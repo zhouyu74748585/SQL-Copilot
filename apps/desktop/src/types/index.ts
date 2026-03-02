@@ -76,8 +76,8 @@ export interface AiConfigVO {
   openaiApiKey?: string;
   openaiModel?: string;
   cliCommand?: string;
-  cliArgs?: string;
   cliWorkingDir?: string;
+  modelOptions?: AiModelOption[];
   updatedAt?: number;
 }
 
@@ -87,6 +87,62 @@ export interface AiConfigSaveReq {
   openaiApiKey?: string;
   openaiModel?: string;
   cliCommand?: string;
-  cliArgs?: string;
   cliWorkingDir?: string;
+  modelOptions?: AiModelOption[];
+}
+
+export interface AiModelOption {
+  id: string;
+  name: string;
+  providerType: 'OPENAI' | 'LOCAL_CLI';
+  openaiBaseUrl?: string;
+  openaiApiKey?: string;
+  openaiModel?: string;
+  cliCommand?: string;
+  cliWorkingDir?: string;
+}
+
+export interface RagConfigVO {
+  ragEmbeddingModelDir?: string;
+  ragEmbeddingModelFileName?: string;
+  ragEmbeddingModelDataFileName?: string;
+  ragEmbeddingTokenizerFileName?: string;
+  ragEmbeddingTokenizerConfigFileName?: string;
+  ragEmbeddingConfigFileName?: string;
+  ragEmbeddingSpecialTokensFileName?: string;
+  ragEmbeddingSentencepieceFileName?: string;
+  ragEmbeddingModelPath?: string;
+  ragEmbeddingModelDataPath?: string;
+  updatedAt?: number;
+}
+
+export interface RagConfigSaveReq {
+  ragEmbeddingModelDir?: string;
+  ragEmbeddingModelFileName?: string;
+  ragEmbeddingModelDataFileName?: string;
+  ragEmbeddingTokenizerFileName?: string;
+  ragEmbeddingTokenizerConfigFileName?: string;
+  ragEmbeddingConfigFileName?: string;
+  ragEmbeddingSpecialTokensFileName?: string;
+  ragEmbeddingSentencepieceFileName?: string;
+  ragEmbeddingModelPath?: string;
+  ragEmbeddingModelDataPath?: string;
+}
+
+export interface RagVectorizeEnqueueReq {
+  connectionId: number;
+  databaseName: string;
+}
+
+export interface RagVectorizeEnqueueVO {
+  enqueued: boolean;
+  queueSize: number;
+  message: string;
+}
+
+export interface RagDatabaseVectorizeStatusVO {
+  databaseName: string;
+  status: 'NOT_VECTORIZED' | 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED';
+  message?: string;
+  updatedAt?: number;
 }

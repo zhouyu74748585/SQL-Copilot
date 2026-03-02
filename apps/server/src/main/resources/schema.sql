@@ -49,7 +49,22 @@ CREATE TABLE IF NOT EXISTS ai_provider_config (
     openai_api_key TEXT,
     openai_model TEXT,
     cli_command TEXT,
-    cli_args TEXT,
     cli_working_dir TEXT,
+    model_options_json TEXT,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS rag_embedding_config (
+    id INTEGER PRIMARY KEY,
+    rag_embedding_model_dir TEXT,
+    rag_embedding_model_file_name TEXT,
+    rag_embedding_model_data_file_name TEXT,
+    rag_embedding_tokenizer_file_name TEXT,
+    rag_embedding_tokenizer_config_file_name TEXT,
+    rag_embedding_config_file_name TEXT,
+    rag_embedding_special_tokens_file_name TEXT,
+    rag_embedding_sentencepiece_file_name TEXT,
+    rag_embedding_model_path TEXT,
+    rag_embedding_model_data_path TEXT,
     updated_at INTEGER NOT NULL
 );

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
 import com.sqlcopilot.studio.service.rag.model.QdrantPoint;
+import com.sqlcopilot.studio.service.rag.model.QdrantScoredPoint;
 import com.sqlcopilot.studio.util.BusinessException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -16,7 +17,11 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 
 @Service
 public class QdrantClientServiceImpl implements QdrantClientService {
@@ -73,7 +78,8 @@ public class QdrantClientServiceImpl implements QdrantClientService {
 
         List<PointReq> pointReqList = new ArrayList<>();
         for (QdrantPoint point : points) {
-            pointReqList.add(new PointReq(point.getId(), point.getVector(), point.getPayload()));
+            // 关键操作：Qdrant payload 不允许 null 值，写入前递归清洗 metadata。
+            pointReqList.add(new PointReq(point.getId(), point.getVector(), sanitizePayload(point.getPayload())));
         }
         UpsertReq req = new UpsertReq(pointReqList);
 
@@ -86,6 +92,36 @@ public class QdrantClientServiceImpl implements QdrantClientService {
         }
 
         validateQdrantResponse(response.body());
+    }
+
+    @Override
+    public List<QdrantScoredPoint> searchPoints(String collectionName,
+                                                List<Float> vector,
+                                                int limit,
+                                                Long connectionId,
+                                                String databaseName) {
+        if (vector == null || vector.isEmpty() || limit <= 0 || connectionId == null) {
+            return List.of();
+        }
+
+        SearchReq req = new SearchReq();
+        req.setVector(vector);
+        req.setLimit(limit);
+        req.setWithPayload(true);
+        req.setFilter(buildFilter(connectionId, databaseName));
+
+        HttpResponse<String> response = send(buildRequest("POST",
+            "/collections/" + collectionName + "/points/search",
+            toJson(req)));
+        if (response.statusCode() == 404) {
+            return List.of();
+        }
+        if (response.statusCode() != 200) {
+            throw new BusinessException(500,
+                "检索 Qdrant 向量失败: HTTP " + response.statusCode() + " - " + response.body());
+        }
+        validateQdrantResponse(response.body());
+        return parseSearchResults(response.body());
     }
 
     private HttpRequest buildRequest(String method, String path, String body) {
@@ -120,6 +156,36 @@ public class QdrantClientServiceImpl implements QdrantClientService {
         }
     }
 
+    private Object sanitizePayload(Object payload) {
+        if (payload == null) {
+            return null;
+        }
+        if (payload instanceof Map<?, ?> mapPayload) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : mapPayload.entrySet()) {
+                if (entry.getKey() == null) {
+                    continue;
+                }
+                Object sanitizedValue = sanitizePayload(entry.getValue());
+                if (sanitizedValue != null) {
+                    result.put(String.valueOf(entry.getKey()), sanitizedValue);
+                }
+            }
+            return result;
+        }
+        if (payload instanceof List<?> listPayload) {
+            List<Object> result = new ArrayList<>();
+            for (Object item : listPayload) {
+                Object sanitizedValue = sanitizePayload(item);
+                if (sanitizedValue != null) {
+                    result.add(sanitizedValue);
+                }
+            }
+            return result;
+        }
+        return payload;
+    }
+
     private void validateQdrantResponse(String body) {
         try {
             JsonNode jsonNode = objectMapper.readTree(body);
@@ -135,6 +201,42 @@ public class QdrantClientServiceImpl implements QdrantClientService {
             throw ex;
         } catch (Exception ex) {
             throw new BusinessException(500, "解析 Qdrant 响应失败: " + ex.getMessage());
+        }
+    }
+
+    private FilterReq buildFilter(Long connectionId, String databaseName) {
+        List<FilterConditionReq> mustConditions = new ArrayList<>();
+        mustConditions.add(new FilterConditionReq("connection_id", new MatchReq(connectionId)));
+        String normalizedDatabaseName = Objects.toString(databaseName, "").trim();
+        if (!normalizedDatabaseName.isBlank()) {
+            mustConditions.add(new FilterConditionReq("database_name", new MatchReq(normalizedDatabaseName)));
+        }
+        return new FilterReq(mustConditions);
+    }
+
+    private List<QdrantScoredPoint> parseSearchResults(String body) {
+        try {
+            JsonNode root = objectMapper.readTree(body);
+            JsonNode resultNode = root.path("result");
+            if (!resultNode.isArray()) {
+                return List.of();
+            }
+
+            List<QdrantScoredPoint> results = new ArrayList<>();
+            for (JsonNode node : resultNode) {
+                String id = node.path("id").asText("");
+                double score = node.path("score").asDouble(0D);
+                Map<String, Object> payload = new HashMap<>();
+                JsonNode payloadNode = node.path("payload");
+                if (payloadNode.isObject()) {
+                    payload = objectMapper.convertValue(payloadNode, objectMapper.getTypeFactory()
+                        .constructMapType(HashMap.class, String.class, Object.class));
+                }
+                results.add(new QdrantScoredPoint(id, score, payload));
+            }
+            return results;
+        } catch (Exception ex) {
+            throw new BusinessException(500, "解析 Qdrant 检索结果失败: " + ex.getMessage());
         }
     }
 
@@ -172,5 +274,62 @@ public class QdrantClientServiceImpl implements QdrantClientService {
     }
 
     private record PointReq(String id, List<Float> vector, Object payload) {
+    }
+
+    private static class SearchReq {
+        private List<Float> vector;
+        private Integer limit;
+        private Boolean withPayload;
+        private FilterReq filter;
+
+        public List<Float> getVector() {
+            return vector;
+        }
+
+        public void setVector(List<Float> vector) {
+            this.vector = vector;
+        }
+
+        public Integer getLimit() {
+            return limit;
+        }
+
+        public void setLimit(Integer limit) {
+            this.limit = limit;
+        }
+
+        public Boolean getWithPayload() {
+            return withPayload;
+        }
+
+        public void setWithPayload(Boolean withPayload) {
+            this.withPayload = withPayload;
+        }
+
+        public FilterReq getFilter() {
+            return filter;
+        }
+
+        public void setFilter(FilterReq filter) {
+            this.filter = filter;
+        }
+    }
+
+    private static class FilterReq {
+        private List<FilterConditionReq> must;
+
+        FilterReq(List<FilterConditionReq> must) {
+            this.must = must;
+        }
+
+        public List<FilterConditionReq> getMust() {
+            return must;
+        }
+    }
+
+    private record FilterConditionReq(String key, MatchReq match) {
+    }
+
+    private record MatchReq(Object value) {
     }
 }

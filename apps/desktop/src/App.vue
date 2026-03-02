@@ -77,6 +77,15 @@
               <img v-if="dataRef.nodeType === 'connection'" class="tree-icon-img" :src="dbIconUrl(dataRef.dbType)" alt="db" />
               <component v-else :is="nodeIconComponent(dataRef)" class="tree-icon-font" />
               <span class="tree-title-text">{{ title }}</span>
+              <span
+                v-if="dataRef.nodeType === 'database'"
+                class="db-vectorize-status"
+                :class="databaseStatusClass(dataRef.vectorizeStatus)"
+              >
+                <a-tooltip :title="databaseStatusLabel(dataRef.vectorizeStatus)">
+                  <component :is="databaseStatusIcon(dataRef.vectorizeStatus)" class="db-vectorize-status-icon" />
+                </a-tooltip>
+              </span>
             </div>
           </template>
         </a-tree>
@@ -248,7 +257,6 @@
                 size="small"
                 style="min-width: 190px"
                 :options="aiModelOptions"
-                :disabled="aiConfigForm.providerType !== 'OPENAI'"
               />
             </div>
           </div>
@@ -439,52 +447,148 @@
       @ok="saveAiConfig"
     >
       <a-form layout="vertical">
-        <a-form-item label="接入方式">
-          <a-radio-group v-model:value="aiConfigForm.providerType">
-            <a-radio value="OPENAI">OpenAI API</a-radio>
-            <a-radio value="LOCAL_CLI">本地 CLI</a-radio>
-          </a-radio-group>
-        </a-form-item>
+        <a-tabs v-model:activeKey="aiConfigActiveTab">
+          <a-tab-pane key="model" tab="模型配置">
+            <a-space>
+              <a-button size="small" @click="addOpenAiModelOption">新增 OpenAI 模型</a-button>
+              <a-button size="small" @click="addCliModelOption">新增 CLI 模型</a-button>
+            </a-space>
+            <div v-if="!aiConfigForm.modelOptions?.length" class="empty-pane" style="margin-top: 12px;">请至少配置一个模型</div>
+            <div
+              v-for="(item, index) in aiConfigForm.modelOptions"
+              :key="item.id || index"
+              class="model-option-card"
+            >
+              <div class="model-option-head">
+                <strong>模型 {{ index + 1 }}</strong>
+                <a-button
+                  size="small"
+                  type="text"
+                  danger
+                  :disabled="(aiConfigForm.modelOptions?.length ?? 0) <= 1"
+                  @click="removeModelOption(index)"
+                >
+                  删除
+                </a-button>
+              </div>
+              <a-row :gutter="12">
+                <a-col :span="8">
+                  <a-form-item label="标识 ID">
+                    <a-input v-model:value="item.id" placeholder="openai-gpt41 / local-cli" />
+                  </a-form-item>
+                </a-col>
+                <a-col :span="8">
+                  <a-form-item label="展示名称">
+                    <a-input v-model:value="item.name" placeholder="GPT-4.1 / 本地 Codex CLI" />
+                  </a-form-item>
+                </a-col>
+                <a-col :span="8">
+                  <a-form-item label="类型">
+                    <a-select
+                      v-model:value="item.providerType"
+                      :options="[{ label: 'OpenAI API', value: 'OPENAI' }, { label: '本地 CLI', value: 'LOCAL_CLI' }]"
+                    />
+                  </a-form-item>
+                </a-col>
+              </a-row>
+              <template v-if="item.providerType === 'OPENAI'">
+                <a-row :gutter="12">
+                  <a-col :span="24">
+                    <a-form-item label="Base URL">
+                      <a-input v-model:value="item.openaiBaseUrl" placeholder="https://api.openai.com/v1" />
+                    </a-form-item>
+                  </a-col>
+                </a-row>
+                <a-row :gutter="12">
+                  <a-col :span="12">
+                    <a-form-item label="API Key">
+                      <a-input-password v-model:value="item.openaiApiKey" placeholder="sk-..." />
+                    </a-form-item>
+                  </a-col>
+                  <a-col :span="12">
+                    <a-form-item label="模型名">
+                      <a-input v-model:value="item.openaiModel" placeholder="gpt-4.1-mini" />
+                    </a-form-item>
+                  </a-col>
+                </a-row>
+              </template>
+              <template v-else>
+                <a-row :gutter="12">
+                  <a-col :span="12">
+                    <a-form-item label="CLI 命令">
+                      <a-input v-model:value="item.cliCommand" placeholder="codex / claude / 其他命令" />
+                    </a-form-item>
+                  </a-col>
+                  <a-col :span="12">
+                    <a-form-item label="工作目录">
+                      <a-input v-model:value="item.cliWorkingDir" placeholder="/path/to/workdir（可选）" />
+                    </a-form-item>
+                  </a-col>
+                </a-row>
+              </template>
+            </div>
+          </a-tab-pane>
 
-        <template v-if="aiConfigForm.providerType === 'OPENAI'">
-          <a-row :gutter="12">
-            <a-col :span="24">
-              <a-form-item label="Base URL">
-                <a-input v-model:value="aiConfigForm.openaiBaseUrl" placeholder="https://api.openai.com/v1" />
-              </a-form-item>
-            </a-col>
-          </a-row>
-          <a-row :gutter="12">
-            <a-col :span="12">
-              <a-form-item label="API Key">
-                <a-input-password v-model:value="aiConfigForm.openaiApiKey" placeholder="sk-..." />
-              </a-form-item>
-            </a-col>
-            <a-col :span="12">
-              <a-form-item label="模型列表（逗号或换行分隔）">
-                <a-textarea v-model:value="aiConfigForm.openaiModel" :rows="3" placeholder="gpt-4.1-mini&#10;gpt-4.1" />
-              </a-form-item>
-            </a-col>
-          </a-row>
-        </template>
-
-        <template v-else>
-          <a-row :gutter="12">
-            <a-col :span="12">
-              <a-form-item label="CLI 命令">
-                <a-input v-model:value="aiConfigForm.cliCommand" placeholder="codex / claude / 其他命令" />
-              </a-form-item>
-            </a-col>
-            <a-col :span="12">
-              <a-form-item label="工作目录">
-                <a-input v-model:value="aiConfigForm.cliWorkingDir" placeholder="/path/to/workdir（可选）" />
-              </a-form-item>
-            </a-col>
-          </a-row>
-          <a-form-item label="CLI 参数（每行一个参数，可用 {prompt}/{context} 占位）">
-            <a-textarea v-model:value="aiConfigForm.cliArgs" :rows="4" />
-          </a-form-item>
-        </template>
+          <a-tab-pane key="embedding" tab="向量化配置">
+            <a-form-item label="向量模型目录（推荐：填写 clone 的模型仓库目录）">
+              <a-input
+                v-model:value="ragConfigForm.ragEmbeddingModelDir"
+                placeholder="/path/to/bge-m3-onnx-o4（目录优先于单文件路径）"
+              />
+            </a-form-item>
+            <a-row :gutter="12">
+              <a-col :span="12">
+                <a-form-item label="ONNX 文件名">
+                  <a-input v-model:value="ragConfigForm.ragEmbeddingModelFileName" placeholder="model_optimized.onnx" />
+                </a-form-item>
+              </a-col>
+              <a-col :span="12">
+                <a-form-item label="ONNX 数据文件名（可选）">
+                  <a-input v-model:value="ragConfigForm.ragEmbeddingModelDataFileName" placeholder="model_optimized.onnx.data" />
+                </a-form-item>
+              </a-col>
+            </a-row>
+            <a-form-item label="Tokenizer 文件名（必填）">
+              <a-input v-model:value="ragConfigForm.ragEmbeddingTokenizerFileName" placeholder="tokenizer.json" />
+            </a-form-item>
+            <a-row :gutter="12">
+              <a-col :span="12">
+                <a-form-item label="Tokenizer 配置文件名">
+                  <a-input v-model:value="ragConfigForm.ragEmbeddingTokenizerConfigFileName" placeholder="tokenizer_config.json" />
+                </a-form-item>
+              </a-col>
+              <a-col :span="12">
+                <a-form-item label="模型配置文件名">
+                  <a-input v-model:value="ragConfigForm.ragEmbeddingConfigFileName" placeholder="config.json" />
+                </a-form-item>
+              </a-col>
+            </a-row>
+            <a-row :gutter="12">
+              <a-col :span="12">
+                <a-form-item label="Special Tokens 文件名">
+                  <a-input v-model:value="ragConfigForm.ragEmbeddingSpecialTokensFileName" placeholder="special_tokens_map.json" />
+                </a-form-item>
+              </a-col>
+              <a-col :span="12">
+                <a-form-item label="SentencePiece 文件名">
+                  <a-input v-model:value="ragConfigForm.ragEmbeddingSentencepieceFileName" placeholder="sentencepiece.bpe.model" />
+                </a-form-item>
+              </a-col>
+            </a-row>
+            <a-row :gutter="12">
+              <a-col :span="12">
+                <a-form-item label="ONNX 文件绝对路径（目录为空时生效）">
+                  <a-input v-model:value="ragConfigForm.ragEmbeddingModelPath" placeholder="/path/to/model_optimized.onnx" />
+                </a-form-item>
+              </a-col>
+              <a-col :span="12">
+                <a-form-item label="ONNX 数据绝对路径（可选）">
+                  <a-input v-model:value="ragConfigForm.ragEmbeddingModelDataPath" placeholder="/path/to/model_optimized.onnx.data" />
+                </a-form-item>
+              </a-col>
+            </a-row>
+          </a-tab-pane>
+        </a-tabs>
       </a-form>
     </a-modal>
 
@@ -499,10 +603,21 @@
       class="context-menu"
       :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
     >
-      <button class="context-menu-item" @click="triggerContextAction('edit')">编辑连接</button>
-      <button class="context-menu-item" @click="triggerContextAction('test')">测试连接</button>
-      <button class="context-menu-item" @click="triggerContextAction('sync')">同步 Schema</button>
-      <button class="context-menu-item danger" @click="triggerContextAction('delete')">删除连接</button>
+      <template v-if="contextMenu.targetType === 'connection'">
+        <button class="context-menu-item" @click="triggerContextAction('edit')">编辑连接</button>
+        <button class="context-menu-item" @click="triggerContextAction('test')">测试连接</button>
+        <button class="context-menu-item" @click="triggerContextAction('sync')">同步 Schema</button>
+        <button class="context-menu-item danger" @click="triggerContextAction('delete')">删除连接</button>
+      </template>
+      <template v-else-if="contextMenu.targetType === 'database'">
+        <button
+          class="context-menu-item"
+          :disabled="isContextDatabaseVectorizing"
+          @click="triggerContextAction('revectorize')"
+        >
+          重新向量化
+        </button>
+      </template>
     </div>
   </div>
 </template>
@@ -510,7 +625,9 @@
 <script setup lang="ts">
 import {
   AppstoreOutlined,
+  CheckCircleOutlined,
   ClockCircleOutlined,
+  CloseCircleOutlined,
   CloseOutlined,
   CodeOutlined,
   DatabaseOutlined,
@@ -518,6 +635,8 @@ import {
   FolderOpenOutlined,
   HddOutlined,
   HistoryOutlined,
+  LoadingOutlined,
+  MinusCircleOutlined,
   PlusOutlined,
   ReloadOutlined,
   RobotOutlined,
@@ -538,9 +657,14 @@ import type {
   AiConfigSaveReq,
   AiConfigVO,
   AiGenerateSqlVO,
+  AiModelOption,
   ConnectionCreateReq,
   ExplainVO,
   QueryHistoryVO,
+  RagDatabaseVectorizeStatusVO,
+  RagConfigSaveReq,
+  RagConfigVO,
+  RagVectorizeEnqueueVO,
   RiskEvaluateVO,
   SchemaOverviewVO,
   SqlExecuteVO,
@@ -572,6 +696,7 @@ interface QueryWorkspaceTab {
 
 const browserTabKey = 'browser';
 const isMacOS = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform);
+let vectorizeStatusPollTimer: number | null = null;
 
 const connections = ref<ConnectionVO[]>([]);
 const schemaOverview = ref<SchemaOverviewVO | null>(null);
@@ -588,6 +713,7 @@ const tableNameCache = ref<Record<string, string[]>>({});
 const objectNameCache = ref<Record<string, string[]>>({});
 const databaseListCache = ref<Record<number, string[]>>({});
 const activeDatabaseMap = ref<Record<number, string>>({});
+const databaseVectorizeStatusMap = ref<Record<string, RagDatabaseVectorizeStatusVO>>({});
 const currentObjectType = ref<'tables' | 'views' | 'functions' | 'events' | 'queries' | 'backups'>('tables');
 const objectViewMode = ref<'row' | 'grid'>('row');
 const viewportHeight = ref(typeof window === 'undefined' ? 900 : window.innerHeight);
@@ -596,7 +722,8 @@ const historyLoading = ref(false);
 const queryHistoryList = ref<QueryHistoryVO[]>([]);
 const historyTargetTabKey = ref('');
 const aiConfigModalOpen = ref(false);
-const selectedAiModel = ref('gpt-4.1-mini');
+const aiConfigActiveTab = ref<'model' | 'embedding'>('model');
+const selectedAiModel = ref('');
 const activeWorkbenchTab = ref(browserTabKey);
 const queryTabs = ref<QueryWorkspaceTab[]>([]);
 const tableDetail = ref<TableDetailVO | null>(null);
@@ -613,11 +740,14 @@ const contextMenu = reactive({
   visible: false,
   x: 0,
   y: 0,
+  targetType: 'none' as 'none' | 'connection' | 'database',
   connectionId: 0,
+  databaseName: '',
 });
 
 const connectionForm = reactive<ConnectionCreateReq>(defaultConnectionForm());
 const aiConfigForm = reactive<AiConfigSaveReq>(defaultAiConfigForm());
+const ragConfigForm = reactive<RagConfigSaveReq>(defaultRagConfigForm());
 
 const workflow = reactive({
   connectionId: 0,
@@ -660,6 +790,11 @@ const canOpenHistory = computed(() => {
   }
   return !!selectedConnection.value;
 });
+
+const isContextDatabaseVectorizing = computed(() =>
+  contextMenu.targetType === 'database'
+  && isDatabaseVectorizing(contextMenu.connectionId, contextMenu.databaseName),
+);
 
 const connectionSelectOptions = computed(() =>
   connections.value.map((item) => ({ label: `${item.name} (${item.env})`, value: item.id })),
@@ -751,7 +886,12 @@ const detailColumns = [
 const tableScrollY = computed(() => Math.max(300, viewportHeight.value - 300));
 const detailScrollY = computed(() => Math.max(220, viewportHeight.value - 360));
 const queryResultScrollY = computed(() => Math.max(200, viewportHeight.value - 520));
-const aiModelOptions = computed(() => parseModels(aiConfigForm.openaiModel).map((item) => ({ label: item, value: item })));
+const aiModelOptions = computed(() =>
+  (aiConfigForm.modelOptions ?? []).map((item) => ({
+    label: `${item.name || item.id || '-'} · ${item.providerType === 'LOCAL_CLI' ? 'CLI' : (item.openaiModel || 'OPENAI')}`,
+    value: item.id,
+  })),
+);
 const workbenchStyle = computed(() => {
   if (viewportWidth.value < 1200) {
     return {};
@@ -804,6 +944,7 @@ function buildConnectionNode(conn: ConnectionVO) {
       key: buildDatabaseNodeKey(conn.id, databaseName),
       title: databaseName,
       nodeType: 'database',
+      vectorizeStatus: getDatabaseVectorizeStatus(conn.id, databaseName),
       selectable: databaseName !== '未发现数据库',
       children: buildCategoryChildren(conn.id, databaseName),
     }));
@@ -910,6 +1051,71 @@ function objectCacheKey(connectionId: number, databaseName: string, objectType: 
   return `${connectionId}|${databaseName || '__default__'}|${objectType}`;
 }
 
+function vectorizeStatusCacheKey(connectionId: number, databaseName: string) {
+  return `${connectionId}|${databaseName.trim().toLowerCase()}`;
+}
+
+function getDatabaseVectorizeStatus(connectionId: number, databaseName: string) {
+  if (!databaseName || databaseName === '未发现数据库') {
+    return 'NOT_VECTORIZED';
+  }
+  const key = vectorizeStatusCacheKey(connectionId, databaseName);
+  return databaseVectorizeStatusMap.value[key]?.status || 'NOT_VECTORIZED';
+}
+
+function isDatabaseVectorizing(connectionId: number, databaseName: string) {
+  const status = getDatabaseVectorizeStatus(connectionId, databaseName);
+  return status === 'PENDING' || status === 'RUNNING';
+}
+
+function databaseStatusLabel(status: string) {
+  if (status === 'PENDING') {
+    return '排队中';
+  }
+  if (status === 'RUNNING') {
+    return '向量化中';
+  }
+  if (status === 'SUCCESS') {
+    return '已向量化';
+  }
+  if (status === 'FAILED') {
+    return '失败';
+  }
+  return '未向量化';
+}
+
+function databaseStatusClass(status: string) {
+  if (status === 'PENDING') {
+    return 'is-pending';
+  }
+  if (status === 'RUNNING') {
+    return 'is-running';
+  }
+  if (status === 'SUCCESS') {
+    return 'is-success';
+  }
+  if (status === 'FAILED') {
+    return 'is-failed';
+  }
+  return 'is-none';
+}
+
+function databaseStatusIcon(status: string) {
+  if (status === 'PENDING') {
+    return ClockCircleOutlined;
+  }
+  if (status === 'RUNNING') {
+    return LoadingOutlined;
+  }
+  if (status === 'SUCCESS') {
+    return CheckCircleOutlined;
+  }
+  if (status === 'FAILED') {
+    return CloseCircleOutlined;
+  }
+  return MinusCircleOutlined;
+}
+
 function getActiveDatabaseName(connectionId: number) {
   const selected = (activeDatabaseMap.value[connectionId] ?? '').trim();
   if (selected) {
@@ -955,7 +1161,7 @@ function openEditModal(targetConnectionId?: number) {
 function openAiQueryTab() {
   ensureConnection();
   const databaseName = getActiveDatabaseName(workflow.connectionId);
-  const models = parseModels(aiConfigForm.openaiModel);
+  const models = aiModelOptions.value.map((item) => String(item.value)).filter((item) => !!item);
   const tab: QueryWorkspaceTab = {
     key: `query-${Date.now()}-${Math.round(Math.random() * 1000)}`,
     title: `AI查询 ${queryTabs.value.length + 1}`,
@@ -968,7 +1174,7 @@ function openAiQueryTab() {
     riskInfo: null,
     executeResult: null,
     explainResult: null,
-    selectedAiModel: models[0] ?? 'gpt-4.1-mini',
+    selectedAiModel: models[0] ?? '',
   };
   queryTabs.value = [...queryTabs.value, tab];
   activeWorkbenchTab.value = tab.key;
@@ -1026,11 +1232,73 @@ async function loadDatabaseListForConnection(connectionId: number) {
   };
 }
 
+async function refreshVectorizeStatusForConnection(connectionId: number) {
+  const list = await getApi<RagDatabaseVectorizeStatusVO[]>(
+    `/api/rag/vectorize/status/list?connectionId=${connectionId}`,
+  );
+  const next = {...databaseVectorizeStatusMap.value};
+  const prefix = `${connectionId}|`;
+  Object.keys(next).forEach((key) => {
+    if (key.startsWith(prefix)) {
+      delete next[key];
+    }
+  });
+  list.forEach((item) => {
+    if (!item.databaseName) {
+      return;
+    }
+    const key = vectorizeStatusCacheKey(connectionId, item.databaseName);
+    next[key] = item;
+  });
+  databaseVectorizeStatusMap.value = next;
+}
+
+async function refreshAllVectorizeStatuses(targetConnectionIds?: number[]) {
+  const ids = targetConnectionIds ?? connections.value.map((item) => item.id);
+  if (!ids.length) {
+    databaseVectorizeStatusMap.value = {};
+    return;
+  }
+  await Promise.all(ids.map(async (connectionId) => {
+    try {
+      await refreshVectorizeStatusForConnection(connectionId);
+    } catch {
+      // 关键操作：状态轮询失败不阻断主流程，等待下一次轮询重试。
+    }
+  }));
+}
+
+function pruneVectorizeStatusMap(validConnectionIds: number[]) {
+  const valid = new Set(validConnectionIds.map((item) => `${item}|`));
+  const next: Record<string, RagDatabaseVectorizeStatusVO> = {};
+  Object.entries(databaseVectorizeStatusMap.value).forEach(([key, value]) => {
+    if (Array.from(valid).some((prefix) => key.startsWith(prefix))) {
+      next[key] = value;
+    }
+  });
+  databaseVectorizeStatusMap.value = next;
+}
+
+function startVectorizeStatusPolling() {
+  stopVectorizeStatusPolling();
+  vectorizeStatusPollTimer = window.setInterval(() => {
+    void refreshAllVectorizeStatuses();
+  }, 3000);
+}
+
+function stopVectorizeStatusPolling() {
+  if (vectorizeStatusPollTimer !== null) {
+    window.clearInterval(vectorizeStatusPollTimer);
+    vectorizeStatusPollTimer = null;
+  }
+}
+
 async function loadConnections() {
   connectionRefreshing.value = true;
   try {
     const list = await getApi<ConnectionVO[]>('/api/connection/list');
     connections.value = list;
+    pruneVectorizeStatusMap(list.map((item) => item.id));
     if (!list.length) {
       workflow.connectionId = 0;
       selectedTreeKeys.value = [];
@@ -1040,6 +1308,7 @@ async function loadConnections() {
       activeWorkbenchTab.value = browserTabKey;
       return;
     }
+    await refreshAllVectorizeStatuses(list.map((item) => item.id));
     if (!workflow.connectionId || !list.some((item) => item.id === workflow.connectionId)) {
       workflow.connectionId = list[0].id;
     }
@@ -1272,27 +1541,84 @@ async function handleTreeRightClick(event: { event: MouseEvent; node: { key?: st
   event.event.preventDefault();
   event.event.stopPropagation();
   const keyValue = String(event.node?.key ?? '');
-  const connectionMatch = keyValue.match(/^conn-(\d+)$/);
-  if (!connectionMatch) {
+  const objectMatch = keyValue.match(/^conn-(\d+)-db-(.+?)-obj-([a-z]+)-(.+)$/);
+  if (objectMatch) {
     return;
   }
-  const connectionId = Number(connectionMatch[1]);
+  const categoryMatch = keyValue.match(/^conn-(\d+)-db-(.+?)-category-([a-z]+)$/);
+  if (categoryMatch) {
+    return;
+  }
+
+  const connectionMatch = keyValue.match(/^conn-(\d+)$/);
+  const databaseMatch = keyValue.match(/^conn-(\d+)-db-(.+)$/);
+  if (!connectionMatch && !databaseMatch) {
+    return;
+  }
+
+  if (connectionMatch) {
+    const connectionId = Number(connectionMatch[1]);
+    workflow.connectionId = connectionId;
+    selectedTreeKeys.value = [keyValue];
+    contextMenu.visible = true;
+    contextMenu.x = Math.min(event.event.clientX, window.innerWidth - 170);
+    contextMenu.y = Math.min(event.event.clientY, window.innerHeight - 180);
+    contextMenu.targetType = 'connection';
+    contextMenu.connectionId = connectionId;
+    contextMenu.databaseName = '';
+    return;
+  }
+
+  if (!databaseMatch) {
+    return;
+  }
+  const connectionId = Number(databaseMatch[1]);
+  const databaseName = decodeURIComponent(databaseMatch[2]);
+  if (databaseName === '未发现数据库') {
+    return;
+  }
   workflow.connectionId = connectionId;
+  activeDatabaseMap.value = {
+    ...activeDatabaseMap.value,
+    [connectionId]: databaseName,
+  };
+  try {
+    await refreshVectorizeStatusForConnection(connectionId);
+  } catch {
+    // 关键操作：右键菜单唤起时尝试刷新状态，失败则沿用本地缓存状态。
+  }
   selectedTreeKeys.value = [keyValue];
   contextMenu.visible = true;
   contextMenu.x = Math.min(event.event.clientX, window.innerWidth - 170);
   contextMenu.y = Math.min(event.event.clientY, window.innerHeight - 180);
+  contextMenu.targetType = 'database';
   contextMenu.connectionId = connectionId;
+  contextMenu.databaseName = databaseName;
 }
 
 function closeContextMenu() {
   contextMenu.visible = false;
+  contextMenu.targetType = 'none';
+  contextMenu.databaseName = '';
 }
 
-async function triggerContextAction(action: 'edit' | 'test' | 'sync' | 'delete') {
+async function triggerContextAction(action: 'edit' | 'test' | 'sync' | 'delete' | 'revectorize') {
   const id = contextMenu.connectionId;
+  const databaseName = contextMenu.databaseName;
+  const targetType = contextMenu.targetType;
   closeContextMenu();
   if (!id) {
+    return;
+  }
+  if (action === 'revectorize') {
+    if (targetType !== 'database' || !databaseName) {
+      return;
+    }
+    if (isDatabaseVectorizing(id, databaseName)) {
+      message.info('该数据库正在向量化，请等待当前任务完成');
+      return;
+    }
+    await enqueueDatabaseRevectorize(id, databaseName);
     return;
   }
   if (action === 'edit') {
@@ -1308,6 +1634,33 @@ async function triggerContextAction(action: 'edit' | 'test' | 'sync' | 'delete')
     return;
   }
   await removeConnection(id);
+}
+
+async function enqueueDatabaseRevectorize(connectionId: number, databaseName: string) {
+  await runSafely(async () => {
+    const result = await postApi<RagVectorizeEnqueueVO>('/api/rag/vectorize/enqueue', {
+      connectionId,
+      databaseName,
+    });
+    if (result.enqueued) {
+      const key = vectorizeStatusCacheKey(connectionId, databaseName);
+      databaseVectorizeStatusMap.value = {
+        ...databaseVectorizeStatusMap.value,
+        [key]: {
+          databaseName,
+          status: 'PENDING',
+          message: result.message,
+          updatedAt: Date.now(),
+        },
+      };
+    }
+    await refreshVectorizeStatusForConnection(connectionId);
+    if (result.enqueued) {
+      message.success(`${result.message}（队列数: ${result.queueSize}）`);
+      return;
+    }
+    message.info(`${result.message}（队列数: ${result.queueSize}）`);
+  });
 }
 
 function onObjectRow(record: ObjectRow) {
@@ -1450,17 +1803,32 @@ function applyHistoryItem(item: QueryHistoryVO) {
 async function openAiConfigModal() {
   aiConfigModalOpen.value = true;
   await runSafely(async () => {
-    const config = await getApi<AiConfigVO>('/api/ai/config/get');
-    fillAiConfigForm(config);
+    const aiConfig = await getApi<AiConfigVO>('/api/ai/config/get');
+    const ragConfig = await getApi<RagConfigVO>('/api/rag/config/get');
+    fillAiConfigForm(aiConfig);
+    fillRagConfigForm(ragConfig);
   });
 }
 
 async function saveAiConfig() {
   await runSafely(async () => {
-    const saved = await postApi<AiConfigVO>('/api/ai/config/save', aiConfigForm);
-    fillAiConfigForm(saved);
+    const modelOptions = normalizeModelOptions(aiConfigForm.modelOptions);
+    if (!modelOptions.length) {
+      throw new Error('请至少配置一个模型');
+    }
+    aiConfigForm.modelOptions = modelOptions;
+    aiConfigForm.providerType = modelOptions[0].providerType;
+    aiConfigForm.openaiBaseUrl = modelOptions[0].openaiBaseUrl || '';
+    aiConfigForm.openaiApiKey = modelOptions[0].openaiApiKey || '';
+    aiConfigForm.openaiModel = modelOptions[0].openaiModel || '';
+    aiConfigForm.cliCommand = modelOptions[0].cliCommand || '';
+    aiConfigForm.cliWorkingDir = modelOptions[0].cliWorkingDir || '';
+    const savedAi = await postApi<AiConfigVO>('/api/ai/config/save', aiConfigForm);
+    const savedRag = await postApi<RagConfigVO>('/api/rag/config/save', ragConfigForm);
+    fillAiConfigForm(savedAi);
+    fillRagConfigForm(savedRag);
     aiConfigModalOpen.value = false;
-    message.success('AI 配置已保存');
+    message.success('AI 与 RAG 配置已保存');
   });
 }
 
@@ -1501,6 +1869,8 @@ async function generateSqlForTab(tab: QueryWorkspaceTab) {
       connectionId: tab.connectionId,
       sessionId: tab.sessionId,
       prompt: tab.prompt,
+      databaseName: tab.databaseName || undefined,
+      sqlSnippet: tab.sqlText || undefined,
       modelName: tab.selectedAiModel || undefined,
     });
     tab.sqlText = generated.sqlText;
@@ -1642,14 +2012,18 @@ function handleWindowResize() {
 
 onMounted(async () => {
   window.addEventListener('resize', handleWindowResize);
+  startVectorizeStatusPolling();
   await loadConnections();
   await runSafely(async () => {
-    const config = await getApi<AiConfigVO>('/api/ai/config/get');
-    fillAiConfigForm(config);
+    const aiConfig = await getApi<AiConfigVO>('/api/ai/config/get');
+    const ragConfig = await getApi<RagConfigVO>('/api/rag/config/get');
+    fillAiConfigForm(aiConfig);
+    fillRagConfigForm(ragConfig);
   });
 });
 
 onBeforeUnmount(() => {
+  stopVectorizeStatusPolling();
   window.removeEventListener('resize', handleWindowResize);
   window.removeEventListener('mousemove', handleResizeBrowserPane);
   window.removeEventListener('mouseup', stopResizeBrowserPane);
@@ -1676,9 +2050,16 @@ watch(
 );
 
 watch(
-  () => aiConfigForm.openaiModel,
-  (value) => {
-    const models = parseModels(value);
+  () => JSON.stringify(aiConfigForm.modelOptions ?? []),
+  () => {
+    const models = aiModelOptions.value.map((item) => String(item.value)).filter((item) => !!item);
+    if (!models.length) {
+      selectedAiModel.value = '';
+      queryTabs.value.forEach((tab) => {
+        tab.selectedAiModel = '';
+      });
+      return;
+    }
     if (!models.includes(selectedAiModel.value)) {
       selectedAiModel.value = models[0];
     }
@@ -1805,16 +2186,75 @@ function dbIconUrl(dbType: string) {
   return sqliteIcon;
 }
 
-function parseModels(raw: string | undefined) {
-  const text = (raw ?? '').trim();
-  if (!text) {
-    return ['gpt-4.1-mini'];
+function normalizeModelOptions(options: AiModelOption[] | undefined) {
+  const list = (options ?? [])
+    .map((item, index) => {
+      const providerType: 'OPENAI' | 'LOCAL_CLI' = item.providerType === 'LOCAL_CLI' ? 'LOCAL_CLI' : 'OPENAI';
+      return {
+        id: (item.id || '').trim() || `${providerType === 'LOCAL_CLI' ? 'cli' : 'openai'}-${index + 1}`,
+        name: (item.name || '').trim() || (providerType === 'LOCAL_CLI' ? `CLI-${index + 1}` : `OpenAI-${index + 1}`),
+        providerType,
+        openaiBaseUrl: (item.openaiBaseUrl || '').trim(),
+        openaiApiKey: (item.openaiApiKey || '').trim(),
+        openaiModel: (item.openaiModel || '').trim(),
+        cliCommand: (item.cliCommand || '').trim(),
+        cliWorkingDir: (item.cliWorkingDir || '').trim(),
+      } satisfies AiModelOption;
+    })
+    .filter((item) => !!item.id);
+  if (list.length) {
+    return list;
   }
-  const tokens = text
-    .split(/[\n,\r\t]/g)
-    .map((item) => item.trim())
-    .filter((item) => !!item);
-  return Array.from(new Set(tokens));
+  return defaultAiConfigForm().modelOptions ?? [];
+}
+
+function nextModelOptionId(prefix: 'openai' | 'cli') {
+  const existing = new Set((aiConfigForm.modelOptions ?? []).map((item) => item.id));
+  let index = 1;
+  while (existing.has(`${prefix}-${index}`)) {
+    index++;
+  }
+  return `${prefix}-${index}`;
+}
+
+function addOpenAiModelOption() {
+  const id = nextModelOptionId('openai');
+  aiConfigForm.modelOptions = [
+    ...(aiConfigForm.modelOptions ?? []),
+    {
+      id,
+      name: `OpenAI ${id}`,
+      providerType: 'OPENAI',
+      openaiBaseUrl: 'https://api.openai.com/v1',
+      openaiApiKey: '',
+      openaiModel: 'gpt-4.1-mini',
+      cliCommand: '',
+      cliWorkingDir: '',
+    },
+  ];
+}
+
+function addCliModelOption() {
+  const id = nextModelOptionId('cli');
+  aiConfigForm.modelOptions = [
+    ...(aiConfigForm.modelOptions ?? []),
+    {
+      id,
+      name: `CLI ${id}`,
+      providerType: 'LOCAL_CLI',
+      openaiBaseUrl: '',
+      openaiApiKey: '',
+      openaiModel: '',
+      cliCommand: '',
+      cliWorkingDir: '',
+    },
+  ];
+}
+
+function removeModelOption(index: number) {
+  const list = [...(aiConfigForm.modelOptions ?? [])];
+  list.splice(index, 1);
+  aiConfigForm.modelOptions = list.length ? list : (defaultAiConfigForm().modelOptions ?? []);
 }
 
 function defaultConnectionForm(): ConnectionCreateReq {
@@ -1860,31 +2300,73 @@ function fillConnectionForm(connection: ConnectionVO) {
 }
 
 function defaultAiConfigForm(): AiConfigSaveReq {
-  return {
+  const defaultOption: AiModelOption = {
+    id: 'openai-1',
+    name: 'OpenAI gpt-4.1-mini',
     providerType: 'OPENAI',
     openaiBaseUrl: 'https://api.openai.com/v1',
     openaiApiKey: '',
     openaiModel: 'gpt-4.1-mini',
     cliCommand: '',
-    cliArgs: '{prompt}',
     cliWorkingDir: '',
+  };
+  return {
+    providerType: 'OPENAI',
+    openaiBaseUrl: defaultOption.openaiBaseUrl,
+    openaiApiKey: defaultOption.openaiApiKey,
+    openaiModel: defaultOption.openaiModel,
+    cliCommand: defaultOption.cliCommand,
+    cliWorkingDir: defaultOption.cliWorkingDir,
+    modelOptions: [defaultOption],
   };
 }
 
 function fillAiConfigForm(config: AiConfigVO) {
+  const options = normalizeModelOptions(config.modelOptions);
+  const first = options[0];
   Object.assign(aiConfigForm, {
-    providerType: config.providerType || 'OPENAI',
-    openaiBaseUrl: config.openaiBaseUrl || 'https://api.openai.com/v1',
-    openaiApiKey: config.openaiApiKey || '',
-    openaiModel: config.openaiModel || 'gpt-4.1-mini',
-    cliCommand: config.cliCommand || '',
-    cliArgs: config.cliArgs || '{prompt}',
-    cliWorkingDir: config.cliWorkingDir || '',
+    providerType: first.providerType,
+    openaiBaseUrl: first.openaiBaseUrl || 'https://api.openai.com/v1',
+    openaiApiKey: first.openaiApiKey || '',
+    openaiModel: first.openaiModel || 'gpt-4.1-mini',
+    cliCommand: first.cliCommand || '',
+    cliWorkingDir: first.cliWorkingDir || '',
+    modelOptions: options,
   } satisfies AiConfigSaveReq);
-  const models = parseModels(aiConfigForm.openaiModel);
+  const models = options.map((item) => item.id).filter((item) => !!item);
   if (!models.includes(selectedAiModel.value)) {
-    selectedAiModel.value = models[0];
+    selectedAiModel.value = models[0] || '';
   }
+}
+
+function defaultRagConfigForm(): RagConfigSaveReq {
+  return {
+    ragEmbeddingModelDir: '',
+    ragEmbeddingModelFileName: 'model_optimized.onnx',
+    ragEmbeddingModelDataFileName: 'model_optimized.onnx.data',
+    ragEmbeddingTokenizerFileName: 'tokenizer.json',
+    ragEmbeddingTokenizerConfigFileName: 'tokenizer_config.json',
+    ragEmbeddingConfigFileName: 'config.json',
+    ragEmbeddingSpecialTokensFileName: 'special_tokens_map.json',
+    ragEmbeddingSentencepieceFileName: 'sentencepiece.bpe.model',
+    ragEmbeddingModelPath: './models/bge-m3/model.onnx',
+    ragEmbeddingModelDataPath: '',
+  };
+}
+
+function fillRagConfigForm(config: RagConfigVO) {
+  Object.assign(ragConfigForm, {
+    ragEmbeddingModelDir: config.ragEmbeddingModelDir || '',
+    ragEmbeddingModelFileName: config.ragEmbeddingModelFileName || 'model_optimized.onnx',
+    ragEmbeddingModelDataFileName: config.ragEmbeddingModelDataFileName || 'model_optimized.onnx.data',
+    ragEmbeddingTokenizerFileName: config.ragEmbeddingTokenizerFileName || 'tokenizer.json',
+    ragEmbeddingTokenizerConfigFileName: config.ragEmbeddingTokenizerConfigFileName || 'tokenizer_config.json',
+    ragEmbeddingConfigFileName: config.ragEmbeddingConfigFileName || 'config.json',
+    ragEmbeddingSpecialTokensFileName: config.ragEmbeddingSpecialTokensFileName || 'special_tokens_map.json',
+    ragEmbeddingSentencepieceFileName: config.ragEmbeddingSentencepieceFileName || 'sentencepiece.bpe.model',
+    ragEmbeddingModelPath: config.ragEmbeddingModelPath || './models/bge-m3/model.onnx',
+    ragEmbeddingModelDataPath: config.ragEmbeddingModelDataPath || '',
+  } satisfies RagConfigSaveReq);
 }
 
 function resetConnectionModalState() {

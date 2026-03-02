@@ -1,7 +1,9 @@
 package com.sqlcopilot.studio.dto.ai;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.Valid;
 import lombok.Data;
+import java.util.List;
 
 /** 保存 AI 接入配置请求对象。 */
 @Data
@@ -23,9 +25,10 @@ public class AiConfigSaveReq {
     /** 本地 CLI 可执行命令。 */
     private String cliCommand;
 
-    /** 本地 CLI 参数（每行一个参数，可用占位符）。 */
-    private String cliArgs;
-
     /** 本地 CLI 执行工作目录。 */
     private String cliWorkingDir;
+
+    /** 可选模型列表（API/CLI 均可配置）。 */
+    @Valid
+    private List<AiModelOptionSaveReq> modelOptions;
 }

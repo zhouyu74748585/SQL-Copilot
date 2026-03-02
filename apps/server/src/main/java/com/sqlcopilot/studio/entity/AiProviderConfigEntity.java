@@ -10,7 +10,7 @@ public class AiProviderConfigEntity {
     private String openaiApiKey;
     private String openaiModel;
     private String cliCommand;
-    private String cliArgs;
     private String cliWorkingDir;
+    private String modelOptionsJson;
     private Long updatedAt;
 }

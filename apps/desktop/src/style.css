@@ -271,6 +271,40 @@ body {
   color: inherit;
 }
 
+.db-vectorize-status {
+  margin-left: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+}
+
+.db-vectorize-status-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.db-vectorize-status.is-none {
+  color: #7a889f;
+}
+
+.db-vectorize-status.is-pending {
+  color: #8b6400;
+}
+
+.db-vectorize-status.is-running {
+  color: #1458d4;
+}
+
+.db-vectorize-status.is-success {
+  color: #17713e;
+}
+
+.db-vectorize-status.is-failed {
+  color: #b53042;
+}
+
 .pane-footer {
   padding: 10px;
   border-top: 1px solid var(--line);
@@ -324,6 +358,21 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.model-option-card {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #e2e9f5;
+  border-radius: 8px;
+  background: #fbfdff;
+}
+
+.model-option-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
 }
 
 .pane-center .ant-table-wrapper {
@@ -726,6 +775,16 @@ body {
 
 .context-menu-item:hover {
   background: #eef4ff;
+}
+
+.context-menu-item:disabled {
+  color: #9caac0;
+  cursor: not-allowed;
+  background: transparent;
+}
+
+.context-menu-item:disabled:hover {
+  background: transparent;
 }
 
 .context-menu-item.danger {

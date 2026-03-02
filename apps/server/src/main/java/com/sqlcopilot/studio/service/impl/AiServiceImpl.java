@@ -4,14 +4,26 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.sqlcopilot.studio.dto.ai.*;
+import com.sqlcopilot.studio.dto.ai.AiConfigVO;
+import com.sqlcopilot.studio.dto.ai.AiGenerateSqlReq;
+import com.sqlcopilot.studio.dto.ai.AiGenerateSqlVO;
+import com.sqlcopilot.studio.dto.ai.AiModelOptionVO;
+import com.sqlcopilot.studio.dto.ai.AiRepairReq;
+import com.sqlcopilot.studio.dto.ai.AiRepairVO;
 import com.sqlcopilot.studio.dto.schema.ContextBuildReq;
 import com.sqlcopilot.studio.dto.schema.ContextBuildVO;
+import com.sqlcopilot.studio.dto.schema.SchemaOverviewVO;
 import com.sqlcopilot.studio.service.AiConfigService;
 import com.sqlcopilot.studio.service.AiService;
 import com.sqlcopilot.studio.service.SchemaService;
+import com.sqlcopilot.studio.service.rag.RagRetrievalService;
+import com.sqlcopilot.studio.service.rag.model.RagPromptContext;
 import com.sqlcopilot.studio.util.BusinessException;
 import com.sqlcopilot.studio.util.SqlClassifier;
+import net.sf.jsqlparser.parser.CCJSqlParserUtil;
+import net.sf.jsqlparser.statement.Statement;
+import net.sf.jsqlparser.statement.Statements;
+import net.sf.jsqlparser.util.TablesNamesFinder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -24,8 +36,11 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -34,45 +49,70 @@ import java.util.regex.Pattern;
 public class AiServiceImpl implements AiService {
 
     private static final Pattern SQL_FENCE_PATTERN = Pattern.compile("(?is)```(?:sql)?\\s*(.*?)```");
+    private static final Pattern CTE_NAME_PATTERN = Pattern.compile("(?is)(?:^|,|\\s)([a-zA-Z_][a-zA-Z0-9_]*)\\s+as\\s*\\(");
+    private static final Pattern COMMAND_TOKEN_PATTERN = Pattern.compile("\"([^\"]*)\"|'([^']*)'|(\\S+)");
     private static final long CLI_TIMEOUT_SECONDS = 45L;
     private static final Logger log = LoggerFactory.getLogger(AiServiceImpl.class);
 
     private final SchemaService schemaService;
     private final AiConfigService aiConfigService;
+    private final RagRetrievalService ragRetrievalService;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10))
         .build();
 
-    public AiServiceImpl(SchemaService schemaService, AiConfigService aiConfigService, ObjectMapper objectMapper) {
+    public AiServiceImpl(SchemaService schemaService,
+                         AiConfigService aiConfigService,
+                         RagRetrievalService ragRetrievalService,
+                         ObjectMapper objectMapper) {
         this.schemaService = schemaService;
         this.aiConfigService = aiConfigService;
+        this.ragRetrievalService = ragRetrievalService;
         this.objectMapper = objectMapper;
     }
 
     @Override
     public AiGenerateSqlVO generateSql(AiGenerateSqlReq req) {
-        // 关键操作：先构建结构化上下文，避免 AI 在未知 Schema 上盲猜。
-        ContextBuildReq contextReq = new ContextBuildReq();
-        contextReq.setConnectionId(req.getConnectionId());
-        contextReq.setQuestion(req.getPrompt());
-        contextReq.setTokenBudget(1200);
-        ContextBuildVO context = schemaService.buildContext(contextReq);
+        // 关键操作：先将用户需求/SQL片段向量化并做 Qdrant 分层检索，构造 Prompt 上下文。
+        String retrievalInput = buildRetrievalInput(req.getPrompt(), req.getSqlSnippet());
+        RagPromptContext ragPromptContext = ragRetrievalService.retrievePromptContext(
+            req.getConnectionId(),
+            req.getDatabaseName(),
+            retrievalInput
+        );
+        GenerationContext generationContext = buildGenerationContext(req, ragPromptContext);
 
         String reasoning;
         String generatedSql;
         boolean fallbackUsed = false;
         try {
-            ProviderResult result = generateByConfiguredProvider(req, context);
+            ProviderResult result = generateByConfiguredProvider(req, generationContext);
             generatedSql = result.sqlText();
             reasoning = result.reasoning();
             log.info("[AI-GENERATE] connectionId={}, sessionId={}, sql={}", req.getConnectionId(), req.getSessionId(), generatedSql);
         } catch (Exception ex) {
-            generatedSql = fallbackSql(req.getPrompt(), context);
+            generatedSql = fallbackSql(req.getPrompt(), generationContext.relatedTables());
             reasoning = "AI 配置调用失败，已降级到本地规则生成。原因: " + ex.getMessage();
             fallbackUsed = true;
             log.warn("[AI-GENERATE-FALLBACK] connectionId={}, sessionId={}, reason={}, sql={}",
                 req.getConnectionId(), req.getSessionId(), ex.getMessage(), generatedSql);
+        }
+
+        AstValidationResult astResult = validateByAst(req, generatedSql);
+        if (!astResult.valid()) {
+            generatedSql = fallbackSql(req.getPrompt(), generationContext.relatedTables());
+            fallbackUsed = true;
+            reasoning = reasoning + "；AST 校验未通过，已降级。原因: " + astResult.message();
+            AstValidationResult fallbackValidation = validateByAst(req, generatedSql);
+            if (!fallbackValidation.valid()) {
+                throw new BusinessException(500, "SQL 生成后 AST 校验失败: " + fallbackValidation.message());
+            }
+            generatedSql = fallbackValidation.sqlText();
+            reasoning = reasoning + "；降级 SQL 已通过 AST 校验。";
+        } else {
+            generatedSql = astResult.sqlText();
+            reasoning = reasoning + "；" + astResult.message();
         }
 
         AiGenerateSqlVO vo = new AiGenerateSqlVO();
@@ -101,38 +141,41 @@ public class AiServiceImpl implements AiService {
         return vo;
     }
 
-    private ProviderResult generateByConfiguredProvider(AiGenerateSqlReq req, ContextBuildVO context) {
+    /**
+     * 关键操作：统一抽象 LLM 通道，支持 OpenAI API 与本地 CLI。
+     */
+    private ProviderResult generateByConfiguredProvider(AiGenerateSqlReq req, GenerationContext context) {
         AiConfigVO config = aiConfigService.getConfig();
-        String providerType = safe(config.getProviderType()).toUpperCase();
-        if ("LOCAL_CLI".equals(providerType)) {
-            return generateByLocalCli(req, context, config);
+        AiModelOptionVO option = resolveModelOption(req.getModelName(), config);
+        if ("LOCAL_CLI".equals(safe(option.getProviderType()).toUpperCase())) {
+            return generateByLocalCli(req, context, option);
         }
-        return generateByOpenAi(req, context, config);
+        return generateByOpenAi(req, context, option);
     }
 
-    private ProviderResult generateByOpenAi(AiGenerateSqlReq req, ContextBuildVO context, AiConfigVO config) {
-        String apiKey = safe(config.getOpenaiApiKey());
+    private ProviderResult generateByOpenAi(AiGenerateSqlReq req, GenerationContext context, AiModelOptionVO option) {
+        String apiKey = safe(option.getOpenaiApiKey());
         if (apiKey.isBlank()) {
-            throw new BusinessException(400, "OpenAI API Key 未配置");
+            throw new BusinessException(400, "OpenAI API Key 未配置: " + safe(option.getName()));
         }
-        String model = resolveOpenAiModel(req.getModelName(), config.getOpenaiModel());
-        String baseUrl = safe(config.getOpenaiBaseUrl());
+        String model = resolveOpenAiModel(req.getModelName(), option);
+        String baseUrl = safe(option.getOpenaiBaseUrl());
         if (baseUrl.isBlank()) {
             baseUrl = "https://api.openai.com/v1";
         }
         String endpoint = normalizeOpenAiEndpoint(baseUrl);
 
-        String contextText = safe(context.getContext());
+        String contextText = safe(context.promptContext());
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("model", model);
         payload.put("temperature", 0.1D);
         ArrayNode messages = payload.putArray("messages");
         messages.addObject()
             .put("role", "system")
-            .put("content", "你是数据库 SQL 专家。仅返回可执行 SQL，不要输出解释。查询语句默认增加 LIMIT 100。");
+            .put("content", "你是数据库 SQL 专家。基于提供的 RAG 上下文生成 SQL。仅返回可执行 SQL，不要输出解释。查询语句默认增加 LIMIT 100。");
         messages.addObject()
             .put("role", "user")
-            .put("content", "用户需求:\n" + req.getPrompt() + "\n\nSchema Context:\n" + contextText);
+            .put("content", buildProviderUserPrompt(req, contextText));
 
         try {
             HttpRequest request = HttpRequest.newBuilder()
@@ -152,7 +195,7 @@ public class AiServiceImpl implements AiService {
             if (sqlText.isBlank()) {
                 throw new BusinessException(500, "OpenAI 返回内容未识别出 SQL");
             }
-            return new ProviderResult(sqlText, "已通过 OpenAI API(" + model + ") 生成 SQL。");
+            return new ProviderResult(sqlText, "已通过 OpenAI API(" + safe(option.getName()) + "/" + model + ") 生成 SQL");
         } catch (BusinessException ex) {
             throw ex;
         } catch (Exception ex) {
@@ -160,24 +203,22 @@ public class AiServiceImpl implements AiService {
         }
     }
 
-    private ProviderResult generateByLocalCli(AiGenerateSqlReq req, ContextBuildVO context, AiConfigVO config) {
-        String command = safe(config.getCliCommand());
+    private ProviderResult generateByLocalCli(AiGenerateSqlReq req, GenerationContext context, AiModelOptionVO option) {
+        String command = safe(option.getCliCommand());
         if (command.isBlank()) {
-            throw new BusinessException(400, "本地 CLI 命令未配置");
+            throw new BusinessException(400, "本地 CLI 命令未配置: " + safe(option.getName()));
         }
 
-        List<String> commandLine = new ArrayList<>();
-        commandLine.add(command);
-        List<String> args = parseCliArgs(config.getCliArgs());
-        String contextText = safe(context.getContext());
-        for (String arg : args) {
-            commandLine.add(arg
-                .replace("{prompt}", req.getPrompt())
-                .replace("{context}", contextText));
+        String backendPrompt = buildProviderUserPrompt(req, safe(context.promptContext()));
+        List<String> commandLine = parseCliCommand(command);
+        if (commandLine.isEmpty()) {
+            throw new BusinessException(400, "本地 CLI 命令无效");
         }
+        // 关键操作：统一把后端拼装提示词作为命令参数传递，避免用户侧拼装输入模板。
+        commandLine.add(backendPrompt);
 
         ProcessBuilder processBuilder = new ProcessBuilder(commandLine);
-        String workingDir = safe(config.getCliWorkingDir());
+        String workingDir = safe(option.getCliWorkingDir());
         if (!workingDir.isBlank()) {
             processBuilder.directory(new File(workingDir));
         }
@@ -185,6 +226,12 @@ public class AiServiceImpl implements AiService {
 
         try {
             Process process = processBuilder.start();
+            // 关键操作：提示词由后端统一拼装后写入 CLI 标准输入，避免用户侧自定义模板干扰生成链路。
+            try (java.io.OutputStream stdin = process.getOutputStream()) {
+                stdin.write(backendPrompt.getBytes(StandardCharsets.UTF_8));
+                stdin.write('\n');
+                stdin.flush();
+            }
             byte[] outputBytes = process.getInputStream().readAllBytes();
             boolean finished = process.waitFor(CLI_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             if (!finished) {
@@ -196,7 +243,7 @@ public class AiServiceImpl implements AiService {
             if (sqlText.isBlank()) {
                 throw new BusinessException(500, "本地 CLI 输出未识别到 SQL");
             }
-            return new ProviderResult(sqlText, "已通过本地 CLI 生成 SQL。");
+            return new ProviderResult(sqlText, "已通过本地 CLI(" + safe(option.getName()) + ") 生成 SQL（提示词由后端构建）");
         } catch (BusinessException ex) {
             throw ex;
         } catch (Exception ex) {
@@ -204,23 +251,22 @@ public class AiServiceImpl implements AiService {
         }
     }
 
-    private List<String> parseCliArgs(String rawArgs) {
-        List<String> args = new ArrayList<>();
-        String value = safe(rawArgs);
-        if (value.isBlank()) {
-            args.add("{prompt}");
-            return args;
-        }
-        for (String line : value.split("\\R")) {
-            String trimmed = line.trim();
-            if (!trimmed.isBlank()) {
-                args.add(trimmed);
+    private List<String> parseCliCommand(String rawCommand) {
+        List<String> tokens = new ArrayList<>();
+        Matcher matcher = COMMAND_TOKEN_PATTERN.matcher(safe(rawCommand));
+        while (matcher.find()) {
+            String token = matcher.group(1);
+            if (token == null) {
+                token = matcher.group(2);
+            }
+            if (token == null) {
+                token = matcher.group(3);
+            }
+            if (token != null && !token.isBlank()) {
+                tokens.add(token);
             }
         }
-        if (args.isEmpty()) {
-            args.add("{prompt}");
-        }
-        return args;
+        return tokens;
     }
 
     private String extractSql(String rawOutput) {
@@ -244,6 +290,17 @@ public class AiServiceImpl implements AiService {
         return "";
     }
 
+    private String buildProviderUserPrompt(AiGenerateSqlReq req, String contextText) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("用户需求:\n").append(req.getPrompt());
+        String sqlSnippet = safe(req.getSqlSnippet());
+        if (!sqlSnippet.isBlank()) {
+            builder.append("\n\n用户 SQL 片段:\n").append(sqlSnippet);
+        }
+        builder.append("\n\nRAG Context:\n").append(contextText);
+        return builder.toString();
+    }
+
     private int firstSqlKeywordIndex(String text) {
         int min = Integer.MAX_VALUE;
         for (String keyword : List.of("select ", "with ", "update ", "delete ", "insert ")) {
@@ -264,16 +321,133 @@ public class AiServiceImpl implements AiService {
             || normalized.startsWith("insert ");
     }
 
-    private String fallbackSql(String prompt, ContextBuildVO context) {
+    private String fallbackSql(String prompt, List<String> relatedTables) {
         String table = "sqlite_master";
-        if (context.getRelatedTables() != null && !context.getRelatedTables().isEmpty()) {
-            table = context.getRelatedTables().get(0);
+        if (relatedTables != null && !relatedTables.isEmpty()) {
+            table = relatedTables.get(0);
         }
         String normalizedPrompt = safe(prompt).toLowerCase();
         if (prompt.contains("数量") || normalizedPrompt.contains("count")) {
             return "SELECT COUNT(1) AS total_count FROM " + table;
         }
         return "SELECT * FROM " + table + " LIMIT 100";
+    }
+
+    /**
+     * 关键操作：生成 SQL 后强制做 AST 解析和表结构校验，减少不可执行 SQL 返回给前端。
+     */
+    private AstValidationResult validateByAst(AiGenerateSqlReq req, String sqlText) {
+        String rawSql = safe(sqlText);
+        if (rawSql.isBlank()) {
+            return new AstValidationResult(false, "", "SQL 为空");
+        }
+
+        try {
+            Statements statements = CCJSqlParserUtil.parseStatements(rawSql);
+            if (statements == null || statements.getStatements().size() != 1) {
+                return new AstValidationResult(false, rawSql, "仅支持单条 SQL 语句");
+            }
+            Statement statement = statements.getStatements().get(0);
+            String normalizedSql = statement.toString();
+
+            List<String> referencedTables = collectReferencedTables(statement, rawSql);
+            Set<String> schemaTables = loadSchemaTables(req.getConnectionId(), req.getDatabaseName());
+            if (!referencedTables.isEmpty() && !schemaTables.isEmpty()) {
+                List<String> missingTables = referencedTables.stream()
+                    .filter(table -> !schemaTables.contains(normalizeIdentifier(table)))
+                    .distinct()
+                    .toList();
+                if (!missingTables.isEmpty()) {
+                    return new AstValidationResult(
+                        false,
+                        normalizedSql,
+                        "引用了当前库不存在的表: " + String.join(", ", missingTables)
+                    );
+                }
+            }
+
+            return new AstValidationResult(true, normalizedSql, "AST 解析与结构校验通过");
+        } catch (Exception ex) {
+            return new AstValidationResult(false, rawSql, "AST 解析失败: " + ex.getMessage());
+        }
+    }
+
+    private List<String> collectReferencedTables(Statement statement, String rawSql) {
+        TablesNamesFinder finder = new TablesNamesFinder();
+        List<String> tables = new ArrayList<>(finder.getTableList(statement));
+        Set<String> cteNames = extractCteNames(rawSql);
+        return tables.stream()
+            .map(this::normalizeIdentifier)
+            .filter(item -> !item.isBlank())
+            .filter(item -> !cteNames.contains(item))
+            .sorted(String.CASE_INSENSITIVE_ORDER)
+            .toList();
+    }
+
+    private Set<String> loadSchemaTables(Long connectionId, String databaseName) {
+        SchemaOverviewVO overview = schemaService.getOverview(connectionId, databaseName);
+        if (overview.getTableSummaries() == null || overview.getTableSummaries().isEmpty()) {
+            return Set.of();
+        }
+        Set<String> tables = new HashSet<>();
+        overview.getTableSummaries().stream()
+            .sorted(Comparator.comparing(SchemaOverviewVO.TableSummaryVO::getTableName, String.CASE_INSENSITIVE_ORDER))
+            .forEach(item -> {
+                String name = normalizeIdentifier(item.getTableName());
+                if (!name.isBlank()) {
+                    tables.add(name);
+                }
+            });
+        return tables;
+    }
+
+    private Set<String> extractCteNames(String sql) {
+        Matcher matcher = CTE_NAME_PATTERN.matcher(safe(sql).toLowerCase());
+        Set<String> names = new HashSet<>();
+        while (matcher.find()) {
+            String cte = normalizeIdentifier(matcher.group(1));
+            if (!cte.isBlank()) {
+                names.add(cte);
+            }
+        }
+        return names;
+    }
+
+    private String normalizeIdentifier(String identifier) {
+        String normalized = safe(identifier).replace("`", "").replace("\"", "");
+        if (normalized.contains(".")) {
+            String[] segments = normalized.split("\\.");
+            normalized = segments[segments.length - 1];
+        }
+        return normalized.toLowerCase();
+    }
+
+    private GenerationContext buildGenerationContext(AiGenerateSqlReq req, RagPromptContext ragPromptContext) {
+        List<String> relatedTables = new ArrayList<>(ragPromptContext.getRelatedTables());
+        String ragContextText = safe(ragPromptContext.getPromptContext());
+        if (Boolean.TRUE.equals(ragPromptContext.getHit()) && !ragContextText.isBlank()) {
+            return new GenerationContext(ragContextText, relatedTables);
+        }
+
+        ContextBuildReq contextReq = new ContextBuildReq();
+        contextReq.setConnectionId(req.getConnectionId());
+        contextReq.setDatabaseName(req.getDatabaseName());
+        contextReq.setQuestion(buildRetrievalInput(req.getPrompt(), req.getSqlSnippet()));
+        contextReq.setTokenBudget(1200);
+        ContextBuildVO schemaContext = schemaService.buildContext(contextReq);
+        if (schemaContext.getRelatedTables() != null && !schemaContext.getRelatedTables().isEmpty()) {
+            relatedTables.addAll(schemaContext.getRelatedTables());
+        }
+        return new GenerationContext(safe(schemaContext.getContext()), relatedTables);
+    }
+
+    private String buildRetrievalInput(String prompt, String sqlSnippet) {
+        String normalizedPrompt = safe(prompt);
+        String normalizedSnippet = safe(sqlSnippet);
+        if (normalizedSnippet.isBlank()) {
+            return normalizedPrompt;
+        }
+        return normalizedPrompt + "\nSQL片段:\n" + normalizedSnippet;
     }
 
     private String normalizeOpenAiEndpoint(String baseUrl) {
@@ -288,12 +462,41 @@ public class AiServiceImpl implements AiService {
         return Objects.toString(input, "").trim();
     }
 
-    private String resolveOpenAiModel(String requestModel, String configuredModels) {
-        String direct = safe(requestModel);
-        if (!direct.isBlank()) {
-            return direct;
+    private AiModelOptionVO resolveModelOption(String requestModel, AiConfigVO config) {
+        List<AiModelOptionVO> options = config.getModelOptions() == null ? List.of() : config.getModelOptions();
+        String target = safe(requestModel);
+        if (!target.isBlank()) {
+            for (AiModelOptionVO option : options) {
+                if (option == null) {
+                    continue;
+                }
+                if (target.equalsIgnoreCase(safe(option.getId()))) {
+                    return option;
+                }
+            }
         }
-        String raw = safe(configuredModels);
+        if (!options.isEmpty()) {
+            return options.get(0);
+        }
+
+        AiModelOptionVO fallback = new AiModelOptionVO();
+        fallback.setId("openai-default");
+        fallback.setName("OpenAI gpt-4.1-mini");
+        fallback.setProviderType("OPENAI");
+        fallback.setOpenaiBaseUrl("https://api.openai.com/v1");
+        fallback.setOpenaiApiKey("");
+        fallback.setOpenaiModel("gpt-4.1-mini");
+        fallback.setCliCommand("");
+        fallback.setCliWorkingDir("");
+        return fallback;
+    }
+
+    private String resolveOpenAiModel(String requestModel, AiModelOptionVO option) {
+        String requestValue = safe(requestModel);
+        if (!requestValue.isBlank() && !requestValue.equalsIgnoreCase(safe(option.getId()))) {
+            return requestValue;
+        }
+        String raw = safe(option.getOpenaiModel());
         if (raw.isBlank()) {
             return "gpt-4.1-mini";
         }
@@ -307,5 +510,11 @@ public class AiServiceImpl implements AiService {
     }
 
     private record ProviderResult(String sqlText, String reasoning) {
+    }
+
+    private record AstValidationResult(boolean valid, String sqlText, String message) {
+    }
+
+    private record GenerationContext(String promptContext, List<String> relatedTables) {
     }
 }

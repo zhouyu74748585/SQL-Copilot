@@ -9,15 +9,28 @@ import org.apache.ibatis.annotations.Update;
 public interface AiConfigMapper {
 
     @Select("""
-        SELECT id, provider_type, openai_base_url, openai_api_key, openai_model, cli_command, cli_args, cli_working_dir, updated_at
+        SELECT id, provider_type, openai_base_url, openai_api_key, openai_model,
+               cli_command, cli_working_dir,
+               model_options_json,
+               updated_at
         FROM ai_provider_config
         WHERE id = #{id}
         """)
     AiProviderConfigEntity findById(@Param("id") Long id);
 
     @Insert("""
-        INSERT INTO ai_provider_config(id, provider_type, openai_base_url, openai_api_key, openai_model, cli_command, cli_args, cli_working_dir, updated_at)
-        VALUES(#{id}, #{providerType}, #{openaiBaseUrl}, #{openaiApiKey}, #{openaiModel}, #{cliCommand}, #{cliArgs}, #{cliWorkingDir}, #{updatedAt})
+        INSERT INTO ai_provider_config(
+            id, provider_type, openai_base_url, openai_api_key, openai_model,
+            cli_command, cli_working_dir,
+            model_options_json,
+            updated_at
+        )
+        VALUES(
+            #{id}, #{providerType}, #{openaiBaseUrl}, #{openaiApiKey}, #{openaiModel},
+            #{cliCommand}, #{cliWorkingDir},
+            #{modelOptionsJson},
+            #{updatedAt}
+        )
         """)
     int insert(AiProviderConfigEntity entity);
 
@@ -28,8 +41,8 @@ public interface AiConfigMapper {
             openai_api_key = #{openaiApiKey},
             openai_model = #{openaiModel},
             cli_command = #{cliCommand},
-            cli_args = #{cliArgs},
             cli_working_dir = #{cliWorkingDir},
+            model_options_json = #{modelOptionsJson},
             updated_at = #{updatedAt}
         WHERE id = #{id}
         """)

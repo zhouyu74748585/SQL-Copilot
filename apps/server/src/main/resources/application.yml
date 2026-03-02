@@ -37,8 +37,13 @@ rag:
     sql-history: sql_history
     sql-fragment: sql_fragment
   embedding:
-    model-path: ./models/bge-m3/model.onnx
-    tokenizer-path: ./models/bge-m3/tokenizer.json
+    model-file-name: model_optimized.onnx
+    model-data-file-name: model_optimized.onnx.data
+    tokenizer-file-name: tokenizer.json
+    tokenizer-config-file-name: tokenizer_config.json
+    config-file-name: config.json
+    special-tokens-file-name: special_tokens_map.json
+    sentencepiece-file-name: sentencepiece.bpe.model
     max-seq-len: 512
     fallback-dimension: 1024
   sql-fragment:

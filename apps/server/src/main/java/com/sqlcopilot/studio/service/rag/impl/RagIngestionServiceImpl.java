@@ -87,10 +87,11 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             for (SchemaTableCacheEntity table : tableMetaList) {
                 List<SchemaColumnCacheEntity> columns = tableColumns.getOrDefault(table.getTableName(), List.of());
                 SchemaTablePayload payload = buildTablePayload(connectionId, normalizedDatabaseName, table, columns);
-                Document doc = new Document(buildTableDocumentText(table, columns), payload.toMetadataMap());
+                Map<String, Object> metadata = sanitizeMetadata(payload.toMetadataMap());
+                Document doc = new Document(buildTableDocumentText(table, columns), metadata);
                 List<Float> vector = ragEmbeddingService.embedText(doc.getText());
                 tablePoints.add(new QdrantPoint(stablePointId("schema_table", connectionId,
-                    normalizedDatabaseName, table.getTableName()), vector, payload));
+                    normalizedDatabaseName, table.getTableName()), vector, metadata));
             }
             writePoints(collectionNames.getSchemaTable(), tablePoints);
 
@@ -100,10 +101,11 @@ public class RagIngestionServiceImpl implements RagIngestionService {
                 Document doc = new Document(buildColumnDocumentText(column), payload.toMetadataMap());
                 List<Float> vector = ragEmbeddingService.embedText(doc.getText());
                 columnPoints.add(new QdrantPoint(stablePointId("schema_column", connectionId,
-                    normalizedDatabaseName, column.getTableName(), column.getColumnName()), vector, payload));
+                    normalizedDatabaseName, column.getTableName(), column.getColumnName()), vector, payload.toMetadataMap()));
             }
             writePoints(collectionNames.getSchemaColumn(), columnPoints);
         } catch (Exception ex) {
+            ex.printStackTrace();
             log.warn("Schema RAG 写入失败, connectionId={}, databaseName={}, reason={}",
                 connectionId, normalizedDatabaseName, ex.getMessage());
         }
@@ -136,13 +138,14 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             );
 
             String historyText = buildSqlHistoryDocumentText(payload);
-            Document doc = new Document(historyText, payload.toMetadataMap());
+            Map<String, Object> historyMetadata = sanitizeMetadata(payload.toMetadataMap());
+            Document doc = new Document(historyText, historyMetadata);
             List<Float> historyVector = ragEmbeddingService.embedText(doc.getText());
             QdrantPoint historyPoint = new QdrantPoint(
                 stablePointId("sql_history", historyEntity.getConnectionId(), databaseName,
                     String.valueOf(historyEntity.getId() == null ? payload.getCreatedAt() : historyEntity.getId())),
                 historyVector,
-                payload
+                historyMetadata
             );
             writePoints(collectionNames.getSqlHistory(), List.of(historyPoint));
 
@@ -151,7 +154,8 @@ public class RagIngestionServiceImpl implements RagIngestionService {
                 if (!fragments.isEmpty()) {
                     List<QdrantPoint> fragmentPoints = new ArrayList<>();
                     for (SqlFragmentPayload fragment : fragments) {
-                        Document fragmentDoc = new Document(fragment.getFragmentText(), fragment.toMetadataMap());
+                        Map<String, Object> fragmentMetadata = sanitizeMetadata(fragment.toMetadataMap());
+                        Document fragmentDoc = new Document(fragment.getFragmentText(), fragmentMetadata);
                         List<Float> fragmentVector = ragEmbeddingService.embedText(fragmentDoc.getText());
                         fragmentPoints.add(new QdrantPoint(
                             stablePointId("sql_fragment", historyEntity.getConnectionId(), databaseName,
@@ -159,7 +163,7 @@ public class RagIngestionServiceImpl implements RagIngestionService {
                                 fragment.getFragmentType(),
                                 String.valueOf(fragment.getFragmentIndex())),
                             fragmentVector,
-                            fragment));
+                             fragmentMetadata));
                     }
                     writePoints(collectionNames.getSqlFragment(), fragmentPoints);
                 }
@@ -380,6 +384,53 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         return Objects.toString(value, "").trim();
     }
 
+    private Map<String, Object> sanitizeMetadata(Map<String, Object> metadata) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (metadata == null || metadata.isEmpty()) {
+            return result;
+        }
+        for (Map.Entry<String, Object> entry : metadata.entrySet()) {
+            if (entry.getKey() == null) {
+                continue;
+            }
+            Object sanitized = sanitizeMetadataValue(entry.getValue());
+            if (sanitized != null) {
+                result.put(entry.getKey(), sanitized);
+            }
+        }
+        return result;
+    }
+
+    private Object sanitizeMetadataValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Map<?, ?> mapValue) {
+            Map<String, Object> nested = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : mapValue.entrySet()) {
+                if (entry.getKey() == null) {
+                    continue;
+                }
+                Object sanitized = sanitizeMetadataValue(entry.getValue());
+                if (sanitized != null) {
+                    nested.put(String.valueOf(entry.getKey()), sanitized);
+                }
+            }
+            return nested;
+        }
+        if (value instanceof List<?> listValue) {
+            List<Object> list = new ArrayList<>();
+            for (Object item : listValue) {
+                Object sanitized = sanitizeMetadataValue(item);
+                if (sanitized != null) {
+                    list.add(sanitized);
+                }
+            }
+            return list;
+        }
+        return value;
+    }
+
     private static class SchemaTablePayload {
         private final Long connectionId;
         private final String databaseName;
@@ -525,6 +576,8 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             metadata.put("connection_id", connectionId);
             metadata.put("database_name", databaseName);
             metadata.put("session_id", sessionId);
+            metadata.put("prompt_text", promptText);
+            metadata.put("sql_text", sqlText);
             metadata.put("execution_ms", executionMs);
             metadata.put("success", success);
             metadata.put("created_at", createdAt);
@@ -633,6 +686,7 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             metadata.put("fragment_type", fragmentType);
             metadata.put("fragment_index", fragmentIndex);
             metadata.put("fragment_name", fragmentName);
+            metadata.put("fragment_text", fragmentText);
             metadata.put("tables", tables);
             metadata.put("columns", columns);
             metadata.put("join_count", joinCount);
