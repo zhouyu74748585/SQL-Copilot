@@ -1,0 +1,11 @@
+node_modules
+*.log
+.DS_Store
+apps/desktop/dist
+apps/server/target
+apps/server/data
+apps/server/exports
+/.idea/
+/out/
+/sql-copilot.db
+/apps/server/sql-copilot.db

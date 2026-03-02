@@ -1,0 +1,13 @@
+{
+  "name": "sql-copilot",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/desktop",
+    "packages/shared-contracts"
+  ],
+  "scripts": {
+    "build": "npm run -w @sqlcopilot/desktop build",
+    "type-check": "npm run -w @sqlcopilot/desktop type-check"
+  }
+}

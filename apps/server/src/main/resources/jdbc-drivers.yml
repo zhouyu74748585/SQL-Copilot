@@ -1,0 +1,60 @@
+drivers:
+  MYSQL:
+    displayName: "MySQL"
+    defaultVersion: "8.0"
+    defaultDriver: "com.mysql.cj.jdbc.Driver"
+    resourcePattern: "drivers/{type}/{version}/driver.jar"
+    driversByVersion:
+      "8.0": "com.mysql.cj.jdbc.Driver"
+      "5.7": "com.mysql.jdbc.Driver"
+    resourceAliases:
+      "8.0": "8.x"
+      "5.7": "5.7"
+
+  POSTGRESQL:
+    displayName: "PostgreSQL"
+    defaultVersion: "16"
+    defaultDriver: "org.postgresql.Driver"
+    resourcePattern: "drivers/{type}/{version}/driver.jar"
+    driversByVersion:
+      "16": "org.postgresql.Driver"
+      "15": "org.postgresql.Driver"
+      "14": "org.postgresql.Driver"
+    resourceAliases:
+      "16": "universal"
+      "15": "universal"
+      "14": "universal"
+
+  SQLSERVER:
+    displayName: "SQL Server"
+    defaultVersion: "2019"
+    defaultDriver: "com.microsoft.sqlserver.jdbc.SQLServerDriver"
+    resourcePattern: "drivers/{type}/{version}/driver.jar"
+    driversByVersion:
+      "2019": "com.microsoft.sqlserver.jdbc.SQLServerDriver"
+      "2016": "com.microsoft.sqlserver.jdbc.SQLServerDriver"
+    resourceAliases:
+      "2019": "universal"
+      "2016": "universal"
+
+  ORACLE:
+    displayName: "Oracle"
+    defaultVersion: "19c"
+    defaultDriver: "oracle.jdbc.OracleDriver"
+    resourcePattern: "drivers/{type}/{version}/driver.jar"
+    driversByVersion:
+      "19c": "oracle.jdbc.OracleDriver"
+      "12c": "oracle.jdbc.OracleDriver"
+    resourceAliases:
+      "19c": "universal"
+      "12c": "universal"
+
+  SQLITE:
+    displayName: "SQLite"
+    defaultVersion: "3"
+    defaultDriver: "org.sqlite.JDBC"
+    resourcePattern: "drivers/{type}/{version}/driver.jar"
+    driversByVersion:
+      "3": "org.sqlite.JDBC"
+    resourceAliases:
+      "3": "universal"

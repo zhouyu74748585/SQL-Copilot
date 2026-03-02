@@ -1,0 +1,70 @@
+{
+  "name": "@sqlcopilot/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "main": "electron/main.cjs",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:renderer": "vite --host 127.0.0.1 --port 5173",
+    "dev:electron": "wait-on tcp:5173 && electron electron/main.cjs",
+    "debug:main": "wait-on tcp:5173 && cross-env ELECTRON_RENDERER_URL=http://127.0.0.1:5173 ELECTRON_DEBUG=1 electron --inspect=9229 electron/main.cjs",
+    "debug": "concurrently -k \"npm run dev:renderer\" \"npm run debug:main\"",
+    "build": "vite build",
+    "download:qdrant": "node scripts/download-qdrant.mjs",
+    "dist": "npm run build && electron-builder",
+    "type-check": "vue-tsc --noEmit -p tsconfig.json",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@sqlcopilot/shared-contracts": "file:../../packages/shared-contracts",
+    "@ant-design/icons-vue": "^7.0.1",
+    "ant-design-vue": "^4.2.6",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "concurrently": "^9.2.1",
+    "cross-env": "^7.0.3",
+    "electron": "36.2.1",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "vue-tsc": "^2.2.0",
+    "wait-on": "^8.0.3"
+  },
+  "build": {
+    "appId": "com.sqlcopilot.desktop",
+    "productName": "SQL Copilot",
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/qdrant",
+        "to": "qdrant",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "mac": {
+      "target": [
+        "dmg"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ]
+    }
+  }
+}

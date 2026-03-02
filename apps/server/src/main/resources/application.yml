@@ -1,0 +1,46 @@
+server:
+  port: 18080
+
+spring:
+  datasource:
+    driver-class-name: org.sqlite.JDBC
+    url: jdbc:sqlite:./sql-copilot.db
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+
+mybatis:
+  type-aliases-package: com.sqlcopilot.studio.entity
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
+logging:
+  level:
+    com.sqlcopilot.studio: info
+
+schema:
+  cache:
+    ttl-ms: 300000
+    refresh-interval-ms: 180000
+    refresh-initial-delay-ms: 60000
+
+rag:
+  enabled: true
+  qdrant:
+    url: http://127.0.0.1:6333
+    api-key: ""
+  collection:
+    schema-table: schema_table
+    schema-column: schema_column
+    sql-history: sql_history
+    sql-fragment: sql_fragment
+  embedding:
+    model-path: ./models/bge-m3/model.onnx
+    tokenizer-path: ./models/bge-m3/tokenizer.json
+    max-seq-len: 512
+    fallback-dimension: 1024
+  sql-fragment:
+    enabled: true
+    max-count: 8

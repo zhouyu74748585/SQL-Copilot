@@ -1,0 +1,25 @@
+package com.sqlcopilot.studio.dto.ai;
+
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import lombok.Data;
+
+/** AI 生成 SQL 请求对象。 */
+@Data
+public class AiGenerateSqlReq {
+
+    /** 连接主键 ID。 */
+    @NotNull
+    private Long connectionId;
+
+    /** 会话 ID。 */
+    @NotBlank
+    private String sessionId;
+
+    /** 用户自然语言需求。 */
+    @NotBlank
+    private String prompt;
+
+    /** 本次会话指定模型（可选）。 */
+    private String modelName;
+}
