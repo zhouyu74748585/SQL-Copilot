@@ -68,3 +68,12 @@ CREATE TABLE IF NOT EXISTS rag_embedding_config (
     rag_embedding_model_data_path TEXT,
     updated_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS rag_vectorize_status (
+    connection_id INTEGER NOT NULL,
+    database_name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    message TEXT,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(connection_id, database_name)
+);

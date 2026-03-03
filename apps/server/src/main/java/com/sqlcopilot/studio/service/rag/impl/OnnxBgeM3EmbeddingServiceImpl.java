@@ -31,6 +31,7 @@ import org.springframework.stereotype.Service;
 public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
 
     private static final Logger log = LoggerFactory.getLogger(OnnxBgeM3EmbeddingServiceImpl.class);
+    private static final long RAG_CONFIG_CACHE_TTL_MS = 10_000L;
 
     private final RagConfigService ragConfigService;
     private final String defaultModelDataPath;
@@ -46,10 +47,13 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
     private final int fallbackDimension;
 
     private final Object initLock = new Object();
+    private final Object configCacheLock = new Object();
 
     private boolean initialized;
     private boolean fallbackOnly;
     private EmbeddingFileConfig loadedConfig;
+    private RagConfigVO cachedRagConfig;
+    private long cachedRagConfigLoadedAt;
 
     private OrtEnvironment ortEnvironment;
     private OrtSession ortSession;
@@ -83,29 +87,48 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
 
     @Override
     public List<Float> embedText(String text) {
-        String normalizedText = text == null ? "" : text;
+        List<List<Float>> vectors = embedTexts(List.of(text == null ? "" : text));
+        if (vectors.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return vectors.get(0);
+    }
+
+    @Override
+    public List<List<Float>> embedTexts(List<String> texts) {
+        if (texts == null || texts.isEmpty()) {
+            return List.of();
+        }
+        List<String> normalizedTexts = texts.stream()
+            .map(item -> item == null ? "" : item)
+            .toList();
         ensureInitialized();
 
         if (fallbackOnly) {
-            return hashEmbedding(normalizedText, fallbackDimension);
+            List<List<Float>> fallbackVectors = new ArrayList<>(normalizedTexts.size());
+            for (String text : normalizedTexts) {
+                fallbackVectors.add(hashEmbedding(text, fallbackDimension));
+            }
+            return fallbackVectors;
         }
 
         try {
-            Encoding encoding = tokenizer.encode(normalizedText);
-            long[] inputIds = clipAndPad(encoding.getIds());
-            long[] attentionMask = clipAndPad(encoding.getAttentionMask());
-            long[] tokenTypeIds = new long[inputIds.length];
-
-            long[][] inputIdsBatch = new long[][]{inputIds};
-            long[][] attentionBatch = new long[][]{attentionMask};
-            long[][] tokenTypeBatch = new long[][]{tokenTypeIds};
+            int batchSize = normalizedTexts.size();
+            long[][] inputIdsBatch = new long[batchSize][maxSeqLen];
+            long[][] attentionBatch = new long[batchSize][maxSeqLen];
+            long[][] tokenTypeBatch = new long[batchSize][maxSeqLen];
+            for (int i = 0; i < batchSize; i++) {
+                Encoding encoding = tokenizer.encode(normalizedTexts.get(i));
+                inputIdsBatch[i] = clipAndPad(encoding.getIds());
+                attentionBatch[i] = clipAndPad(encoding.getAttentionMask());
+            }
 
             try (OnnxTensor inputIdsTensor = OnnxTensor.createTensor(ortEnvironment,
-                LongBuffer.wrap(flatten(inputIdsBatch)), new long[]{1, inputIds.length});
+                LongBuffer.wrap(flatten(inputIdsBatch)), new long[]{batchSize, maxSeqLen});
                  OnnxTensor attentionTensor = OnnxTensor.createTensor(ortEnvironment,
-                     LongBuffer.wrap(flatten(attentionBatch)), new long[]{1, attentionMask.length});
+                     LongBuffer.wrap(flatten(attentionBatch)), new long[]{batchSize, maxSeqLen});
                  OnnxTensor tokenTypeTensor = OnnxTensor.createTensor(ortEnvironment,
-                     LongBuffer.wrap(flatten(tokenTypeBatch)), new long[]{1, tokenTypeIds.length})) {
+                     LongBuffer.wrap(flatten(tokenTypeBatch)), new long[]{batchSize, maxSeqLen})) {
 
                 Map<String, OnnxTensor> feed = new HashMap<>();
                 feed.put("input_ids", inputIdsTensor);
@@ -119,7 +142,14 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
                     if (!(output instanceof float[][][] lastHiddenState)) {
                         throw new BusinessException(500, "BGE-M3 输出结构不符合预期");
                     }
-                    return meanPooling(lastHiddenState[0], attentionMask);
+                    if (lastHiddenState.length < batchSize) {
+                        throw new BusinessException(500, "BGE-M3 输出批次数量不符合预期");
+                    }
+                    List<List<Float>> vectors = new ArrayList<>(batchSize);
+                    for (int i = 0; i < batchSize; i++) {
+                        vectors.add(meanPooling(lastHiddenState[i], attentionBatch[i]));
+                    }
+                    return vectors;
                 }
             }
         } catch (BusinessException ex) {
@@ -172,7 +202,7 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
      * 关键逻辑：优先使用前端配置的模型目录（支持 clone 仓库目录结构），否则回退到单文件路径配置。
      */
     private EmbeddingFileConfig resolveEmbeddingFileConfig() {
-        RagConfigVO config = ragConfigService.getConfig();
+        RagConfigVO config = getCachedRagConfig();
 
         String configuredModelDir = safeTrim(config.getRagEmbeddingModelDir());
         String configuredModelPath = safeTrim(config.getRagEmbeddingModelPath());
@@ -273,6 +303,24 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
             optionalFileStatus.missingFiles(),
             "default-model-dir=" + defaultModelDirPath
         );
+    }
+
+    private RagConfigVO getCachedRagConfig() {
+        long now = System.currentTimeMillis();
+        RagConfigVO localCache = cachedRagConfig;
+        if (localCache != null && now - cachedRagConfigLoadedAt < RAG_CONFIG_CACHE_TTL_MS) {
+            return localCache;
+        }
+        synchronized (configCacheLock) {
+            long refreshedNow = System.currentTimeMillis();
+            if (cachedRagConfig != null && refreshedNow - cachedRagConfigLoadedAt < RAG_CONFIG_CACHE_TTL_MS) {
+                return cachedRagConfig;
+            }
+            // 关键优化：向量化高频 embed 场景下短时缓存配置，避免每次都查询 rag_embedding_config。
+            cachedRagConfig = ragConfigService.getConfig();
+            cachedRagConfigLoadedAt = refreshedNow;
+            return cachedRagConfig;
+        }
     }
 
     private Path resolveModelFileByName(Path modelDirPath, String configuredFileName) {

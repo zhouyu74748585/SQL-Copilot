@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 
 import java.sql.Connection;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
@@ -53,17 +54,22 @@ public class SqlServiceImpl implements SqlService {
         ensureSingleStatement(sql);
 
         ConnectionEntity connectionEntity = connectionService.getConnectionEntity(req.getConnectionId());
+        String targetDatabaseName = resolveTargetDatabaseName(connectionEntity.getDatabaseName(), req.getDatabaseName());
         String explainSql = buildExplainSql(connectionEntity.getDbType(), sql);
-        log.info("[SQL-EXPLAIN] connectionId={}, sql={}", req.getConnectionId(), sql);
-        log.info("[SQL-EXPLAIN] connectionId={}, explainSql={}", req.getConnectionId(), explainSql);
+        log.info("[SQL-EXPLAIN] connectionId={}, databaseName={}, sql={}",
+            req.getConnectionId(), targetDatabaseName, sql);
+        log.info("[SQL-EXPLAIN] connectionId={}, databaseName={}, explainSql={}",
+            req.getConnectionId(), targetDatabaseName, explainSql);
 
         ExplainVO vo = new ExplainVO();
-        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId());
-             Statement statement = connection.createStatement();
-             ResultSet resultSet = statement.executeQuery(explainSql)) {
-            vo.setRows(ResultSetConverter.readRows(resultSet, 200));
-            vo.setSummary("Explain 分析完成");
-            return vo;
+        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId())) {
+            applyDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
+            try (Statement statement = connection.createStatement();
+                 ResultSet resultSet = statement.executeQuery(explainSql)) {
+                vo.setRows(ResultSetConverter.readRows(resultSet, 200));
+                vo.setSummary("Explain 分析完成");
+                return vo;
+            }
         } catch (Exception ex) {
             throw new BusinessException(500, "Explain 执行失败: " + ex.getMessage());
         }
@@ -92,7 +98,9 @@ public class SqlServiceImpl implements SqlService {
         String sql = req.getSqlText().trim();
         ensureSingleStatement(sql);
         ConnectionEntity connection = connectionService.getConnectionEntity(req.getConnectionId());
-        log.info("[SQL-EXECUTE] connectionId={}, sessionId={}, sql={}", req.getConnectionId(), req.getSessionId(), sql);
+        String targetDatabaseName = resolveTargetDatabaseName(connection.getDatabaseName(), req.getDatabaseName());
+        log.info("[SQL-EXECUTE] connectionId={}, sessionId={}, databaseName={}, sql={}",
+            req.getConnectionId(), req.getSessionId(), targetDatabaseName, sql);
 
         List<RiskItemVO> items = evaluateRiskItems(sql);
         String riskLevel = decideRiskLevel(items);
@@ -108,22 +116,26 @@ public class SqlServiceImpl implements SqlService {
 
         long start = System.currentTimeMillis();
         SqlExecuteVO result = new SqlExecuteVO();
-        try (Connection jdbcConnection = connectionService.openTargetConnection(req.getConnectionId());
-             Statement statement = jdbcConnection.createStatement()) {
-            if (SqlClassifier.isQuery(sql)) {
-                String executableSql = addLimitIfNeeded(sql);
-                log.info("[SQL-EXECUTE] connectionId={}, executableSql={}", req.getConnectionId(), executableSql);
-                try (ResultSet resultSet = statement.executeQuery(executableSql)) {
-                    result.setColumns(ResultSetConverter.readColumns(resultSet.getMetaData()));
-                    result.setRows(ResultSetConverter.readRows(resultSet, 500));
-                    result.setAffectedRows(result.getRows().size());
+        try (Connection jdbcConnection = connectionService.openTargetConnection(req.getConnectionId())) {
+            applyDatabaseContext(jdbcConnection, connection.getDbType(), targetDatabaseName);
+            try (Statement statement = jdbcConnection.createStatement()) {
+                if (SqlClassifier.isQuery(sql)) {
+                    String executableSql = addLimitIfNeeded(sql);
+                    log.info("[SQL-EXECUTE] connectionId={}, databaseName={}, executableSql={}",
+                        req.getConnectionId(), targetDatabaseName, executableSql);
+                    try (ResultSet resultSet = statement.executeQuery(executableSql)) {
+                        result.setColumns(ResultSetConverter.readColumns(resultSet.getMetaData()));
+                        result.setRows(ResultSetConverter.readRows(resultSet, 500));
+                        result.setAffectedRows(result.getRows().size());
+                    }
+                } else {
+                    log.info("[SQL-EXECUTE] connectionId={}, databaseName={}, dmlSql={}",
+                        req.getConnectionId(), targetDatabaseName, sql);
+                    int affected = statement.executeUpdate(sql);
+                    result.setAffectedRows(affected);
+                    result.setRows(new ArrayList<>());
+                    result.setColumns(new ArrayList<>());
                 }
-            } else {
-                log.info("[SQL-EXECUTE] connectionId={}, dmlSql={}", req.getConnectionId(), sql);
-                int affected = statement.executeUpdate(sql);
-                result.setAffectedRows(affected);
-                result.setRows(new ArrayList<>());
-                result.setColumns(new ArrayList<>());
             }
             result.setSuccess(Boolean.TRUE);
             result.setMessage("执行成功");
@@ -143,6 +155,34 @@ public class SqlServiceImpl implements SqlService {
             return "EXPLAIN QUERY PLAN " + sql;
         }
         return "EXPLAIN " + sql;
+    }
+
+    /**
+     * 关键操作：SQL 执行链路显式设置数据库上下文，避免未配置默认库时出现 No database selected。
+     */
+    private void applyDatabaseContext(Connection connection, String dbType, String targetDatabaseName) throws SQLException {
+        String type = normalize(dbType).toUpperCase(Locale.ROOT);
+        if (targetDatabaseName.isBlank()) {
+            return;
+        }
+        if ("MYSQL".equals(type) || "POSTGRESQL".equals(type)) {
+            connection.setCatalog(targetDatabaseName);
+        }
+        if ("SQLSERVER".equals(type) || "ORACLE".equals(type)) {
+            connection.setSchema(targetDatabaseName);
+        }
+    }
+
+    private String resolveTargetDatabaseName(String configuredDatabaseName, String requestedDatabaseName) {
+        String requested = normalize(requestedDatabaseName);
+        if (!requested.isBlank()) {
+            return requested;
+        }
+        return normalize(configuredDatabaseName);
+    }
+
+    private String normalize(String value) {
+        return value == null ? "" : value.trim();
     }
 
     private void validateAckToken(String sql, String riskAckToken) {

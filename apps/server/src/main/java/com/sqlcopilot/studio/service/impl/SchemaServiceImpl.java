@@ -44,7 +44,9 @@ public class SchemaServiceImpl implements SchemaService {
     public SchemaSyncVO syncSchema(Long connectionId, String databaseName) {
         String cacheDatabaseName = resolveCacheDatabaseName(connectionId, databaseName);
         SchemaCacheKey cacheKey = new SchemaCacheKey(connectionId, cacheDatabaseName);
-        SchemaSnapshot snapshot = refreshSnapshot(cacheKey, databaseName, true);
+        SchemaSnapshot snapshot = refreshSnapshot(cacheKey, databaseName, true, true);
+        // 关键操作：显式同步请求才执行全量字段向量化，避免 overview 读链路被重型任务阻塞。
+        ragIngestionService.ingestSchema(connectionId, cacheDatabaseName, snapshot.tables(), snapshot.columns());
 
         SchemaSyncVO vo = new SchemaSyncVO();
         vo.setSuccess(Boolean.TRUE);
@@ -56,12 +58,13 @@ public class SchemaServiceImpl implements SchemaService {
 
     @Override
     public SchemaOverviewVO getOverview(Long connectionId, String databaseName) {
-        SchemaSnapshot snapshot = ensureCacheReady(connectionId, databaseName);
+        SchemaSnapshot snapshot = ensureCacheReady(connectionId, databaseName, false);
 
         SchemaOverviewVO vo = new SchemaOverviewVO();
         vo.setConnectionId(connectionId);
+        vo.setDatabaseName(fromCacheDatabaseName(snapshot.databaseName()));
         vo.setTableCount(snapshot.tables().size());
-        vo.setColumnCount(snapshot.columns().size());
+        vo.setColumnCount(snapshot.columnCount());
         List<SchemaOverviewVO.TableSummaryVO> summaries = snapshot.tables().stream().map(item -> {
             SchemaOverviewVO.TableSummaryVO summary = new SchemaOverviewVO.TableSummaryVO();
             summary.setTableName(item.getTableName());
@@ -76,10 +79,16 @@ public class SchemaServiceImpl implements SchemaService {
 
     @Override
     public TableDetailVO getTableDetail(Long connectionId, String databaseName, String tableName) {
-        SchemaSnapshot snapshot = ensureCacheReady(connectionId, databaseName);
-        List<SchemaColumnCacheEntity> columnCache = snapshot.columns().stream()
-            .filter(item -> tableName.equals(item.getTableName()))
-            .toList();
+        SchemaSnapshot snapshot = ensureCacheReady(connectionId, databaseName, false);
+        List<SchemaColumnCacheEntity> columnCache;
+        if (snapshot.columns().isEmpty()) {
+            // 关键操作：字段详情改为按表按需读取，不在 overview 阶段全量抓取。
+            columnCache = loadColumnsForTable(connectionId, databaseName, tableName);
+        } else {
+            columnCache = snapshot.columns().stream()
+                .filter(item -> tableName.equals(item.getTableName()))
+                .toList();
+        }
 
         TableDetailVO vo = new TableDetailVO();
         vo.setConnectionId(connectionId);
@@ -152,7 +161,7 @@ public class SchemaServiceImpl implements SchemaService {
 
     @Override
     public ContextBuildVO buildContext(ContextBuildReq req) {
-        SchemaSnapshot snapshot = ensureCacheReady(req.getConnectionId(), req.getDatabaseName());
+        SchemaSnapshot snapshot = ensureCacheReady(req.getConnectionId(), req.getDatabaseName(), false);
 
         int tokenBudget = req.getTokenBudget() == null ? 1200 : req.getTokenBudget();
         List<SchemaTableCacheEntity> tables = snapshot.tables();
@@ -174,10 +183,12 @@ public class SchemaServiceImpl implements SchemaService {
             }
             scoreMap.put(table.getTableName(), score);
         }
-        for (SchemaColumnCacheEntity column : columns) {
-            String lower = column.getColumnName().toLowerCase(Locale.ROOT);
-            if (question.contains(lower)) {
-                scoreMap.compute(column.getTableName(), (k, v) -> (v == null ? 0 : v) + 1);
+        if (!columns.isEmpty()) {
+            for (SchemaColumnCacheEntity column : columns) {
+                String lower = column.getColumnName().toLowerCase(Locale.ROOT);
+                if (question.contains(lower)) {
+                    scoreMap.compute(column.getTableName(), (k, v) -> (v == null ? 0 : v) + 1);
+                }
             }
         }
 
@@ -196,7 +207,12 @@ public class SchemaServiceImpl implements SchemaService {
             if (accepted.contains(tableName)) {
                 continue;
             }
-            String segment = buildTableSegment(tableColumns.getOrDefault(tableName, List.of()), tableName);
+            List<SchemaColumnCacheEntity> tableColumnList = tableColumns.get(tableName);
+            if (tableColumnList == null && columns.isEmpty()) {
+                tableColumnList = loadColumnsForTable(req.getConnectionId(), req.getDatabaseName(), tableName);
+                tableColumns.put(tableName, tableColumnList);
+            }
+            String segment = buildTableSegment(tableColumnList == null ? List.of() : tableColumnList, tableName);
             int segmentTokens = Math.max(1, segment.length() / 4);
             if (usedTokens + segmentTokens > tokenBudget) {
                 continue;
@@ -225,7 +241,7 @@ public class SchemaServiceImpl implements SchemaService {
         // 关键操作：定时刷新仅覆盖已访问过的缓存键，避免无意义扫描所有连接。
         for (SchemaCacheKey cacheKey : new ArrayList<>(schemaSnapshotCache.keySet())) {
             try {
-                refreshSnapshot(cacheKey, fromCacheDatabaseName(cacheKey.databaseName()), true);
+                refreshSnapshot(cacheKey, fromCacheDatabaseName(cacheKey.databaseName()), true, false);
             } catch (Exception ex) {
                 log.warn("定时刷新 Schema 缓存失败, connectionId={}, databaseName={}, reason={}",
                     cacheKey.connectionId(), cacheKey.databaseName(), ex.getMessage());
@@ -233,22 +249,31 @@ public class SchemaServiceImpl implements SchemaService {
         }
     }
 
-    private SchemaSnapshot ensureCacheReady(Long connectionId, String databaseName) {
+    private SchemaSnapshot ensureCacheReady(Long connectionId, String databaseName, boolean requireColumnDetails) {
         String cacheDatabaseName = resolveCacheDatabaseName(connectionId, databaseName);
         SchemaCacheKey cacheKey = new SchemaCacheKey(connectionId, cacheDatabaseName);
-        return refreshSnapshot(cacheKey, databaseName, false);
+        return refreshSnapshot(cacheKey, databaseName, false, requireColumnDetails);
     }
 
-    private SchemaSnapshot refreshSnapshot(SchemaCacheKey cacheKey, String databaseName, boolean forceRefresh) {
+    private SchemaSnapshot refreshSnapshot(SchemaCacheKey cacheKey,
+                                           String databaseName,
+                                           boolean forceRefresh,
+                                           boolean requireColumnDetails) {
         Object lock = schemaCacheLocks.computeIfAbsent(cacheKey, key -> new Object());
         synchronized (lock) {
             SchemaSnapshot current = schemaSnapshotCache.get(cacheKey);
-            if (!forceRefresh && current != null && !isCacheExpired(current)) {
+            if (!forceRefresh && current != null && !isCacheExpired(current)
+                && (!requireColumnDetails || !current.columns().isEmpty())) {
                 return current;
             }
 
             try {
-                SchemaSnapshot latest = loadSnapshot(cacheKey.connectionId(), databaseName, cacheKey.databaseName());
+                SchemaSnapshot latest = loadSnapshot(
+                    cacheKey.connectionId(),
+                    databaseName,
+                    cacheKey.databaseName(),
+                    requireColumnDetails
+                );
                 schemaSnapshotCache.put(cacheKey, latest);
                 return latest;
             } catch (BusinessException ex) {
@@ -262,7 +287,10 @@ public class SchemaServiceImpl implements SchemaService {
         }
     }
 
-    private SchemaSnapshot loadSnapshot(Long connectionId, String databaseName, String cacheDatabaseName) {
+    private SchemaSnapshot loadSnapshot(Long connectionId,
+                                        String databaseName,
+                                        String cacheDatabaseName,
+                                        boolean includeColumnDetails) {
         long now = System.currentTimeMillis();
         List<SchemaTableCacheEntity> tables = new ArrayList<>();
         List<SchemaColumnCacheEntity> columns = new ArrayList<>();
@@ -293,28 +321,8 @@ public class SchemaServiceImpl implements SchemaService {
                     tableEntity.setUpdatedAt(now);
                     tables.add(tableEntity);
 
-                    Set<String> primaryKeys = readPrimaryKeys(metaData, catalog, schemaPattern, tableName);
-                    Set<String> indexedColumns = readIndexedColumns(metaData, catalog, schemaPattern, tableName);
-                    try (ResultSet columnRs = metaData.getColumns(catalog, schemaPattern, tableName, "%")) {
-                        while (columnRs.next()) {
-                            String columnName = columnRs.getString("COLUMN_NAME");
-                            SchemaColumnCacheEntity columnEntity = new SchemaColumnCacheEntity();
-                            columnEntity.setConnectionId(connectionId);
-                            columnEntity.setDatabaseName(cacheDatabaseName);
-                            columnEntity.setTableName(tableName);
-                            columnEntity.setColumnName(columnName);
-                            columnEntity.setDataType(columnRs.getString("TYPE_NAME"));
-                            columnEntity.setColumnSize(readIntegerColumn(columnRs, "COLUMN_SIZE"));
-                            columnEntity.setDecimalDigits(readIntegerColumn(columnRs, "DECIMAL_DIGITS"));
-                            columnEntity.setColumnDefault(columnRs.getString("COLUMN_DEF"));
-                            columnEntity.setAutoIncrementFlag(parseAutoIncrementFlag(columnRs.getString("IS_AUTOINCREMENT")));
-                            columnEntity.setNullableFlag(columnRs.getInt("NULLABLE") == DatabaseMetaData.columnNullable ? 1 : 0);
-                            columnEntity.setColumnComment(columnRs.getString("REMARKS"));
-                            columnEntity.setIndexedFlag(indexedColumns.contains(columnName) ? 1 : 0);
-                            columnEntity.setPrimaryKeyFlag(primaryKeys.contains(columnName) ? 1 : 0);
-                            columnEntity.setUpdatedAt(now);
-                            columns.add(columnEntity);
-                        }
+                    if (includeColumnDetails) {
+                        columns.addAll(readColumnsForTable(metaData, catalog, schemaPattern, connectionId, cacheDatabaseName, tableName, now));
                     }
                 }
             }
@@ -324,9 +332,60 @@ public class SchemaServiceImpl implements SchemaService {
 
         List<SchemaTableCacheEntity> readonlyTables = List.copyOf(tables);
         List<SchemaColumnCacheEntity> readonlyColumns = List.copyOf(columns);
-        // 关键操作：元数据快照构建完成后异步链路写入 RAG（失败不影响主流程）。
-        ragIngestionService.ingestSchema(connectionId, cacheDatabaseName, readonlyTables, readonlyColumns);
-        return new SchemaSnapshot(readonlyTables, readonlyColumns, now);
+        return new SchemaSnapshot(cacheDatabaseName, readonlyTables, readonlyColumns, readonlyColumns.size(), now);
+    }
+
+    private List<SchemaColumnCacheEntity> loadColumnsForTable(Long connectionId, String databaseName, String tableName) {
+        if (tableName == null || tableName.isBlank()) {
+            return List.of();
+        }
+        String cacheDatabaseName = resolveCacheDatabaseName(connectionId, databaseName);
+        long now = System.currentTimeMillis();
+        ConnectionEntity connectionEntity = connectionService.getConnectionEntity(connectionId);
+        String targetDatabaseName = resolveTargetDatabaseName(connectionEntity, databaseName);
+        try (Connection connection = connectionService.openTargetConnection(connectionId)) {
+            applyDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
+            DatabaseMetaData metaData = connection.getMetaData();
+            String catalog = resolveCatalog(connection, connectionEntity.getDbType(), targetDatabaseName);
+            String schemaPattern = resolveSchemaPattern(connectionEntity.getDbType(), targetDatabaseName);
+            return readColumnsForTable(metaData, catalog, schemaPattern, connectionId, cacheDatabaseName, tableName, now);
+        } catch (SQLException ex) {
+            throw new BusinessException(500, "读取表字段详情失败: " + ex.getMessage());
+        }
+    }
+
+    private List<SchemaColumnCacheEntity> readColumnsForTable(DatabaseMetaData metaData,
+                                                              String catalog,
+                                                              String schemaPattern,
+                                                              Long connectionId,
+                                                              String cacheDatabaseName,
+                                                              String tableName,
+                                                              long now) throws SQLException {
+        List<SchemaColumnCacheEntity> columns = new ArrayList<>();
+        Set<String> primaryKeys = readPrimaryKeys(metaData, catalog, schemaPattern, tableName);
+        Set<String> indexedColumns = readIndexedColumns(metaData, catalog, schemaPattern, tableName);
+        try (ResultSet columnRs = metaData.getColumns(catalog, schemaPattern, tableName, "%")) {
+            while (columnRs.next()) {
+                String columnName = columnRs.getString("COLUMN_NAME");
+                SchemaColumnCacheEntity columnEntity = new SchemaColumnCacheEntity();
+                columnEntity.setConnectionId(connectionId);
+                columnEntity.setDatabaseName(cacheDatabaseName);
+                columnEntity.setTableName(tableName);
+                columnEntity.setColumnName(columnName);
+                columnEntity.setDataType(columnRs.getString("TYPE_NAME"));
+                columnEntity.setColumnSize(readIntegerColumn(columnRs, "COLUMN_SIZE"));
+                columnEntity.setDecimalDigits(readIntegerColumn(columnRs, "DECIMAL_DIGITS"));
+                columnEntity.setColumnDefault(columnRs.getString("COLUMN_DEF"));
+                columnEntity.setAutoIncrementFlag(parseAutoIncrementFlag(columnRs.getString("IS_AUTOINCREMENT")));
+                columnEntity.setNullableFlag(columnRs.getInt("NULLABLE") == DatabaseMetaData.columnNullable ? 1 : 0);
+                columnEntity.setColumnComment(columnRs.getString("REMARKS"));
+                columnEntity.setIndexedFlag(indexedColumns.contains(columnName) ? 1 : 0);
+                columnEntity.setPrimaryKeyFlag(primaryKeys.contains(columnName) ? 1 : 0);
+                columnEntity.setUpdatedAt(now);
+                columns.add(columnEntity);
+            }
+        }
+        return columns;
     }
 
     private boolean isCacheExpired(SchemaSnapshot snapshot) {
@@ -504,11 +563,12 @@ public class SchemaServiceImpl implements SchemaService {
     }
 
     private String buildTableSegment(List<SchemaColumnCacheEntity> columnList, String tableName) {
-        if (columnList.isEmpty()) {
-            return "";
-        }
         StringBuilder builder = new StringBuilder();
         builder.append("表: ").append(tableName).append("\n");
+        if (columnList.isEmpty()) {
+            builder.append("- (字段详情按需加载)\n");
+            return builder.toString();
+        }
         for (SchemaColumnCacheEntity column : columnList) {
             builder.append("- ").append(column.getColumnName())
                 .append(" ").append(column.getDataType())
@@ -537,8 +597,10 @@ public class SchemaServiceImpl implements SchemaService {
     private record SchemaCacheKey(Long connectionId, String databaseName) {
     }
 
-    private record SchemaSnapshot(List<SchemaTableCacheEntity> tables,
+    private record SchemaSnapshot(String databaseName,
+                                  List<SchemaTableCacheEntity> tables,
                                   List<SchemaColumnCacheEntity> columns,
+                                  int columnCount,
                                   long updatedAt) {
     }
 }

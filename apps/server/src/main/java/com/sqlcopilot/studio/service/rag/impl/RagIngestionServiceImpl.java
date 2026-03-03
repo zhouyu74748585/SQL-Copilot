@@ -11,14 +11,20 @@ import com.sqlcopilot.studio.service.rag.RagIngestionService;
 import com.sqlcopilot.studio.service.rag.model.QdrantPoint;
 import com.sqlcopilot.studio.service.rag.model.RagCollectionNames;
 import com.sqlcopilot.studio.service.rag.model.SqlFeatureMeta;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.document.Document;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -39,6 +45,10 @@ public class RagIngestionServiceImpl implements RagIngestionService {
     private final boolean ragEnabled;
     private final boolean sqlFragmentEnabled;
     private final int sqlFragmentMaxCount;
+    private final int embeddingBatchSize;
+    private final int embeddingParallelism;
+    private final int qdrantUpsertBatchSize;
+    private final ExecutorService embeddingBatchExecutor;
     private final RagCollectionNames collectionNames;
 
     public RagIngestionServiceImpl(QdrantClientService qdrantClientService,
@@ -50,19 +60,35 @@ public class RagIngestionServiceImpl implements RagIngestionService {
                                    @Value("${rag.collection.sql-history:sql_history}") String sqlHistoryCollection,
                                    @Value("${rag.collection.sql-fragment:sql_fragment}") String sqlFragmentCollection,
                                    @Value("${rag.sql-fragment.enabled:true}") boolean sqlFragmentEnabled,
-                                   @Value("${rag.sql-fragment.max-count:8}") int sqlFragmentMaxCount) {
+                                   @Value("${rag.sql-fragment.max-count:8}") int sqlFragmentMaxCount,
+                                   @Value("${rag.embedding.batch-size:16}") int embeddingBatchSize,
+                                   @Value("${rag.embedding.parallelism:2}") int embeddingParallelism,
+                                   @Value("${rag.qdrant.upsert-batch-size:300}") int qdrantUpsertBatchSize) {
         this.qdrantClientService = qdrantClientService;
         this.ragEmbeddingService = ragEmbeddingService;
         this.connectionService = connectionService;
         this.ragEnabled = ragEnabled;
         this.sqlFragmentEnabled = sqlFragmentEnabled;
         this.sqlFragmentMaxCount = Math.max(1, sqlFragmentMaxCount);
+        this.embeddingBatchSize = Math.max(1, embeddingBatchSize);
+        this.embeddingParallelism = Math.max(1, embeddingParallelism);
+        this.qdrantUpsertBatchSize = Math.max(1, qdrantUpsertBatchSize);
+        this.embeddingBatchExecutor = this.embeddingParallelism <= 1
+            ? null
+            : Executors.newFixedThreadPool(this.embeddingParallelism, new EmbeddingThreadFactory());
         this.collectionNames = new RagCollectionNames(
             schemaTableCollection,
             schemaColumnCollection,
             sqlHistoryCollection,
             sqlFragmentCollection
         );
+    }
+
+    @PreDestroy
+    public void shutdownEmbeddingExecutor() {
+        if (embeddingBatchExecutor != null) {
+            embeddingBatchExecutor.shutdownNow();
+        }
     }
 
     @Override
@@ -80,30 +106,36 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         String normalizedDatabaseName = normalizeDatabaseName(databaseName);
 
         try {
-            Map<String, List<SchemaColumnCacheEntity>> tableColumns = columnMetaList.stream()
+            List<SchemaColumnCacheEntity> safeColumnMetaList = columnMetaList == null ? List.of() : columnMetaList;
+            Map<String, List<SchemaColumnCacheEntity>> tableColumns = safeColumnMetaList.stream()
                 .collect(Collectors.groupingBy(SchemaColumnCacheEntity::getTableName));
 
-            List<QdrantPoint> tablePoints = new ArrayList<>();
+            List<PointEmbeddingTask> tableTasks = new ArrayList<>();
             for (SchemaTableCacheEntity table : tableMetaList) {
                 List<SchemaColumnCacheEntity> columns = tableColumns.getOrDefault(table.getTableName(), List.of());
                 SchemaTablePayload payload = buildTablePayload(connectionId, normalizedDatabaseName, table, columns);
                 Map<String, Object> metadata = sanitizeMetadata(payload.toMetadataMap());
-                Document doc = new Document(buildTableDocumentText(table, columns), metadata);
-                List<Float> vector = ragEmbeddingService.embedText(doc.getText());
-                tablePoints.add(new QdrantPoint(stablePointId("schema_table", connectionId,
-                    normalizedDatabaseName, table.getTableName()), vector, metadata));
+                tableTasks.add(new PointEmbeddingTask(
+                    stablePointId("schema_table", connectionId, normalizedDatabaseName, table.getTableName()),
+                    buildTableDocumentText(table, columns),
+                    metadata
+                ));
             }
+            List<QdrantPoint> tablePoints = buildQdrantPoints(tableTasks);
             writePoints(collectionNames.getSchemaTable(), tablePoints);
 
-            List<QdrantPoint> columnPoints = new ArrayList<>();
-            for (SchemaColumnCacheEntity column : columnMetaList) {
+            List<PointEmbeddingTask> columnTasks = new ArrayList<>();
+            for (SchemaColumnCacheEntity column : safeColumnMetaList) {
                 SchemaColumnPayload payload = buildColumnPayload(connectionId, normalizedDatabaseName, column);
                 Map<String, Object> metadata = sanitizeMetadata(payload.toMetadataMap());
-                Document doc = new Document(buildColumnDocumentText(column), metadata);
-                List<Float> vector = ragEmbeddingService.embedText(doc.getText());
-                columnPoints.add(new QdrantPoint(stablePointId("schema_column", connectionId,
-                    normalizedDatabaseName, column.getTableName(), column.getColumnName()), vector, metadata));
+                columnTasks.add(new PointEmbeddingTask(
+                    stablePointId("schema_column", connectionId,
+                        normalizedDatabaseName, column.getTableName(), column.getColumnName()),
+                    buildColumnDocumentText(column),
+                    metadata
+                ));
             }
+            List<QdrantPoint> columnPoints = buildQdrantPoints(columnTasks);
             writePoints(collectionNames.getSchemaColumn(), columnPoints);
         } catch (Exception ex) {
             ex.printStackTrace();
@@ -140,32 +172,30 @@ public class RagIngestionServiceImpl implements RagIngestionService {
 
             String historyText = buildSqlHistoryDocumentText(payload);
             Map<String, Object> historyMetadata = sanitizeMetadata(payload.toMetadataMap());
-            Document doc = new Document(historyText, historyMetadata);
-            List<Float> historyVector = ragEmbeddingService.embedText(doc.getText());
-            QdrantPoint historyPoint = new QdrantPoint(
+            List<QdrantPoint> historyPoints = buildQdrantPoints(List.of(new PointEmbeddingTask(
                 stablePointId("sql_history", historyEntity.getConnectionId(), databaseName,
                     String.valueOf(historyEntity.getId() == null ? payload.getCreatedAt() : historyEntity.getId())),
-                historyVector,
+                historyText,
                 historyMetadata
-            );
-            writePoints(collectionNames.getSqlHistory(), List.of(historyPoint));
+            )));
+            writePoints(collectionNames.getSqlHistory(), historyPoints);
 
             if (sqlFragmentEnabled) {
                 List<SqlFragmentPayload> fragments = buildSqlFragments(payload);
                 if (!fragments.isEmpty()) {
-                    List<QdrantPoint> fragmentPoints = new ArrayList<>();
+                    List<PointEmbeddingTask> fragmentTasks = new ArrayList<>();
                     for (SqlFragmentPayload fragment : fragments) {
                         Map<String, Object> fragmentMetadata = sanitizeMetadata(fragment.toMetadataMap());
-                        Document fragmentDoc = new Document(fragment.getFragmentText(), fragmentMetadata);
-                        List<Float> fragmentVector = ragEmbeddingService.embedText(fragmentDoc.getText());
-                        fragmentPoints.add(new QdrantPoint(
+                        fragmentTasks.add(new PointEmbeddingTask(
                             stablePointId("sql_fragment", historyEntity.getConnectionId(), databaseName,
                                 String.valueOf(historyEntity.getId() == null ? payload.getCreatedAt() : historyEntity.getId()),
                                 fragment.getFragmentType(),
                                 String.valueOf(fragment.getFragmentIndex())),
-                            fragmentVector,
-                             fragmentMetadata));
+                            fragment.getFragmentText(),
+                            fragmentMetadata
+                        ));
                     }
+                    List<QdrantPoint> fragmentPoints = buildQdrantPoints(fragmentTasks);
                     writePoints(collectionNames.getSqlFragment(), fragmentPoints);
                 }
             }
@@ -180,7 +210,70 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         }
         int vectorSize = points.get(0).getVector().size();
         qdrantClientService.ensureCollection(collectionName, vectorSize);
-        qdrantClientService.upsertPoints(collectionName, points);
+        for (int start = 0; start < points.size(); start += qdrantUpsertBatchSize) {
+            int end = Math.min(start + qdrantUpsertBatchSize, points.size());
+            qdrantClientService.upsertPoints(collectionName, points.subList(start, end));
+        }
+    }
+
+    private List<QdrantPoint> buildQdrantPoints(List<PointEmbeddingTask> tasks) {
+        if (tasks == null || tasks.isEmpty()) {
+            return List.of();
+        }
+        List<String> texts = tasks.stream().map(PointEmbeddingTask::text).toList();
+        List<List<Float>> vectors = embedTextsInBatches(texts);
+        if (vectors.size() != tasks.size()) {
+            throw new IllegalStateException("向量数量与任务数量不一致");
+        }
+        List<QdrantPoint> points = new ArrayList<>(tasks.size());
+        for (int i = 0; i < tasks.size(); i++) {
+            PointEmbeddingTask task = tasks.get(i);
+            points.add(new QdrantPoint(task.pointId(), vectors.get(i), task.metadata()));
+        }
+        return points;
+    }
+
+    private List<List<Float>> embedTextsInBatches(List<String> texts) {
+        if (texts == null || texts.isEmpty()) {
+            return List.of();
+        }
+        List<EmbeddingBatchTask> tasks = new ArrayList<>();
+        int order = 0;
+        for (int start = 0; start < texts.size(); start += embeddingBatchSize) {
+            int end = Math.min(start + embeddingBatchSize, texts.size());
+            tasks.add(new EmbeddingBatchTask(order++, List.copyOf(texts.subList(start, end))));
+        }
+        if (embeddingBatchExecutor == null || tasks.size() == 1) {
+            List<List<Float>> vectors = new ArrayList<>(texts.size());
+            for (EmbeddingBatchTask task : tasks) {
+                vectors.addAll(ragEmbeddingService.embedTexts(task.texts()));
+            }
+            return vectors;
+        }
+
+        try {
+            // 关键操作：批次内并发受 embeddingParallelism 限制，兼顾吞吐与资源占用。
+            List<CompletableFuture<EmbeddingBatchResult>> futures = tasks.stream()
+                .map(task -> CompletableFuture.supplyAsync(
+                    () -> new EmbeddingBatchResult(task.order(), ragEmbeddingService.embedTexts(task.texts())),
+                    embeddingBatchExecutor
+                ))
+                .toList();
+            List<EmbeddingBatchResult> batchResults = futures.stream().map(CompletableFuture::join)
+                .sorted(Comparator.comparingInt(EmbeddingBatchResult::order))
+                .toList();
+            List<List<Float>> vectors = new ArrayList<>(texts.size());
+            for (EmbeddingBatchResult result : batchResults) {
+                vectors.addAll(result.vectors());
+            }
+            return vectors;
+        } catch (CompletionException ex) {
+            Throwable cause = ex.getCause();
+            if (cause instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            throw new IllegalStateException("批量向量化失败: " + Objects.toString(cause == null ? ex : cause, ex.toString()));
+        }
     }
 
     private String buildTableDocumentText(SchemaTableCacheEntity table, List<SchemaColumnCacheEntity> columns) {
@@ -430,6 +523,27 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             return list;
         }
         return value;
+    }
+
+    private record PointEmbeddingTask(String pointId, String text, Map<String, Object> metadata) {
+    }
+
+    private record EmbeddingBatchTask(int order, List<String> texts) {
+    }
+
+    private record EmbeddingBatchResult(int order, List<List<Float>> vectors) {
+    }
+
+    private static class EmbeddingThreadFactory implements ThreadFactory {
+
+        private final AtomicInteger index = new AtomicInteger(1);
+
+        @Override
+        public Thread newThread(Runnable runnable) {
+            Thread thread = new Thread(runnable, "rag-embedding-batch-" + index.getAndIncrement());
+            thread.setDaemon(true);
+            return thread;
+        }
     }
 
     private static class SchemaTablePayload {

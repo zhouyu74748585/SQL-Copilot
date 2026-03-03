@@ -11,6 +11,9 @@ public class SchemaOverviewVO {
     /** 连接主键 ID。 */
     private Long connectionId;
 
+    /** 数据库名称。 */
+    private String databaseName;
+
     /** 总表数量。 */
     private Integer tableCount;
 

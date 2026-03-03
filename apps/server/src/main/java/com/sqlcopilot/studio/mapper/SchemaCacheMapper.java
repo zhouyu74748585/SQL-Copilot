@@ -44,6 +44,13 @@ public interface SchemaCacheMapper {
     List<SchemaTableCacheEntity> findTables(@Param("connectionId") Long connectionId, @Param("databaseName") String databaseName);
 
     @Select("""
+        SELECT * FROM schema_table_cache
+        WHERE connection_id = #{connectionId}
+        ORDER BY table_name
+        """)
+    List<SchemaTableCacheEntity> findTablesByConnection(@Param("connectionId") Long connectionId);
+
+    @Select("""
         SELECT * FROM schema_column_cache
         WHERE connection_id = #{connectionId} AND database_name = #{databaseName} AND table_name = #{tableName}
         ORDER BY id

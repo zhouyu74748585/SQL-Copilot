@@ -29,6 +29,7 @@ public class AiConfigMigrationRunner implements ApplicationRunner {
              Statement statement = connection.createStatement()) {
             ensureAiProviderModelOptionsColumn(connection);
             ensureRagConfigTable(statement);
+            ensureRagVectorizeStatusTable(statement);
             migrateLegacyRagColumns(connection);
         } catch (SQLException ex) {
             throw new IllegalStateException("AI 配置表迁移失败", ex);
@@ -68,6 +69,22 @@ public class AiConfigMigrationRunner implements ApplicationRunner {
                 rag_embedding_model_path TEXT,
                 rag_embedding_model_data_path TEXT,
                 updated_at INTEGER NOT NULL
+            )
+            """);
+    }
+
+    /**
+     * 关键操作：持久化数据库向量化状态，确保服务重启后状态可恢复。
+     */
+    private void ensureRagVectorizeStatusTable(Statement statement) throws SQLException {
+        statement.execute("""
+            CREATE TABLE IF NOT EXISTS rag_vectorize_status (
+                connection_id INTEGER NOT NULL,
+                database_name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                message TEXT,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY(connection_id, database_name)
             )
             """);
     }

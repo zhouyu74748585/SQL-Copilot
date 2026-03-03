@@ -2,6 +2,7 @@ package com.sqlcopilot.studio.service.rag;
 
 import com.sqlcopilot.studio.service.rag.model.QdrantPoint;
 import com.sqlcopilot.studio.service.rag.model.QdrantScoredPoint;
+import com.sqlcopilot.studio.service.rag.model.QdrantCollectionMetric;
 
 import java.util.List;
 
@@ -16,4 +17,6 @@ public interface QdrantClientService {
                                          int limit,
                                          Long connectionId,
                                          String databaseName);
+
+    QdrantCollectionMetric queryCollectionMetric(String collectionName, Long connectionId, String databaseName);
 }

@@ -20,6 +20,9 @@ public class SqlExecuteReq {
     @NotBlank
     private String sqlText;
 
+    /** 目标数据库名称（可选，未传时使用连接默认库）。 */
+    private String databaseName;
+
     /** 风险确认令牌，高风险 SQL 必填。 */
     private String riskAckToken;
 

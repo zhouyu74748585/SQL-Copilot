@@ -14,7 +14,7 @@ mybatis:
   type-aliases-package: com.sqlcopilot.studio.entity
   configuration:
     map-underscore-to-camel-case: true
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
 
 logging:
   level:
@@ -31,6 +31,7 @@ rag:
   qdrant:
     url: http://127.0.0.1:6333
     api-key: ""
+    upsert-batch-size: 300
   collection:
     schema-table: schema_table
     schema-column: schema_column
@@ -46,6 +47,12 @@ rag:
     sentencepiece-file-name: sentencepiece.bpe.model
     max-seq-len: 512
     fallback-dimension: 1024
+    batch-size: 16
+    parallelism: 2
+  retrieval:
+    schema-table-limit: 10
+    schema-column-limit: 20
+    sql-history-limit: 8
   sql-fragment:
     enabled: true
     max-count: 8

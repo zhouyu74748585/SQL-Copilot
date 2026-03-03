@@ -21,6 +21,7 @@ export interface ConnectionCreateReq {
 
 export interface SchemaOverviewVO {
   connectionId: number;
+  databaseName?: string;
   tableCount: number;
   columnCount: number;
   tableSummaries: Array<{
@@ -29,6 +30,13 @@ export interface SchemaOverviewVO {
     rowEstimate?: number;
     tableSizeBytes?: number;
   }>;
+}
+
+export interface SchemaDatabaseVO {
+  databaseName: string;
+  vectorizeStatus: 'NOT_VECTORIZED' | 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED';
+  vectorizeMessage?: string;
+  vectorizeUpdatedAt?: number;
 }
 
 export interface TableDetailVO {
@@ -140,9 +148,34 @@ export interface RagVectorizeEnqueueVO {
   message: string;
 }
 
+export interface RagVectorizeInterruptReq {
+  connectionId: number;
+  databaseName: string;
+}
+
+export interface RagVectorizeInterruptVO {
+  interrupted: boolean;
+  status: 'NOT_VECTORIZED' | 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED';
+  message: string;
+  updatedAt?: number;
+}
+
 export interface RagDatabaseVectorizeStatusVO {
   databaseName: string;
   status: 'NOT_VECTORIZED' | 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED';
   message?: string;
   updatedAt?: number;
+}
+
+export interface RagVectorizeOverviewVO {
+  databaseName: string;
+  status: 'NOT_VECTORIZED' | 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED';
+  message?: string;
+  updatedAt?: number;
+  totalVectorCount: number;
+  schemaTableVectorCount: number;
+  schemaColumnVectorCount: number;
+  sqlHistoryVectorCount: number;
+  sqlFragmentVectorCount: number;
+  vectorDimension?: number;
 }

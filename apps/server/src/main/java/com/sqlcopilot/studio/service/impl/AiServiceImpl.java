@@ -51,7 +51,13 @@ public class AiServiceImpl implements AiService {
     private static final Pattern SQL_FENCE_PATTERN = Pattern.compile("(?is)```(?:sql)?\\s*(.*?)```");
     private static final Pattern CTE_NAME_PATTERN = Pattern.compile("(?is)(?:^|,|\\s)([a-zA-Z_][a-zA-Z0-9_]*)\\s+as\\s*\\(");
     private static final Pattern COMMAND_TOKEN_PATTERN = Pattern.compile("\"([^\"]*)\"|'([^']*)'|(\\S+)");
+    private static final Set<String> CODEX_SUBCOMMANDS = Set.of(
+        "exec", "e", "review", "login", "logout", "mcp", "mcp-server",
+        "app-server", "app", "completion", "sandbox", "debug", "apply",
+        "a", "resume", "fork", "cloud", "features", "help"
+    );
     private static final long CLI_TIMEOUT_SECONDS = 45L;
+    private static final String OPENAI_SYSTEM_PROMPT = "你是数据库 SQL 专家。基于提供的 RAG 上下文生成 SQL。仅返回可执行 SQL，不要输出解释。查询语句默认增加 LIMIT 100。";
     private static final Logger log = LoggerFactory.getLogger(AiServiceImpl.class);
 
     private final SchemaService schemaService;
@@ -74,6 +80,16 @@ public class AiServiceImpl implements AiService {
 
     @Override
     public AiGenerateSqlVO generateSql(AiGenerateSqlReq req) {
+        long startAt = System.currentTimeMillis();
+        log.info(
+            "[AI-GENERATE-REQ] connectionId={}, sessionId={}, databaseName={}, modelName={}, promptLength={}, sqlSnippetLength={}",
+            req.getConnectionId(),
+            safe(req.getSessionId()),
+            safe(req.getDatabaseName()),
+            safe(req.getModelName()),
+            safe(req.getPrompt()).length(),
+            safe(req.getSqlSnippet()).length()
+        );
         // 关键操作：先将用户需求/SQL片段向量化并做 Qdrant 分层检索，构造 Prompt 上下文。
         String retrievalInput = buildRetrievalInput(req.getPrompt(), req.getSqlSnippet());
         RagPromptContext ragPromptContext = ragRetrievalService.retrievePromptContext(
@@ -90,13 +106,18 @@ public class AiServiceImpl implements AiService {
             ProviderResult result = generateByConfiguredProvider(req, generationContext);
             generatedSql = result.sqlText();
             reasoning = result.reasoning();
-            log.info("[AI-GENERATE] connectionId={}, sessionId={}, sql={}", req.getConnectionId(), req.getSessionId(), generatedSql);
         } catch (Exception ex) {
             generatedSql = fallbackSql(req.getPrompt(), generationContext.relatedTables());
             reasoning = "AI 配置调用失败，已降级到本地规则生成。原因: " + ex.getMessage();
             fallbackUsed = true;
-            log.warn("[AI-GENERATE-FALLBACK] connectionId={}, sessionId={}, reason={}, sql={}",
-                req.getConnectionId(), req.getSessionId(), ex.getMessage(), generatedSql);
+            log.warn(
+                "[AI-GENERATE-PROVIDER-FAILED] connectionId={}, sessionId={}, databaseName={}, modelName={}, reason={}",
+                req.getConnectionId(),
+                safe(req.getSessionId()),
+                safe(req.getDatabaseName()),
+                safe(req.getModelName()),
+                safe(ex.getMessage())
+            );
         }
 
         AstValidationResult astResult = validateByAst(req, generatedSql);
@@ -119,6 +140,19 @@ public class AiServiceImpl implements AiService {
         vo.setSqlText(generatedSql);
         vo.setReasoning(reasoning);
         vo.setFallbackUsed(fallbackUsed);
+        log.info(
+            "[AI-GENERATE-RESP] connectionId={}, sessionId={}, databaseName={}, modelName={}, ragHit={}, relatedTableCount={}, contextLength={}, sqlLength={}, fallbackUsed={}, elapsedMs={}",
+            req.getConnectionId(),
+            safe(req.getSessionId()),
+            safe(req.getDatabaseName()),
+            safe(req.getModelName()),
+            Boolean.TRUE.equals(ragPromptContext.getHit()),
+            generationContext.relatedTables().size(),
+            safe(generationContext.promptContext()).length(),
+            safe(generatedSql).length(),
+            fallbackUsed,
+            System.currentTimeMillis() - startAt
+        );
         return vo;
     }
 
@@ -163,23 +197,14 @@ public class AiServiceImpl implements AiService {
         if (baseUrl.isBlank()) {
             baseUrl = "https://api.openai.com/v1";
         }
-        String endpoint = normalizeOpenAiEndpoint(baseUrl);
+        OpenAiEndpoint endpoint = resolveOpenAiEndpoint(baseUrl, model);
 
         String contextText = safe(context.promptContext());
-        ObjectNode payload = objectMapper.createObjectNode();
-        payload.put("model", model);
-        payload.put("temperature", 0.1D);
-        ArrayNode messages = payload.putArray("messages");
-        messages.addObject()
-            .put("role", "system")
-            .put("content", "你是数据库 SQL 专家。基于提供的 RAG 上下文生成 SQL。仅返回可执行 SQL，不要输出解释。查询语句默认增加 LIMIT 100。");
-        messages.addObject()
-            .put("role", "user")
-            .put("content", buildProviderUserPrompt(req, contextText));
+        ObjectNode payload = buildOpenAiPayload(req, model, contextText, endpoint.apiType());
 
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(endpoint))
+                .uri(URI.create(endpoint.url()))
                 .timeout(Duration.ofSeconds(30))
                 .header("Authorization", "Bearer " + apiKey)
                 .header("Content-Type", "application/json")
@@ -189,8 +214,8 @@ public class AiServiceImpl implements AiService {
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 throw new BusinessException(500, "OpenAI 接口返回状态码: " + response.statusCode());
             }
-            JsonNode root = objectMapper.readTree(response.body());
-            String content = root.at("/choices/0/message/content").asText("");
+            // 关键操作：统一兼容 chat/completions 与 responses（含 SSE）两种返回体。
+            String content = parseOpenAiResponseText(response, endpoint.apiType());
             String sqlText = extractSql(content);
             if (sqlText.isBlank()) {
                 throw new BusinessException(500, "OpenAI 返回内容未识别出 SQL");
@@ -203,6 +228,147 @@ public class AiServiceImpl implements AiService {
         }
     }
 
+    private ObjectNode buildOpenAiPayload(AiGenerateSqlReq req, String model, String contextText, OpenAiApiType apiType) {
+        ObjectNode payload = objectMapper.createObjectNode();
+        payload.put("model", model);
+        String userPrompt = buildProviderUserPrompt(req, contextText);
+        if (apiType == OpenAiApiType.RESPONSES) {
+            ArrayNode input = payload.putArray("input");
+            input.addObject()
+                .put("role", "system")
+                .put("content", OPENAI_SYSTEM_PROMPT);
+            input.addObject()
+                .put("role", "user")
+                .put("content", userPrompt);
+            return payload;
+        }
+        payload.put("temperature", 0.1D);
+        ArrayNode messages = payload.putArray("messages");
+        messages.addObject()
+            .put("role", "system")
+            .put("content", OPENAI_SYSTEM_PROMPT);
+        messages.addObject()
+            .put("role", "user")
+            .put("content", userPrompt);
+        return payload;
+    }
+
+    private String parseOpenAiResponseText(HttpResponse<String> response, OpenAiApiType apiType) throws Exception {
+        String body = Objects.toString(response.body(), "");
+        String contentType = response.headers().firstValue("content-type").orElse("").toLowerCase();
+        if (contentType.contains("text/event-stream") || body.startsWith("event:") || body.contains("\nevent:")) {
+            return parseResponsesSseText(body);
+        }
+        JsonNode root = objectMapper.readTree(body);
+        if (apiType == OpenAiApiType.RESPONSES) {
+            String text = parseResponsesJsonText(root);
+            if (!text.isBlank()) {
+                return text;
+            }
+        }
+        String chatText = parseChatCompletionsText(root);
+        if (!chatText.isBlank()) {
+            return chatText;
+        }
+        return parseResponsesJsonText(root);
+    }
+
+    private String parseChatCompletionsText(JsonNode root) {
+        JsonNode contentNode = root.at("/choices/0/message/content");
+        if (contentNode.isTextual()) {
+            return safe(contentNode.asText(""));
+        }
+        if (contentNode.isArray()) {
+            StringBuilder builder = new StringBuilder();
+            for (JsonNode part : contentNode) {
+                String text = safe(part.path("text").asText(""));
+                if (!text.isBlank()) {
+                    if (builder.length() > 0) {
+                        builder.append('\n');
+                    }
+                    builder.append(text);
+                }
+            }
+            return builder.toString().trim();
+        }
+        return "";
+    }
+
+    private String parseResponsesJsonText(JsonNode root) {
+        String directText = safe(root.path("output_text").asText(""));
+        if (!directText.isBlank()) {
+            return directText;
+        }
+        JsonNode outputItems = root.path("output");
+        if (!outputItems.isArray()) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        for (JsonNode item : outputItems) {
+            JsonNode contentItems = item.path("content");
+            if (!contentItems.isArray()) {
+                continue;
+            }
+            for (JsonNode content : contentItems) {
+                String text = safe(content.path("text").asText(""));
+                if (text.isBlank()) {
+                    continue;
+                }
+                if (builder.length() > 0) {
+                    builder.append('\n');
+                }
+                builder.append(text);
+            }
+        }
+        return builder.toString().trim();
+    }
+
+    private String parseResponsesSseText(String body) {
+        StringBuilder deltaText = new StringBuilder();
+        String doneText = "";
+        String[] lines = Objects.toString(body, "").split("\\R");
+        for (String line : lines) {
+            if (line == null) {
+                continue;
+            }
+            String trimmed = line.trim();
+            if (!trimmed.startsWith("data:")) {
+                continue;
+            }
+            String jsonData = trimmed.substring(5).trim();
+            if (jsonData.isEmpty() || "[DONE]".equalsIgnoreCase(jsonData)) {
+                continue;
+            }
+            try {
+                JsonNode eventNode = objectMapper.readTree(jsonData);
+                String eventType = safe(eventNode.path("type").asText(""));
+                if ("response.output_text.delta".equals(eventType)) {
+                    deltaText.append(eventNode.path("delta").asText(""));
+                    continue;
+                }
+                if ("response.output_text.done".equals(eventType)) {
+                    String text = safe(eventNode.path("text").asText(""));
+                    if (!text.isBlank()) {
+                        doneText = text;
+                    }
+                    continue;
+                }
+                if ("response.completed".equals(eventType)) {
+                    String text = parseResponsesJsonText(eventNode.path("response"));
+                    if (!text.isBlank()) {
+                        doneText = text;
+                    }
+                }
+            } catch (Exception ignored) {
+                // 忽略非 JSON data 行，继续消费后续流式事件。
+            }
+        }
+        if (!doneText.isBlank()) {
+            return doneText;
+        }
+        return deltaText.toString().trim();
+    }
+
     private ProviderResult generateByLocalCli(AiGenerateSqlReq req, GenerationContext context, AiModelOptionVO option) {
         String command = safe(option.getCliCommand());
         if (command.isBlank()) {
@@ -210,27 +376,45 @@ public class AiServiceImpl implements AiService {
         }
 
         String backendPrompt = buildProviderUserPrompt(req, safe(context.promptContext()));
+        String constrainedPrompt = buildCliConstrainedPrompt(backendPrompt);
         List<String> commandLine = parseCliCommand(command);
         if (commandLine.isEmpty()) {
             throw new BusinessException(400, "本地 CLI 命令无效");
         }
-        // 关键操作：统一把后端拼装提示词作为命令参数传递，避免用户侧拼装输入模板。
-        commandLine.add(backendPrompt);
+        CliInvocation cliInvocation = buildCliInvocation(commandLine, constrainedPrompt);
 
-        ProcessBuilder processBuilder = new ProcessBuilder(commandLine);
-        String workingDir = safe(option.getCliWorkingDir());
-        if (!workingDir.isBlank()) {
-            processBuilder.directory(new File(workingDir));
-        }
+        ProcessBuilder processBuilder = new ProcessBuilder(cliInvocation.commandLine());
         processBuilder.redirectErrorStream(true);
+        log.info(
+            "[AI-CLI-CALL] providerName={}, providerId={}, rawCommand={}, resolvedCommandHead={}, commandArgCount={}, promptAsArg={}, connectionId={}, sessionId={}, databaseName={}, modelName={}, userPromptLength={}, sqlSnippetLength={}, ragContextLength={}, finalPromptLength={}, ignoredWorkingDirSet={}",
+            safe(option.getName()),
+            safe(option.getId()),
+            command,
+            summarizeCommandHead(cliInvocation.commandLine()),
+            cliInvocation.commandLine().size(),
+            !cliInvocation.writePromptToStdin(),
+            req.getConnectionId(),
+            safe(req.getSessionId()),
+            safe(req.getDatabaseName()),
+            safe(req.getModelName()),
+            safe(req.getPrompt()).length(),
+            safe(req.getSqlSnippet()).length(),
+            safe(context.promptContext()).length(),
+            constrainedPrompt.length(),
+            !safe(option.getCliWorkingDir()).isBlank()
+        );
 
         try {
             Process process = processBuilder.start();
-            // 关键操作：提示词由后端统一拼装后写入 CLI 标准输入，避免用户侧自定义模板干扰生成链路。
-            try (java.io.OutputStream stdin = process.getOutputStream()) {
-                stdin.write(backendPrompt.getBytes(StandardCharsets.UTF_8));
-                stdin.write('\n');
-                stdin.flush();
+            // 关键操作：codex 自动走 exec 非交互参数模式，避免 "stdin is not a terminal"。
+            if (cliInvocation.writePromptToStdin()) {
+                try (java.io.OutputStream stdin = process.getOutputStream()) {
+                    stdin.write(constrainedPrompt.getBytes(StandardCharsets.UTF_8));
+                    stdin.write('\n');
+                    stdin.flush();
+                }
+            } else {
+                process.getOutputStream().close();
             }
             byte[] outputBytes = process.getInputStream().readAllBytes();
             boolean finished = process.waitFor(CLI_TIMEOUT_SECONDS, TimeUnit.SECONDS);
@@ -238,7 +422,17 @@ public class AiServiceImpl implements AiService {
                 process.destroyForcibly();
                 throw new BusinessException(500, "本地 CLI 执行超时");
             }
+            int exitCode = process.exitValue();
             String output = new String(outputBytes, StandardCharsets.UTF_8);
+            log.info(
+                "[AI-CLI-RESULT] providerName={}, providerId={}, connectionId={}, sessionId={}, exitCode={}, outputLength={}",
+                safe(option.getName()),
+                safe(option.getId()),
+                req.getConnectionId(),
+                safe(req.getSessionId()),
+                exitCode,
+                output.length()
+            );
             String sqlText = extractSql(output);
             if (sqlText.isBlank()) {
                 throw new BusinessException(500, "本地 CLI 输出未识别到 SQL");
@@ -249,6 +443,17 @@ public class AiServiceImpl implements AiService {
         } catch (Exception ex) {
             throw new BusinessException(500, "本地 CLI 调用失败: " + ex.getMessage());
         }
+    }
+
+    private String buildCliConstrainedPrompt(String basePrompt) {
+        return """
+            你是数据库 SQL 专家。
+            严格要求：
+            1. 仅基于下面给出的用户需求、SQL片段（如有）和 RAG Context 生成 SQL。
+            2. 禁止扫描、读取或参考当前工程/仓库/本地文件系统的任何内容。
+            3. 仅返回可执行 SQL，不要输出解释。
+
+            """ + basePrompt;
     }
 
     private List<String> parseCliCommand(String rawCommand) {
@@ -267,6 +472,32 @@ public class AiServiceImpl implements AiService {
             }
         }
         return tokens;
+    }
+
+    private CliInvocation buildCliInvocation(List<String> parsedCommand, String prompt) {
+        List<String> commandLine = new ArrayList<>(parsedCommand);
+        if (isCodexExecutable(commandLine.get(0))) {
+            if (!containsCodexSubcommand(commandLine)) {
+                commandLine.add("exec");
+            }
+            commandLine.add(prompt);
+            return new CliInvocation(commandLine, false);
+        }
+        commandLine.add(prompt);
+        return new CliInvocation(commandLine, true);
+    }
+
+    private boolean isCodexExecutable(String executable) {
+        return "codex".equalsIgnoreCase(new File(safe(executable)).getName());
+    }
+
+    private boolean containsCodexSubcommand(List<String> commandLine) {
+        for (int i = 1; i < commandLine.size(); i++) {
+            if (CODEX_SUBCOMMANDS.contains(safe(commandLine.get(i)))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String extractSql(String rawOutput) {
@@ -450,16 +681,50 @@ public class AiServiceImpl implements AiService {
         return normalizedPrompt + "\nSQL片段:\n" + normalizedSnippet;
     }
 
-    private String normalizeOpenAiEndpoint(String baseUrl) {
-        if (baseUrl.endsWith("/chat/completions")) {
-            return baseUrl;
+    /**
+     * 关键操作：根据地址与模型自动判断 OpenAI 接口风格，兼容 chat/completions 与 responses。
+     */
+    private OpenAiEndpoint resolveOpenAiEndpoint(String baseUrl, String model) {
+        String normalized = stripTrailingSlash(baseUrl);
+        String lowerUrl = normalized.toLowerCase();
+        if (lowerUrl.endsWith("/chat/completions")) {
+            return new OpenAiEndpoint(normalized, OpenAiApiType.CHAT_COMPLETIONS);
         }
-        String normalized = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
-        return normalized + "/chat/completions";
+        if (lowerUrl.endsWith("/responses")) {
+            return new OpenAiEndpoint(normalized, OpenAiApiType.RESPONSES);
+        }
+        if (preferResponsesApi(normalized, model)) {
+            return new OpenAiEndpoint(normalized + "/responses", OpenAiApiType.RESPONSES);
+        }
+        return new OpenAiEndpoint(normalized + "/chat/completions", OpenAiApiType.CHAT_COMPLETIONS);
+    }
+
+    private boolean preferResponsesApi(String baseUrl, String model) {
+        String lowerModel = safe(model).toLowerCase();
+        String lowerBaseUrl = safe(baseUrl).toLowerCase();
+        return lowerModel.contains("codex")
+            || lowerModel.startsWith("gpt-5")
+            || lowerBaseUrl.contains("/codex/");
+    }
+
+    private String stripTrailingSlash(String value) {
+        String normalized = safe(value);
+        while (normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized;
     }
 
     private String safe(String input) {
         return Objects.toString(input, "").trim();
+    }
+
+    private String summarizeCommandHead(List<String> commandLine) {
+        if (commandLine == null || commandLine.isEmpty()) {
+            return "";
+        }
+        int max = Math.min(4, commandLine.size());
+        return String.join(" ", commandLine.subList(0, max));
     }
 
     private AiModelOptionVO resolveModelOption(String requestModel, AiConfigVO config) {
@@ -509,6 +774,9 @@ public class AiServiceImpl implements AiService {
         return "gpt-4.1-mini";
     }
 
+    private record CliInvocation(List<String> commandLine, boolean writePromptToStdin) {
+    }
+
     private record ProviderResult(String sqlText, String reasoning) {
     }
 
@@ -516,5 +784,13 @@ public class AiServiceImpl implements AiService {
     }
 
     private record GenerationContext(String promptContext, List<String> relatedTables) {
+    }
+
+    private enum OpenAiApiType {
+        CHAT_COMPLETIONS,
+        RESPONSES
+    }
+
+    private record OpenAiEndpoint(String url, OpenAiApiType apiType) {
     }
 }

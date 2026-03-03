@@ -1,9 +1,18 @@
 package com.sqlcopilot.studio.controller;
 
 import com.sqlcopilot.studio.dto.common.ApiResponse;
+import com.sqlcopilot.studio.dto.rag.RagDatabaseVectorizeStatusVO;
 import com.sqlcopilot.studio.dto.schema.*;
+import com.sqlcopilot.studio.service.RagVectorizeQueueService;
 import com.sqlcopilot.studio.service.SchemaService;
 import jakarta.validation.Valid;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
@@ -12,10 +21,15 @@ import org.springframework.web.bind.annotation.*;
 @Validated
 public class SchemaController {
 
-    private final SchemaService schemaService;
+    private static final Logger log = LoggerFactory.getLogger(SchemaController.class);
 
-    public SchemaController(SchemaService schemaService) {
+    private final SchemaService schemaService;
+    private final RagVectorizeQueueService ragVectorizeQueueService;
+
+    public SchemaController(SchemaService schemaService,
+                            RagVectorizeQueueService ragVectorizeQueueService) {
         this.schemaService = schemaService;
+        this.ragVectorizeQueueService = ragVectorizeQueueService;
     }
 
     @PostMapping("/sync")
@@ -26,7 +40,9 @@ public class SchemaController {
     @GetMapping("/overview")
     public ApiResponse<SchemaOverviewVO> overview(@RequestParam("connectionId") Long connectionId,
                                                   @RequestParam(value = "databaseName", required = false) String databaseName) {
-        return ApiResponse.success(schemaService.getOverview(connectionId, databaseName));
+        SchemaOverviewVO overview = schemaService.getOverview(connectionId, databaseName);
+        tryEnqueueVectorizeTask(connectionId, overview.getDatabaseName());
+        return ApiResponse.success(overview);
     }
 
     @GetMapping("/tableDetail")
@@ -37,8 +53,28 @@ public class SchemaController {
     }
 
     @GetMapping("/databases")
-    public ApiResponse<java.util.List<String>> databases(@RequestParam("connectionId") Long connectionId) {
-        return ApiResponse.success(schemaService.listDatabases(connectionId));
+    public ApiResponse<List<SchemaDatabaseVO>> databases(@RequestParam("connectionId") Long connectionId) {
+        List<String> databases = schemaService.listDatabases(connectionId);
+        List<RagDatabaseVectorizeStatusVO> statuses = ragVectorizeQueueService.listStatus(connectionId);
+        Map<String, RagDatabaseVectorizeStatusVO> statusMap = new LinkedHashMap<>();
+        for (RagDatabaseVectorizeStatusVO item : statuses) {
+            if (item.getDatabaseName() == null) {
+                continue;
+            }
+            statusMap.put(normalizeDatabaseName(item.getDatabaseName()), item);
+        }
+
+        List<SchemaDatabaseVO> result = databases.stream().map(item -> {
+            String databaseName = Objects.toString(item, "").trim();
+            RagDatabaseVectorizeStatusVO status = statusMap.get(normalizeDatabaseName(databaseName));
+            SchemaDatabaseVO vo = new SchemaDatabaseVO();
+            vo.setDatabaseName(databaseName);
+            vo.setVectorizeStatus(status == null ? "NOT_VECTORIZED" : status.getStatus());
+            vo.setVectorizeMessage(status == null ? "暂无向量化数据" : status.getMessage());
+            vo.setVectorizeUpdatedAt(status == null ? null : status.getUpdatedAt());
+            return vo;
+        }).toList();
+        return ApiResponse.success(result);
     }
 
     @GetMapping("/objectNames")
@@ -51,5 +87,26 @@ public class SchemaController {
     @PostMapping("/context/build")
     public ApiResponse<ContextBuildVO> buildContext(@Valid @RequestBody ContextBuildReq req) {
         return ApiResponse.success(schemaService.buildContext(req));
+    }
+
+    private void tryEnqueueVectorizeTask(Long connectionId, String databaseName) {
+        if (databaseName == null || databaseName.isBlank()) {
+            return;
+        }
+        try {
+            // 关键操作：Schema 查询链路仅做状态判断与入队，避免同步执行向量化阻塞请求。
+            RagDatabaseVectorizeStatusVO status = ragVectorizeQueueService.getStatus(connectionId, databaseName);
+            if (!"NOT_VECTORIZED".equals(status.getStatus())) {
+                return;
+            }
+            ragVectorizeQueueService.enqueue(connectionId, databaseName);
+        } catch (Exception ex) {
+            log.warn("自动追加向量化任务失败, connectionId={}, databaseName={}, reason={}",
+                connectionId, databaseName, ex.getMessage());
+        }
+    }
+
+    private String normalizeDatabaseName(String value) {
+        return Objects.toString(value, "").trim().toLowerCase(Locale.ROOT);
     }
 }

@@ -1,9 +1,11 @@
 package com.sqlcopilot.studio.service.rag.impl;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
+import com.sqlcopilot.studio.service.rag.model.QdrantCollectionMetric;
 import com.sqlcopilot.studio.service.rag.model.QdrantPoint;
 import com.sqlcopilot.studio.service.rag.model.QdrantScoredPoint;
 import com.sqlcopilot.studio.util.BusinessException;
@@ -22,6 +24,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class QdrantClientServiceImpl implements QdrantClientService {
@@ -30,6 +33,7 @@ public class QdrantClientServiceImpl implements QdrantClientService {
     private final ObjectMapper objectMapper;
     private final String qdrantBaseUrl;
     private final String qdrantApiKey;
+    private final Map<String, Integer> ensuredCollectionVectorSizeCache = new ConcurrentHashMap<>();
 
     public QdrantClientServiceImpl(@Value("${rag.qdrant.url:http://127.0.0.1:6333}") String qdrantBaseUrl,
                                    @Value("${rag.qdrant.api-key:}") String qdrantApiKey) {
@@ -45,11 +49,21 @@ public class QdrantClientServiceImpl implements QdrantClientService {
         if (vectorSize <= 0) {
             throw new BusinessException(500, "向量维度无效，无法创建 Qdrant 集合");
         }
+        Integer cachedSize = ensuredCollectionVectorSizeCache.get(collectionName);
+        if (cachedSize != null && cachedSize == vectorSize) {
+            return;
+        }
 
         HttpResponse<String> getResponse = send(buildRequest("GET",
             "/collections/" + collectionName,
             null));
         if (getResponse.statusCode() == 200) {
+            Integer existingSize = parseCollectionVectorDimension(getResponse.body());
+            if (existingSize != null && existingSize > 0 && existingSize != vectorSize) {
+                throw new BusinessException(500, "Qdrant 集合向量维度不一致: collection=" + collectionName
+                    + ", expected=" + vectorSize + ", actual=" + existingSize);
+            }
+            ensuredCollectionVectorSizeCache.put(collectionName, existingSize == null || existingSize <= 0 ? vectorSize : existingSize);
             return;
         }
         if (getResponse.statusCode() != 404) {
@@ -68,6 +82,7 @@ public class QdrantClientServiceImpl implements QdrantClientService {
             throw new BusinessException(500,
                 "创建 Qdrant 集合失败: HTTP " + putResponse.statusCode() + " - " + putResponse.body());
         }
+        ensuredCollectionVectorSizeCache.put(collectionName, vectorSize);
     }
 
     @Override
@@ -122,6 +137,43 @@ public class QdrantClientServiceImpl implements QdrantClientService {
         }
         validateQdrantResponse(response.body());
         return parseSearchResults(response.body());
+    }
+
+    @Override
+    public QdrantCollectionMetric queryCollectionMetric(String collectionName, Long connectionId, String databaseName) {
+        if (collectionName == null || collectionName.isBlank() || connectionId == null) {
+            return new QdrantCollectionMetric(collectionName, 0, 0L);
+        }
+
+        HttpResponse<String> collectionResponse = send(buildRequest("GET", "/collections/" + collectionName, null));
+        if (collectionResponse.statusCode() == 404) {
+            return new QdrantCollectionMetric(collectionName, 0, 0L);
+        }
+        if (collectionResponse.statusCode() != 200) {
+            throw new BusinessException(500,
+                "查询 Qdrant 集合信息失败: HTTP " + collectionResponse.statusCode() + " - " + collectionResponse.body());
+        }
+        validateQdrantResponse(collectionResponse.body());
+
+        Integer vectorDimension = parseCollectionVectorDimension(collectionResponse.body());
+
+        // 关键操作：通过连接 + 数据库过滤统计点位数量，避免返回跨库汇总数据。
+        CountReq countReq = new CountReq(buildFilter(connectionId, databaseName), true);
+        HttpResponse<String> countResponse = send(buildRequest(
+            "POST",
+            "/collections/" + collectionName + "/points/count",
+            toJson(countReq)
+        ));
+        if (countResponse.statusCode() == 404) {
+            return new QdrantCollectionMetric(collectionName, vectorDimension, 0L);
+        }
+        if (countResponse.statusCode() != 200) {
+            throw new BusinessException(500,
+                "查询 Qdrant 点位数量失败: HTTP " + countResponse.statusCode() + " - " + countResponse.body());
+        }
+        validateQdrantResponse(countResponse.body());
+        Long count = parseCollectionPointCount(countResponse.body());
+        return new QdrantCollectionMetric(collectionName, vectorDimension, count);
     }
 
     private HttpRequest buildRequest(String method, String path, String body) {
@@ -204,6 +256,37 @@ public class QdrantClientServiceImpl implements QdrantClientService {
         }
     }
 
+    private Integer parseCollectionVectorDimension(String body) {
+        try {
+            JsonNode root = objectMapper.readTree(body);
+            JsonNode vectorsNode = root.path("result").path("config").path("params").path("vectors");
+            if (vectorsNode.isObject() && vectorsNode.has("size")) {
+                return vectorsNode.path("size").asInt(0);
+            }
+            if (vectorsNode.isObject()) {
+                java.util.Iterator<JsonNode> iterator = vectorsNode.elements();
+                while (iterator.hasNext()) {
+                    JsonNode item = iterator.next();
+                    if (item.isObject() && item.has("size")) {
+                        return item.path("size").asInt(0);
+                    }
+                }
+            }
+            return 0;
+        } catch (Exception ex) {
+            throw new BusinessException(500, "解析 Qdrant 集合维度失败: " + ex.getMessage());
+        }
+    }
+
+    private Long parseCollectionPointCount(String body) {
+        try {
+            JsonNode root = objectMapper.readTree(body);
+            return root.path("result").path("count").asLong(0L);
+        } catch (Exception ex) {
+            throw new BusinessException(500, "解析 Qdrant 点位数量失败: " + ex.getMessage());
+        }
+    }
+
     private FilterReq buildFilter(Long connectionId, String databaseName) {
         List<FilterConditionReq> mustConditions = new ArrayList<>();
         mustConditions.add(new FilterConditionReq("connection_id", new MatchReq(connectionId)));
@@ -218,16 +301,23 @@ public class QdrantClientServiceImpl implements QdrantClientService {
         try {
             JsonNode root = objectMapper.readTree(body);
             JsonNode resultNode = root.path("result");
-            if (!resultNode.isArray()) {
+            JsonNode pointsNode = resultNode;
+            if (!pointsNode.isArray() && resultNode.isObject()) {
+                pointsNode = resultNode.path("points");
+            }
+            if (!pointsNode.isArray()) {
                 return List.of();
             }
 
             List<QdrantScoredPoint> results = new ArrayList<>();
-            for (JsonNode node : resultNode) {
+            for (JsonNode node : pointsNode) {
                 String id = node.path("id").asText("");
                 double score = node.path("score").asDouble(0D);
                 Map<String, Object> payload = new HashMap<>();
                 JsonNode payloadNode = node.path("payload");
+                if (!payloadNode.isObject()) {
+                    payloadNode = node.path("point").path("payload");
+                }
                 if (payloadNode.isObject()) {
                     payload = objectMapper.convertValue(payloadNode, objectMapper.getTypeFactory()
                         .constructMapType(HashMap.class, String.class, Object.class));
@@ -276,6 +366,9 @@ public class QdrantClientServiceImpl implements QdrantClientService {
     private record PointReq(String id, List<Float> vector, Object payload) {
     }
 
+    private record CountReq(FilterReq filter, Boolean exact) {
+    }
+
     private static class SearchReq {
         private List<Float> vector;
         private Integer limit;
@@ -298,10 +391,12 @@ public class QdrantClientServiceImpl implements QdrantClientService {
             this.limit = limit;
         }
 
+        @JsonProperty("with_payload")
         public Boolean getWithPayload() {
             return withPayload;
         }
 
+        @JsonProperty("with_payload")
         public void setWithPayload(Boolean withPayload) {
             this.withPayload = withPayload;
         }

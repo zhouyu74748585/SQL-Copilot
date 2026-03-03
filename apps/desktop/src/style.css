@@ -575,10 +575,23 @@ body {
   color: #51627d;
 }
 
-.sql-editor textarea {
-  font-family: 'JetBrains Mono', 'Menlo', monospace;
-  font-size: 12px;
-  line-height: 1.45;
+.sql-editor-tip {
+  margin-left: 8px;
+  font-weight: 400;
+  color: #6c809f;
+}
+
+.sql-editor {
+  display: block;
+  min-height: 220px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.sql-editor .monaco-editor,
+.sql-editor .monaco-editor .view-lines {
+  font-family: 'JetBrains Mono', 'Menlo', monospace !important;
 }
 
 .editor-actions {
@@ -752,7 +765,7 @@ body {
 
 .context-menu {
   position: fixed;
-  width: 154px;
+  width: 186px;
   background: #fff;
   border: 1px solid #dce5f4;
   border-radius: 8px;
@@ -795,6 +808,79 @@ body {
   background: #fff0f3;
 }
 
+.vectorize-overview-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.vectorize-overview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.vectorize-overview-db {
+  font-size: 14px;
+  font-weight: 600;
+  color: #243955;
+}
+
+.vectorize-overview-kpis {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.vectorize-overview-kpi-card {
+  border: 1px solid #e2eaf7;
+  border-radius: 10px;
+  background: #f8fbff;
+  padding: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.vectorize-overview-kpi-card > span {
+  font-size: 12px;
+  color: #5b6e8d;
+}
+
+.vectorize-overview-kpi-card > strong {
+  font-size: 15px;
+  color: #1f3350;
+}
+
+.vectorize-overview-breakdown {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.vectorize-overview-item {
+  border: 1px solid #e7edf8;
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: #51627d;
+}
+
+.vectorize-overview-item > strong {
+  font-size: 13px;
+  color: #233750;
+}
+
+.vectorize-overview-note {
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #f3f7ff;
+  color: #60708f;
+  font-size: 12px;
+}
+
 @media (max-width: 1400px) {
   .workbench,
   .workbench.workbench-query {
@@ -813,5 +899,13 @@ body {
   .pane {
     border-right: none;
     border-bottom: 1px solid var(--line);
+  }
+
+  .vectorize-overview-kpis {
+    grid-template-columns: 1fr;
+  }
+
+  .vectorize-overview-breakdown {
+    grid-template-columns: 1fr;
   }
 }

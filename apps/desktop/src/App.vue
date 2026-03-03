@@ -267,13 +267,34 @@
           </div>
 
           <div class="editor-group">
-            <label class="label">SQL</label>
-            <a-textarea v-model:value="activeQueryTab.sqlText" :rows="9" class="sql-editor" />
+            <label class="label">
+              SQL
+            </label>
+            <MonacoEditor
+              v-model:value="activeQueryTab.sqlText"
+              language="sql"
+              width="100%"
+              height="220px"
+              theme="vs"
+              :options="sqlEditorOptions"
+              class="sql-editor"
+              @mount="handleSqlEditorMount"
+            >
+              <template #default>编辑器加载中...</template>
+              <template #failure>编辑器加载失败，请刷新页面重试</template>
+            </MonacoEditor>
           </div>
 
           <div class="editor-actions">
             <a-space wrap>
-              <a-button size="small" @click="generateSqlForTab(activeQueryTab)">AI 生成 SQL</a-button>
+              <a-button
+                size="small"
+                :loading="activeQueryTab.aiGenerating"
+                :disabled="activeQueryTab.aiGenerating"
+                @click="generateSqlForTab(activeQueryTab)"
+              >
+                AI 生成 SQL
+              </a-button>
               <a-button size="small" @click="explainSqlForTab(activeQueryTab)">EXPLAIN</a-button>
               <a-button size="small" @click="evaluateRiskForTab(activeQueryTab)">风险评估</a-button>
               <a-button size="small" type="primary" @click="executeSqlForTab(activeQueryTab)">执行 SQL</a-button>
@@ -291,7 +312,7 @@
               :pagination="false"
               :columns="activeResultColumns"
               :data-source="activeResultRows"
-              :scroll="{ y: queryResultScrollY }"
+              :scroll="{ x: queryResultScrollX, y: queryResultScrollY }"
               row-key="__rowKey"
             />
           </div>
@@ -617,8 +638,80 @@
         >
           重新向量化
         </button>
+        <button
+          class="context-menu-item"
+          :disabled="!canInterruptContextVectorize"
+          @click="triggerContextAction('interruptVectorize')"
+        >
+          中断向量化
+        </button>
+        <button
+          class="context-menu-item"
+          :disabled="!canViewContextVectorizedData"
+          @click="triggerContextAction('viewVectorizedData')"
+        >
+          查看向量化数据
+        </button>
       </template>
     </div>
+
+    <a-modal
+      v-model:open="vectorizeOverviewModalOpen"
+      title="向量化数据概要"
+      width="560px"
+      :footer="null"
+      @cancel="vectorizeOverviewModalOpen = false"
+    >
+      <a-spin :spinning="vectorizeOverviewLoading">
+        <div v-if="vectorizeOverviewData" class="vectorize-overview-panel">
+          <div class="vectorize-overview-head">
+            <div class="vectorize-overview-db">{{ vectorizeOverviewData.databaseName }}</div>
+            <a-tag :color="databaseStatusClass(vectorizeOverviewData.status) === 'is-success' ? 'green' : 'blue'">
+              {{ databaseStatusLabel(vectorizeOverviewData.status) }}
+            </a-tag>
+          </div>
+
+          <div class="vectorize-overview-kpis">
+            <div class="vectorize-overview-kpi-card">
+              <span>向量规模</span>
+              <strong>{{ formatCompactCount(vectorizeOverviewData.totalVectorCount) }}</strong>
+            </div>
+            <div class="vectorize-overview-kpi-card">
+              <span>向量维度</span>
+              <strong>{{ vectorizeOverviewData.vectorDimension || '-' }}</strong>
+            </div>
+            <div class="vectorize-overview-kpi-card">
+              <span>最近更新</span>
+              <strong>{{ formatTime(vectorizeOverviewData.updatedAt) }}</strong>
+            </div>
+          </div>
+
+          <div class="vectorize-overview-breakdown">
+            <div class="vectorize-overview-item">
+              <span>表向量</span>
+              <strong>{{ formatCompactCount(vectorizeOverviewData.schemaTableVectorCount) }}</strong>
+            </div>
+            <div class="vectorize-overview-item">
+              <span>字段向量</span>
+              <strong>{{ formatCompactCount(vectorizeOverviewData.schemaColumnVectorCount) }}</strong>
+            </div>
+            <div class="vectorize-overview-item">
+              <span>SQL 历史</span>
+              <strong>{{ formatCompactCount(vectorizeOverviewData.sqlHistoryVectorCount) }}</strong>
+            </div>
+            <div class="vectorize-overview-item">
+              <span>SQL 片段</span>
+              <strong>{{ formatCompactCount(vectorizeOverviewData.sqlFragmentVectorCount) }}</strong>
+            </div>
+          </div>
+
+          <div class="vectorize-overview-note">
+            {{ vectorizeOverviewData.message || '仅展示概要统计，不展示具体向量明细。' }}
+          </div>
+        </div>
+        <div v-else class="empty-pane">暂无可展示的向量化数据概要</div>
+      </a-spin>
+    </a-modal>
   </div>
 </template>
 
@@ -644,6 +737,9 @@ import {
   SettingOutlined,
   UnorderedListOutlined,
 } from '@ant-design/icons-vue';
+import {Editor as MonacoEditor} from '@guolao/vue-monaco-editor';
+import type {IDisposable} from 'monaco-editor';
+import type * as MonacoApi from 'monaco-editor';
 import type {ConnectionVO} from '@sqlcopilot/shared-contracts';
 import {message} from 'ant-design-vue';
 import {computed, onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue';
@@ -665,7 +761,10 @@ import type {
   RagConfigSaveReq,
   RagConfigVO,
   RagVectorizeEnqueueVO,
+  RagVectorizeInterruptVO,
+  RagVectorizeOverviewVO,
   RiskEvaluateVO,
+  SchemaDatabaseVO,
   SchemaOverviewVO,
   SqlExecuteVO,
   TableDetailVO,
@@ -692,11 +791,13 @@ interface QueryWorkspaceTab {
   executeResult: SqlExecuteVO | null;
   explainResult: ExplainVO | null;
   selectedAiModel: string;
+  aiGenerating: boolean;
 }
 
 const browserTabKey = 'browser';
 const isMacOS = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform);
 let vectorizeStatusPollTimer: number | null = null;
+const vectorizeStatusPollIntervalMs = 30000;
 
 const connections = ref<ConnectionVO[]>([]);
 const schemaOverview = ref<SchemaOverviewVO | null>(null);
@@ -710,6 +811,7 @@ const tableKeyword = ref('');
 const selectedTreeKeys = ref<string[]>([]);
 const expandedTreeKeys = ref<string[]>([]);
 const tableNameCache = ref<Record<string, string[]>>({});
+const tableNameLoadedCache = ref<Record<string, boolean>>({});
 const objectNameCache = ref<Record<string, string[]>>({});
 const databaseListCache = ref<Record<number, string[]>>({});
 const activeDatabaseMap = ref<Record<number, string>>({});
@@ -721,6 +823,9 @@ const historyModalOpen = ref(false);
 const historyLoading = ref(false);
 const queryHistoryList = ref<QueryHistoryVO[]>([]);
 const historyTargetTabKey = ref('');
+const vectorizeOverviewModalOpen = ref(false);
+const vectorizeOverviewLoading = ref(false);
+const vectorizeOverviewData = ref<RagVectorizeOverviewVO | null>(null);
 const aiConfigModalOpen = ref(false);
 const aiConfigActiveTab = ref<'model' | 'embedding'>('model');
 const selectedAiModel = ref('');
@@ -769,6 +874,38 @@ const envOptions = [
   { label: '生产 PROD', value: 'PROD' },
 ];
 
+const sqlEditorOptions = {
+  automaticLayout: true,
+  minimap: { enabled: false },
+  fontSize: 12,
+  lineHeight: 18,
+  wordWrap: 'on',
+  quickSuggestions: {
+    comments: false,
+    strings: false,
+    other: true,
+  },
+  quickSuggestionsDelay: 80,
+  suggestOnTriggerCharacters: true,
+  scrollBeyondLastLine: false,
+  tabSize: 2,
+  insertSpaces: true,
+};
+const sqlKeywords = [
+  'SELECT', 'FROM', 'WHERE', 'GROUP BY', 'ORDER BY', 'HAVING', 'LIMIT', 'OFFSET',
+  'DISTINCT', 'AS', 'AND', 'OR', 'NOT', 'IN', 'EXISTS', 'BETWEEN', 'LIKE', 'IS NULL', 'IS NOT NULL',
+  'INSERT INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE', 'TRUNCATE', 'MERGE',
+  'CREATE TABLE', 'ALTER TABLE', 'DROP TABLE', 'CREATE INDEX', 'DROP INDEX', 'CREATE VIEW', 'DROP VIEW',
+  'JOIN', 'INNER JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'FULL JOIN', 'ON', 'UNION', 'UNION ALL',
+  'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
+  'COUNT', 'SUM', 'AVG', 'MIN', 'MAX',
+  'WITH', 'CTE', 'DESC', 'ASC', 'TOP',
+];
+let sqlCompletionProviderDisposable: IDisposable | null = null;
+let sqlEditorTypeDisposable: IDisposable | null = null;
+let sqlAutoSuggestTimer: number | null = null;
+const pendingTableNameLoads = new Map<string, Promise<string[]>>();
+
 const selectedConnection = computed(() =>
   connections.value.find((item) => item.id === workflow.connectionId),
 );
@@ -793,6 +930,18 @@ const canOpenHistory = computed(() => {
 
 const isContextDatabaseVectorizing = computed(() =>
   contextMenu.targetType === 'database'
+  && isDatabaseVectorizing(contextMenu.connectionId, contextMenu.databaseName),
+);
+
+const canViewContextVectorizedData = computed(() =>
+  contextMenu.targetType === 'database'
+  && !!contextMenu.databaseName
+  && !isDatabaseVectorizing(contextMenu.connectionId, contextMenu.databaseName),
+);
+
+const canInterruptContextVectorize = computed(() =>
+  contextMenu.targetType === 'database'
+  && !!contextMenu.databaseName
   && isDatabaseVectorizing(contextMenu.connectionId, contextMenu.databaseName),
 );
 
@@ -932,9 +1081,12 @@ const activeResultColumns = computed(() => {
     title: cell.columnName,
     dataIndex: cell.columnName,
     key: cell.columnName,
+    width: 180,
     ellipsis: true,
   }));
 });
+
+const queryResultScrollX = computed(() => Math.max(activeResultColumns.value.length * 180, 960));
 
 function buildConnectionNode(conn: ConnectionVO) {
   if (requiresDatabaseLayer(conn)) {
@@ -1175,11 +1327,14 @@ function openAiQueryTab() {
     executeResult: null,
     explainResult: null,
     selectedAiModel: models[0] ?? '',
+    aiGenerating: false,
   };
   queryTabs.value = [...queryTabs.value, tab];
   activeWorkbenchTab.value = tab.key;
   void runSafely(async () => {
     await prepareConnectionTreeData(tab.connectionId);
+    tab.databaseName = tab.databaseName || getActiveDatabaseName(tab.connectionId);
+    await warmupTableSuggestions(tab);
   });
 }
 
@@ -1225,11 +1380,32 @@ async function loadDatabaseListForConnection(connectionId: number) {
   if (databaseListCache.value[connectionId]?.length) {
     return;
   }
-  const list = await getApi<string[]>(`/api/schema/databases?connectionId=${connectionId}`);
+  const list = await getApi<SchemaDatabaseVO[]>(`/api/schema/databases?connectionId=${connectionId}`);
+  const databaseNames = list.map((item) => item.databaseName).filter((item) => !!item);
   databaseListCache.value = {
     ...databaseListCache.value,
-    [connectionId]: list,
+    [connectionId]: databaseNames,
   };
+  const next = {...databaseVectorizeStatusMap.value};
+  const prefix = `${connectionId}|`;
+  Object.keys(next).forEach((key) => {
+    if (key.startsWith(prefix)) {
+      delete next[key];
+    }
+  });
+  list.forEach((item) => {
+    if (!item.databaseName) {
+      return;
+    }
+    const key = vectorizeStatusCacheKey(connectionId, item.databaseName);
+    next[key] = {
+      databaseName: item.databaseName,
+      status: item.vectorizeStatus,
+      message: item.vectorizeMessage,
+      updatedAt: item.vectorizeUpdatedAt,
+    };
+  });
+  databaseVectorizeStatusMap.value = next;
 }
 
 async function refreshVectorizeStatusForConnection(connectionId: number) {
@@ -1282,8 +1458,15 @@ function pruneVectorizeStatusMap(validConnectionIds: number[]) {
 function startVectorizeStatusPolling() {
   stopVectorizeStatusPolling();
   vectorizeStatusPollTimer = window.setInterval(() => {
-    void refreshAllVectorizeStatuses();
-  }, 3000);
+    const cachedConnectionIds = Object.keys(databaseListCache.value)
+      .map((item) => Number(item))
+      .filter((item) => Number.isFinite(item) && item > 0);
+    const ids = cachedConnectionIds.length ? cachedConnectionIds : (workflow.connectionId ? [workflow.connectionId] : []);
+    if (!ids.length) {
+      return;
+    }
+    void refreshAllVectorizeStatuses(ids);
+  }, vectorizeStatusPollIntervalMs);
 }
 
 function stopVectorizeStatusPolling() {
@@ -1410,16 +1593,204 @@ async function loadOverview() {
       : `/api/schema/overview?connectionId=${workflow.connectionId}`;
     const overview = await getApi<SchemaOverviewVO>(query);
     schemaOverview.value = overview;
+    const cacheKey = tableCacheKey(workflow.connectionId, databaseName);
+    const tableNames = (overview.tableSummaries ?? []).map((item) => item.tableName);
     tableNameCache.value = {
       ...tableNameCache.value,
-      [tableCacheKey(workflow.connectionId, databaseName)]: (overview.tableSummaries ?? []).map((item) => item.tableName),
+      [cacheKey]: tableNames,
+    };
+    tableNameLoadedCache.value = {
+      ...tableNameLoadedCache.value,
+      [cacheKey]: true,
     };
     objectNameCache.value = {
       ...objectNameCache.value,
-      [objectCacheKey(workflow.connectionId, databaseName, 'tables')]: (overview.tableSummaries ?? []).map((item) => item.tableName),
+      [objectCacheKey(workflow.connectionId, databaseName, 'tables')]: tableNames,
     };
     expandConnectionNode(workflow.connectionId);
   });
+}
+
+async function loadTableNamesByConnection(connectionId: number, databaseName: string) {
+  if (!connectionId || !databaseName) {
+    return [];
+  }
+  const query = `/api/schema/overview?connectionId=${connectionId}&databaseName=${encodeURIComponent(databaseName)}`;
+  const overview = await getApi<SchemaOverviewVO>(query);
+  const tableNames = (overview.tableSummaries ?? []).map((item) => item.tableName);
+  const cacheKey = tableCacheKey(connectionId, databaseName);
+  tableNameCache.value = {
+    ...tableNameCache.value,
+    [cacheKey]: tableNames,
+  };
+  tableNameLoadedCache.value = {
+    ...tableNameLoadedCache.value,
+    [cacheKey]: true,
+  };
+  objectNameCache.value = {
+    ...objectNameCache.value,
+    [objectCacheKey(connectionId, databaseName, 'tables')]: tableNames,
+  };
+  return tableNames;
+}
+
+function resolveQueryDatabaseName(tab: QueryWorkspaceTab | null) {
+  if (!tab) {
+    return '';
+  }
+  return (tab.databaseName || getActiveDatabaseName(tab.connectionId)).trim();
+}
+
+async function ensureTableNamesLoaded(connectionId: number, databaseName: string) {
+  if (!connectionId || !databaseName || databaseName === '未发现数据库') {
+    return [];
+  }
+  const cacheKey = tableCacheKey(connectionId, databaseName);
+  const loaded = !!tableNameLoadedCache.value[cacheKey];
+  if (loaded) {
+    return tableNameCache.value[cacheKey] ?? [];
+  }
+  const pending = pendingTableNameLoads.get(cacheKey);
+  if (pending) {
+    return pending;
+  }
+  const task = loadTableNamesByConnection(connectionId, databaseName)
+    .catch(() => {
+      tableNameLoadedCache.value = {
+        ...tableNameLoadedCache.value,
+        [cacheKey]: true,
+      };
+      return [];
+    })
+    .finally(() => {
+      pendingTableNameLoads.delete(cacheKey);
+    });
+  pendingTableNameLoads.set(cacheKey, task);
+  return task;
+}
+
+function tableNameSuggestions(
+  monaco: typeof MonacoApi,
+  names: string[],
+  range: MonacoApi.IRange,
+  prefix: string,
+  databaseName: string,
+) {
+  const keyword = prefix.trim().toLowerCase();
+  const uniqueNames = Array.from(new Set(names.filter((item) => !!item)));
+  const matched = keyword
+    ? uniqueNames.filter((name) => name.toLowerCase().includes(keyword))
+    : uniqueNames;
+  return matched.slice(0, 300).map((name) => {
+    const startsWithPrefix = keyword && name.toLowerCase().startsWith(keyword);
+    return {
+      label: name,
+      kind: monaco.languages.CompletionItemKind.Struct,
+      insertText: name,
+      range,
+      detail: `表 · ${databaseName}`,
+      sortText: `${startsWithPrefix ? '0' : '1'}_${name}`,
+    };
+  });
+}
+
+function sqlKeywordSuggestions(
+  monaco: typeof MonacoApi,
+  range: MonacoApi.IRange,
+  prefix: string,
+) {
+  const keyword = prefix.trim().toUpperCase();
+  const matched = keyword
+    ? sqlKeywords.filter((item) => item.includes(keyword))
+    : sqlKeywords;
+  return matched.map((item) => {
+    const startsWithPrefix = keyword && item.startsWith(keyword);
+    return {
+      label: item,
+      kind: monaco.languages.CompletionItemKind.Keyword,
+      insertText: item,
+      range,
+      detail: 'SQL 关键字',
+      sortText: `${startsWithPrefix ? '0' : '1'}_keyword_${item}`,
+    };
+  });
+}
+
+function registerSqlCompletionProvider(monaco: typeof MonacoApi) {
+  if (sqlCompletionProviderDisposable) {
+    return;
+  }
+  sqlCompletionProviderDisposable = monaco.languages.registerCompletionItemProvider('sql', {
+    triggerCharacters: ['.', '`'],
+    provideCompletionItems: async (model, position) => {
+      const tab = activeQueryTab.value;
+      if (!tab) {
+        return { suggestions: [] };
+      }
+      const word = model.getWordUntilPosition(position);
+      const range = {
+        startLineNumber: position.lineNumber,
+        endLineNumber: position.lineNumber,
+        startColumn: word.startColumn,
+        endColumn: word.endColumn,
+      };
+      const keywordSuggestions = sqlKeywordSuggestions(monaco, range, word.word || '');
+      const databaseName = resolveQueryDatabaseName(tab);
+      if (!databaseName || databaseName === '未发现数据库') {
+        return { suggestions: keywordSuggestions };
+      }
+      const tableNames = await ensureTableNamesLoaded(tab.connectionId, databaseName);
+      return {
+        suggestions: [
+          ...tableNameSuggestions(monaco, tableNames, range, word.word || '', databaseName),
+          ...keywordSuggestions,
+        ],
+      };
+    },
+  });
+}
+
+function registerSqlAutoSuggest(editor: MonacoApi.editor.IStandaloneCodeEditor) {
+  sqlEditorTypeDisposable?.dispose();
+  sqlEditorTypeDisposable = editor.onDidChangeModelContent((event) => {
+    if (event.isFlush || !event.changes.length) {
+      return;
+    }
+    const latestChange = event.changes[event.changes.length - 1];
+    const typedText = latestChange.text ?? '';
+    if (!typedText || typedText.length > 2 || /\s/.test(typedText)) {
+      return;
+    }
+    if (!/[\w.`]/.test(typedText)) {
+      return;
+    }
+    if (sqlAutoSuggestTimer !== null) {
+      window.clearTimeout(sqlAutoSuggestTimer);
+    }
+    sqlAutoSuggestTimer = window.setTimeout(() => {
+      editor.trigger('sql-auto-suggest', 'editor.action.triggerSuggest', {});
+    }, 60);
+  });
+}
+
+async function warmupTableSuggestions(tab: QueryWorkspaceTab | null) {
+  if (!tab) {
+    return;
+  }
+  const databaseName = resolveQueryDatabaseName(tab);
+  if (!databaseName || databaseName === '未发现数据库') {
+    return;
+  }
+  await ensureTableNamesLoaded(tab.connectionId, databaseName);
+}
+
+function handleSqlEditorMount(
+  editor: MonacoApi.editor.IStandaloneCodeEditor,
+  monaco: typeof MonacoApi,
+) {
+  registerSqlCompletionProvider(monaco);
+  registerSqlAutoSuggest(editor);
+  void warmupTableSuggestions(activeQueryTab.value);
 }
 
 async function loadObjectNames(connectionId: number, databaseName: string, objectType: string) {
@@ -1561,7 +1932,7 @@ async function handleTreeRightClick(event: { event: MouseEvent; node: { key?: st
     workflow.connectionId = connectionId;
     selectedTreeKeys.value = [keyValue];
     contextMenu.visible = true;
-    contextMenu.x = Math.min(event.event.clientX, window.innerWidth - 170);
+    contextMenu.x = Math.min(event.event.clientX, window.innerWidth - 220);
     contextMenu.y = Math.min(event.event.clientY, window.innerHeight - 180);
     contextMenu.targetType = 'connection';
     contextMenu.connectionId = connectionId;
@@ -1589,7 +1960,7 @@ async function handleTreeRightClick(event: { event: MouseEvent; node: { key?: st
   }
   selectedTreeKeys.value = [keyValue];
   contextMenu.visible = true;
-  contextMenu.x = Math.min(event.event.clientX, window.innerWidth - 170);
+  contextMenu.x = Math.min(event.event.clientX, window.innerWidth - 220);
   contextMenu.y = Math.min(event.event.clientY, window.innerHeight - 180);
   contextMenu.targetType = 'database';
   contextMenu.connectionId = connectionId;
@@ -1602,7 +1973,7 @@ function closeContextMenu() {
   contextMenu.databaseName = '';
 }
 
-async function triggerContextAction(action: 'edit' | 'test' | 'sync' | 'delete' | 'revectorize') {
+async function triggerContextAction(action: 'edit' | 'test' | 'sync' | 'delete' | 'revectorize' | 'interruptVectorize' | 'viewVectorizedData') {
   const id = contextMenu.connectionId;
   const databaseName = contextMenu.databaseName;
   const targetType = contextMenu.targetType;
@@ -1621,6 +1992,20 @@ async function triggerContextAction(action: 'edit' | 'test' | 'sync' | 'delete' 
     await enqueueDatabaseRevectorize(id, databaseName);
     return;
   }
+  if (action === 'interruptVectorize') {
+    if (targetType !== 'database' || !databaseName) {
+      return;
+    }
+    await interruptDatabaseVectorize(id, databaseName);
+    return;
+  }
+  if (action === 'viewVectorizedData') {
+    if (targetType !== 'database' || !databaseName) {
+      return;
+    }
+    await openVectorizeOverview(id, databaseName);
+    return;
+  }
   if (action === 'edit') {
     openEditModal(id);
     return;
@@ -1634,6 +2019,27 @@ async function triggerContextAction(action: 'edit' | 'test' | 'sync' | 'delete' 
     return;
   }
   await removeConnection(id);
+}
+
+async function openVectorizeOverview(connectionId: number, databaseName: string) {
+  vectorizeOverviewModalOpen.value = true;
+  vectorizeOverviewLoading.value = true;
+  vectorizeOverviewData.value = null;
+  try {
+    vectorizeOverviewData.value = await getApi<RagVectorizeOverviewVO>(
+      `/api/rag/vectorize/overview?connectionId=${connectionId}&databaseName=${encodeURIComponent(databaseName)}`,
+    );
+    if ((vectorizeOverviewData.value.totalVectorCount ?? 0) <= 0) {
+      message.info('该数据库暂无向量化数据');
+      vectorizeOverviewModalOpen.value = false;
+    }
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    message.error(msg);
+    vectorizeOverviewModalOpen.value = false;
+  } finally {
+    vectorizeOverviewLoading.value = false;
+  }
 }
 
 async function enqueueDatabaseRevectorize(connectionId: number, databaseName: string) {
@@ -1660,6 +2066,31 @@ async function enqueueDatabaseRevectorize(connectionId: number, databaseName: st
       return;
     }
     message.info(`${result.message}（队列数: ${result.queueSize}）`);
+  });
+}
+
+async function interruptDatabaseVectorize(connectionId: number, databaseName: string) {
+  await runSafely(async () => {
+    const result = await postApi<RagVectorizeInterruptVO>('/api/rag/vectorize/interrupt', {
+      connectionId,
+      databaseName,
+    });
+    const key = vectorizeStatusCacheKey(connectionId, databaseName);
+    databaseVectorizeStatusMap.value = {
+      ...databaseVectorizeStatusMap.value,
+      [key]: {
+        databaseName,
+        status: result.status,
+        message: result.message,
+        updatedAt: result.updatedAt ?? Date.now(),
+      },
+    };
+    await refreshVectorizeStatusForConnection(connectionId);
+    if (result.interrupted) {
+      message.success(result.message);
+      return;
+    }
+    message.info(result.message);
   });
 }
 
@@ -1856,14 +2287,20 @@ async function handleQueryConnectionChange(tab: QueryWorkspaceTab) {
     tab.riskInfo = null;
     tab.executeResult = null;
     tab.explainResult = null;
+    await warmupTableSuggestions(tab);
   });
 }
 
 function handleQueryDatabaseChange(tab: QueryWorkspaceTab) {
   tab.riskAckToken = '';
+  void warmupTableSuggestions(tab);
 }
 
 async function generateSqlForTab(tab: QueryWorkspaceTab) {
+  if (tab.aiGenerating) {
+    return;
+  }
+  tab.aiGenerating = true;
   await runSafely(async () => {
     const generated = await postApi<AiGenerateSqlVO>('/api/ai/query/generate', {
       connectionId: tab.connectionId,
@@ -1879,6 +2316,7 @@ async function generateSqlForTab(tab: QueryWorkspaceTab) {
     }
     message.success('SQL 已生成');
   });
+  tab.aiGenerating = false;
 }
 
 async function explainSqlForTab(tab: QueryWorkspaceTab) {
@@ -1886,6 +2324,7 @@ async function explainSqlForTab(tab: QueryWorkspaceTab) {
     tab.explainResult = await postApi<ExplainVO>('/api/sql/explain', {
       connectionId: tab.connectionId,
       sqlText: tab.sqlText,
+      databaseName: tab.databaseName || undefined,
     });
     tab.executeResult = null;
     message.success('EXPLAIN 完成');
@@ -1910,6 +2349,7 @@ async function executeSqlForTab(tab: QueryWorkspaceTab) {
       connectionId: tab.connectionId,
       sessionId: tab.sessionId,
       sqlText: tab.sqlText,
+      databaseName: tab.databaseName || undefined,
       riskAckToken: tab.riskAckToken,
       operatorName: 'desktop-user',
     });
@@ -1991,6 +2431,20 @@ function formatSize(sizeBytes: number) {
   return `${sizeBytes} B`;
 }
 
+function formatCompactCount(count?: number) {
+  const value = count ?? 0;
+  if (value <= 0) {
+    return '0';
+  }
+  if (value < 1000) {
+    return `${value}`;
+  }
+  return new Intl.NumberFormat('zh-CN', {
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
 function formatTime(ts?: number) {
   if (!ts) {
     return '-';
@@ -2027,7 +2481,26 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', handleWindowResize);
   window.removeEventListener('mousemove', handleResizeBrowserPane);
   window.removeEventListener('mouseup', stopResizeBrowserPane);
+  sqlEditorTypeDisposable?.dispose();
+  sqlEditorTypeDisposable = null;
+  sqlCompletionProviderDisposable?.dispose();
+  sqlCompletionProviderDisposable = null;
+  if (sqlAutoSuggestTimer !== null) {
+    window.clearTimeout(sqlAutoSuggestTimer);
+    sqlAutoSuggestTimer = null;
+  }
 });
+
+watch(
+  () => [activeWorkbenchTab.value, activeQueryTab.value?.connectionId ?? 0, activeQueryTab.value?.databaseName ?? ''],
+  () => {
+    if (!activeQueryTab.value) {
+      return;
+    }
+    void warmupTableSuggestions(activeQueryTab.value);
+  },
+  { immediate: true },
+);
 
 watch(
   () => connectionForm.dbType,
