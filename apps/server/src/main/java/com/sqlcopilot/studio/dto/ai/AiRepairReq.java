@@ -23,4 +23,10 @@ public class AiRepairReq {
     /** 执行错误信息。 */
     @NotBlank
     private String errorMessage;
+
+    /** 当前查询目标数据库（可选，用于元数据和 RAG 上下文过滤）。 */
+    private String databaseName;
+
+    /** 本次会话指定模型选项 ID（可选）。 */
+    private String modelName;
 }

@@ -44,6 +44,7 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -81,6 +82,15 @@ public class AiServiceImpl implements AiService {
         2) 输出格式固定为“结论、问题、优化建议”三部分；
         3) 不执行 EXPLAIN，不要编造不存在的表结构；
         4) 如果上下文不足要明确指出不确定项。
+        """;
+    private static final String REPAIR_SQL_SYSTEM_PROMPT = """
+        你是一个 SQL 修复助手。
+        要求：
+        1) 请根据提供的执行错误信息和数据库元数据上下文，修复失败的 SQL。
+        2) 输出必须且只能是一个 JSON 对象，包含以下字段：
+            - errorExplanation：简要说明 SQL 为什么失败，以及做了哪些修改
+            - repairedSql：可执行的修复后 SQL
+        3) 不要输出 Markdown、代码块或任何额外文本。
         """;
     private static final Logger log = LoggerFactory.getLogger(AiServiceImpl.class);
 
@@ -197,21 +207,194 @@ public class AiServiceImpl implements AiService {
 
     @Override
     public AiRepairVO repairSql(AiRepairReq req) {
-        String sql = req.getSqlText();
-        log.info("[AI-REPAIR] connectionId={}, sessionId={}, beforeSql={}", req.getConnectionId(), req.getSessionId(), sql);
-        if (SqlClassifier.isQuery(sql) && !SqlClassifier.normalize(sql).contains(" limit ")) {
-            sql = sql + " LIMIT 100";
-        }
-        if (req.getErrorMessage().toLowerCase().contains("unknown column")) {
-            sql = "/* 请检查字段名称是否存在 */\n" + sql;
-        }
+        long startAt = System.currentTimeMillis();
+        String sourceSql = safe(req.getSqlText());
+        String errorMessage = safe(req.getErrorMessage());
+        log.info(
+            "[AI-REPAIR-REQ] connectionId={}, sessionId={}, databaseName={}, modelName={}, sqlLength={}, errorLength={}",
+            req.getConnectionId(),
+            safe(req.getSessionId()),
+            safe(req.getDatabaseName()),
+            safe(req.getModelName()),
+            sourceSql.length(),
+            errorMessage.length()
+        );
 
         AiRepairVO vo = new AiRepairVO();
-        vo.setRepaired(Boolean.TRUE);
-        vo.setRepairedSql(sql);
-        vo.setRepairNote("已执行基础修复策略（LIMIT 补充/字段错误提示）。");
-        log.info("[AI-REPAIR] connectionId={}, sessionId={}, afterSql={}", req.getConnectionId(), req.getSessionId(), sql);
-        return vo;
+        try {
+            AiGenerateSqlReq providerReq = buildRepairGenerateReq(req, sourceSql, errorMessage);
+            String retrievalInput = buildRetrievalInput(providerReq.getPrompt(), sourceSql + "\n" + errorMessage);
+            RagPromptContext ragPromptContext = ragRetrievalService.retrievePromptContext(
+                req.getConnectionId(),
+                req.getDatabaseName(),
+                retrievalInput
+            );
+            GenerationContext generationContext = buildGenerationContext(providerReq, ragPromptContext);
+            TextProviderResult providerResult = generateTextByConfiguredProvider(
+                providerReq,
+                generationContext,
+                REPAIR_SQL_SYSTEM_PROMPT,
+                "SQL 修复"
+            );
+
+            ParsedRepairResult parsed = parseRepairResult(providerResult.content(), sourceSql, errorMessage);
+            boolean fallbackUsed = safe(parsed.repairedSql()).isBlank();
+            if (fallbackUsed) {
+                ParsedRepairResult fallback = fallbackRepairResult(sourceSql, errorMessage);
+                vo.setRepaired(Boolean.FALSE);
+                vo.setErrorExplanation(fallback.errorExplanation());
+                vo.setRepairedSql(fallback.repairedSql());
+                vo.setRepairNote("模型输出未识别到有效 SQL，已使用规则兜底");
+            } else {
+                vo.setRepaired(Boolean.TRUE);
+                vo.setErrorExplanation(parsed.errorExplanation());
+                vo.setRepairedSql(parsed.repairedSql());
+                vo.setRepairNote("模型修复完成");
+            }
+
+            log.info(
+                "[AI-REPAIR-RESP] connectionId={}, sessionId={}, databaseName={}, modelName={}, ragHit={}, repairedSqlLength={}, elapsedMs={}, fallbackUsed={}",
+                req.getConnectionId(),
+                safe(req.getSessionId()),
+                safe(req.getDatabaseName()),
+                safe(req.getModelName()),
+                Boolean.TRUE.equals(ragPromptContext.getHit()),
+                safe(vo.getRepairedSql()).length(),
+                System.currentTimeMillis() - startAt,
+                fallbackUsed
+            );
+            return vo;
+        } catch (Exception ex) {
+            ParsedRepairResult fallback = fallbackRepairResult(sourceSql, errorMessage);
+            vo.setRepaired(Boolean.FALSE);
+            vo.setErrorExplanation(fallback.errorExplanation());
+            vo.setRepairedSql(fallback.repairedSql());
+            vo.setRepairNote("模型修复失败，已使用规则兜底: " + safe(ex.getMessage()));
+            log.warn(
+                "[AI-REPAIR-FALLBACK] connectionId={}, sessionId={}, databaseName={}, modelName={}, reason={}, elapsedMs={}",
+                req.getConnectionId(),
+                safe(req.getSessionId()),
+                safe(req.getDatabaseName()),
+                safe(req.getModelName()),
+                safe(ex.getMessage()),
+                System.currentTimeMillis() - startAt
+            );
+            return vo;
+        }
+    }
+
+    private AiGenerateSqlReq buildRepairGenerateReq(AiRepairReq req, String sqlText, String errorMessage) {
+        AiGenerateSqlReq aiReq = new AiGenerateSqlReq();
+        aiReq.setConnectionId(req.getConnectionId());
+        aiReq.setSessionId(req.getSessionId());
+        aiReq.setDatabaseName(req.getDatabaseName());
+        aiReq.setModelName(req.getModelName());
+        aiReq.setSqlSnippet(sqlText);
+        aiReq.setPrompt(buildRepairPrompt(sqlText, errorMessage));
+        return aiReq;
+    }
+
+    private String buildRepairPrompt(String sqlText, String errorMessage) {
+        return """
+            Repair the failed SQL according to the execution error.
+            Keep business intent unchanged while making it executable.
+
+            Execution error:
+            %s
+
+            Original SQL:
+            %s
+
+            Return strict JSON with keys:
+            errorExplanation
+            repairedSql
+            """.formatted(safe(errorMessage), safe(sqlText));
+    }
+
+    private ParsedRepairResult parseRepairResult(String rawOutput, String sourceSql, String errorMessage) {
+        ParsedRepairResult jsonResult = tryParseRepairJson(rawOutput);
+        if (jsonResult != null && !safe(jsonResult.repairedSql()).isBlank()) {
+            return jsonResult;
+        }
+
+        String repairedSql = extractSql(rawOutput);
+        if (!repairedSql.isBlank()) {
+            String explanation = extractRepairExplanation(rawOutput, repairedSql, errorMessage);
+            return new ParsedRepairResult(explanation, repairedSql);
+        }
+        String fallbackExplanation = "Model output did not contain a valid repaired SQL.";
+        return new ParsedRepairResult(fallbackExplanation, "");
+    }
+
+    private ParsedRepairResult tryParseRepairJson(String rawOutput) {
+        String normalized = safe(rawOutput).trim();
+        if (normalized.isBlank()) {
+            return null;
+        }
+        List<String> candidates = new ArrayList<>();
+        candidates.add(normalized);
+        int jsonStart = normalized.indexOf('{');
+        int jsonEnd = normalized.lastIndexOf('}');
+        if (jsonStart >= 0 && jsonEnd > jsonStart) {
+            candidates.add(normalized.substring(jsonStart, jsonEnd + 1));
+        }
+
+        for (String candidate : candidates) {
+            try {
+                JsonNode node = objectMapper.readTree(candidate);
+                if (node == null || !node.isObject()) {
+                    continue;
+                }
+                String explanation = safe(node.path("errorExplanation").asText(""));
+                String repairedSql = normalizeSqlText(safe(node.path("repairedSql").asText("")));
+                if (repairedSql.isBlank()) {
+                    repairedSql = extractSql(candidate);
+                }
+                if (!repairedSql.isBlank()) {
+                    if (explanation.isBlank()) {
+                        explanation = "The SQL has been repaired based on the execution error.";
+                    }
+                    return new ParsedRepairResult(explanation.trim(), repairedSql.trim());
+                }
+            } catch (Exception ignore) {
+                // ignore non-json candidate
+            }
+        }
+        return null;
+    }
+
+    private String extractRepairExplanation(String rawOutput, String repairedSql, String errorMessage) {
+        String text = safe(rawOutput).trim();
+        if (text.isBlank()) {
+            return "SQL execution failed: " + safe(errorMessage);
+        }
+        String withoutFence = SQL_FENCE_PATTERN.matcher(text).replaceAll("").trim();
+        if (!safe(repairedSql).isBlank()) {
+            withoutFence = withoutFence.replace(repairedSql, "").trim();
+        }
+        if (withoutFence.startsWith("{") && withoutFence.endsWith("}")) {
+            ParsedRepairResult parsed = tryParseRepairJson(withoutFence);
+            if (parsed != null && !safe(parsed.errorExplanation()).isBlank()) {
+                return parsed.errorExplanation();
+            }
+        }
+        if (withoutFence.isBlank()) {
+            return "SQL execution failed: " + safe(errorMessage);
+        }
+        return withoutFence;
+    }
+
+    private ParsedRepairResult fallbackRepairResult(String sourceSql, String errorMessage) {
+        String repairedSql = safe(sourceSql);
+        if (SqlClassifier.isQuery(repairedSql) && !SqlClassifier.normalize(repairedSql).contains(" limit ")) {
+            repairedSql = repairedSql + " LIMIT 100";
+        }
+        if (safe(errorMessage).toLowerCase(Locale.ROOT).contains("unknown column")) {
+            repairedSql = "/* Please verify referenced column names. */\n" + repairedSql;
+        }
+        String explanation = "SQL execution failed: " + safe(errorMessage)
+            + ". Rule-based fallback was applied (limit hint / column hint).";
+        return new ParsedRepairResult(explanation, repairedSql);
     }
 
     private void ensureExplainOrAnalyzeSnippet(AiGenerateSqlReq req, String actionName) {
@@ -1187,6 +1370,9 @@ public class AiServiceImpl implements AiService {
     private record TextProviderResult(String content, String reasoning) {
     }
 
+    private record ParsedRepairResult(String errorExplanation, String repairedSql) {
+    }
+
     private record AstValidationResult(boolean valid, String sqlText, String message) {
     }
 
@@ -1207,3 +1393,4 @@ public class AiServiceImpl implements AiService {
     private record OpenAiEndpoint(String url, OpenAiApiType apiType) {
     }
 }
+

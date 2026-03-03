@@ -320,7 +320,7 @@
               :class="{ 'is-user': item.role === 'user', 'is-assistant': item.role === 'assistant' }"
             >
               <template v-if="item.role === 'user'">
-                <div class="query-chat-user-bubble">{{ item.content }}</div>
+                <div class="query-chat-user-bubble" :class="userBubbleClass(item.actionType)">{{ item.content }}</div>
               </template>
               <template v-else>
                 <div class="query-chat-assistant-card">
@@ -328,6 +328,7 @@
                     <span>{{ assistantActionLabel(item.actionType) }}</span>
                     <span>{{ formatTime(item.createdAt) }}</span>
                   </div>
+                  <div v-if="item.content" class="query-chat-text">{{ item.content }}</div>
                   <template v-if="item.sqlText">
                     <pre class="query-chat-sql">{{ item.sqlText }}</pre>
                     <a-space size="small" wrap>
@@ -348,7 +349,6 @@
                       </a-tooltip>
                     </a-space>
                   </template>
-                  <div v-else class="query-chat-text">{{ item.content || '-' }}</div>
                 </div>
               </template>
             </div>
@@ -413,7 +413,7 @@
         <aside v-if="activeQueryTab" class="pane pane-right query-editor-pane">
           <div class="pane-title">SQL 编辑与执行</div>
 
-          <div class="editor-group">
+          <div class="editor-group" ref="sqlEditorContainerRef">
             <MonacoEditor
               v-model:value="activeQueryTab.sqlText"
               language="sql"
@@ -427,6 +427,35 @@
               <template #default>编辑器加载中...</template>
               <template #failure>编辑器加载失败，请刷新页面重试</template>
             </MonacoEditor>
+            <div
+              v-if="sqlSelectionPopover.visible && activeQueryTab.selectedSqlText"
+              class="sql-selection-popover"
+              :style="{ left: `${sqlSelectionPopover.left}px`, top: `${sqlSelectionPopover.top}px` }"
+            >
+              <a-space size="small">
+                <a-button size="small" class="sql-selection-popover-btn" @click="appendSelectedSqlToPrompt(activeQueryTab)">
+                  添加到对话框
+                </a-button>
+                <a-button
+                  size="small"
+                  class="sql-selection-popover-btn"
+                  :loading="activeQueryTab.aiGenerating"
+                  :disabled="activeQueryTab.aiGenerating"
+                  @click="explainSelectedSqlInChat(activeQueryTab)"
+                >
+                  解释 SQL
+                </a-button>
+                <a-button
+                  size="small"
+                  class="sql-selection-popover-btn"
+                  :loading="activeQueryTab.aiGenerating"
+                  :disabled="activeQueryTab.aiGenerating"
+                  @click="analyzeSelectedSqlInChat(activeQueryTab)"
+                >
+                  分析 SQL
+                </a-button>
+              </a-space>
+            </div>
           </div>
 
           <div class="editor-actions">
@@ -455,7 +484,7 @@
                   <template #icon><safety-outlined /></template>
                 </a-button>
               </a-tooltip>
-              <a-tooltip title="自动修复">
+              <a-tooltip v-if="activeQueryTab.lastExecuteFailed" title="自动修复">
                 <a-button size="small" class="sql-action-icon-btn" @click="repairSqlForTab(activeQueryTab)">
                   <template #icon><tool-outlined /></template>
                 </a-button>
@@ -479,6 +508,10 @@
 
           <div class="query-result-panel">
             <div class="query-result-title">查询结果</div>
+            <div v-if="activeQueryTab.lastExecuteFailed" class="query-result-error">
+              <span class="query-result-error-text">{{ activeQueryTab.lastExecuteErrorMessage || 'SQL 执行失败' }}</span>
+              <a-button size="small" type="primary" danger @click="repairSqlForTab(activeQueryTab)">修复 SQL</a-button>
+            </div>
             <a-table
               size="small"
               :pagination="false"
@@ -662,10 +695,14 @@
 
           <a-tab-pane key="embedding" tab="向量化配置">
             <a-form-item label="向量模型目录（推荐：填写 clone 的模型仓库目录）">
-              <a-input
-                v-model:value="ragConfigForm.ragEmbeddingModelDir"
-                placeholder="/path/to/bge-m3-onnx-o4（目录优先于单文件路径）"
-              />
+              <div class="file-picker-row">
+                <a-input
+                  :value="ragConfigForm.ragEmbeddingModelDir"
+                  readonly
+                  placeholder="/path/to/bge-m3-onnx-o4 (directory first)"
+                />
+                <a-button :loading="pickingRagModelDir" @click="pickRagEmbeddingModelDir">选择目录</a-button>
+              </div>
             </a-form-item>
             <a-row :gutter="12">
               <a-col :span="12">
@@ -709,12 +746,26 @@
             <a-row :gutter="12">
               <a-col :span="12">
                 <a-form-item label="ONNX 文件绝对路径（目录为空时生效）">
-                  <a-input v-model:value="ragConfigForm.ragEmbeddingModelPath" placeholder="/path/to/model_optimized.onnx" />
+                  <div class="file-picker-row">
+                    <a-input
+                      :value="ragConfigForm.ragEmbeddingModelPath"
+                      readonly
+                      placeholder="/path/to/model_optimized.onnx"
+                    />
+                    <a-button :loading="pickingRagModelPath" @click="pickRagEmbeddingModelPath">选择文件</a-button>
+                  </div>
                 </a-form-item>
               </a-col>
               <a-col :span="12">
                 <a-form-item label="ONNX 数据绝对路径（可选）">
-                  <a-input v-model:value="ragConfigForm.ragEmbeddingModelDataPath" placeholder="/path/to/model_optimized.onnx.data" />
+                  <div class="file-picker-row">
+                    <a-input
+                      :value="ragConfigForm.ragEmbeddingModelDataPath"
+                      readonly
+                      placeholder="/path/to/model_optimized.onnx.data"
+                    />
+                    <a-button :loading="pickingRagModelDataPath" @click="pickRagEmbeddingModelDataPath">选择文件</a-button>
+                  </div>
                 </a-form-item>
               </a-col>
             </a-row>
@@ -872,6 +923,7 @@ import type {
   AiConfigSaveReq,
   AiConfigVO,
   AiGenerateSqlVO,
+  AiRepairVO,
   AiModelOption,
   AiTextResponseVO,
   ConnectionCreateReq,
@@ -892,6 +944,22 @@ import type {
   TableDetailVO,
 } from './types';
 
+interface DesktopDialogFilter {
+  name: string;
+  extensions: string[];
+}
+
+interface DesktopPickFileOptions {
+  title?: string;
+  defaultPath?: string;
+  filters?: DesktopDialogFilter[];
+}
+
+interface DesktopBridge {
+  pickFile: (options?: DesktopPickFileOptions) => Promise<string>;
+  pickDirectory: (options?: Omit<DesktopPickFileOptions, 'filters'>) => Promise<string>;
+}
+
 interface ObjectRow {
   objectName: string;
   objectType: 'tables' | 'views' | 'functions' | 'events' | 'queries' | 'backups';
@@ -900,12 +968,15 @@ interface ObjectRow {
   description: string;
 }
 
+type QueryActionType = 'generate' | 'explain' | 'analyze' | 'repair';
+type AiActionType = 'generate' | 'explain' | 'analyze';
+
 interface QueryChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   sqlText?: string;
-  actionType: 'generate' | 'explain' | 'analyze';
+  actionType: QueryActionType;
   createdAt: number;
 }
 
@@ -925,6 +996,9 @@ interface QueryWorkspaceTab {
   aiGenerating: boolean;
   selectedSqlText: string;
   chatMessages: QueryChatMessage[];
+  lastExecuteFailed: boolean;
+  lastExecuteErrorMessage: string;
+  lastFailedSqlText: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -977,6 +1051,12 @@ const editingHistoryTitle = ref('');
 const sessionTitleOverrides = ref<Record<string, string>>({});
 const tableDetail = ref<TableDetailVO | null>(null);
 const tableDetailLoading = ref(false);
+const sqlEditorContainerRef = ref<HTMLElement | null>(null);
+const sqlSelectionPopover = reactive({
+  visible: false,
+  left: 0,
+  top: 0,
+});
 const viewportWidth = ref(typeof window === 'undefined' ? 1440 : window.innerWidth);
 const browserRightPaneWidth = ref(390);
 const browserPaneResizeState = reactive({
@@ -997,6 +1077,9 @@ const contextMenu = reactive({
 const connectionForm = reactive<ConnectionCreateReq>(defaultConnectionForm());
 const aiConfigForm = reactive<AiConfigSaveReq>(defaultAiConfigForm());
 const ragConfigForm = reactive<RagConfigSaveReq>(defaultRagConfigForm());
+const pickingRagModelDir = ref(false);
+const pickingRagModelPath = ref(false);
+const pickingRagModelDataPath = ref(false);
 
 const workflow = reactive({
   connectionId: 0,
@@ -1048,6 +1131,7 @@ const sqlKeywords = [
 let sqlCompletionProviderDisposable: IDisposable | null = null;
 let sqlEditorTypeDisposable: IDisposable | null = null;
 let sqlEditorSelectionDisposable: IDisposable | null = null;
+let sqlEditorScrollDisposable: IDisposable | null = null;
 let sqlAutoSuggestTimer: number | null = null;
 let activeSqlEditorInstance: MonacoApi.editor.IStandaloneCodeEditor | null = null;
 const pendingTableNameLoads = new Map<string, Promise<string[]>>();
@@ -1482,6 +1566,9 @@ function openAiQueryTab() {
     aiGenerating: false,
     selectedSqlText: '',
     chatMessages: [],
+    lastExecuteFailed: false,
+    lastExecuteErrorMessage: '',
+    lastFailedSqlText: '',
     createdAt: now,
     updatedAt: now,
   };
@@ -1726,6 +1813,9 @@ function buildHistoryTabFromRows(connectionId: number, sessionId: string, rows: 
     aiGenerating: false,
     selectedSqlText: '',
     chatMessages: messages,
+    lastExecuteFailed: false,
+    lastExecuteErrorMessage: '',
+    lastFailedSqlText: '',
     createdAt: first?.createdAt ?? Date.now(),
     updatedAt: last?.createdAt ?? Date.now(),
   };
@@ -1890,7 +1980,23 @@ function assistantActionLabel(actionType: QueryChatMessage['actionType']) {
   if (actionType === 'analyze') {
     return '分析 SQL';
   }
+  if (actionType === 'repair') {
+    return '修复 SQL';
+  }
   return '生成 SQL';
+}
+
+function userBubbleClass(actionType: QueryActionType) {
+  if (actionType === 'explain') {
+    return 'is-explain';
+  }
+  if (actionType === 'analyze') {
+    return 'is-analyze';
+  }
+  if (actionType === 'repair') {
+    return 'is-repair';
+  }
+  return 'is-generate';
 }
 
 function touchQueryTab(tab: QueryWorkspaceTab) {
@@ -1910,12 +2016,17 @@ function appendUserChatMessage(tab: QueryWorkspaceTab, promptText: string, actio
   touchQueryTab(tab);
 }
 
-function appendAssistantSqlMessage(tab: QueryWorkspaceTab, sqlText: string, actionType: QueryChatMessage['actionType']) {
+function appendAssistantSqlMessage(
+  tab: QueryWorkspaceTab,
+  sqlText: string,
+  actionType: QueryChatMessage['actionType'],
+  content = '',
+) {
   const now = Date.now();
   tab.chatMessages.push({
     id: `chat-assistant-${now}-${Math.random().toString(16).slice(2, 8)}`,
     role: 'assistant',
-    content: '',
+    content: content.trim(),
     sqlText,
     actionType,
     createdAt: now,
@@ -1942,6 +2053,7 @@ function appendSqlToEditor(tab: QueryWorkspaceTab, sqlText: string) {
   }
   tab.sqlText = tab.sqlText.trim() ? `${tab.sqlText.trim()}\n\n${value}` : value;
   tab.selectedSqlText = '';
+  hideSqlSelectionPopover();
   touchQueryTab(tab);
   activeWorkbenchTab.value = tab.key;
 }
@@ -1954,6 +2066,54 @@ function appendSelectedSqlToPrompt(tab: QueryWorkspaceTab) {
   }
   tab.prompt = tab.prompt.trim() ? `${tab.prompt.trim()}\n${value}` : value;
   touchQueryTab(tab);
+  hideSqlSelectionPopover();
+}
+
+async function explainSelectedSqlInChat(tab: QueryWorkspaceTab) {
+  await runAiTextActionWithSelectedSql(tab, 'explain');
+}
+
+async function analyzeSelectedSqlInChat(tab: QueryWorkspaceTab) {
+  await runAiTextActionWithSelectedSql(tab, 'analyze');
+}
+
+async function runAiTextActionWithSelectedSql(tab: QueryWorkspaceTab, actionType: 'explain' | 'analyze') {
+  if (tab.aiGenerating) {
+    return;
+  }
+  const sqlSnippet = tab.selectedSqlText.trim();
+  if (!sqlSnippet) {
+    message.info('请先选择一段 SQL');
+    return;
+  }
+
+  const promptText = actionType === 'explain' ? '请解释这段 SQL 的含义。' : '请分析这段 SQL 的合理性。';
+  appendUserChatMessage(tab, `${promptText}\n\n${sqlSnippet}`, actionType);
+  tab.aiGenerating = true;
+  hideSqlSelectionPopover();
+
+  try {
+    const endpoint = actionType === 'explain' ? '/api/ai/query/explain' : '/api/ai/query/analyze';
+    const result = await postApi<AiTextResponseVO>(endpoint, {
+      connectionId: tab.connectionId,
+      sessionId: tab.sessionId,
+      prompt: buildAiPrompt(promptText, actionType, sqlSnippet),
+      databaseName: tab.databaseName || undefined,
+      sqlSnippet,
+      modelName: tab.selectedAiModel || undefined,
+    });
+    appendAssistantTextMessage(tab, result.content || '未返回内容', actionType);
+    if (result.reasoning) {
+      message.info(result.reasoning);
+    }
+    message.success(actionType === 'explain' ? 'SQL 含义解释已生成' : 'SQL 合理性分析已生成');
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    message.error(msg);
+  } finally {
+    tab.aiGenerating = false;
+    touchQueryTab(tab);
+  }
 }
 
 async function prepareConnectionTreeData(connectionId: number) {
@@ -2395,17 +2555,65 @@ function readSelectedSql(editor: MonacoApi.editor.IStandaloneCodeEditor) {
   return model.getValueInRange(selection).trim();
 }
 
+function hideSqlSelectionPopover() {
+  sqlSelectionPopover.visible = false;
+}
+
+function updateSqlSelectionPopoverPosition(editor: MonacoApi.editor.IStandaloneCodeEditor) {
+  const selection = editor.getSelection();
+  const container = sqlEditorContainerRef.value;
+  const editorNode = editor.getDomNode();
+  if (!selection || selection.isEmpty() || !container || !editorNode) {
+    hideSqlSelectionPopover();
+    return;
+  }
+  const visiblePosition = editor.getScrolledVisiblePosition(selection.getEndPosition());
+  if (!visiblePosition) {
+    hideSqlSelectionPopover();
+    return;
+  }
+  const containerRect = container.getBoundingClientRect();
+  const editorRect = editorNode.getBoundingClientRect();
+  const popoverWidth = 340;
+  const estimatedHeight = 36;
+  const baseLeft = editorRect.left - containerRect.left + visiblePosition.left;
+  const baseTop = editorRect.top - containerRect.top + visiblePosition.top;
+  const maxLeft = Math.max(8, container.clientWidth - popoverWidth - 8);
+  const left = Math.min(Math.max(8, baseLeft), maxLeft);
+  const top = Math.max(8, baseTop - estimatedHeight - 6);
+  sqlSelectionPopover.left = left;
+  sqlSelectionPopover.top = top;
+  sqlSelectionPopover.visible = true;
+}
+
 function syncSelectedSqlForActiveTab() {
   if (!activeSqlEditorInstance || !activeQueryTab.value) {
+    hideSqlSelectionPopover();
     return;
   }
   activeQueryTab.value.selectedSqlText = readSelectedSql(activeSqlEditorInstance);
+  if (!activeQueryTab.value.selectedSqlText) {
+    hideSqlSelectionPopover();
+    return;
+  }
+  updateSqlSelectionPopoverPosition(activeSqlEditorInstance);
 }
 
 function registerSqlSelectionTracker(editor: MonacoApi.editor.IStandaloneCodeEditor) {
   sqlEditorSelectionDisposable?.dispose();
   sqlEditorSelectionDisposable = editor.onDidChangeCursorSelection(() => {
     syncSelectedSqlForActiveTab();
+  });
+}
+
+function registerSqlScrollTracker(editor: MonacoApi.editor.IStandaloneCodeEditor) {
+  sqlEditorScrollDisposable?.dispose();
+  sqlEditorScrollDisposable = editor.onDidScrollChange(() => {
+    if (!activeQueryTab.value?.selectedSqlText) {
+      hideSqlSelectionPopover();
+      return;
+    }
+    updateSqlSelectionPopoverPosition(editor);
   });
 }
 
@@ -2428,6 +2636,7 @@ function handleSqlEditorMount(
   registerSqlCompletionProvider(monaco);
   registerSqlAutoSuggest(editor);
   registerSqlSelectionTracker(editor);
+  registerSqlScrollTracker(editor);
   syncSelectedSqlForActiveTab();
   void warmupTableSuggestions(activeQueryTab.value);
 }
@@ -2824,6 +3033,94 @@ function quickSelectAll() {
   openAiQueryTab();
 }
 
+function getDesktopBridge(): DesktopBridge | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  const bridge = (window as Window & { sqlCopilotDesktop?: DesktopBridge }).sqlCopilotDesktop;
+  if (!bridge || typeof bridge.pickFile !== 'function') {
+    return null;
+  }
+  return bridge;
+}
+
+async function pickRagEmbeddingModelDir() {
+  const bridge = getDesktopBridge();
+  if (!bridge || typeof bridge.pickDirectory !== 'function') {
+    message.warning('当前运行环境不支持目录选择器，请通过桌面端运行。');
+    return;
+  }
+  if (pickingRagModelDir.value) {
+    return;
+  }
+  pickingRagModelDir.value = true;
+  try {
+    const selectedPath = await bridge.pickDirectory({
+      title: '选择向量化模型目录',
+      defaultPath: ragConfigForm.ragEmbeddingModelDir || ragConfigForm.ragEmbeddingModelPath || undefined,
+    });
+    if (!selectedPath) {
+      return;
+    }
+    ragConfigForm.ragEmbeddingModelDir = selectedPath;
+  } finally {
+    pickingRagModelDir.value = false;
+  }
+}
+
+async function pickRagEmbeddingModelPath() {
+  const bridge = getDesktopBridge();
+  if (!bridge) {
+    message.warning('当前运行环境不支持文件选择器，请通过桌面端运行。');
+    return;
+  }
+  if (pickingRagModelPath.value) {
+    return;
+  }
+  pickingRagModelPath.value = true;
+  try {
+    const selectedPath = await bridge.pickFile({
+      title: '选择向量化 ONNX 模型文件',
+      defaultPath: ragConfigForm.ragEmbeddingModelPath || ragConfigForm.ragEmbeddingModelDir || undefined,
+      filters: [{ name: 'ONNX Model', extensions: ['onnx'] }],
+    });
+    if (!selectedPath) {
+      return;
+    }
+    ragConfigForm.ragEmbeddingModelPath = selectedPath;
+  } finally {
+    pickingRagModelPath.value = false;
+  }
+}
+
+async function pickRagEmbeddingModelDataPath() {
+  const bridge = getDesktopBridge();
+  if (!bridge) {
+    message.warning('当前运行环境不支持文件选择器，请通过桌面端运行。');
+    return;
+  }
+  if (pickingRagModelDataPath.value) {
+    return;
+  }
+  pickingRagModelDataPath.value = true;
+  try {
+    const selectedPath = await bridge.pickFile({
+      title: '选择 ONNX 数据文件',
+      defaultPath: ragConfigForm.ragEmbeddingModelDataPath
+        || ragConfigForm.ragEmbeddingModelPath
+        || ragConfigForm.ragEmbeddingModelDir
+        || undefined,
+      filters: [{ name: 'ONNX Data', extensions: ['data'] }],
+    });
+    if (!selectedPath) {
+      return;
+    }
+    ragConfigForm.ragEmbeddingModelDataPath = selectedPath;
+  } finally {
+    pickingRagModelDataPath.value = false;
+  }
+}
+
 async function openAiConfigModal() {
   aiConfigModalOpen.value = true;
   await runSafely(async () => {
@@ -2880,6 +3177,9 @@ async function handleQueryConnectionChange(tab: QueryWorkspaceTab) {
     tab.riskInfo = null;
     tab.executeResult = null;
     tab.explainResult = null;
+    tab.lastExecuteFailed = false;
+    tab.lastExecuteErrorMessage = '';
+    tab.lastFailedSqlText = '';
     tab.selectedSqlText = '';
     touchQueryTab(tab);
     await warmupTableSuggestions(tab);
@@ -2888,6 +3188,9 @@ async function handleQueryConnectionChange(tab: QueryWorkspaceTab) {
 
 function handleQueryDatabaseChange(tab: QueryWorkspaceTab) {
   tab.riskAckToken = '';
+  tab.lastExecuteFailed = false;
+  tab.lastExecuteErrorMessage = '';
+  tab.lastFailedSqlText = '';
   touchQueryTab(tab);
   void warmupTableSuggestions(tab);
 }
@@ -2918,7 +3221,7 @@ async function saveConversationHistory(tab: QueryWorkspaceTab, promptText: strin
   }
 }
 
-function buildAiPrompt(promptText: string, actionType: QueryChatMessage['actionType'], sqlSnippet?: string) {
+function buildAiPrompt(promptText: string, actionType: AiActionType, sqlSnippet?: string) {
   const snippet = (sqlSnippet ?? '').trim();
   if (actionType === 'explain') {
     return [
@@ -2951,7 +3254,7 @@ function buildAiPrompt(promptText: string, actionType: QueryChatMessage['actionT
   ].join('\n');
 }
 
-async function generateSqlForTab(tab: QueryWorkspaceTab, actionType: QueryChatMessage['actionType'] = 'generate') {
+async function generateSqlForTab(tab: QueryWorkspaceTab, actionType: AiActionType = 'generate') {
   if (tab.aiGenerating) {
     return;
   }
@@ -3045,11 +3348,12 @@ async function evaluateRiskForTab(tab: QueryWorkspaceTab) {
 }
 
 async function executeSqlForTab(tab: QueryWorkspaceTab, sqlOverride?: string) {
-  await runSafely(async () => {
-    const sqlText = resolveSqlForAction(tab, sqlOverride);
-    if (!sqlText) {
-      throw new Error('请先输入或选择 SQL');
-    }
+  const sqlText = resolveSqlForAction(tab, sqlOverride);
+  if (!sqlText) {
+    message.error('请先输入或选择 SQL');
+    return;
+  }
+  try {
     const result = await postApi<SqlExecuteVO>('/api/sql/execute', {
       connectionId: tab.connectionId,
       sessionId: tab.sessionId,
@@ -3060,24 +3364,69 @@ async function executeSqlForTab(tab: QueryWorkspaceTab, sqlOverride?: string) {
     });
     tab.executeResult = result;
     tab.explainResult = null;
+    tab.lastExecuteFailed = false;
+    tab.lastExecuteErrorMessage = '';
+    tab.lastFailedSqlText = '';
     touchQueryTab(tab);
     message.success(`执行成功，耗时 ${result.executionMs}ms`);
-  });
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    tab.executeResult = null;
+    tab.explainResult = null;
+    tab.lastExecuteFailed = true;
+    tab.lastExecuteErrorMessage = errMsg;
+    tab.lastFailedSqlText = sqlText;
+    touchQueryTab(tab);
+    message.error(errMsg);
+  }
 }
 
 async function repairSqlForTab(tab: QueryWorkspaceTab) {
-  await runSafely(async () => {
-    const repaired = await postApi<{ repairedSql: string; repaired: boolean; repairNote: string }>('/api/ai/query/repair', {
+  if (!tab.lastExecuteFailed) {
+    message.info('最近一次 SQL 执行未失败，无需修复');
+    return;
+  }
+  const failedSql = tab.lastFailedSqlText.trim();
+  const errorMessage = tab.lastExecuteErrorMessage.trim();
+  if (!failedSql || !errorMessage) {
+    message.error('缺少失败 SQL 或错误信息，无法执行修复');
+    return;
+  }
+  if (tab.aiGenerating) {
+    return;
+  }
+  tab.aiGenerating = true;
+  try {
+    appendUserChatMessage(
+      tab,
+      `请修复以下 SQL 执行错误。\n错误信息：${errorMessage}\n\nSQL:\n${failedSql}`,
+      'repair',
+    );
+    const repaired = await postApi<AiRepairVO>('/api/ai/query/repair', {
       connectionId: tab.connectionId,
       sessionId: tab.sessionId,
-      sqlText: tab.sqlText,
-      errorMessage: 'unknown column',
+      sqlText: failedSql,
+      errorMessage,
+      databaseName: tab.databaseName || undefined,
+      modelName: tab.selectedAiModel || undefined,
     });
-    tab.sqlText = repaired.repairedSql;
-    tab.selectedSqlText = '';
+    appendAssistantSqlMessage(
+      tab,
+      repaired.repairedSql || failedSql,
+      'repair',
+      (repaired.errorExplanation || repaired.repairNote || '已尝试修复 SQL').trim(),
+    );
+    tab.lastExecuteFailed = false;
+    tab.lastExecuteErrorMessage = '';
+    tab.lastFailedSqlText = '';
     touchQueryTab(tab);
-    message.success(repaired.repairNote);
-  });
+    message.success(repaired.repairNote || '修复建议已生成');
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    message.error(errMsg);
+  } finally {
+    tab.aiGenerating = false;
+  }
 }
 
 async function exportCsvForTab(tab: QueryWorkspaceTab) {
@@ -3182,9 +3531,12 @@ onBeforeUnmount(() => {
   sqlEditorTypeDisposable = null;
   sqlEditorSelectionDisposable?.dispose();
   sqlEditorSelectionDisposable = null;
+  sqlEditorScrollDisposable?.dispose();
+  sqlEditorScrollDisposable = null;
   sqlCompletionProviderDisposable?.dispose();
   sqlCompletionProviderDisposable = null;
   activeSqlEditorInstance = null;
+  hideSqlSelectionPopover();
   if (sqlAutoSuggestTimer !== null) {
     window.clearTimeout(sqlAutoSuggestTimer);
     sqlAutoSuggestTimer = null;
@@ -3195,9 +3547,11 @@ watch(
   () => [activeWorkbenchTab.value, activeQueryTab.value?.connectionId ?? 0, activeQueryTab.value?.databaseName ?? ''],
   () => {
     if (!activeQueryTab.value) {
+      hideSqlSelectionPopover();
       return;
     }
     activeQueryTab.value.selectedSqlText = '';
+    hideSqlSelectionPopover();
     void warmupTableSuggestions(activeQueryTab.value);
     syncSelectedSqlForActiveTab();
   },
@@ -3550,3 +3904,5 @@ function resetConnectionModalState() {
   resetConnectionForm();
 }
 </script>
+
+

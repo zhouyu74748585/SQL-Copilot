@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain } = require('electron');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const http = require('http');
@@ -19,6 +19,7 @@ function createWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      preload: path.join(__dirname, 'preload.cjs'),
     },
   });
 
@@ -32,6 +33,70 @@ function createWindow() {
   if (isDebug) {
     win.webContents.openDevTools({ mode: 'detach' });
   }
+}
+
+function normalizeDialogFilters(filters) {
+  if (!Array.isArray(filters) || filters.length === 0) {
+    return undefined;
+  }
+  return filters
+    .map((item) => {
+      const name = typeof item?.name === 'string' ? item.name.trim() : '';
+      const extensions = Array.isArray(item?.extensions)
+        ? item.extensions
+            .map((ext) => (typeof ext === 'string' ? ext.replace(/^\./, '').trim() : ''))
+            .filter((ext) => !!ext)
+        : [];
+      if (!name || !extensions.length) {
+        return null;
+      }
+      return { name, extensions };
+    })
+    .filter((item) => !!item);
+}
+
+function registerIpcHandlers() {
+  ipcMain.handle('dialog:pick-file', async (_event, rawOptions) => {
+    const options = rawOptions && typeof rawOptions === 'object' ? rawOptions : {};
+    const title = typeof options.title === 'string' && options.title.trim()
+      ? options.title.trim()
+      : 'Select file';
+    const defaultPath = typeof options.defaultPath === 'string' && options.defaultPath.trim()
+      ? options.defaultPath.trim()
+      : undefined;
+    const filters = normalizeDialogFilters(options.filters);
+    const parent = BrowserWindow.getFocusedWindow() || undefined;
+    const result = await dialog.showOpenDialog(parent, {
+      title,
+      defaultPath,
+      filters,
+      properties: ['openFile'],
+    });
+    if (result.canceled || !Array.isArray(result.filePaths) || !result.filePaths.length) {
+      return '';
+    }
+    return result.filePaths[0];
+  });
+
+  ipcMain.handle('dialog:pick-directory', async (_event, rawOptions) => {
+    const options = rawOptions && typeof rawOptions === 'object' ? rawOptions : {};
+    const title = typeof options.title === 'string' && options.title.trim()
+      ? options.title.trim()
+      : 'Select directory';
+    const defaultPath = typeof options.defaultPath === 'string' && options.defaultPath.trim()
+      ? options.defaultPath.trim()
+      : undefined;
+    const parent = BrowserWindow.getFocusedWindow() || undefined;
+    const result = await dialog.showOpenDialog(parent, {
+      title,
+      defaultPath,
+      properties: ['openDirectory'],
+    });
+    if (result.canceled || !Array.isArray(result.filePaths) || !result.filePaths.length) {
+      return '';
+    }
+    return result.filePaths[0];
+  });
 }
 
 function platformKey() {
@@ -178,6 +243,7 @@ app.on('before-quit', stopQdrant);
 app.on('will-quit', stopQdrant);
 
 app.whenReady().then(async () => {
+  registerIpcHandlers();
   try {
     await startQdrant();
   } catch (error) {
@@ -185,3 +251,4 @@ app.whenReady().then(async () => {
   }
   createWindow();
 });
+

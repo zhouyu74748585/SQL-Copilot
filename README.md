@@ -41,7 +41,7 @@ npm run -w @sqlcopilot/desktop dist
 ```
 
 说明：
-- 渲染进程：Vite 在 `http://127.0.0.1:5173`
+- 渲染进程：Vite 在 `http://127.0.0.1:6044`
 - 主进程：Electron 以 `--inspect=9229` 启动，可用 IDE/Chrome DevTools 附加调试
 - 会自动打开 Electron DevTools（独立窗口）
 

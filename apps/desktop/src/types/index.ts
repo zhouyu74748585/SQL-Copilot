@@ -68,6 +68,13 @@ export interface AiTextResponseVO {
   fallbackUsed: boolean;
 }
 
+export interface AiRepairVO {
+  repairedSql: string;
+  repaired: boolean;
+  repairNote: string;
+  errorExplanation?: string;
+}
+
 export interface ExplainVO {
   rows: QueryRowVO[];
   summary: string;

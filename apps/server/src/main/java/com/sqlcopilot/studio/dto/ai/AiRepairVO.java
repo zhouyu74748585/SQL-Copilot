@@ -14,4 +14,7 @@ public class AiRepairVO {
 
     /** 修复说明。 */
     private String repairNote;
+
+    /** 错误原因说明（文本段）。 */
+    private String errorExplanation;
 }
