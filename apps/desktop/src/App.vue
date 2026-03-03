@@ -431,7 +431,7 @@
 
           <div class="editor-actions">
             <a-space wrap>
-              <a-tooltip :title="activeQueryTab.selectedSqlText ? 'EXPLAIN（仅作用于选中 SQL）' : 'EXPLAIN'">
+              <a-tooltip :title="activeQueryTab.selectedSqlText ? '计划选择的SQL' : '计划 SQL'">
                 <a-button
                   size="small"
                   :class="['sql-action-icon-btn', { 'is-selection-active': !!activeQueryTab.selectedSqlText }]"
@@ -440,7 +440,7 @@
                   <template #icon><eye-outlined /></template>
                 </a-button>
               </a-tooltip>
-              <a-tooltip :title="activeQueryTab.selectedSqlText ? '执行 SQL（仅作用于选中 SQL）' : '执行 SQL'">
+              <a-tooltip :title="activeQueryTab.selectedSqlText ? '执行选中的SQL' : '执行 SQL'">
                 <a-button
                   size="small"
                   type="primary"
