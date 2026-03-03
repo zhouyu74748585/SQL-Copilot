@@ -4,6 +4,7 @@ import com.sqlcopilot.studio.dto.ai.AiGenerateSqlReq;
 import com.sqlcopilot.studio.dto.ai.AiGenerateSqlVO;
 import com.sqlcopilot.studio.dto.ai.AiRepairReq;
 import com.sqlcopilot.studio.dto.ai.AiRepairVO;
+import com.sqlcopilot.studio.dto.ai.AiTextResponseVO;
 import com.sqlcopilot.studio.dto.common.ApiResponse;
 import com.sqlcopilot.studio.service.AiService;
 import jakarta.validation.Valid;
@@ -26,6 +27,18 @@ public class AiController {
     public ApiResponse<AiGenerateSqlVO> generate(@Valid @RequestBody AiGenerateSqlReq req) {
         // 关键操作：先构建 Schema 上下文再生成 SQL，避免无结构盲猜。
         return ApiResponse.success(aiService.generateSql(req));
+    }
+
+    @PostMapping("/explain")
+    public ApiResponse<AiTextResponseVO> explain(@Valid @RequestBody AiGenerateSqlReq req) {
+        // 关键操作：解释 SQL 使用自然语言输出，不执行数据库 EXPLAIN。
+        return ApiResponse.success(aiService.explainSql(req));
+    }
+
+    @PostMapping("/analyze")
+    public ApiResponse<AiTextResponseVO> analyze(@Valid @RequestBody AiGenerateSqlReq req) {
+        // 关键操作：基于数据库元数据分析 SQL 合理性，输出结构化建议。
+        return ApiResponse.success(aiService.analyzeSql(req));
     }
 
     @PostMapping("/repair")

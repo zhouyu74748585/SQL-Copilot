@@ -10,11 +10,14 @@ import com.sqlcopilot.studio.dto.ai.AiGenerateSqlVO;
 import com.sqlcopilot.studio.dto.ai.AiModelOptionVO;
 import com.sqlcopilot.studio.dto.ai.AiRepairReq;
 import com.sqlcopilot.studio.dto.ai.AiRepairVO;
+import com.sqlcopilot.studio.dto.ai.AiTextResponseVO;
 import com.sqlcopilot.studio.dto.schema.ContextBuildReq;
 import com.sqlcopilot.studio.dto.schema.ContextBuildVO;
 import com.sqlcopilot.studio.dto.schema.SchemaOverviewVO;
+import com.sqlcopilot.studio.entity.ConnectionEntity;
 import com.sqlcopilot.studio.service.AiConfigService;
 import com.sqlcopilot.studio.service.AiService;
+import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.SchemaService;
 import com.sqlcopilot.studio.service.rag.RagRetrievalService;
 import com.sqlcopilot.studio.service.rag.model.RagPromptContext;
@@ -51,6 +54,7 @@ public class AiServiceImpl implements AiService {
     private static final Pattern SQL_FENCE_PATTERN = Pattern.compile("(?is)```(?:sql)?\\s*(.*?)```");
     private static final Pattern CTE_NAME_PATTERN = Pattern.compile("(?is)(?:^|,|\\s)([a-zA-Z_][a-zA-Z0-9_]*)\\s+as\\s*\\(");
     private static final Pattern COMMAND_TOKEN_PATTERN = Pattern.compile("\"([^\"]*)\"|'([^']*)'|(\\S+)");
+    private static final Pattern SQL_KEYWORD_PATTERN = Pattern.compile("(?is)\\b(select|with|update|delete|insert)\\b");
     private static final Set<String> CODEX_SUBCOMMANDS = Set.of(
         "exec", "e", "review", "login", "logout", "mcp", "mcp-server",
         "app-server", "app", "completion", "sandbox", "debug", "apply",
@@ -58,10 +62,27 @@ public class AiServiceImpl implements AiService {
     );
     private static final long CLI_TIMEOUT_SECONDS = 45L;
     private static final String OPENAI_SYSTEM_PROMPT = "你是数据库 SQL 专家。基于提供的 RAG 上下文生成 SQL。仅返回可执行 SQL，不要输出解释。查询语句默认增加 LIMIT 100。";
+    private static final String EXPLAIN_SQL_SYSTEM_PROMPT = """
+        你是数据库讲解助手。请用中文解释 SQL 的业务含义。
+        要求：
+        1) 用自然语言解释查询目标、筛选条件、关联关系、聚合与排序逻辑；
+        2) 不要输出 EXPLAIN 执行计划，不要给出数据库命令；
+        3) 语言简洁，必要时分点说明；
+        4) 可以指出潜在风险点，但不要生成改写 SQL。
+        """;
+    private static final String ANALYZE_SQL_SYSTEM_PROMPT = """
+        你是数据库审查助手。请基于给定数据库元数据分析 SQL 的合理性。
+        要求：
+        1) 重点检查：是否命中索引、谓词/Join 条件是否合理、是否可能全表扫描、是否存在歧义或高风险写法；
+        2) 输出格式固定为“结论、问题、优化建议”三部分；
+        3) 不执行 EXPLAIN，不要编造不存在的表结构；
+        4) 如果上下文不足要明确指出不确定项。
+        """;
     private static final Logger log = LoggerFactory.getLogger(AiServiceImpl.class);
 
     private final SchemaService schemaService;
     private final AiConfigService aiConfigService;
+    private final ConnectionService connectionService;
     private final RagRetrievalService ragRetrievalService;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient = HttpClient.newBuilder()
@@ -70,10 +91,12 @@ public class AiServiceImpl implements AiService {
 
     public AiServiceImpl(SchemaService schemaService,
                          AiConfigService aiConfigService,
+                         ConnectionService connectionService,
                          RagRetrievalService ragRetrievalService,
                          ObjectMapper objectMapper) {
         this.schemaService = schemaService;
         this.aiConfigService = aiConfigService;
+        this.connectionService = connectionService;
         this.ragRetrievalService = ragRetrievalService;
         this.objectMapper = objectMapper;
     }
@@ -157,6 +180,18 @@ public class AiServiceImpl implements AiService {
     }
 
     @Override
+    public AiTextResponseVO explainSql(AiGenerateSqlReq req) {
+        ensureExplainOrAnalyzeSnippet(req, "解释 SQL");
+        return generateTextResponse(req, "EXPLAIN-TEXT", EXPLAIN_SQL_SYSTEM_PROMPT, "SQL 含义解释");
+    }
+
+    @Override
+    public AiTextResponseVO analyzeSql(AiGenerateSqlReq req) {
+        ensureExplainOrAnalyzeSnippet(req, "分析 SQL");
+        return generateTextResponse(req, "ANALYZE-SQL", ANALYZE_SQL_SYSTEM_PROMPT, "SQL 合理性分析");
+    }
+
+    @Override
     public AiRepairVO repairSql(AiRepairReq req) {
         String sql = req.getSqlText();
         log.info("[AI-REPAIR] connectionId={}, sessionId={}, beforeSql={}", req.getConnectionId(), req.getSessionId(), sql);
@@ -175,6 +210,79 @@ public class AiServiceImpl implements AiService {
         return vo;
     }
 
+    private void ensureExplainOrAnalyzeSnippet(AiGenerateSqlReq req, String actionName) {
+        if (safe(req.getSqlSnippet()).isBlank()) {
+            throw new BusinessException(400, "请先提供需要" + actionName + "的 SQL 片段");
+        }
+    }
+
+    private AiTextResponseVO generateTextResponse(AiGenerateSqlReq req,
+                                                  String logScene,
+                                                  String systemPrompt,
+                                                  String taskLabel) {
+        long startAt = System.currentTimeMillis();
+        log.info(
+            "[AI-{}-REQ] connectionId={}, sessionId={}, databaseName={}, modelName={}, promptLength={}, sqlSnippetLength={}",
+            logScene,
+            req.getConnectionId(),
+            safe(req.getSessionId()),
+            safe(req.getDatabaseName()),
+            safe(req.getModelName()),
+            safe(req.getPrompt()).length(),
+            safe(req.getSqlSnippet()).length()
+        );
+
+        String retrievalInput = buildRetrievalInput(req.getPrompt(), req.getSqlSnippet());
+        RagPromptContext ragPromptContext = ragRetrievalService.retrievePromptContext(
+            req.getConnectionId(),
+            req.getDatabaseName(),
+            retrievalInput
+        );
+        GenerationContext generationContext = buildGenerationContext(req, ragPromptContext);
+
+        String content;
+        String reasoning;
+        boolean fallbackUsed = false;
+        try {
+            TextProviderResult result = generateTextByConfiguredProvider(req, generationContext, systemPrompt, taskLabel);
+            content = result.content();
+            reasoning = result.reasoning();
+        } catch (Exception ex) {
+            content = "未能完成本次" + taskLabel + "，请稍后重试。";
+            reasoning = "AI 配置调用失败，已降级为错误提示。原因: " + ex.getMessage();
+            fallbackUsed = true;
+            log.warn(
+                "[AI-{}-PROVIDER-FAILED] connectionId={}, sessionId={}, databaseName={}, modelName={}, reason={}",
+                logScene,
+                req.getConnectionId(),
+                safe(req.getSessionId()),
+                safe(req.getDatabaseName()),
+                safe(req.getModelName()),
+                safe(ex.getMessage())
+            );
+        }
+
+        AiTextResponseVO vo = new AiTextResponseVO();
+        vo.setContent(safe(content));
+        vo.setReasoning(safe(reasoning));
+        vo.setFallbackUsed(fallbackUsed);
+        log.info(
+            "[AI-{}-RESP] connectionId={}, sessionId={}, databaseName={}, modelName={}, ragHit={}, relatedTableCount={}, contextLength={}, contentLength={}, fallbackUsed={}, elapsedMs={}",
+            logScene,
+            req.getConnectionId(),
+            safe(req.getSessionId()),
+            safe(req.getDatabaseName()),
+            safe(req.getModelName()),
+            Boolean.TRUE.equals(ragPromptContext.getHit()),
+            generationContext.relatedTables().size(),
+            safe(generationContext.promptContext()).length(),
+            safe(content).length(),
+            fallbackUsed,
+            System.currentTimeMillis() - startAt
+        );
+        return vo;
+    }
+
     /**
      * 关键操作：统一抽象 LLM 通道，支持 OpenAI API 与本地 CLI。
      */
@@ -185,6 +293,18 @@ public class AiServiceImpl implements AiService {
             return generateByLocalCli(req, context, option);
         }
         return generateByOpenAi(req, context, option);
+    }
+
+    private TextProviderResult generateTextByConfiguredProvider(AiGenerateSqlReq req,
+                                                                GenerationContext context,
+                                                                String systemPrompt,
+                                                                String taskLabel) {
+        AiConfigVO config = aiConfigService.getConfig();
+        AiModelOptionVO option = resolveModelOption(req.getModelName(), config);
+        if ("LOCAL_CLI".equals(safe(option.getProviderType()).toUpperCase())) {
+            return generateTextByLocalCli(req, context, option, systemPrompt, taskLabel);
+        }
+        return generateTextByOpenAi(req, context, option, systemPrompt, taskLabel);
     }
 
     private ProviderResult generateByOpenAi(AiGenerateSqlReq req, GenerationContext context, AiModelOptionVO option) {
@@ -200,7 +320,7 @@ public class AiServiceImpl implements AiService {
         OpenAiEndpoint endpoint = resolveOpenAiEndpoint(baseUrl, model);
 
         String contextText = safe(context.promptContext());
-        ObjectNode payload = buildOpenAiPayload(req, model, contextText, endpoint.apiType());
+        ObjectNode payload = buildOpenAiPayload(req, model, contextText, endpoint.apiType(), OPENAI_SYSTEM_PROMPT);
 
         try {
             HttpRequest request = HttpRequest.newBuilder()
@@ -228,7 +348,54 @@ public class AiServiceImpl implements AiService {
         }
     }
 
-    private ObjectNode buildOpenAiPayload(AiGenerateSqlReq req, String model, String contextText, OpenAiApiType apiType) {
+    private TextProviderResult generateTextByOpenAi(AiGenerateSqlReq req,
+                                                    GenerationContext context,
+                                                    AiModelOptionVO option,
+                                                    String systemPrompt,
+                                                    String taskLabel) {
+        String apiKey = safe(option.getOpenaiApiKey());
+        if (apiKey.isBlank()) {
+            throw new BusinessException(400, "OpenAI API Key 未配置: " + safe(option.getName()));
+        }
+        String model = resolveOpenAiModel(req.getModelName(), option);
+        String baseUrl = safe(option.getOpenaiBaseUrl());
+        if (baseUrl.isBlank()) {
+            baseUrl = "https://api.openai.com/v1";
+        }
+        OpenAiEndpoint endpoint = resolveOpenAiEndpoint(baseUrl, model);
+
+        String contextText = safe(context.promptContext());
+        ObjectNode payload = buildOpenAiPayload(req, model, contextText, endpoint.apiType(), systemPrompt);
+
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(endpoint.url()))
+                .timeout(Duration.ofSeconds(30))
+                .header("Authorization", "Bearer " + apiKey)
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(payload)))
+                .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                throw new BusinessException(500, "OpenAI 接口返回状态码: " + response.statusCode());
+            }
+            String content = parseOpenAiResponseText(response, endpoint.apiType());
+            if (safe(content).isBlank()) {
+                throw new BusinessException(500, "OpenAI 返回内容为空");
+            }
+            return new TextProviderResult(content, "已通过 OpenAI API(" + safe(option.getName()) + "/" + model + ")完成" + taskLabel);
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new BusinessException(500, "OpenAI 调用失败: " + ex.getMessage());
+        }
+    }
+
+    private ObjectNode buildOpenAiPayload(AiGenerateSqlReq req,
+                                          String model,
+                                          String contextText,
+                                          OpenAiApiType apiType,
+                                          String systemPrompt) {
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("model", model);
         String userPrompt = buildProviderUserPrompt(req, contextText);
@@ -236,7 +403,7 @@ public class AiServiceImpl implements AiService {
             ArrayNode input = payload.putArray("input");
             input.addObject()
                 .put("role", "system")
-                .put("content", OPENAI_SYSTEM_PROMPT);
+                .put("content", systemPrompt);
             input.addObject()
                 .put("role", "user")
                 .put("content", userPrompt);
@@ -246,7 +413,7 @@ public class AiServiceImpl implements AiService {
         ArrayNode messages = payload.putArray("messages");
         messages.addObject()
             .put("role", "system")
-            .put("content", OPENAI_SYSTEM_PROMPT);
+            .put("content", systemPrompt);
         messages.addObject()
             .put("role", "user")
             .put("content", userPrompt);
@@ -445,6 +612,66 @@ public class AiServiceImpl implements AiService {
         }
     }
 
+    private TextProviderResult generateTextByLocalCli(AiGenerateSqlReq req,
+                                                       GenerationContext context,
+                                                       AiModelOptionVO option,
+                                                       String systemPrompt,
+                                                       String taskLabel) {
+        String command = safe(option.getCliCommand());
+        if (command.isBlank()) {
+            throw new BusinessException(400, "本地 CLI 命令未配置: " + safe(option.getName()));
+        }
+
+        String backendPrompt = buildProviderUserPrompt(req, safe(context.promptContext()));
+        String constrainedPrompt = buildCliConstrainedPromptForText(systemPrompt, backendPrompt);
+        List<String> commandLine = parseCliCommand(command);
+        if (commandLine.isEmpty()) {
+            throw new BusinessException(400, "本地 CLI 命令无效");
+        }
+        CliInvocation cliInvocation = buildCliInvocation(commandLine, constrainedPrompt);
+
+        ProcessBuilder processBuilder = new ProcessBuilder(cliInvocation.commandLine());
+        processBuilder.redirectErrorStream(true);
+        try {
+            Process process = processBuilder.start();
+            if (cliInvocation.writePromptToStdin()) {
+                try (java.io.OutputStream stdin = process.getOutputStream()) {
+                    stdin.write(constrainedPrompt.getBytes(StandardCharsets.UTF_8));
+                    stdin.write('\n');
+                    stdin.flush();
+                }
+            } else {
+                process.getOutputStream().close();
+            }
+            byte[] outputBytes = process.getInputStream().readAllBytes();
+            boolean finished = process.waitFor(CLI_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                throw new BusinessException(500, "本地 CLI 执行超时");
+            }
+            int exitCode = process.exitValue();
+            String output = new String(outputBytes, StandardCharsets.UTF_8).trim();
+            if (output.isBlank()) {
+                throw new BusinessException(500, "本地 CLI 输出为空");
+            }
+            log.info(
+                "[AI-CLI-TEXT-RESULT] providerName={}, providerId={}, connectionId={}, sessionId={}, taskLabel={}, exitCode={}, outputLength={}",
+                safe(option.getName()),
+                safe(option.getId()),
+                req.getConnectionId(),
+                safe(req.getSessionId()),
+                safe(taskLabel),
+                exitCode,
+                output.length()
+            );
+            return new TextProviderResult(output, "已通过本地 CLI(" + safe(option.getName()) + ")完成" + taskLabel + "（提示词由后端构建）");
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new BusinessException(500, "本地 CLI 调用失败: " + ex.getMessage());
+        }
+    }
+
     private String buildCliConstrainedPrompt(String basePrompt) {
         return """
             你是数据库 SQL 专家。
@@ -454,6 +681,18 @@ public class AiServiceImpl implements AiService {
             3. 仅返回可执行 SQL，不要输出解释。
 
             """ + basePrompt;
+    }
+
+    private String buildCliConstrainedPromptForText(String systemPrompt, String basePrompt) {
+        return """
+            %s
+            严格要求：
+            1. 仅基于下面给出的用户需求、SQL片段（如有）和 RAG Context 输出结果。
+            2. 禁止扫描、读取或参考当前工程/仓库/本地文件系统的任何内容。
+            3. 仅输出结论文本，不要输出执行命令。
+
+            %s
+            """.formatted(systemPrompt, basePrompt);
     }
 
     private List<String> parseCliCommand(String rawCommand) {
@@ -501,28 +740,36 @@ public class AiServiceImpl implements AiService {
     }
 
     private String extractSql(String rawOutput) {
-        String output = safe(rawOutput);
+        String output = normalizeSqlText(rawOutput);
         if (output.isBlank()) {
             return "";
         }
         Matcher matcher = SQL_FENCE_PATTERN.matcher(output);
         while (matcher.find()) {
-            String candidate = safe(matcher.group(1));
+            String candidate = normalizeSqlText(matcher.group(1));
             if (looksLikeSql(candidate)) {
                 return candidate;
             }
         }
 
-        String lower = output.toLowerCase();
-        int idx = firstSqlKeywordIndex(lower);
+        int idx = firstSqlKeywordIndex(output);
         if (idx >= 0) {
-            return output.substring(idx).trim();
+            return normalizeSqlText(output.substring(idx));
         }
         return "";
     }
 
     private String buildProviderUserPrompt(AiGenerateSqlReq req, String contextText) {
+        DatabaseBasicInfo basicInfo = loadDatabaseBasicInfo(req.getConnectionId(), req.getDatabaseName());
         StringBuilder builder = new StringBuilder();
+        builder.append("数据库基本信息:\n")
+            .append("- 类型: ").append(basicInfo.dbType()).append('\n')
+            .append("- 版本: ").append(basicInfo.dbVersion()).append('\n')
+            .append("- 连接默认库: ").append(basicInfo.configuredDatabaseName());
+        if (!basicInfo.requestDatabaseName().isBlank()) {
+            builder.append('\n').append("- 本次目标库: ").append(basicInfo.requestDatabaseName());
+        }
+        builder.append("\n\n");
         builder.append("用户需求:\n").append(req.getPrompt());
         String sqlSnippet = safe(req.getSqlSnippet());
         if (!sqlSnippet.isBlank()) {
@@ -532,24 +779,70 @@ public class AiServiceImpl implements AiService {
         return builder.toString();
     }
 
-    private int firstSqlKeywordIndex(String text) {
-        int min = Integer.MAX_VALUE;
-        for (String keyword : List.of("select ", "with ", "update ", "delete ", "insert ")) {
-            int idx = text.indexOf(keyword);
-            if (idx >= 0 && idx < min) {
-                min = idx;
+    private DatabaseBasicInfo loadDatabaseBasicInfo(Long connectionId, String requestDatabaseName) {
+        String dbType = "UNKNOWN";
+        String dbVersion = "UNKNOWN";
+        String configuredDatabaseName = "-";
+        try {
+            ConnectionEntity connectionEntity = connectionService.getConnectionEntity(connectionId);
+            String entityDbType = safe(connectionEntity.getDbType());
+            if (!entityDbType.isBlank()) {
+                dbType = entityDbType;
             }
+            String entityDatabaseName = safe(connectionEntity.getDatabaseName());
+            if (!entityDatabaseName.isBlank()) {
+                configuredDatabaseName = entityDatabaseName;
+            }
+        } catch (Exception ignored) {
+            // 关键操作：元信息获取失败不影响主流程，使用默认值继续生成。
         }
-        return min == Integer.MAX_VALUE ? -1 : min;
+
+        try (java.sql.Connection connection = connectionService.openTargetConnection(connectionId)) {
+            java.sql.DatabaseMetaData metaData = connection.getMetaData();
+            if (metaData != null) {
+                String productName = safe(metaData.getDatabaseProductName());
+                if (!productName.isBlank()) {
+                    dbType = productName;
+                }
+                String productVersion = safe(metaData.getDatabaseProductVersion());
+                if (!productVersion.isBlank()) {
+                    dbVersion = productVersion;
+                }
+            }
+        } catch (Exception ignored) {
+            // 关键操作：数据库版本读取失败不阻断 AI 主流程。
+        }
+        return new DatabaseBasicInfo(dbType, dbVersion, configuredDatabaseName, safe(requestDatabaseName));
+    }
+
+    private int firstSqlKeywordIndex(String text) {
+        Matcher matcher = SQL_KEYWORD_PATTERN.matcher(Objects.toString(text, ""));
+        if (matcher.find()) {
+            return matcher.start();
+        }
+        return -1;
     }
 
     private boolean looksLikeSql(String text) {
-        String normalized = safe(text).toLowerCase();
-        return normalized.startsWith("select ")
-            || normalized.startsWith("with ")
-            || normalized.startsWith("update ")
-            || normalized.startsWith("delete ")
-            || normalized.startsWith("insert ");
+        String normalized = normalizeSqlText(text);
+        Matcher matcher = SQL_KEYWORD_PATTERN.matcher(normalized);
+        return matcher.find() && matcher.start() == 0;
+    }
+
+    private String normalizeSqlText(String input) {
+        String value = Objects.toString(input, "").trim();
+        if (value.length() >= 2) {
+            char first = value.charAt(0);
+            char last = value.charAt(value.length() - 1);
+            if ((first == '"' && last == '"') || (first == '\'' && last == '\'')) {
+                value = value.substring(1, value.length() - 1).trim();
+            }
+        }
+        return value
+            .replace("\\n", "\n")
+            .replace("\\t", "\t")
+            .replace("\\r", "\r")
+            .replace("\\\"", "\"");
     }
 
     private String fallbackSql(String prompt, List<String> relatedTables) {
@@ -780,10 +1073,19 @@ public class AiServiceImpl implements AiService {
     private record ProviderResult(String sqlText, String reasoning) {
     }
 
+    private record TextProviderResult(String content, String reasoning) {
+    }
+
     private record AstValidationResult(boolean valid, String sqlText, String message) {
     }
 
     private record GenerationContext(String promptContext, List<String> relatedTables) {
+    }
+
+    private record DatabaseBasicInfo(String dbType,
+                                     String dbVersion,
+                                     String configuredDatabaseName,
+                                     String requestDatabaseName) {
     }
 
     private enum OpenAiApiType {

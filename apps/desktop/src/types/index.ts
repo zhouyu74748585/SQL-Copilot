@@ -62,6 +62,12 @@ export interface AiGenerateSqlVO {
   fallbackUsed: boolean;
 }
 
+export interface AiTextResponseVO {
+  content: string;
+  reasoning: string;
+  fallbackUsed: boolean;
+}
+
 export interface ExplainVO {
   rows: QueryRowVO[];
   summary: string;

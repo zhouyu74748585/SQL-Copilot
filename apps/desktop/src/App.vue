@@ -10,10 +10,53 @@
         <robot-outlined />
         <span>AI查询</span>
       </button>
-      <button class="tool-item" :disabled="!canOpenHistory" @click="openToolbarHistory" title="会话历史">
-        <history-outlined />
-        <span>会话历史</span>
-      </button>
+      <a-dropdown placement="bottomLeft" :trigger="['click']">
+        <button class="tool-item" :disabled="!canOpenHistory" title="会话历史" @click="handleHistoryMenuClick">
+          <history-outlined />
+          <span>会话历史</span>
+        </button>
+        <template #overlay>
+          <div class="history-menu-panel">
+            <div class="history-menu-title">
+              <span>会话历史</span>
+              <span v-if="historyReloading" class="history-menu-loading">刷新中...</span>
+            </div>
+            <div v-if="!sessionHistoryTabs.length" class="history-menu-empty">暂无 AI 会话</div>
+            <button
+              v-for="tab in sessionHistoryTabs"
+              :key="tab.key"
+              class="history-menu-item"
+              :class="{ 'is-active': activeWorkbenchTab === tab.key }"
+              @click="activateHistoryTab(tab.key)"
+            >
+              <div class="history-menu-item-head">
+                <a-input
+                  v-if="editingHistoryTabKey === tab.key"
+                  v-model:value="editingHistoryTitle"
+                  size="small"
+                  class="history-menu-title-input"
+                  maxlength="60"
+                  @click.stop
+                  @pressEnter="commitHistoryTitleEdit(tab)"
+                  @blur="commitHistoryTitleEdit(tab)"
+                  @keydown.esc.stop.prevent="cancelHistoryTitleEdit"
+                />
+                <span v-else class="history-menu-item-title">{{ tab.title }}</span>
+                <div class="history-menu-item-head-actions">
+                  <span>{{ formatTime(tab.updatedAt) }}</span>
+                  <a-button size="small" type="link" class="history-menu-rename-btn" title="改名" @click.stop="startHistoryTitleEdit(tab)">
+                    <template #icon><edit-outlined /></template>
+                  </a-button>
+                </div>
+              </div>
+              <div class="history-menu-item-meta">
+                连接: {{ queryTabConnectionName(tab) }} | 库: {{ tab.databaseName || '-' }} | 模型: {{ modelLabelById(tab.selectedAiModel) }}
+              </div>
+              <div class="history-menu-item-desc">{{ lastPromptText(tab) }}</div>
+            </button>
+          </div>
+        </template>
+      </a-dropdown>
       <button class="tool-item" @click="openAiConfigModal" title="AI 配置">
         <setting-outlined />
         <span>AI 配置</span>
@@ -226,55 +269,142 @@
       </template>
 
       <template v-else>
-        <section v-if="activeQueryTab" class="pane pane-center query-pane-center">
-          <div class="pane-title">{{ activeQueryTab.title }}</div>
+        <div v-if="activeQueryTab" class="query-shared-meta">
+          <div class="query-meta-item">
+            <span>连接</span>
+            <a-select
+              v-model:value="activeQueryTab.connectionId"
+              size="small"
+              style="min-width: 156px"
+              :options="connectionSelectOptions"
+              @change="handleQueryConnectionChange(activeQueryTab)"
+            />
+          </div>
+          <div class="query-meta-item">
+            <span>数据库</span>
+            <a-select
+              v-model:value="activeQueryTab.databaseName"
+              size="small"
+              style="min-width: 166px"
+              :options="databaseOptionsForTab(activeQueryTab)"
+              @change="handleQueryDatabaseChange(activeQueryTab)"
+            />
+          </div>
+        </div>
 
-          <div class="query-meta-bar">
-            <div class="query-meta-item">
-              <span>连接</span>
-              <a-select
-                v-model:value="activeQueryTab.connectionId"
-                size="small"
-                style="min-width: 180px"
-                :options="connectionSelectOptions"
-                @change="handleQueryConnectionChange(activeQueryTab)"
-              />
+        <section v-if="activeQueryTab" class="pane pane-center query-chat-pane">
+          <div class="pane-title">{{ activeQueryTab.title }} · 对话</div>
+
+          <div class="query-chat-scroll">
+            <div v-if="!activeQueryTab.chatMessages.length" class="query-chat-empty">
+              输入自然语言后点击“生成 SQL”“解释 SQL”或“分析 SQL”，这里会按对话展示历史。
             </div>
-            <div class="query-meta-item">
-              <span>数据库</span>
-              <a-select
-                v-model:value="activeQueryTab.databaseName"
-                size="small"
-                style="min-width: 190px"
-                :options="databaseOptionsForTab(activeQueryTab)"
-                @change="handleQueryDatabaseChange(activeQueryTab)"
-              />
-            </div>
-            <div class="query-meta-item">
-              <span>模型</span>
-              <a-select
-                v-model:value="activeQueryTab.selectedAiModel"
-                size="small"
-                style="min-width: 190px"
-                :options="aiModelOptions"
-              />
+            <div
+              v-for="item in activeQueryTab.chatMessages"
+              :key="item.id"
+              class="query-chat-message"
+              :class="{ 'is-user': item.role === 'user', 'is-assistant': item.role === 'assistant' }"
+            >
+              <template v-if="item.role === 'user'">
+                <div class="query-chat-user-bubble">{{ item.content }}</div>
+              </template>
+              <template v-else>
+                <div class="query-chat-assistant-card">
+                  <div class="query-chat-assistant-head">
+                    <span>{{ assistantActionLabel(item.actionType) }}</span>
+                    <span>{{ formatTime(item.createdAt) }}</span>
+                  </div>
+                  <template v-if="item.sqlText">
+                    <pre class="query-chat-sql">{{ item.sqlText }}</pre>
+                    <a-space size="small" wrap>
+                      <a-tooltip title="追加到左侧编辑器">
+                        <a-button size="small" class="sql-action-icon-btn" @click="appendSqlToEditor(activeQueryTab, item.sqlText || '')">
+                          <template #icon><arrow-left-outlined /></template>
+                        </a-button>
+                      </a-tooltip>
+                      <a-tooltip title="EXPLAIN">
+                        <a-button size="small" class="sql-action-icon-btn" @click="explainSqlForTab(activeQueryTab, item.sqlText || '')">
+                          <template #icon><eye-outlined /></template>
+                        </a-button>
+                      </a-tooltip>
+                      <a-tooltip title="执行 SQL">
+                        <a-button size="small" type="primary" class="sql-action-icon-btn" @click="executeSqlForTab(activeQueryTab, item.sqlText || '')">
+                          <template #icon><play-circle-outlined /></template>
+                        </a-button>
+                      </a-tooltip>
+                    </a-space>
+                  </template>
+                  <div v-else class="query-chat-text">{{ item.content || '-' }}</div>
+                </div>
+              </template>
             </div>
           </div>
 
-          <div class="editor-group">
-            <label class="label">自然语言需求</label>
-            <a-textarea v-model:value="activeQueryTab.prompt" :rows="3" placeholder="例如：统计近 7 天订单量趋势" />
+          <div class="query-chat-composer">
+            <a-textarea
+              v-model:value="activeQueryTab.prompt"
+              :rows="4"
+              placeholder="例如：查询近 7 天订单量，并按天聚合"
+            />
+            <div class="query-chat-composer-row">
+              <div class="query-chat-model-box">
+                <span>模型</span>
+                <a-select
+                  v-model:value="activeQueryTab.selectedAiModel"
+                  size="small"
+                  style="min-width: 190px"
+                  :options="aiModelOptions"
+                />
+              </div>
+              <div class="query-chat-composer-actions">
+                <a-tooltip title="生成 SQL">
+                  <a-button
+                    size="small"
+                    type="primary"
+                    class="sql-action-icon-btn"
+                    :loading="activeQueryTab.aiGenerating"
+                    :disabled="activeQueryTab.aiGenerating"
+                    @click="generateSqlForTab(activeQueryTab, 'generate')"
+                  >
+                    <template #icon><code-outlined /></template>
+                  </a-button>
+                </a-tooltip>
+                <a-tooltip title="解释 SQL">
+                  <a-button
+                    size="small"
+                    class="sql-action-icon-btn"
+                    :loading="activeQueryTab.aiGenerating"
+                    :disabled="activeQueryTab.aiGenerating"
+                    @click="generateSqlForTab(activeQueryTab, 'explain')"
+                  >
+                    <template #icon><read-outlined /></template>
+                  </a-button>
+                </a-tooltip>
+                <a-tooltip title="分析 SQL">
+                  <a-button
+                    size="small"
+                    class="sql-action-icon-btn"
+                    :loading="activeQueryTab.aiGenerating"
+                    :disabled="activeQueryTab.aiGenerating"
+                    @click="generateSqlForTab(activeQueryTab, 'analyze')"
+                  >
+                    <template #icon><bar-chart-outlined /></template>
+                  </a-button>
+                </a-tooltip>
+              </div>
+            </div>
           </div>
+        </section>
+
+        <aside v-if="activeQueryTab" class="pane pane-right query-editor-pane">
+          <div class="pane-title">SQL 编辑与执行</div>
 
           <div class="editor-group">
-            <label class="label">
-              SQL
-            </label>
             <MonacoEditor
               v-model:value="activeQueryTab.sqlText"
               language="sql"
               width="100%"
-              height="220px"
+              height="240px"
               theme="vs"
               :options="sqlEditorOptions"
               class="sql-editor"
@@ -287,21 +417,49 @@
 
           <div class="editor-actions">
             <a-space wrap>
-              <a-button
-                size="small"
-                :loading="activeQueryTab.aiGenerating"
-                :disabled="activeQueryTab.aiGenerating"
-                @click="generateSqlForTab(activeQueryTab)"
-              >
-                AI 生成 SQL
-              </a-button>
-              <a-button size="small" @click="explainSqlForTab(activeQueryTab)">EXPLAIN</a-button>
-              <a-button size="small" @click="evaluateRiskForTab(activeQueryTab)">风险评估</a-button>
-              <a-button size="small" type="primary" @click="executeSqlForTab(activeQueryTab)">执行 SQL</a-button>
-              <a-button size="small" @click="repairSqlForTab(activeQueryTab)">自动修复</a-button>
-              <a-button size="small" @click="openHistoryModal(activeQueryTab.key)">会话历史</a-button>
-              <a-button size="small" @click="exportJsonForTab(activeQueryTab)">导出 JSON</a-button>
-              <a-button size="small" @click="exportCsvForTab(activeQueryTab)">导出 CSV</a-button>
+              <a-tooltip :title="activeQueryTab.selectedSqlText ? 'EXPLAIN（仅作用于选中 SQL）' : 'EXPLAIN'">
+                <a-button
+                  size="small"
+                  :class="['sql-action-icon-btn', { 'is-selection-active': !!activeQueryTab.selectedSqlText }]"
+                  @click="explainSqlForTab(activeQueryTab)"
+                >
+                  <template #icon><eye-outlined /></template>
+                </a-button>
+              </a-tooltip>
+              <a-tooltip :title="activeQueryTab.selectedSqlText ? '执行 SQL（仅作用于选中 SQL）' : '执行 SQL'">
+                <a-button
+                  size="small"
+                  type="primary"
+                  :class="['sql-action-icon-btn', { 'is-selection-active': !!activeQueryTab.selectedSqlText }]"
+                  @click="executeSqlForTab(activeQueryTab)"
+                >
+                  <template #icon><play-circle-outlined /></template>
+                </a-button>
+              </a-tooltip>
+              <a-tooltip title="风险评估">
+                <a-button size="small" class="sql-action-icon-btn" @click="evaluateRiskForTab(activeQueryTab)">
+                  <template #icon><safety-outlined /></template>
+                </a-button>
+              </a-tooltip>
+              <a-tooltip title="自动修复">
+                <a-button size="small" class="sql-action-icon-btn" @click="repairSqlForTab(activeQueryTab)">
+                  <template #icon><tool-outlined /></template>
+                </a-button>
+              </a-tooltip>
+              <a-tooltip title="导出结果（CSV）">
+                <a-button size="small" class="sql-action-icon-btn" @click="exportCsvForTab(activeQueryTab)">
+                  <template #icon><download-outlined /></template>
+                </a-button>
+              </a-tooltip>
+              <a-tooltip v-if="activeQueryTab.selectedSqlText" title="所选 SQL 加入对话">
+                <a-button
+                  size="small"
+                  class="sql-action-icon-btn"
+                  @click="appendSelectedSqlToPrompt(activeQueryTab)"
+                >
+                  <template #icon><message-outlined /></template>
+                </a-button>
+              </a-tooltip>
             </a-space>
           </div>
 
@@ -315,41 +473,6 @@
               :scroll="{ x: queryResultScrollX, y: queryResultScrollY }"
               row-key="__rowKey"
             />
-          </div>
-        </section>
-
-        <aside v-if="activeQueryTab" class="pane pane-right query-pane-right">
-          <div class="pane-title">查询会话</div>
-
-          <div class="query-connection-card">
-            <div class="query-card-title">当前连接</div>
-            <div class="query-card-row"><span>连接:</span><strong>{{ queryTabConnectionName(activeQueryTab) }}</strong></div>
-            <div class="query-card-row"><span>数据库:</span><strong>{{ activeQueryTab.databaseName || '-' }}</strong></div>
-            <div class="query-card-row"><span>Session:</span><strong>{{ activeQueryTab.sessionId }}</strong></div>
-          </div>
-
-          <div class="risk-box">
-            <div class="risk-header">
-              <span>风险评估</span>
-              <a-tag v-if="activeQueryTab.riskInfo" :color="riskColor(activeQueryTab.riskInfo.riskLevel)">{{ activeQueryTab.riskInfo.riskLevel }}</a-tag>
-            </div>
-            <ul class="risk-list">
-              <li v-for="item in activeQueryTab.riskInfo?.riskItems ?? []" :key="item.ruleCode">
-                <span class="risk-code">{{ item.ruleCode }}</span>
-                <span>{{ item.description }}</span>
-              </li>
-              <li v-if="!activeQueryTab.riskInfo">尚未评估</li>
-            </ul>
-          </div>
-
-          <div class="sql-preview">
-            <div class="preview-title">Explain / 执行反馈</div>
-            <div class="preview-content">
-              <div>Explain: {{ activeQueryTab.explainResult?.summary ?? '-' }}</div>
-              <div>耗时: {{ activeQueryTab.executeResult?.executionMs ?? '-' }} ms</div>
-              <div>影响行数: {{ activeQueryTab.executeResult?.affectedRows ?? '-' }}</div>
-              <div>状态: {{ activeQueryTab.executeResult?.message ?? '-' }}</div>
-            </div>
           </div>
         </aside>
       </template>
@@ -430,33 +553,6 @@
           <a-checkbox v-model:checked="connectionForm.sshEnabled">SSH 隧道</a-checkbox>
         </a-space>
       </a-form>
-    </a-modal>
-
-    <a-modal
-      v-model:open="historyModalOpen"
-      title="会话历史"
-      width="860px"
-      :footer="null"
-      @cancel="historyModalOpen = false"
-    >
-      <a-spin :spinning="historyLoading">
-        <a-list
-          size="small"
-          :data-source="queryHistoryList"
-          :locale="{ emptyText: '暂无历史会话' }"
-        >
-          <template #renderItem="{ item }">
-            <a-list-item class="history-item" @click="applyHistoryItem(item)">
-              <div class="history-item-head">
-                <span>Session: {{ item.sessionId || '-' }}</span>
-                <span>{{ formatTime(item.createdAt) }}</span>
-              </div>
-              <div class="history-item-prompt">{{ item.promptText || '无自然语言输入' }}</div>
-              <div class="history-item-sql">{{ item.sqlText }}</div>
-            </a-list-item>
-          </template>
-        </a-list>
-      </a-spin>
     </a-modal>
 
     <a-modal
@@ -718,23 +814,32 @@
 <script setup lang="ts">
 import {
   AppstoreOutlined,
+  BarChartOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
   CloseCircleOutlined,
   CloseOutlined,
+  DownloadOutlined,
   CodeOutlined,
   DatabaseOutlined,
+  EditOutlined,
   EyeOutlined,
   FolderOpenOutlined,
   HddOutlined,
   HistoryOutlined,
   LoadingOutlined,
+  MessageOutlined,
   MinusCircleOutlined,
+  ArrowLeftOutlined,
+  PlayCircleOutlined,
   PlusOutlined,
+  ReadOutlined,
   ReloadOutlined,
   RobotOutlined,
+  SafetyOutlined,
   SearchOutlined,
   SettingOutlined,
+  ToolOutlined,
   UnorderedListOutlined,
 } from '@ant-design/icons-vue';
 import {Editor as MonacoEditor} from '@guolao/vue-monaco-editor';
@@ -754,6 +859,7 @@ import type {
   AiConfigVO,
   AiGenerateSqlVO,
   AiModelOption,
+  AiTextResponseVO,
   ConnectionCreateReq,
   ExplainVO,
   QueryHistoryVO,
@@ -778,6 +884,15 @@ interface ObjectRow {
   description: string;
 }
 
+interface QueryChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  sqlText?: string;
+  actionType: 'generate' | 'explain' | 'analyze';
+  createdAt: number;
+}
+
 interface QueryWorkspaceTab {
   key: string;
   title: string;
@@ -792,6 +907,10 @@ interface QueryWorkspaceTab {
   explainResult: ExplainVO | null;
   selectedAiModel: string;
   aiGenerating: boolean;
+  selectedSqlText: string;
+  chatMessages: QueryChatMessage[];
+  createdAt: number;
+  updatedAt: number;
 }
 
 const browserTabKey = 'browser';
@@ -819,10 +938,6 @@ const databaseVectorizeStatusMap = ref<Record<string, RagDatabaseVectorizeStatus
 const currentObjectType = ref<'tables' | 'views' | 'functions' | 'events' | 'queries' | 'backups'>('tables');
 const objectViewMode = ref<'row' | 'grid'>('row');
 const viewportHeight = ref(typeof window === 'undefined' ? 900 : window.innerHeight);
-const historyModalOpen = ref(false);
-const historyLoading = ref(false);
-const queryHistoryList = ref<QueryHistoryVO[]>([]);
-const historyTargetTabKey = ref('');
 const vectorizeOverviewModalOpen = ref(false);
 const vectorizeOverviewLoading = ref(false);
 const vectorizeOverviewData = ref<RagVectorizeOverviewVO | null>(null);
@@ -831,6 +946,10 @@ const aiConfigActiveTab = ref<'model' | 'embedding'>('model');
 const selectedAiModel = ref('');
 const activeWorkbenchTab = ref(browserTabKey);
 const queryTabs = ref<QueryWorkspaceTab[]>([]);
+const historyReloading = ref(false);
+const editingHistoryTabKey = ref('');
+const editingHistoryTitle = ref('');
+const sessionTitleOverrides = ref<Record<string, string>>({});
 const tableDetail = ref<TableDetailVO | null>(null);
 const tableDetailLoading = ref(false);
 const viewportWidth = ref(typeof window === 'undefined' ? 1440 : window.innerWidth);
@@ -903,8 +1022,11 @@ const sqlKeywords = [
 ];
 let sqlCompletionProviderDisposable: IDisposable | null = null;
 let sqlEditorTypeDisposable: IDisposable | null = null;
+let sqlEditorSelectionDisposable: IDisposable | null = null;
 let sqlAutoSuggestTimer: number | null = null;
+let activeSqlEditorInstance: MonacoApi.editor.IStandaloneCodeEditor | null = null;
 const pendingTableNameLoads = new Map<string, Promise<string[]>>();
+const sessionTitleOverridesStorageKey = 'sqlcopilot.session-title-overrides.v1';
 
 const selectedConnection = computed(() =>
   connections.value.find((item) => item.id === workflow.connectionId),
@@ -922,11 +1044,12 @@ const activeQueryConnectionName = computed(() => {
 });
 
 const canOpenHistory = computed(() => {
-  if (activeQueryTab.value?.connectionId) {
-    return true;
-  }
-  return !!selectedConnection.value;
+  return connections.value.length > 0;
 });
+
+const sessionHistoryTabs = computed(() =>
+  [...queryTabs.value].sort((a, b) => b.updatedAt - a.updatedAt),
+);
 
 const isContextDatabaseVectorizing = computed(() =>
   contextMenu.targetType === 'database'
@@ -1051,7 +1174,7 @@ const workbenchStyle = computed(() => {
     };
   }
   return {
-    gridTemplateColumns: '270px minmax(520px, 1fr) 390px',
+    gridTemplateColumns: '270px minmax(560px, 1.12fr) minmax(420px, 0.88fr)',
   };
 });
 
@@ -1100,12 +1223,6 @@ function buildConnectionNode(conn: ConnectionVO) {
       selectable: databaseName !== '未发现数据库',
       children: buildCategoryChildren(conn.id, databaseName),
     }));
-    if (!activeDbName && databases.length) {
-      activeDatabaseMap.value = {
-        ...activeDatabaseMap.value,
-        [conn.id]: databases[0],
-      };
-    }
     return {
       key: `conn-${conn.id}`,
       title: conn.name,
@@ -1312,15 +1429,17 @@ function openEditModal(targetConnectionId?: number) {
 
 function openAiQueryTab() {
   ensureConnection();
+  const now = Date.now();
   const databaseName = getActiveDatabaseName(workflow.connectionId);
   const models = aiModelOptions.value.map((item) => String(item.value)).filter((item) => !!item);
+  const initialPrompt = workflow.prompt || `查询 ${selectedObjectName.value || '当前数据库'} 最近数据`;
   const tab: QueryWorkspaceTab = {
-    key: `query-${Date.now()}-${Math.round(Math.random() * 1000)}`,
-    title: `AI查询 ${queryTabs.value.length + 1}`,
+    key: `query-${now}-${Math.round(Math.random() * 1000)}`,
+    title: '未命名会话',
     connectionId: workflow.connectionId,
     databaseName,
-    sessionId: `session-${Date.now()}`,
-    prompt: workflow.prompt || `查询 ${selectedObjectName.value || '当前数据库'} 最近数据`,
+    sessionId: `session-${now}`,
+    prompt: initialPrompt,
     sqlText: workflow.sqlText,
     riskAckToken: '',
     riskInfo: null,
@@ -1328,7 +1447,12 @@ function openAiQueryTab() {
     explainResult: null,
     selectedAiModel: models[0] ?? '',
     aiGenerating: false,
+    selectedSqlText: '',
+    chatMessages: [],
+    createdAt: now,
+    updatedAt: now,
   };
+  applySessionTitle(tab);
   queryTabs.value = [...queryTabs.value, tab];
   activeWorkbenchTab.value = tab.key;
   void runSafely(async () => {
@@ -1351,6 +1475,336 @@ function closeQueryTab(tabKey: string) {
   }
 }
 
+function activateHistoryTab(tabKey: string) {
+  activeWorkbenchTab.value = tabKey;
+}
+
+function handleHistoryMenuClick() {
+  void runSafely(async () => {
+    await reloadConversationHistory();
+  });
+}
+
+function sessionRefKey(connectionId: number, sessionId: string) {
+  return `${connectionId}::${sessionId}`;
+}
+
+function sessionTitleOverrideKey(tab: Pick<QueryWorkspaceTab, 'connectionId' | 'sessionId'>) {
+  return sessionRefKey(tab.connectionId, tab.sessionId);
+}
+
+function normalizeTitleSource(text: string) {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function buildSessionDefaultTitle(text: string) {
+  const normalized = normalizeTitleSource(text);
+  if (!normalized) {
+    return '未命名会话';
+  }
+  const splitIndex = normalized.search(/[。！？!?；;\n]/);
+  const firstSentence = (splitIndex >= 0 ? normalized.slice(0, splitIndex) : normalized).trim() || normalized;
+  return firstSentence.length > 20 ? `${firstSentence.slice(0, 20)}...` : firstSentence;
+}
+
+function firstPromptForTitle(tab: QueryWorkspaceTab) {
+  const firstUser = tab.chatMessages.find((item) => item.role === 'user' && item.content.trim());
+  if (firstUser) {
+    return firstUser.content;
+  }
+  return tab.prompt;
+}
+
+function applySessionTitle(tab: QueryWorkspaceTab) {
+  const custom = (sessionTitleOverrides.value[sessionTitleOverrideKey(tab)] ?? '').trim();
+  if (custom) {
+    tab.title = custom;
+    return;
+  }
+  tab.title = buildSessionDefaultTitle(firstPromptForTitle(tab));
+}
+
+function loadSessionTitleOverrides() {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  try {
+    const raw = window.localStorage.getItem(sessionTitleOverridesStorageKey);
+    if (!raw) {
+      return;
+    }
+    const parsed = JSON.parse(raw) as Record<string, string>;
+    if (!parsed || typeof parsed !== 'object') {
+      return;
+    }
+    const next: Record<string, string> = {};
+    Object.entries(parsed).forEach(([key, value]) => {
+      if (typeof value !== 'string') {
+        return;
+      }
+      const normalized = value.trim();
+      if (normalized) {
+        next[key] = normalized;
+      }
+    });
+    sessionTitleOverrides.value = next;
+  } catch {
+    sessionTitleOverrides.value = {};
+  }
+}
+
+function persistSessionTitleOverrides() {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  try {
+    window.localStorage.setItem(sessionTitleOverridesStorageKey, JSON.stringify(sessionTitleOverrides.value));
+  } catch {
+    // 忽略本地存储异常，避免阻塞主流程。
+  }
+}
+
+function startHistoryTitleEdit(tab: QueryWorkspaceTab) {
+  editingHistoryTabKey.value = tab.key;
+  editingHistoryTitle.value = tab.title;
+}
+
+function commitHistoryTitleEdit(tab: QueryWorkspaceTab) {
+  if (editingHistoryTabKey.value !== tab.key) {
+    return;
+  }
+  const overrideKey = sessionTitleOverrideKey(tab);
+  const renamed = editingHistoryTitle.value.trim();
+  const next = {...sessionTitleOverrides.value};
+  if (renamed) {
+    next[overrideKey] = renamed;
+  } else {
+    delete next[overrideKey];
+  }
+  sessionTitleOverrides.value = next;
+  persistSessionTitleOverrides();
+  applySessionTitle(tab);
+  editingHistoryTabKey.value = '';
+  editingHistoryTitle.value = '';
+}
+
+function cancelHistoryTitleEdit() {
+  editingHistoryTabKey.value = '';
+  editingHistoryTitle.value = '';
+}
+
+function buildHistoryChatMessages(connectionId: number, sessionId: string, rows: QueryHistoryVO[]) {
+  const ordered = [...rows].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+  const messages: QueryChatMessage[] = [];
+  ordered.forEach((item, index) => {
+    const promptText = (item.promptText ?? '').trim();
+    const sqlText = (item.sqlText ?? '').trim();
+    if (!promptText || !sqlText) {
+      return;
+    }
+    const ts = item.createdAt ?? Date.now() + index;
+    messages.push({
+      id: `chat-history-user-${connectionId}-${encodeURIComponent(sessionId)}-${item.id ?? index}`,
+      role: 'user',
+      content: promptText,
+      actionType: 'generate',
+      createdAt: ts,
+    });
+    messages.push({
+      id: `chat-history-assistant-${connectionId}-${encodeURIComponent(sessionId)}-${item.id ?? index}`,
+      role: 'assistant',
+      content: '',
+      sqlText,
+      actionType: 'generate',
+      createdAt: ts + 1,
+    });
+  });
+  return messages;
+}
+
+function buildHistoryTabFromRows(connectionId: number, sessionId: string, rows: QueryHistoryVO[]) {
+  const messages = buildHistoryChatMessages(connectionId, sessionId, rows);
+  const ordered = [...rows].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+  const last = ordered[ordered.length - 1];
+  const first = ordered[0];
+  const models = aiModelOptions.value.map((item) => String(item.value)).filter((item) => !!item);
+  const tab: QueryWorkspaceTab = {
+    key: `query-history-${connectionId}-${encodeURIComponent(sessionId)}`,
+    title: '未命名会话',
+    connectionId,
+    databaseName: getActiveDatabaseName(connectionId),
+    sessionId,
+    prompt: '',
+    sqlText: (last?.sqlText ?? '').trim(),
+    riskAckToken: '',
+    riskInfo: null,
+    executeResult: null,
+    explainResult: null,
+    selectedAiModel: models[0] ?? '',
+    aiGenerating: false,
+    selectedSqlText: '',
+    chatMessages: messages,
+    createdAt: first?.createdAt ?? Date.now(),
+    updatedAt: last?.createdAt ?? Date.now(),
+  };
+  applySessionTitle(tab);
+  return tab;
+}
+
+async function reloadConversationHistory() {
+  if (historyReloading.value || !connections.value.length) {
+    return;
+  }
+  historyReloading.value = true;
+  try {
+    const allHistoryRows = (await Promise.all(
+      connections.value.map(async (conn) => {
+        try {
+          return await getApi<QueryHistoryVO[]>(`/api/editor/history/list?connectionId=${conn.id}&limit=200`);
+        } catch {
+          return [] as QueryHistoryVO[];
+        }
+      }),
+    )).flat();
+    const grouped = new Map<string, { connectionId: number; sessionId: string; rows: QueryHistoryVO[] }>();
+    allHistoryRows.forEach((item) => {
+      const sessionId = (item.sessionId ?? '').trim();
+      const promptText = (item.promptText ?? '').trim();
+      const sqlText = (item.sqlText ?? '').trim();
+      if (!sessionId || !promptText || !sqlText) {
+        return;
+      }
+      const key = sessionRefKey(item.connectionId, sessionId);
+      const bucket = grouped.get(key) ?? { connectionId: item.connectionId, sessionId, rows: [] };
+      bucket.rows.push(item);
+      grouped.set(key, bucket);
+    });
+    if (!grouped.size) {
+      message.info('暂无可加载的会话历史');
+      return;
+    }
+    const bySessionKey = new Map<string, QueryWorkspaceTab>();
+    queryTabs.value.forEach((tab) => {
+      bySessionKey.set(sessionRefKey(tab.connectionId, tab.sessionId), tab);
+    });
+    const nextTabs = [...queryTabs.value];
+    grouped.forEach(({ connectionId, sessionId, rows }) => {
+      const existing = bySessionKey.get(sessionRefKey(connectionId, sessionId));
+      const messages = buildHistoryChatMessages(connectionId, sessionId, rows);
+      if (!messages.length) {
+        return;
+      }
+      const latest = [...rows].sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))[0];
+      if (existing) {
+        existing.chatMessages = messages;
+        existing.updatedAt = Math.max(existing.updatedAt, latest?.createdAt ?? 0);
+        if (!existing.sqlText.trim()) {
+          existing.sqlText = (latest?.sqlText ?? '').trim();
+        }
+        if (!existing.databaseName) {
+          existing.databaseName = getActiveDatabaseName(connectionId);
+        }
+        applySessionTitle(existing);
+        return;
+      }
+      nextTabs.push(buildHistoryTabFromRows(connectionId, sessionId, rows));
+    });
+    queryTabs.value = nextTabs;
+    if (!queryTabs.value.some((item) => item.key === activeWorkbenchTab.value)) {
+      activeWorkbenchTab.value = browserTabKey;
+    }
+    message.success(`会话历史已刷新，共 ${grouped.size} 个会话`);
+  } finally {
+    historyReloading.value = false;
+  }
+}
+
+function modelLabelById(modelId: string) {
+  const model = aiConfigForm.modelOptions?.find((item) => item.id === modelId);
+  if (!model) {
+    return modelId || '-';
+  }
+  return model.name || model.id || '-';
+}
+
+function lastPromptText(tab: QueryWorkspaceTab) {
+  const latestPrompt = [...tab.chatMessages].reverse().find((item) => item.role === 'user');
+  return latestPrompt?.content || '暂无自然语言对话';
+}
+
+function assistantActionLabel(actionType: QueryChatMessage['actionType']) {
+  if (actionType === 'explain') {
+    return '解释 SQL';
+  }
+  if (actionType === 'analyze') {
+    return '分析 SQL';
+  }
+  return '生成 SQL';
+}
+
+function touchQueryTab(tab: QueryWorkspaceTab) {
+  tab.updatedAt = Date.now();
+}
+
+function appendUserChatMessage(tab: QueryWorkspaceTab, promptText: string, actionType: QueryChatMessage['actionType']) {
+  const now = Date.now();
+  tab.chatMessages.push({
+    id: `chat-user-${now}-${Math.random().toString(16).slice(2, 8)}`,
+    role: 'user',
+    content: promptText,
+    actionType,
+    createdAt: now,
+  });
+  applySessionTitle(tab);
+  touchQueryTab(tab);
+}
+
+function appendAssistantSqlMessage(tab: QueryWorkspaceTab, sqlText: string, actionType: QueryChatMessage['actionType']) {
+  const now = Date.now();
+  tab.chatMessages.push({
+    id: `chat-assistant-${now}-${Math.random().toString(16).slice(2, 8)}`,
+    role: 'assistant',
+    content: '',
+    sqlText,
+    actionType,
+    createdAt: now,
+  });
+  touchQueryTab(tab);
+}
+
+function appendAssistantTextMessage(tab: QueryWorkspaceTab, content: string, actionType: QueryChatMessage['actionType']) {
+  const now = Date.now();
+  tab.chatMessages.push({
+    id: `chat-assistant-${now}-${Math.random().toString(16).slice(2, 8)}`,
+    role: 'assistant',
+    content: content.trim(),
+    actionType,
+    createdAt: now,
+  });
+  touchQueryTab(tab);
+}
+
+function appendSqlToEditor(tab: QueryWorkspaceTab, sqlText: string) {
+  const value = sqlText.trim();
+  if (!value) {
+    return;
+  }
+  tab.sqlText = tab.sqlText.trim() ? `${tab.sqlText.trim()}\n\n${value}` : value;
+  tab.selectedSqlText = '';
+  touchQueryTab(tab);
+  activeWorkbenchTab.value = tab.key;
+}
+
+function appendSelectedSqlToPrompt(tab: QueryWorkspaceTab) {
+  const value = tab.selectedSqlText.trim();
+  if (!value) {
+    message.info('请先在右侧 SQL 编辑器中选择一段 SQL');
+    return;
+  }
+  tab.prompt = tab.prompt.trim() ? `${tab.prompt.trim()}\n${value}` : value;
+  touchQueryTab(tab);
+}
+
 async function prepareConnectionTreeData(connectionId: number) {
   const connection = connections.value.find((item) => item.id === connectionId);
   if (!connection) {
@@ -1358,13 +1812,6 @@ async function prepareConnectionTreeData(connectionId: number) {
   }
   if (requiresDatabaseLayer(connection)) {
     await loadDatabaseListForConnection(connectionId);
-    const databases = databaseListCache.value[connectionId] ?? [];
-    if (databases.length && !activeDatabaseMap.value[connectionId]) {
-      activeDatabaseMap.value = {
-        ...activeDatabaseMap.value,
-        [connectionId]: databases[0],
-      };
-    }
   } else {
     const configuredDb = parseConfiguredDatabaseName(connection);
     if (configuredDb) {
@@ -1770,6 +2217,30 @@ function registerSqlAutoSuggest(editor: MonacoApi.editor.IStandaloneCodeEditor) 
     sqlAutoSuggestTimer = window.setTimeout(() => {
       editor.trigger('sql-auto-suggest', 'editor.action.triggerSuggest', {});
     }, 60);
+    syncSelectedSqlForActiveTab();
+  });
+}
+
+function readSelectedSql(editor: MonacoApi.editor.IStandaloneCodeEditor) {
+  const model = editor.getModel();
+  const selection = editor.getSelection();
+  if (!model || !selection || selection.isEmpty()) {
+    return '';
+  }
+  return model.getValueInRange(selection).trim();
+}
+
+function syncSelectedSqlForActiveTab() {
+  if (!activeSqlEditorInstance || !activeQueryTab.value) {
+    return;
+  }
+  activeQueryTab.value.selectedSqlText = readSelectedSql(activeSqlEditorInstance);
+}
+
+function registerSqlSelectionTracker(editor: MonacoApi.editor.IStandaloneCodeEditor) {
+  sqlEditorSelectionDisposable?.dispose();
+  sqlEditorSelectionDisposable = editor.onDidChangeCursorSelection(() => {
+    syncSelectedSqlForActiveTab();
   });
 }
 
@@ -1788,8 +2259,11 @@ function handleSqlEditorMount(
   editor: MonacoApi.editor.IStandaloneCodeEditor,
   monaco: typeof MonacoApi,
 ) {
+  activeSqlEditorInstance = editor;
   registerSqlCompletionProvider(monaco);
   registerSqlAutoSuggest(editor);
+  registerSqlSelectionTracker(editor);
+  syncSelectedSqlForActiveTab();
   void warmupTableSuggestions(activeQueryTab.value);
 }
 
@@ -2185,52 +2659,6 @@ function quickSelectAll() {
   openAiQueryTab();
 }
 
-async function openToolbarHistory() {
-  if (activeQueryTab.value) {
-    await openHistoryModal(activeQueryTab.value.key);
-    return;
-  }
-  await openHistoryModal();
-}
-
-async function openHistoryModal(targetTabKey?: string) {
-  const connectionId = targetTabKey
-    ? queryTabs.value.find((item) => item.key === targetTabKey)?.connectionId ?? 0
-    : workflow.connectionId;
-  if (!connectionId) {
-    throw new Error('请先选择连接');
-  }
-  historyTargetTabKey.value = targetTabKey ?? '';
-  historyModalOpen.value = true;
-  await loadHistory(connectionId);
-}
-
-async function loadHistory(connectionId: number) {
-  historyLoading.value = true;
-  try {
-    queryHistoryList.value = await getApi<QueryHistoryVO[]>(
-      `/api/editor/history/list?connectionId=${connectionId}&limit=80`,
-    );
-  } finally {
-    historyLoading.value = false;
-  }
-}
-
-function applyHistoryItem(item: QueryHistoryVO) {
-  if (historyTargetTabKey.value) {
-    const tab = queryTabs.value.find((entry) => entry.key === historyTargetTabKey.value);
-    if (tab) {
-      tab.sessionId = item.sessionId || tab.sessionId;
-      tab.prompt = item.promptText || tab.prompt;
-      tab.sqlText = item.sqlText;
-    }
-  } else {
-    workflow.prompt = item.promptText || workflow.prompt;
-    workflow.sqlText = item.sqlText;
-  }
-  historyModalOpen.value = false;
-}
-
 async function openAiConfigModal() {
   aiConfigModalOpen.value = true;
   await runSafely(async () => {
@@ -2287,74 +2715,187 @@ async function handleQueryConnectionChange(tab: QueryWorkspaceTab) {
     tab.riskInfo = null;
     tab.executeResult = null;
     tab.explainResult = null;
+    tab.selectedSqlText = '';
+    touchQueryTab(tab);
     await warmupTableSuggestions(tab);
   });
 }
 
 function handleQueryDatabaseChange(tab: QueryWorkspaceTab) {
   tab.riskAckToken = '';
+  touchQueryTab(tab);
   void warmupTableSuggestions(tab);
 }
 
-async function generateSqlForTab(tab: QueryWorkspaceTab) {
+function resolveSqlForAction(tab: QueryWorkspaceTab, sqlOverride?: string) {
+  const override = (sqlOverride ?? '').trim();
+  if (override) {
+    return override;
+  }
+  const selected = tab.selectedSqlText.trim();
+  if (selected) {
+    return selected;
+  }
+  return tab.sqlText.trim();
+}
+
+async function saveConversationHistory(tab: QueryWorkspaceTab, promptText: string, sqlText: string) {
+  try {
+    await postApi<boolean>('/api/editor/history/save', {
+      connectionId: tab.connectionId,
+      sessionId: tab.sessionId,
+      promptText,
+      sqlText,
+      success: true,
+    });
+  } catch {
+    // 关键操作：会话历史持久化失败不阻塞主流程。
+  }
+}
+
+function buildAiPrompt(promptText: string, actionType: QueryChatMessage['actionType'], sqlSnippet?: string) {
+  const snippet = (sqlSnippet ?? '').trim();
+  if (actionType === 'explain') {
+    return [
+      '请用中文解释下面 SQL 的业务含义。',
+      '要求：',
+      '1) 不要执行 EXPLAIN；',
+      '2) 用自然语言解释查询目的、条件、关联和聚合。',
+      `用户补充：${promptText}`,
+      snippet ? `SQL片段：\n${snippet}` : '',
+    ].filter((item) => !!item).join('\n');
+  }
+  if (actionType === 'analyze') {
+    return [
+      '请基于数据库元数据分析下面 SQL 的合理性。',
+      '要求：',
+      '1) 输出结论、问题、优化建议；',
+      '2) 不要执行 EXPLAIN；',
+      '3) 指出不确定项。',
+      `用户补充：${promptText}`,
+      snippet ? `SQL片段：\n${snippet}` : '',
+    ].filter((item) => !!item).join('\n');
+  }
+  return [
+    '你是 SQL 生成助手。',
+    '请根据用户需求生成可直接执行的 SQL。',
+    '要求：',
+    '1) 只返回 SQL，不要解释和 markdown；',
+    '2) 语句尽量完整且可执行。',
+    `用户需求：${promptText}`,
+  ].join('\n');
+}
+
+async function generateSqlForTab(tab: QueryWorkspaceTab, actionType: QueryChatMessage['actionType'] = 'generate') {
   if (tab.aiGenerating) {
     return;
   }
+  const rawPrompt = tab.prompt.trim();
+  const actionSqlSnippet = actionType === 'generate' ? '' : resolveSqlForAction(tab);
+  if (actionType === 'generate' && !rawPrompt) {
+    message.info('请先输入自然语言需求');
+    return;
+  }
+  if (actionType !== 'generate' && !rawPrompt && !actionSqlSnippet) {
+    message.info('请先输入说明，或在右侧编辑器中选择 SQL');
+    return;
+  }
+  const promptText = rawPrompt || (actionType === 'explain'
+    ? '请解释这段 SQL 的含义。'
+    : '请分析这段 SQL 的合理性。');
+  appendUserChatMessage(tab, promptText, actionType);
+  tab.prompt = '';
+  const finalPrompt = buildAiPrompt(promptText, actionType, actionSqlSnippet);
+  const sqlSnippet = actionType === 'generate' ? undefined : (actionSqlSnippet || undefined);
   tab.aiGenerating = true;
   await runSafely(async () => {
-    const generated = await postApi<AiGenerateSqlVO>('/api/ai/query/generate', {
+    if (actionType === 'generate') {
+      const generated = await postApi<AiGenerateSqlVO>('/api/ai/query/generate', {
+        connectionId: tab.connectionId,
+        sessionId: tab.sessionId,
+        prompt: finalPrompt,
+        databaseName: tab.databaseName || undefined,
+        sqlSnippet: undefined,
+        modelName: tab.selectedAiModel || undefined,
+      });
+      appendAssistantSqlMessage(tab, generated.sqlText, actionType);
+      await saveConversationHistory(tab, promptText, generated.sqlText);
+      if (generated.reasoning) {
+        message.info(generated.reasoning);
+      }
+      message.success('SQL 已生成');
+      return;
+    }
+
+    const endpoint = actionType === 'explain' ? '/api/ai/query/explain' : '/api/ai/query/analyze';
+    const result = await postApi<AiTextResponseVO>(endpoint, {
       connectionId: tab.connectionId,
       sessionId: tab.sessionId,
-      prompt: tab.prompt,
+      prompt: finalPrompt,
       databaseName: tab.databaseName || undefined,
-      sqlSnippet: tab.sqlText || undefined,
+      sqlSnippet,
       modelName: tab.selectedAiModel || undefined,
     });
-    tab.sqlText = generated.sqlText;
-    if (generated.reasoning) {
-      message.info(generated.reasoning);
+    appendAssistantTextMessage(tab, result.content || '未返回内容', actionType);
+    if (result.reasoning) {
+      message.info(result.reasoning);
     }
-    message.success('SQL 已生成');
+    message.success(actionType === 'explain' ? 'SQL 含义解释已生成' : 'SQL 合理性分析已生成');
   });
   tab.aiGenerating = false;
 }
 
-async function explainSqlForTab(tab: QueryWorkspaceTab) {
+async function explainSqlForTab(tab: QueryWorkspaceTab, sqlOverride?: string) {
   await runSafely(async () => {
+    const sqlText = resolveSqlForAction(tab, sqlOverride);
+    if (!sqlText) {
+      throw new Error('请先输入或选择 SQL');
+    }
     tab.explainResult = await postApi<ExplainVO>('/api/sql/explain', {
       connectionId: tab.connectionId,
-      sqlText: tab.sqlText,
+      sqlText,
       databaseName: tab.databaseName || undefined,
     });
     tab.executeResult = null;
+    touchQueryTab(tab);
     message.success('EXPLAIN 完成');
   });
 }
 
 async function evaluateRiskForTab(tab: QueryWorkspaceTab) {
   await runSafely(async () => {
+    const sqlText = resolveSqlForAction(tab);
+    if (!sqlText) {
+      throw new Error('请先输入或选择 SQL');
+    }
     const result = await postApi<RiskEvaluateVO>('/api/sql/risk/evaluate', {
       connectionId: tab.connectionId,
-      sqlText: tab.sqlText,
+      sqlText,
     });
     tab.riskInfo = result;
     tab.riskAckToken = result.riskAckToken ?? '';
+    touchQueryTab(tab);
     message.info(`风险级别: ${result.riskLevel}`);
   });
 }
 
-async function executeSqlForTab(tab: QueryWorkspaceTab) {
+async function executeSqlForTab(tab: QueryWorkspaceTab, sqlOverride?: string) {
   await runSafely(async () => {
+    const sqlText = resolveSqlForAction(tab, sqlOverride);
+    if (!sqlText) {
+      throw new Error('请先输入或选择 SQL');
+    }
     const result = await postApi<SqlExecuteVO>('/api/sql/execute', {
       connectionId: tab.connectionId,
       sessionId: tab.sessionId,
-      sqlText: tab.sqlText,
+      sqlText,
       databaseName: tab.databaseName || undefined,
       riskAckToken: tab.riskAckToken,
       operatorName: 'desktop-user',
     });
     tab.executeResult = result;
     tab.explainResult = null;
+    touchQueryTab(tab);
     message.success(`执行成功，耗时 ${result.executionMs}ms`);
   });
 }
@@ -2368,6 +2909,8 @@ async function repairSqlForTab(tab: QueryWorkspaceTab) {
       errorMessage: 'unknown column',
     });
     tab.sqlText = repaired.repairedSql;
+    tab.selectedSqlText = '';
+    touchQueryTab(tab);
     message.success(repaired.repairNote);
   });
 }
@@ -2378,18 +2921,6 @@ async function exportCsvForTab(tab: QueryWorkspaceTab) {
       connectionId: tab.connectionId,
       sqlText: tab.sqlText,
       format: 'CSV',
-      fileName: `aidb_${Date.now()}`,
-    });
-    message.success(`已导出: ${result.filePath}`);
-  });
-}
-
-async function exportJsonForTab(tab: QueryWorkspaceTab) {
-  await runSafely(async () => {
-    const result = await postApi<{ filePath: string }>('/api/editor/result/export', {
-      connectionId: tab.connectionId,
-      sqlText: tab.sqlText,
-      format: 'JSON',
       fileName: `aidb_${Date.now()}`,
     });
     message.success(`已导出: ${result.filePath}`);
@@ -2466,6 +2997,7 @@ function handleWindowResize() {
 
 onMounted(async () => {
   window.addEventListener('resize', handleWindowResize);
+  loadSessionTitleOverrides();
   startVectorizeStatusPolling();
   await loadConnections();
   await runSafely(async () => {
@@ -2483,8 +3015,11 @@ onBeforeUnmount(() => {
   window.removeEventListener('mouseup', stopResizeBrowserPane);
   sqlEditorTypeDisposable?.dispose();
   sqlEditorTypeDisposable = null;
+  sqlEditorSelectionDisposable?.dispose();
+  sqlEditorSelectionDisposable = null;
   sqlCompletionProviderDisposable?.dispose();
   sqlCompletionProviderDisposable = null;
+  activeSqlEditorInstance = null;
   if (sqlAutoSuggestTimer !== null) {
     window.clearTimeout(sqlAutoSuggestTimer);
     sqlAutoSuggestTimer = null;
@@ -2497,7 +3032,9 @@ watch(
     if (!activeQueryTab.value) {
       return;
     }
+    activeQueryTab.value.selectedSqlText = '';
     void warmupTableSuggestions(activeQueryTab.value);
+    syncSelectedSqlForActiveTab();
   },
   { immediate: true },
 );
