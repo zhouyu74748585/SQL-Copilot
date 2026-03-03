@@ -98,10 +98,11 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             List<QdrantPoint> columnPoints = new ArrayList<>();
             for (SchemaColumnCacheEntity column : columnMetaList) {
                 SchemaColumnPayload payload = buildColumnPayload(connectionId, normalizedDatabaseName, column);
-                Document doc = new Document(buildColumnDocumentText(column), payload.toMetadataMap());
+                Map<String, Object> metadata = sanitizeMetadata(payload.toMetadataMap());
+                Document doc = new Document(buildColumnDocumentText(column), metadata);
                 List<Float> vector = ragEmbeddingService.embedText(doc.getText());
                 columnPoints.add(new QdrantPoint(stablePointId("schema_column", connectionId,
-                    normalizedDatabaseName, column.getTableName(), column.getColumnName()), vector, payload.toMetadataMap()));
+                    normalizedDatabaseName, column.getTableName(), column.getColumnName()), vector, metadata));
             }
             writePoints(collectionNames.getSchemaColumn(), columnPoints);
         } catch (Exception ex) {
