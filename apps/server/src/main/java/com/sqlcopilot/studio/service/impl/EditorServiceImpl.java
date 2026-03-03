@@ -2,6 +2,8 @@ package com.sqlcopilot.studio.service.impl;
 
 import com.sqlcopilot.studio.dto.editor.ExportReq;
 import com.sqlcopilot.studio.dto.editor.ExportResultVO;
+import com.sqlcopilot.studio.dto.editor.QueryHistorySessionPageVO;
+import com.sqlcopilot.studio.dto.editor.QueryHistorySessionVO;
 import com.sqlcopilot.studio.dto.editor.QueryHistoryVO;
 import com.sqlcopilot.studio.dto.editor.SaveQueryHistoryReq;
 import com.sqlcopilot.studio.dto.sql.QueryCellVO;
@@ -27,6 +29,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 @Service
 public class EditorServiceImpl implements EditorService {
@@ -47,6 +50,38 @@ public class EditorServiceImpl implements EditorService {
     public List<QueryHistoryVO> listHistory(Long connectionId, Integer limit) {
         int actualLimit = (limit == null || limit <= 0) ? 20 : Math.min(limit, 200);
         return queryHistoryMapper.listByConnection(connectionId, actualLimit).stream().map(this::toHistoryVO).toList();
+    }
+
+    @Override
+    public QueryHistorySessionPageVO pageHistorySessions(Long connectionId, Integer pageNo, Integer pageSize, String keyword) {
+        int actualPageNo = (pageNo == null || pageNo <= 0) ? 1 : pageNo;
+        int actualPageSize = (pageSize == null || pageSize <= 0) ? 20 : Math.min(pageSize, 100);
+        int offset = (actualPageNo - 1) * actualPageSize;
+        String normalizedKeyword = Objects.toString(keyword, "").trim();
+
+        long total = Objects.requireNonNullElse(queryHistoryMapper.countSessions(connectionId, normalizedKeyword), 0L);
+        List<QueryHistorySessionVO> items = queryHistoryMapper.pageSessions(connectionId, normalizedKeyword, actualPageSize, offset)
+            .stream()
+            .map(this::normalizeSessionTitle)
+            .toList();
+
+        QueryHistorySessionPageVO vo = new QueryHistorySessionPageVO();
+        vo.setPageNo(actualPageNo);
+        vo.setPageSize(actualPageSize);
+        vo.setTotal(total);
+        vo.setHasMore((long) offset + items.size() < total);
+        vo.setItems(items);
+        return vo;
+    }
+
+    @Override
+    public List<QueryHistoryVO> listHistoryBySession(Long connectionId, String sessionId, Integer limit) {
+        String normalizedSessionId = Objects.toString(sessionId, "").trim();
+        if (normalizedSessionId.isBlank()) {
+            throw new BusinessException(400, "会话 ID 不能为空");
+        }
+        int actualLimit = (limit == null || limit <= 0) ? 1000 : Math.min(limit, 5000);
+        return queryHistoryMapper.listBySession(connectionId, normalizedSessionId, actualLimit).stream().map(this::toHistoryVO).toList();
     }
 
     @Override
@@ -162,5 +197,16 @@ public class EditorServiceImpl implements EditorService {
         vo.setSuccess(entity.getSuccessFlag() == 1);
         vo.setCreatedAt(entity.getCreatedAt());
         return vo;
+    }
+
+    private QueryHistorySessionVO normalizeSessionTitle(QueryHistorySessionVO item) {
+        String title = Objects.toString(item.getTitle(), "").trim();
+        if (title.isBlank()) {
+            item.setTitle("未命名会话");
+            return item;
+        }
+        String oneLine = title.replaceAll("\\s+", " ").trim();
+        item.setTitle(oneLine.length() > 60 ? oneLine.substring(0, 60) : oneLine);
+        return item;
     }
 }

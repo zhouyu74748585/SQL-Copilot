@@ -18,42 +18,56 @@
         <template #overlay>
           <div class="history-menu-panel">
             <div class="history-menu-title">
-              <span>会话历史</span>
+              <span>会话历史 · {{ queryTabConnectionNameById(historySessionConnectionId) || '-' }}</span>
               <span v-if="historyReloading" class="history-menu-loading">刷新中...</span>
             </div>
-            <div v-if="!sessionHistoryTabs.length" class="history-menu-empty">暂无 AI 会话</div>
-            <button
-              v-for="tab in sessionHistoryTabs"
-              :key="tab.key"
-              class="history-menu-item"
-              :class="{ 'is-active': activeWorkbenchTab === tab.key }"
-              @click="activateHistoryTab(tab.key)"
-            >
-              <div class="history-menu-item-head">
-                <a-input
-                  v-if="editingHistoryTabKey === tab.key"
-                  v-model:value="editingHistoryTitle"
-                  size="small"
-                  class="history-menu-title-input"
-                  maxlength="60"
-                  @click.stop
-                  @pressEnter="commitHistoryTitleEdit(tab)"
-                  @blur="commitHistoryTitleEdit(tab)"
-                  @keydown.esc.stop.prevent="cancelHistoryTitleEdit"
-                />
-                <span v-else class="history-menu-item-title">{{ tab.title }}</span>
-                <div class="history-menu-item-head-actions">
-                  <span>{{ formatTime(tab.updatedAt) }}</span>
-                  <a-button size="small" type="link" class="history-menu-rename-btn" title="改名" @click.stop="startHistoryTitleEdit(tab)">
-                    <template #icon><edit-outlined /></template>
-                  </a-button>
+            <div class="history-menu-toolbar">
+              <a-input
+                v-model:value="historyKeywordInput"
+                size="small"
+                allow-clear
+                placeholder="按标题搜索会话"
+                @pressEnter="applyHistoryKeywordSearch"
+              />
+              <a-button size="small" class="history-search-btn" @click="applyHistoryKeywordSearch">搜索</a-button>
+            </div>
+            <div class="history-menu-list" @scroll="handleHistoryMenuScroll">
+              <div v-if="!sessionHistoryTabs.length" class="history-menu-empty">暂无 AI 会话</div>
+              <button
+                v-for="item in sessionHistoryTabs"
+                :key="historyItemKey(item)"
+                class="history-menu-item"
+                :class="{ 'is-active': isHistoryItemActive(item), 'is-loading': historySessionLoadingKey === historyItemKey(item) }"
+                @click="openHistorySession(item)"
+              >
+                <div class="history-menu-item-head">
+                  <a-input
+                    v-if="editingHistoryTabKey === historyItemKey(item)"
+                    v-model:value="editingHistoryTitle"
+                    size="small"
+                    class="history-menu-title-input"
+                    maxlength="60"
+                    @click.stop
+                    @pressEnter="commitHistoryTitleEdit(item)"
+                    @blur="commitHistoryTitleEdit(item)"
+                    @keydown.esc.stop.prevent="cancelHistoryTitleEdit"
+                  />
+                  <span v-else class="history-menu-item-title">{{ historyItemDisplayTitle(item) }}</span>
+                  <div class="history-menu-item-head-actions">
+                    <span>{{ formatTime(item.updatedAt) }}</span>
+                    <a-button size="small" type="link" class="history-menu-rename-btn" title="改名" @click.stop="startHistoryTitleEdit(item)">
+                      <template #icon><edit-outlined /></template>
+                    </a-button>
+                  </div>
                 </div>
-              </div>
-              <div class="history-menu-item-meta">
-                连接: {{ queryTabConnectionName(tab) }} | 库: {{ tab.databaseName || '-' }} | 模型: {{ modelLabelById(tab.selectedAiModel) }}
-              </div>
-              <div class="history-menu-item-desc">{{ lastPromptText(tab) }}</div>
-            </button>
+                <div class="history-menu-item-meta">
+                  会话ID: {{ item.sessionId }} | 记录数: {{ item.messageCount ?? 0 }}
+                </div>
+                <div class="history-menu-item-desc">创建于 {{ formatTime(item.createdAt) }}</div>
+              </button>
+              <div v-if="historyLoadingMore" class="history-menu-load-tip">加载中...</div>
+              <div v-else-if="sessionHistoryTabs.length && !historySessionHasMore" class="history-menu-load-tip">没有更多会话</div>
+            </div>
           </div>
         </template>
       </a-dropdown>
@@ -862,6 +876,8 @@ import type {
   AiTextResponseVO,
   ConnectionCreateReq,
   ExplainVO,
+  QueryHistorySessionPageVO,
+  QueryHistorySessionVO,
   QueryHistoryVO,
   RagDatabaseVectorizeStatusVO,
   RagConfigSaveReq,
@@ -947,6 +963,15 @@ const selectedAiModel = ref('');
 const activeWorkbenchTab = ref(browserTabKey);
 const queryTabs = ref<QueryWorkspaceTab[]>([]);
 const historyReloading = ref(false);
+const historyLoadingMore = ref(false);
+const historySessionLoadingKey = ref('');
+const historyKeywordInput = ref('');
+const historyKeyword = ref('');
+const historySessionItems = ref<QueryHistorySessionVO[]>([]);
+const historySessionPageNo = ref(1);
+const historySessionPageSize = 20;
+const historySessionHasMore = ref(true);
+const historySessionConnectionId = ref(0);
 const editingHistoryTabKey = ref('');
 const editingHistoryTitle = ref('');
 const sessionTitleOverrides = ref<Record<string, string>>({});
@@ -1047,9 +1072,17 @@ const canOpenHistory = computed(() => {
   return connections.value.length > 0;
 });
 
-const sessionHistoryTabs = computed(() =>
-  [...queryTabs.value].sort((a, b) => b.updatedAt - a.updatedAt),
-);
+const currentHistoryConnectionId = computed(() => {
+  if (activeQueryTab.value?.connectionId) {
+    return activeQueryTab.value.connectionId;
+  }
+  if (workflow.connectionId) {
+    return workflow.connectionId;
+  }
+  return connections.value[0]?.id ?? 0;
+});
+
+const sessionHistoryTabs = computed(() => historySessionItems.value);
 
 const isContextDatabaseVectorizing = computed(() =>
   contextMenu.targetType === 'database'
@@ -1475,13 +1508,22 @@ function closeQueryTab(tabKey: string) {
   }
 }
 
-function activateHistoryTab(tabKey: string) {
-  activeWorkbenchTab.value = tabKey;
-}
-
 function handleHistoryMenuClick() {
+  if (!canOpenHistory.value) {
+    return;
+  }
+  const connectionId = currentHistoryConnectionId.value;
+  if (!connectionId) {
+    return;
+  }
+  if (historySessionConnectionId.value !== connectionId) {
+    historyKeywordInput.value = '';
+    historyKeyword.value = '';
+  }
+  historySessionConnectionId.value = connectionId;
+  cancelHistoryTitleEdit();
   void runSafely(async () => {
-    await reloadConversationHistory();
+    await loadHistorySessionPage(true);
   });
 }
 
@@ -1489,8 +1531,23 @@ function sessionRefKey(connectionId: number, sessionId: string) {
   return `${connectionId}::${sessionId}`;
 }
 
-function sessionTitleOverrideKey(tab: Pick<QueryWorkspaceTab, 'connectionId' | 'sessionId'>) {
-  return sessionRefKey(tab.connectionId, tab.sessionId);
+function sessionTitleOverrideKey(sessionRef: { connectionId: number; sessionId: string }) {
+  return sessionRefKey(sessionRef.connectionId, sessionRef.sessionId);
+}
+
+function historyItemKey(item: QueryHistorySessionVO) {
+  return sessionRefKey(item.connectionId, item.sessionId);
+}
+
+function findQueryTabBySession(connectionId: number, sessionId: string) {
+  return queryTabs.value.find((tab) => tab.connectionId === connectionId && tab.sessionId === sessionId) ?? null;
+}
+
+function queryTabConnectionNameById(connectionId?: number) {
+  if (!connectionId) {
+    return '';
+  }
+  return connections.value.find((item) => item.id === connectionId)?.name ?? '';
 }
 
 function normalizeTitleSource(text: string) {
@@ -1522,6 +1579,23 @@ function applySessionTitle(tab: QueryWorkspaceTab) {
     return;
   }
   tab.title = buildSessionDefaultTitle(firstPromptForTitle(tab));
+}
+
+function historyItemDisplayTitle(item: QueryHistorySessionVO) {
+  const custom = (sessionTitleOverrides.value[sessionTitleOverrideKey(item)] ?? '').trim();
+  if (custom) {
+    return custom;
+  }
+  const source = (item.title ?? '').trim();
+  return buildSessionDefaultTitle(source);
+}
+
+function isHistoryItemActive(item: QueryHistorySessionVO) {
+  const tab = activeQueryTab.value;
+  if (!tab) {
+    return false;
+  }
+  return tab.connectionId === item.connectionId && tab.sessionId === item.sessionId;
 }
 
 function loadSessionTitleOverrides() {
@@ -1564,16 +1638,17 @@ function persistSessionTitleOverrides() {
   }
 }
 
-function startHistoryTitleEdit(tab: QueryWorkspaceTab) {
-  editingHistoryTabKey.value = tab.key;
-  editingHistoryTitle.value = tab.title;
+function startHistoryTitleEdit(item: QueryHistorySessionVO) {
+  editingHistoryTabKey.value = historyItemKey(item);
+  editingHistoryTitle.value = historyItemDisplayTitle(item);
 }
 
-function commitHistoryTitleEdit(tab: QueryWorkspaceTab) {
-  if (editingHistoryTabKey.value !== tab.key) {
+function commitHistoryTitleEdit(item: QueryHistorySessionVO) {
+  const key = historyItemKey(item);
+  if (editingHistoryTabKey.value !== key) {
     return;
   }
-  const overrideKey = sessionTitleOverrideKey(tab);
+  const overrideKey = sessionTitleOverrideKey(item);
   const renamed = editingHistoryTitle.value.trim();
   const next = {...sessionTitleOverrides.value};
   if (renamed) {
@@ -1583,7 +1658,14 @@ function commitHistoryTitleEdit(tab: QueryWorkspaceTab) {
   }
   sessionTitleOverrides.value = next;
   persistSessionTitleOverrides();
-  applySessionTitle(tab);
+  const tab = findQueryTabBySession(item.connectionId, item.sessionId);
+  if (tab) {
+    if (renamed) {
+      tab.title = renamed;
+    } else {
+      applySessionTitle(tab);
+    }
+  }
   editingHistoryTabKey.value = '';
   editingHistoryTitle.value = '';
 }
@@ -1651,71 +1733,140 @@ function buildHistoryTabFromRows(connectionId: number, sessionId: string, rows: 
   return tab;
 }
 
-async function reloadConversationHistory() {
-  if (historyReloading.value || !connections.value.length) {
+async function loadHistorySessionPage(reset: boolean) {
+  if (!historySessionConnectionId.value) {
     return;
   }
-  historyReloading.value = true;
-  try {
-    const allHistoryRows = (await Promise.all(
-      connections.value.map(async (conn) => {
-        try {
-          return await getApi<QueryHistoryVO[]>(`/api/editor/history/list?connectionId=${conn.id}&limit=200`);
-        } catch {
-          return [] as QueryHistoryVO[];
-        }
-      }),
-    )).flat();
-    const grouped = new Map<string, { connectionId: number; sessionId: string; rows: QueryHistoryVO[] }>();
-    allHistoryRows.forEach((item) => {
-      const sessionId = (item.sessionId ?? '').trim();
-      const promptText = (item.promptText ?? '').trim();
-      const sqlText = (item.sqlText ?? '').trim();
-      if (!sessionId || !promptText || !sqlText) {
-        return;
-      }
-      const key = sessionRefKey(item.connectionId, sessionId);
-      const bucket = grouped.get(key) ?? { connectionId: item.connectionId, sessionId, rows: [] };
-      bucket.rows.push(item);
-      grouped.set(key, bucket);
-    });
-    if (!grouped.size) {
-      message.info('暂无可加载的会话历史');
+  if (reset) {
+    if (historyReloading.value) {
       return;
     }
-    const bySessionKey = new Map<string, QueryWorkspaceTab>();
-    queryTabs.value.forEach((tab) => {
-      bySessionKey.set(sessionRefKey(tab.connectionId, tab.sessionId), tab);
-    });
-    const nextTabs = [...queryTabs.value];
-    grouped.forEach(({ connectionId, sessionId, rows }) => {
-      const existing = bySessionKey.get(sessionRefKey(connectionId, sessionId));
-      const messages = buildHistoryChatMessages(connectionId, sessionId, rows);
-      if (!messages.length) {
-        return;
-      }
-      const latest = [...rows].sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))[0];
-      if (existing) {
-        existing.chatMessages = messages;
-        existing.updatedAt = Math.max(existing.updatedAt, latest?.createdAt ?? 0);
-        if (!existing.sqlText.trim()) {
-          existing.sqlText = (latest?.sqlText ?? '').trim();
-        }
-        if (!existing.databaseName) {
-          existing.databaseName = getActiveDatabaseName(connectionId);
-        }
-        applySessionTitle(existing);
-        return;
-      }
-      nextTabs.push(buildHistoryTabFromRows(connectionId, sessionId, rows));
-    });
-    queryTabs.value = nextTabs;
-    if (!queryTabs.value.some((item) => item.key === activeWorkbenchTab.value)) {
-      activeWorkbenchTab.value = browserTabKey;
+    historyReloading.value = true;
+  } else {
+    if (historyLoadingMore.value || historyReloading.value || !historySessionHasMore.value) {
+      return;
     }
-    message.success(`会话历史已刷新，共 ${grouped.size} 个会话`);
+    historyLoadingMore.value = true;
+  }
+  try {
+    const requestPageNo = reset ? 1 : historySessionPageNo.value;
+    const params = new URLSearchParams({
+      connectionId: `${historySessionConnectionId.value}`,
+      pageNo: `${requestPageNo}`,
+      pageSize: `${historySessionPageSize}`,
+    });
+    if (historyKeyword.value) {
+      params.set('keyword', historyKeyword.value);
+    }
+    const page = await getApi<QueryHistorySessionPageVO>(`/api/editor/history/session/page?${params.toString()}`);
+    const pageItems = page.items ?? [];
+    if (reset) {
+      historySessionItems.value = pageItems;
+    } else if (pageItems.length) {
+      const merged = [...historySessionItems.value];
+      const indexMap = new Map<string, number>();
+      merged.forEach((entry, idx) => {
+        indexMap.set(historyItemKey(entry), idx);
+      });
+      pageItems.forEach((entry) => {
+        const entryKey = historyItemKey(entry);
+        const existed = indexMap.get(entryKey);
+        if (existed === undefined) {
+          indexMap.set(entryKey, merged.length);
+          merged.push(entry);
+        } else {
+          merged[existed] = entry;
+        }
+      });
+      historySessionItems.value = merged;
+    }
+    historySessionPageNo.value = (page.pageNo ?? requestPageNo) + 1;
+    historySessionHasMore.value = !!page.hasMore;
   } finally {
-    historyReloading.value = false;
+    if (reset) {
+      historyReloading.value = false;
+    } else {
+      historyLoadingMore.value = false;
+    }
+  }
+}
+
+function applyHistoryKeywordSearch() {
+  historyKeyword.value = historyKeywordInput.value.trim();
+  historySessionPageNo.value = 1;
+  historySessionHasMore.value = true;
+  historySessionItems.value = [];
+  cancelHistoryTitleEdit();
+  void runSafely(async () => {
+    await loadHistorySessionPage(true);
+  });
+}
+
+function handleHistoryMenuScroll(event: Event) {
+  if (historyLoadingMore.value || historyReloading.value || !historySessionHasMore.value) {
+    return;
+  }
+  const target = event.target as HTMLElement | null;
+  if (!target) {
+    return;
+  }
+  if (target.scrollTop + target.clientHeight < target.scrollHeight - 36) {
+    return;
+  }
+  void runSafely(async () => {
+    await loadHistorySessionPage(false);
+  });
+}
+
+async function openHistorySession(item: QueryHistorySessionVO) {
+  const loadingKey = historyItemKey(item);
+  if (historySessionLoadingKey.value === loadingKey) {
+    return;
+  }
+  historySessionLoadingKey.value = loadingKey;
+  try {
+    const params = new URLSearchParams({
+      connectionId: `${item.connectionId}`,
+      sessionId: item.sessionId,
+      limit: '5000',
+    });
+    const rows = await getApi<QueryHistoryVO[]>(`/api/editor/history/session/detail?${params.toString()}`);
+    if (!rows.length) {
+      message.info('该会话暂无可展示历史');
+      return;
+    }
+    const customTitle = (sessionTitleOverrides.value[sessionTitleOverrideKey(item)] ?? '').trim();
+    const fallbackTitle = historyItemDisplayTitle(item);
+    let tab = findQueryTabBySession(item.connectionId, item.sessionId);
+    if (tab) {
+      const loaded = buildHistoryTabFromRows(item.connectionId, item.sessionId, rows);
+      tab.chatMessages = loaded.chatMessages;
+      tab.sqlText = loaded.sqlText;
+      tab.selectedSqlText = '';
+      tab.executeResult = null;
+      tab.explainResult = null;
+      tab.riskInfo = null;
+      tab.riskAckToken = '';
+      tab.prompt = '';
+      tab.createdAt = item.createdAt ?? loaded.createdAt;
+      tab.updatedAt = item.updatedAt ?? loaded.updatedAt;
+      tab.databaseName = tab.databaseName || loaded.databaseName;
+      tab.title = customTitle || fallbackTitle;
+    } else {
+      tab = buildHistoryTabFromRows(item.connectionId, item.sessionId, rows);
+      tab.prompt = '';
+      tab.selectedSqlText = '';
+      tab.title = customTitle || fallbackTitle;
+      tab.createdAt = item.createdAt ?? tab.createdAt;
+      tab.updatedAt = item.updatedAt ?? tab.updatedAt;
+      queryTabs.value = [...queryTabs.value, tab];
+    }
+    activeWorkbenchTab.value = tab.key;
+    await prepareConnectionTreeData(tab.connectionId);
+    tab.databaseName = tab.databaseName || getActiveDatabaseName(tab.connectionId);
+    await warmupTableSuggestions(tab);
+  } finally {
+    historySessionLoadingKey.value = '';
   }
 }
 
@@ -1936,11 +2087,25 @@ async function loadConnections() {
       schemaOverview.value = null;
       queryTabs.value = [];
       activeWorkbenchTab.value = browserTabKey;
+      historySessionConnectionId.value = 0;
+      historySessionItems.value = [];
+      historySessionPageNo.value = 1;
+      historySessionHasMore.value = true;
+      historyKeywordInput.value = '';
+      historyKeyword.value = '';
       return;
     }
     await refreshAllVectorizeStatuses(list.map((item) => item.id));
     if (!workflow.connectionId || !list.some((item) => item.id === workflow.connectionId)) {
       workflow.connectionId = list[0].id;
+    }
+    if (historySessionConnectionId.value && !list.some((item) => item.id === historySessionConnectionId.value)) {
+      historySessionConnectionId.value = 0;
+      historySessionItems.value = [];
+      historySessionPageNo.value = 1;
+      historySessionHasMore.value = true;
+      historyKeywordInput.value = '';
+      historyKeyword.value = '';
     }
     currentObjectType.value = 'tables';
     selectedObjectName.value = '';

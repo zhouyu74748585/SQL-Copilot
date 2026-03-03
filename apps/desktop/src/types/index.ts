@@ -84,6 +84,23 @@ export interface QueryHistoryVO {
   createdAt?: number;
 }
 
+export interface QueryHistorySessionVO {
+  connectionId: number;
+  sessionId: string;
+  title: string;
+  createdAt?: number;
+  updatedAt?: number;
+  messageCount?: number;
+}
+
+export interface QueryHistorySessionPageVO {
+  pageNo: number;
+  pageSize: number;
+  total: number;
+  hasMore: boolean;
+  items: QueryHistorySessionVO[];
+}
+
 export interface AiConfigVO {
   providerType: 'OPENAI' | 'LOCAL_CLI';
   openaiBaseUrl?: string;

@@ -143,19 +143,23 @@ body {
 .history-menu-panel {
   width: 460px;
   max-height: 420px;
-  overflow: auto;
+  min-height: 240px;
+  overflow: hidden;
   border: 1px solid #d6e1f2;
   border-radius: 10px;
   background: #fff;
   box-shadow: 0 12px 28px rgba(21, 44, 86, 0.2);
   padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .history-menu-title {
   font-size: 12px;
   font-weight: 700;
   color: #334a70;
-  padding: 4px 6px 8px;
+  padding: 2px 6px 8px;
   border-bottom: 1px solid #edf2fb;
   display: flex;
   justify-content: space-between;
@@ -166,6 +170,29 @@ body {
   font-size: 11px;
   color: #5d78a5;
   font-weight: 500;
+}
+
+.history-menu-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+}
+
+.history-menu-toolbar .ant-input-affix-wrapper,
+.history-menu-toolbar .ant-input {
+  flex: 1;
+}
+
+.history-search-btn {
+  min-width: 54px;
+}
+
+.history-menu-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
 }
 
 .history-menu-empty {
@@ -185,9 +212,17 @@ body {
   cursor: pointer;
 }
 
+.history-menu-item:first-of-type {
+  margin-top: 0;
+}
+
 .history-menu-item:hover {
   border-color: #b7cdf4;
   background: #f1f6ff;
+}
+
+.history-menu-item.is-loading {
+  opacity: 0.75;
 }
 
 .history-menu-item.is-active {
@@ -259,6 +294,13 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.history-menu-load-tip {
+  padding: 10px 6px 4px;
+  font-size: 12px;
+  color: #607292;
+  text-align: center;
 }
 
 .workspace-tabs {

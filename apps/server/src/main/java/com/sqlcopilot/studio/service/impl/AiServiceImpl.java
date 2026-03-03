@@ -14,6 +14,7 @@ import com.sqlcopilot.studio.dto.ai.AiTextResponseVO;
 import com.sqlcopilot.studio.dto.schema.ContextBuildReq;
 import com.sqlcopilot.studio.dto.schema.ContextBuildVO;
 import com.sqlcopilot.studio.dto.schema.SchemaOverviewVO;
+import com.sqlcopilot.studio.dto.schema.TableDetailVO;
 import com.sqlcopilot.studio.entity.ConnectionEntity;
 import com.sqlcopilot.studio.service.AiConfigService;
 import com.sqlcopilot.studio.service.AiService;
@@ -41,6 +42,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -55,6 +57,8 @@ public class AiServiceImpl implements AiService {
     private static final Pattern CTE_NAME_PATTERN = Pattern.compile("(?is)(?:^|,|\\s)([a-zA-Z_][a-zA-Z0-9_]*)\\s+as\\s*\\(");
     private static final Pattern COMMAND_TOKEN_PATTERN = Pattern.compile("\"([^\"]*)\"|'([^']*)'|(\\S+)");
     private static final Pattern SQL_KEYWORD_PATTERN = Pattern.compile("(?is)\\b(select|with|update|delete|insert)\\b");
+    private static final int RELATED_TABLE_META_LIMIT = 8;
+    private static final int RELATED_INDEX_COLUMN_LIMIT = 12;
     private static final Set<String> CODEX_SUBCOMMANDS = Set.of(
         "exec", "e", "review", "login", "logout", "mcp", "mcp-server",
         "app-server", "app", "completion", "sandbox", "debug", "apply",
@@ -320,7 +324,14 @@ public class AiServiceImpl implements AiService {
         OpenAiEndpoint endpoint = resolveOpenAiEndpoint(baseUrl, model);
 
         String contextText = safe(context.promptContext());
-        ObjectNode payload = buildOpenAiPayload(req, model, contextText, endpoint.apiType(), OPENAI_SYSTEM_PROMPT);
+        ObjectNode payload = buildOpenAiPayload(
+            req,
+            model,
+            contextText,
+            endpoint.apiType(),
+            OPENAI_SYSTEM_PROMPT,
+            context.relatedTables()
+        );
 
         try {
             HttpRequest request = HttpRequest.newBuilder()
@@ -365,7 +376,14 @@ public class AiServiceImpl implements AiService {
         OpenAiEndpoint endpoint = resolveOpenAiEndpoint(baseUrl, model);
 
         String contextText = safe(context.promptContext());
-        ObjectNode payload = buildOpenAiPayload(req, model, contextText, endpoint.apiType(), systemPrompt);
+        ObjectNode payload = buildOpenAiPayload(
+            req,
+            model,
+            contextText,
+            endpoint.apiType(),
+            systemPrompt,
+            context.relatedTables()
+        );
 
         try {
             HttpRequest request = HttpRequest.newBuilder()
@@ -395,10 +413,11 @@ public class AiServiceImpl implements AiService {
                                           String model,
                                           String contextText,
                                           OpenAiApiType apiType,
-                                          String systemPrompt) {
+                                          String systemPrompt,
+                                          List<String> relatedTables) {
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("model", model);
-        String userPrompt = buildProviderUserPrompt(req, contextText);
+        String userPrompt = buildProviderUserPrompt(req, contextText, relatedTables);
         if (apiType == OpenAiApiType.RESPONSES) {
             ArrayNode input = payload.putArray("input");
             input.addObject()
@@ -542,7 +561,7 @@ public class AiServiceImpl implements AiService {
             throw new BusinessException(400, "本地 CLI 命令未配置: " + safe(option.getName()));
         }
 
-        String backendPrompt = buildProviderUserPrompt(req, safe(context.promptContext()));
+        String backendPrompt = buildProviderUserPrompt(req, safe(context.promptContext()), context.relatedTables());
         String constrainedPrompt = buildCliConstrainedPrompt(backendPrompt);
         List<String> commandLine = parseCliCommand(command);
         if (commandLine.isEmpty()) {
@@ -622,7 +641,7 @@ public class AiServiceImpl implements AiService {
             throw new BusinessException(400, "本地 CLI 命令未配置: " + safe(option.getName()));
         }
 
-        String backendPrompt = buildProviderUserPrompt(req, safe(context.promptContext()));
+        String backendPrompt = buildProviderUserPrompt(req, safe(context.promptContext()), context.relatedTables());
         String constrainedPrompt = buildCliConstrainedPromptForText(systemPrompt, backendPrompt);
         List<String> commandLine = parseCliCommand(command);
         if (commandLine.isEmpty()) {
@@ -759,8 +778,9 @@ public class AiServiceImpl implements AiService {
         return "";
     }
 
-    private String buildProviderUserPrompt(AiGenerateSqlReq req, String contextText) {
+    private String buildProviderUserPrompt(AiGenerateSqlReq req, String contextText, List<String> relatedTables) {
         DatabaseBasicInfo basicInfo = loadDatabaseBasicInfo(req.getConnectionId(), req.getDatabaseName());
+        String relatedIndexInfo = buildRelatedTableIndexInfo(req.getConnectionId(), req.getDatabaseName(), relatedTables);
         StringBuilder builder = new StringBuilder();
         builder.append("数据库基本信息:\n")
             .append("- 类型: ").append(basicInfo.dbType()).append('\n')
@@ -768,6 +788,9 @@ public class AiServiceImpl implements AiService {
             .append("- 连接默认库: ").append(basicInfo.configuredDatabaseName());
         if (!basicInfo.requestDatabaseName().isBlank()) {
             builder.append('\n').append("- 本次目标库: ").append(basicInfo.requestDatabaseName());
+        }
+        if (!relatedIndexInfo.isBlank()) {
+            builder.append("\n\n关联表索引字段:\n").append(relatedIndexInfo);
         }
         builder.append("\n\n");
         builder.append("用户需求:\n").append(req.getPrompt());
@@ -813,6 +836,94 @@ public class AiServiceImpl implements AiService {
             // 关键操作：数据库版本读取失败不阻断 AI 主流程。
         }
         return new DatabaseBasicInfo(dbType, dbVersion, configuredDatabaseName, safe(requestDatabaseName));
+    }
+
+    private String buildRelatedTableIndexInfo(Long connectionId, String databaseName, List<String> relatedTables) {
+        if (relatedTables == null || relatedTables.isEmpty()) {
+            return "";
+        }
+        LinkedHashSet<String> tableNames = new LinkedHashSet<>();
+        for (String table : relatedTables) {
+            String normalizedTable = normalizeRelatedTableName(table);
+            if (normalizedTable.isBlank()) {
+                continue;
+            }
+            tableNames.add(normalizedTable);
+            if (tableNames.size() >= RELATED_TABLE_META_LIMIT) {
+                break;
+            }
+        }
+        if (tableNames.isEmpty()) {
+            return "";
+        }
+
+        StringBuilder builder = new StringBuilder();
+        for (String tableName : tableNames) {
+            try {
+                TableDetailVO tableDetail = schemaService.getTableDetail(connectionId, databaseName, tableName);
+                List<TableDetailVO.ColumnDetailVO> columns = tableDetail == null ? List.of() : tableDetail.getColumns();
+                if (columns == null || columns.isEmpty()) {
+                    builder.append("- ").append(tableName).append(": 未获取到索引字段元数据").append('\n');
+                    continue;
+                }
+                LinkedHashSet<String> pkColumns = new LinkedHashSet<>();
+                LinkedHashSet<String> indexedColumns = new LinkedHashSet<>();
+                for (TableDetailVO.ColumnDetailVO column : columns) {
+                    String columnName = safe(column == null ? "" : column.getColumnName());
+                    if (columnName.isBlank()) {
+                        continue;
+                    }
+                    if (Boolean.TRUE.equals(column.getPrimaryKey())) {
+                        pkColumns.add(columnName);
+                    }
+                    if (Boolean.TRUE.equals(column.getIndexed())) {
+                        indexedColumns.add(columnName);
+                    }
+                }
+                if (pkColumns.isEmpty() && indexedColumns.isEmpty()) {
+                    builder.append("- ").append(tableName).append(": 未识别到索引字段").append('\n');
+                    continue;
+                }
+                String pkText = joinTopColumns(pkColumns, RELATED_INDEX_COLUMN_LIMIT);
+                String indexedText = joinTopColumns(indexedColumns, RELATED_INDEX_COLUMN_LIMIT);
+                builder.append("- ").append(tableName).append(": ");
+                if (!pkText.isBlank()) {
+                    builder.append("PK(").append(pkText).append(")");
+                }
+                if (!indexedText.isBlank()) {
+                    if (!pkText.isBlank()) {
+                        builder.append("; ");
+                    }
+                    builder.append("IDX(").append(indexedText).append(")");
+                }
+                builder.append('\n');
+            } catch (Exception ex) {
+                builder.append("- ").append(tableName).append(": 索引字段读取失败(").append(safe(ex.getMessage())).append(")").append('\n');
+            }
+        }
+        return builder.toString().trim();
+    }
+
+    private String joinTopColumns(Set<String> columns, int limit) {
+        if (columns == null || columns.isEmpty()) {
+            return "";
+        }
+        List<String> list = new ArrayList<>(columns);
+        int end = Math.min(limit, list.size());
+        String joined = String.join(", ", list.subList(0, end));
+        if (list.size() > end) {
+            return joined + ", ...";
+        }
+        return joined;
+    }
+
+    private String normalizeRelatedTableName(String tableName) {
+        String normalized = safe(tableName).replace("`", "").replace("\"", "");
+        if (normalized.contains(".")) {
+            String[] segments = normalized.split("\\.");
+            normalized = safe(segments[segments.length - 1]);
+        }
+        return normalized;
     }
 
     private int firstSqlKeywordIndex(String text) {
