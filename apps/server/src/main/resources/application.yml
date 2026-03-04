@@ -25,6 +25,8 @@ schema:
     ttl-ms: 300000
     refresh-interval-ms: 180000
     refresh-initial-delay-ms: 60000
+  table-stats:
+    refresh-interval-ms: 60000
 
 rag:
   enabled: true

@@ -2127,7 +2127,7 @@ body {
 
 @media (max-width: 1200px) {
   .studio-root .workbench {
-    padding: 8px;
+    padding: 8px 0 0;
     gap: 8px;
   }
 
@@ -2363,10 +2363,18 @@ body {
 
 .studio-root .workbench {
   height: calc(100% - var(--chrome-height));
-  padding: 8px 10px 10px;
+  padding: 8px 0 0;
   gap: 10px;
   background: var(--bg-app);
   margin-top: 0;
+}
+
+.studio-root .workbench.workbench-browser {
+  column-gap: 0;
+}
+
+.studio-root .workbench.workbench-browser > .pane-left {
+  margin-right: 8px;
 }
 
 .studio-root.theme-dark .top-chrome .tool-item .anticon,

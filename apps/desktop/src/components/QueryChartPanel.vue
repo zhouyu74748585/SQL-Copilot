@@ -210,7 +210,12 @@ function waitFrame() {
   });
 }
 
-async function exportPngDataUrl() {
+interface ExportPngOptions {
+  pixelRatio?: number;
+  backgroundColor?: string;
+}
+
+async function exportPngDataUrl(options?: ExportPngOptions) {
   await nextTick();
   renderChart();
   await nextTick();
@@ -218,9 +223,13 @@ async function exportPngDataUrl() {
   if (!chartInstance || !optionReady.value) {
     return '';
   }
+  const pixelRatio = Number.isFinite(options?.pixelRatio)
+    ? Math.max(1, Math.min(Number(options?.pixelRatio), 3))
+    : 2;
+  const backgroundColor = (options?.backgroundColor || '#ffffff').trim() || '#ffffff';
   return chartInstance.getDataURL({
-    pixelRatio: 2,
-    backgroundColor: '#ffffff',
+    pixelRatio,
+    backgroundColor,
     type: 'png',
   });
 }

@@ -156,7 +156,10 @@ public class RagIngestionServiceImpl implements RagIngestionService {
 
         try {
             ConnectionEntity connectionEntity = connectionService.getConnectionEntity(historyEntity.getConnectionId());
-            String databaseName = normalizeDatabaseName(connectionEntity.getDatabaseName());
+            String databaseName = normalizeDatabaseName(historyEntity.getDatabaseName());
+            if ("__default__".equals(databaseName)) {
+                databaseName = normalizeDatabaseName(connectionEntity.getDatabaseName());
+            }
             SqlFeatureMeta featureMeta = extractSqlFeatureMeta(historyEntity.getSqlText());
 
             SqlHistoryPayload payload = new SqlHistoryPayload(

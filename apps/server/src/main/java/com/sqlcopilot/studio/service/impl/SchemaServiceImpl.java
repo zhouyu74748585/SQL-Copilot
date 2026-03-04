@@ -8,6 +8,7 @@ import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.SchemaService;
 import com.sqlcopilot.studio.service.rag.RagIngestionService;
 import com.sqlcopilot.studio.util.BusinessException;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -17,6 +18,8 @@ import org.springframework.stereotype.Service;
 import java.sql.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 @Service
@@ -25,19 +28,35 @@ public class SchemaServiceImpl implements SchemaService {
     private static final Logger log = LoggerFactory.getLogger(SchemaServiceImpl.class);
     private static final String DEFAULT_CACHE_DATABASE_NAME = "__default__";
     private static final long MIN_CACHE_TTL_MS = 5_000L;
+    private static final long MIN_TABLE_STATS_REFRESH_INTERVAL_MS = 10_000L;
 
     private final ConnectionService connectionService;
     private final RagIngestionService ragIngestionService;
     private final long schemaCacheTtlMs;
+    private final long tableStatsRefreshIntervalMs;
     private final Map<SchemaCacheKey, SchemaSnapshot> schemaSnapshotCache = new ConcurrentHashMap<>();
     private final Map<SchemaCacheKey, Object> schemaCacheLocks = new ConcurrentHashMap<>();
+    private final Map<SchemaCacheKey, TableStatsSnapshot> tableStatsSnapshotCache = new ConcurrentHashMap<>();
+    private final Set<SchemaCacheKey> tableStatsRefreshingKeys = ConcurrentHashMap.newKeySet();
+    private final ExecutorService tableStatsExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread thread = new Thread(r, "schema-table-stats-worker");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     public SchemaServiceImpl(ConnectionService connectionService,
                              RagIngestionService ragIngestionService,
-                             @Value("${schema.cache.ttl-ms:300000}") long schemaCacheTtlMs) {
+                             @Value("${schema.cache.ttl-ms:300000}") long schemaCacheTtlMs,
+                             @Value("${schema.table-stats.refresh-interval-ms:60000}") long tableStatsRefreshIntervalMs) {
         this.connectionService = connectionService;
         this.ragIngestionService = ragIngestionService;
         this.schemaCacheTtlMs = Math.max(schemaCacheTtlMs, MIN_CACHE_TTL_MS);
+        this.tableStatsRefreshIntervalMs = Math.max(tableStatsRefreshIntervalMs, MIN_TABLE_STATS_REFRESH_INTERVAL_MS);
+    }
+
+    @PreDestroy
+    public void shutdownTableStatsExecutor() {
+        tableStatsExecutor.shutdownNow();
     }
 
     @Override
@@ -74,6 +93,40 @@ public class SchemaServiceImpl implements SchemaService {
             return summary;
         }).toList();
         vo.setTableSummaries(summaries);
+        return vo;
+    }
+
+    @Override
+    public SchemaTableStatsVO getTableStats(Long connectionId, String databaseName) {
+        String cacheDatabaseName = resolveCacheDatabaseName(connectionId, databaseName);
+        SchemaCacheKey cacheKey = new SchemaCacheKey(connectionId, cacheDatabaseName);
+        long now = System.currentTimeMillis();
+        TableStatsSnapshot current = tableStatsSnapshotCache.get(cacheKey);
+        boolean needRefresh = current == null || now - current.updatedAt() >= tableStatsRefreshIntervalMs;
+        if (needRefresh && tableStatsRefreshingKeys.add(cacheKey)) {
+            // 关键操作：表行数/大小统计异步执行，避免阻塞对象浏览主链路。
+            tableStatsExecutor.submit(() -> refreshTableStatsAsync(cacheKey, databaseName));
+        }
+
+        TableStatsSnapshot latest = tableStatsSnapshotCache.get(cacheKey);
+        SchemaTableStatsVO vo = new SchemaTableStatsVO();
+        vo.setConnectionId(connectionId);
+        vo.setDatabaseName(fromCacheDatabaseName(cacheDatabaseName));
+        vo.setRefreshing(tableStatsRefreshingKeys.contains(cacheKey));
+        vo.setUpdatedAt(latest == null ? null : latest.updatedAt());
+        List<SchemaTableStatsVO.TableStatVO> tableStats = latest == null
+            ? List.of()
+            : latest.tableStats().entrySet().stream()
+            .sorted(Map.Entry.comparingByKey(String.CASE_INSENSITIVE_ORDER))
+            .map(entry -> {
+                SchemaTableStatsVO.TableStatVO item = new SchemaTableStatsVO.TableStatVO();
+                item.setTableName(entry.getKey());
+                item.setRowEstimate(entry.getValue().rowEstimate());
+                item.setTableSizeBytes(entry.getValue().tableSizeBytes());
+                return item;
+            })
+            .toList();
+        vo.setTableStats(tableStats);
         return vo;
     }
 
@@ -335,6 +388,150 @@ public class SchemaServiceImpl implements SchemaService {
         return new SchemaSnapshot(cacheDatabaseName, readonlyTables, readonlyColumns, readonlyColumns.size(), now);
     }
 
+    private void refreshTableStatsAsync(SchemaCacheKey cacheKey, String databaseName) {
+        try {
+            TableStatsSnapshot snapshot = loadTableStatsSnapshot(
+                cacheKey.connectionId(),
+                databaseName,
+                cacheKey.databaseName()
+            );
+            tableStatsSnapshotCache.put(cacheKey, snapshot);
+        } catch (Exception ex) {
+            log.warn("异步表统计刷新失败, connectionId={}, databaseName={}, reason={}",
+                cacheKey.connectionId(), cacheKey.databaseName(), ex.getMessage());
+        } finally {
+            tableStatsRefreshingKeys.remove(cacheKey);
+        }
+    }
+
+    private TableStatsSnapshot loadTableStatsSnapshot(Long connectionId,
+                                                      String databaseName,
+                                                      String cacheDatabaseName) {
+        long now = System.currentTimeMillis();
+        ConnectionEntity connectionEntity = connectionService.getConnectionEntity(connectionId);
+        String targetDatabaseName = resolveTargetDatabaseName(connectionEntity, databaseName);
+        Map<String, TableStat> statsMap;
+        try (Connection connection = connectionService.openTargetConnection(connectionId)) {
+            applyDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
+            statsMap = queryTableStats(connection, connectionEntity.getDbType(), targetDatabaseName);
+        } catch (SQLException ex) {
+            throw new BusinessException(500, "读取表统计失败: " + ex.getMessage());
+        }
+        return new TableStatsSnapshot(cacheDatabaseName, statsMap, now);
+    }
+
+    private Map<String, TableStat> queryTableStats(Connection connection, String dbType, String targetDatabaseName)
+        throws SQLException {
+        String type = normalize(dbType).toUpperCase(Locale.ROOT);
+        if ("MYSQL".equals(type)) {
+            return queryMySqlTableStats(connection, targetDatabaseName);
+        }
+        if ("POSTGRESQL".equals(type)) {
+            return queryPostgreSqlTableStats(connection);
+        }
+        if ("SQLSERVER".equals(type)) {
+            return querySqlServerTableStats(connection);
+        }
+        if ("ORACLE".equals(type)) {
+            return queryOracleTableStats(connection);
+        }
+        return Map.of();
+    }
+
+    private Map<String, TableStat> queryMySqlTableStats(Connection connection, String targetDatabaseName) throws SQLException {
+        String schemaName = normalize(targetDatabaseName);
+        if (schemaName.isBlank()) {
+            schemaName = normalize(connection.getCatalog());
+        }
+        if (schemaName.isBlank()) {
+            return Map.of();
+        }
+        String sql = """
+            SELECT TABLE_NAME,
+                   COALESCE(TABLE_ROWS, 0) AS row_estimate,
+                   COALESCE(DATA_LENGTH, 0) + COALESCE(INDEX_LENGTH, 0) AS table_size_bytes
+            FROM information_schema.TABLES
+            WHERE TABLE_SCHEMA = ?
+            """;
+        try (PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setString(1, schemaName);
+            try (ResultSet rs = ps.executeQuery()) {
+                return readTableStatsResult(rs);
+            }
+        }
+    }
+
+    private Map<String, TableStat> queryPostgreSqlTableStats(Connection connection) throws SQLException {
+        String sql = """
+            SELECT c.relname AS table_name,
+                   GREATEST(COALESCE(c.reltuples, 0), 0)::bigint AS row_estimate,
+                   COALESCE(pg_total_relation_size(c.oid), 0) AS table_size_bytes
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relkind = 'r'
+              AND n.nspname = current_schema()
+            """;
+        try (Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery(sql)) {
+            return readTableStatsResult(rs);
+        }
+    }
+
+    private Map<String, TableStat> querySqlServerTableStats(Connection connection) throws SQLException {
+        String sql = """
+            SELECT t.name AS table_name,
+                   SUM(p.rows) AS row_estimate,
+                   SUM(a.total_pages) * 8192 AS table_size_bytes
+            FROM sys.tables t
+            JOIN sys.schemas s ON t.schema_id = s.schema_id
+            JOIN sys.indexes i ON t.object_id = i.object_id
+            JOIN sys.partitions p ON i.object_id = p.object_id AND i.index_id = p.index_id
+            JOIN sys.allocation_units a ON p.partition_id = a.container_id
+            WHERE s.name = SCHEMA_NAME()
+            GROUP BY t.name
+            """;
+        try (Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery(sql)) {
+            return readTableStatsResult(rs);
+        }
+    }
+
+    private Map<String, TableStat> queryOracleTableStats(Connection connection) throws SQLException {
+        String sql = """
+            SELECT table_name,
+                   NVL(num_rows, 0) AS row_estimate,
+                   NVL(blocks, 0) * 8192 AS table_size_bytes
+            FROM user_tables
+            """;
+        try (Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery(sql)) {
+            return readTableStatsResult(rs);
+        }
+    }
+
+    private Map<String, TableStat> readTableStatsResult(ResultSet rs) throws SQLException {
+        Map<String, TableStat> stats = new LinkedHashMap<>();
+        while (rs.next()) {
+            String tableName = normalize(rs.getString("table_name"));
+            if (tableName.isBlank()) {
+                tableName = normalize(rs.getString("TABLE_NAME"));
+            }
+            if (tableName.isBlank()) {
+                continue;
+            }
+            long rowEstimate = safeLong(rs.getObject("row_estimate"));
+            if (rowEstimate == 0L) {
+                rowEstimate = safeLong(rs.getObject("ROW_ESTIMATE"));
+            }
+            long tableSizeBytes = safeLong(rs.getObject("table_size_bytes"));
+            if (tableSizeBytes == 0L) {
+                tableSizeBytes = safeLong(rs.getObject("TABLE_SIZE_BYTES"));
+            }
+            stats.put(tableName, new TableStat(Math.max(0L, rowEstimate), Math.max(0L, tableSizeBytes)));
+        }
+        return stats;
+    }
+
     private List<SchemaColumnCacheEntity> loadColumnsForTable(Long connectionId, String databaseName, String tableName) {
         if (tableName == null || tableName.isBlank()) {
             return List.of();
@@ -425,6 +622,20 @@ public class SchemaServiceImpl implements SchemaService {
             return Integer.parseInt(value.toString());
         } catch (NumberFormatException ignore) {
             return null;
+        }
+    }
+
+    private long safeLong(Object value) {
+        if (value == null) {
+            return 0L;
+        }
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        try {
+            return Long.parseLong(String.valueOf(value));
+        } catch (NumberFormatException ignore) {
+            return 0L;
         }
     }
 
@@ -602,5 +813,13 @@ public class SchemaServiceImpl implements SchemaService {
                                   List<SchemaColumnCacheEntity> columns,
                                   int columnCount,
                                   long updatedAt) {
+    }
+
+    private record TableStatsSnapshot(String databaseName,
+                                      Map<String, TableStat> tableStats,
+                                      long updatedAt) {
+    }
+
+    private record TableStat(long rowEstimate, long tableSizeBytes) {
     }
 }

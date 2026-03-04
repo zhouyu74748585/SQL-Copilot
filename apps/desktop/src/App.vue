@@ -129,7 +129,14 @@
       <div class="top-chrome-safe top-chrome-safe-right" />
     </section>
 
-    <main class="workbench" :class="{ 'workbench-query': activeWorkbenchTab !== browserTabKey }" :style="workbenchStyle">
+    <main
+      class="workbench"
+      :class="{
+        'workbench-query': activeWorkbenchTab !== browserTabKey,
+        'workbench-browser': activeWorkbenchTab === browserTabKey,
+      }"
+      :style="workbenchStyle"
+    >
       <aside class="pane pane-left">
         <div class="pane-title pane-title-with-action">
           <span>我的连接</span>
@@ -418,16 +425,18 @@
                           <template #icon><eye-outlined /></template>
                         </a-button>
                       </a-tooltip>
-                      <a-tooltip title="执行 SQL">
+                      <a-tooltip :title="activeQueryTab.sqlExecuting ? '终止执行' : '执行 SQL'">
                         <a-button
                           size="small"
-                          type="primary"
+                          :type="activeQueryTab.sqlExecuting ? 'default' : 'primary'"
+                          :danger="activeQueryTab.sqlExecuting"
                           class="sql-action-icon-btn"
-                          :loading="activeQueryTab.sqlExecuting"
-                          :disabled="activeQueryTab.sqlExecuting"
-                          @click="executeSqlForTab(activeQueryTab, item.sqlText || '')"
+                          @click="activeQueryTab.sqlExecuting ? terminateSqlExecutionForTab(activeQueryTab) : executeSqlForTab(activeQueryTab, item.sqlText || '')"
                         >
-                          <template #icon><play-circle-outlined /></template>
+                          <template #icon>
+                            <stop-outlined v-if="activeQueryTab.sqlExecuting" />
+                            <play-circle-outlined v-else />
+                          </template>
                         </a-button>
                       </a-tooltip>
                       <a-tooltip title="解释 SQL">
@@ -457,6 +466,7 @@
               v-model:value="activeQueryTab.prompt"
               :rows="4"
               placeholder="例如：查询近 7 天订单量，并按天聚合"
+              @keydown="handleChatComposerKeydown($event, activeQueryTab)"
             />
             <div class="query-chat-composer-row">
               <div class="query-chat-model-box">
@@ -474,14 +484,24 @@
                   <a-switch v-model:checked="activeQueryTab.autoExecute" size="small" />
                 </template>
               </div>
-              <div v-if="activeQueryTab.autoMode" class="query-chat-composer-actions">
+              <div v-if="activeQueryTab.aiGenerating" class="query-chat-composer-actions">
+                <a-tooltip title="终止对话执行">
+                  <a-button
+                    size="small"
+                    danger
+                    class="sql-action-icon-btn"
+                    @click="terminateAiExecutionForTab(activeQueryTab)"
+                  >
+                    <template #icon><stop-outlined /></template>
+                  </a-button>
+                </a-tooltip>
+              </div>
+              <div v-else-if="activeQueryTab.autoMode" class="query-chat-composer-actions">
                 <a-tooltip title="Auto 发送">
                   <a-button
                     size="small"
                     type="primary"
                     class="sql-action-icon-btn"
-                    :loading="activeQueryTab.aiGenerating"
-                    :disabled="activeQueryTab.aiGenerating"
                     @click="sendAutoForTab(activeQueryTab)"
                   >
                     <template #icon><send-outlined /></template>
@@ -494,8 +514,6 @@
                     size="small"
                     type="primary"
                     class="sql-action-icon-btn"
-                    :loading="activeQueryTab.aiGenerating"
-                    :disabled="activeQueryTab.aiGenerating"
                     @click="generateSqlForTab(activeQueryTab, 'generate')"
                   >
                     <template #icon><code-outlined /></template>
@@ -505,8 +523,6 @@
                   <a-button
                     size="small"
                     class="sql-action-icon-btn"
-                    :loading="activeQueryTab.aiGenerating"
-                    :disabled="activeQueryTab.aiGenerating"
                     @click="generateSqlForTab(activeQueryTab, 'explain')"
                   >
                     <template #icon><read-outlined /></template>
@@ -516,8 +532,6 @@
                   <a-button
                     size="small"
                     class="sql-action-icon-btn"
-                    :loading="activeQueryTab.aiGenerating"
-                    :disabled="activeQueryTab.aiGenerating"
                     @click="generateSqlForTab(activeQueryTab, 'analyze')"
                   >
                     <template #icon><experiment-outlined /></template>
@@ -527,8 +541,6 @@
                   <a-button
                     size="small"
                     class="sql-action-icon-btn"
-                    :loading="activeQueryTab.aiGenerating"
-                    :disabled="activeQueryTab.aiGenerating"
                     @click="generateChartPlanForTab(activeQueryTab)"
                   >
                     <template #icon><area-chart-outlined /></template>
@@ -604,16 +616,18 @@
                   <template #icon><eye-outlined /></template>
                 </a-button>
               </a-tooltip>
-              <a-tooltip :title="activeQueryTab.selectedSqlText ? '执行选中的SQL' : '执行 SQL'">
+              <a-tooltip :title="activeQueryTab.sqlExecuting ? '终止执行' : (activeQueryTab.selectedSqlText ? '执行选中的SQL' : '执行 SQL')">
                 <a-button
                   size="small"
-                  type="primary"
+                  :type="activeQueryTab.sqlExecuting ? 'default' : 'primary'"
+                  :danger="activeQueryTab.sqlExecuting"
                   :class="['sql-action-icon-btn', { 'is-selection-active': !!activeQueryTab.selectedSqlText }]"
-                  :loading="activeQueryTab.sqlExecuting"
-                  :disabled="activeQueryTab.sqlExecuting"
-                  @click="executeSqlForTab(activeQueryTab)"
+                  @click="activeQueryTab.sqlExecuting ? terminateSqlExecutionForTab(activeQueryTab) : executeSqlForTab(activeQueryTab)"
                 >
-                  <template #icon><play-circle-outlined /></template>
+                  <template #icon>
+                    <stop-outlined v-if="activeQueryTab.sqlExecuting" />
+                    <play-circle-outlined v-else />
+                  </template>
                 </a-button>
               </a-tooltip>
               <a-tooltip v-if="activeQueryTab.lastExecuteFailed" title="自动修复">
@@ -1151,6 +1165,13 @@
         >
           查询数据
         </button>
+        <button
+          class="context-menu-item"
+          :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
+          @click="triggerContextAction('vectorizeTable')"
+        >
+          向量化
+        </button>
       </template>
     </div>
 
@@ -1250,6 +1271,7 @@ import {
   SearchOutlined,
   SendOutlined,
   SettingOutlined,
+  StopOutlined,
   ToolOutlined,
   UnorderedListOutlined,
 } from '@ant-design/icons-vue';
@@ -1294,9 +1316,11 @@ import type {
   RagVectorizeEnqueueVO,
   RagVectorizeInterruptVO,
   RagVectorizeOverviewVO,
+  RagVectorizeTableVO,
   RiskEvaluateVO,
   SchemaDatabaseVO,
   SchemaOverviewVO,
+  SchemaTableStatsVO,
   SqlExecuteVO,
   SortDirection,
   TableDetailVO,
@@ -1316,6 +1340,8 @@ interface DesktopPickFileOptions {
 interface DesktopBridge {
   pickFile: (options?: DesktopPickFileOptions) => Promise<string>;
   pickDirectory: (options?: Omit<DesktopPickFileOptions, 'filters'>) => Promise<string>;
+  saveChartCache?: (payload: ChartCacheSaveReq) => Promise<{ filePath: string; width: number; height: number }>;
+  readChartCache?: (filePath: string) => Promise<string>;
 }
 
 interface ObjectRow {
@@ -1342,6 +1368,7 @@ type AiActionType = 'generate' | 'explain' | 'analyze';
 type UiTheme = 'light' | 'dark';
 type QueryResultViewMode = 'table' | 'chart';
 type RetryActionKind = 'ai_action' | 'auto' | 'chart_plan';
+type RequestAbortReason = 'manual' | 'timeout';
 
 interface RetryRequestMeta {
   kind: RetryActionKind;
@@ -1417,6 +1444,8 @@ const isWindows = typeof navigator !== 'undefined' && /win/i.test(navigator.plat
 const isLinux = typeof navigator !== 'undefined' && /linux/i.test(navigator.platform);
 let vectorizeStatusPollTimer: number | null = null;
 const vectorizeStatusPollIntervalMs = 30000;
+const tableStatsMinRequestIntervalMs = 30000;
+const tableStatsPollIntervalMs = 1500;
 
 const connections = ref<ConnectionVO[]>([]);
 const schemaOverview = ref<SchemaOverviewVO | null>(null);
@@ -1432,6 +1461,9 @@ const expandedTreeKeys = ref<string[]>([]);
 const tableNameCache = ref<Record<string, string[]>>({});
 const tableNameLoadedCache = ref<Record<string, boolean>>({});
 const objectNameCache = ref<Record<string, string[]>>({});
+const tableStatsCache = ref<Record<string, Record<string, { rowEstimate: number; tableSizeBytes: number }>>>({});
+const tableStatsLoadingState = ref<Record<string, boolean>>({});
+const tableStatsLastRequestAt = ref<Record<string, number>>({});
 const databaseListCache = ref<Record<number, string[]>>({});
 const activeDatabaseMap = ref<Record<number, string>>({});
 const databaseVectorizeStatusMap = ref<Record<string, RagDatabaseVectorizeStatusVO>>({});
@@ -1558,7 +1590,12 @@ let sqlEditorScrollDisposable: IDisposable | null = null;
 let sqlAutoSuggestTimer: number | null = null;
 let activeSqlEditorInstance: MonacoApi.editor.IStandaloneCodeEditor | null = null;
 const pendingTableNameLoads = new Map<string, Promise<string[]>>();
+const tableStatsPollingTimers = new Map<string, number>();
 const sessionTitleOverridesStorageKey = 'sqlcopilot.session-title-overrides.v1';
+const sqlExecutionAbortControllerMap = new Map<string, AbortController>();
+const sqlExecutionAbortReasonMap = new Map<string, RequestAbortReason>();
+const aiRequestAbortControllerMap = new Map<string, AbortController>();
+const aiRequestAbortReasonMap = new Map<string, RequestAbortReason>();
 
 const selectedConnection = computed(() =>
   connections.value.find((item) => item.id === workflow.connectionId),
@@ -1682,11 +1719,13 @@ const connectionTreeData = computed(() => {
 
 const objectRows = computed<ObjectRow[]>(() => {
   if (currentObjectType.value === 'tables') {
+    const databaseName = getActiveDatabaseName(workflow.connectionId);
+    const statsByTable = tableStatsCache.value[tableCacheKey(workflow.connectionId, databaseName)] ?? {};
     return (schemaOverview.value?.tableSummaries ?? []).map((item) => ({
       objectName: item.tableName,
       objectType: 'tables',
-      rowEstimate: item.rowEstimate ?? 0,
-      tableSize: formatSize(item.tableSizeBytes ?? 0),
+      rowEstimate: statsByTable[item.tableName]?.rowEstimate ?? item.rowEstimate ?? 0,
+      tableSize: formatSize(statsByTable[item.tableName]?.tableSizeBytes ?? item.tableSizeBytes ?? 0),
       description: item.tableComment ?? '',
     }));
   }
@@ -1836,7 +1875,7 @@ const workbenchStyle = computed(() => {
   }
   if (activeWorkbenchTab.value === browserTabKey) {
     return {
-      gridTemplateColumns: `270px minmax(460px, 1fr) 6px ${browserRightPaneWidth.value}px`,
+      gridTemplateColumns: `270px minmax(460px, 1fr) 8px ${browserRightPaneWidth.value}px`,
     };
   }
   return {
@@ -2306,6 +2345,16 @@ function closeQueryTab(tabKey: string) {
   const index = queryTabs.value.findIndex((item) => item.key === tabKey);
   if (index < 0) {
     return;
+  }
+  const sqlController = sqlExecutionAbortControllerMap.get(tabKey);
+  if (sqlController) {
+    sqlExecutionAbortReasonMap.set(tabKey, 'manual');
+    sqlController.abort();
+  }
+  const aiController = aiRequestAbortControllerMap.get(tabKey);
+  if (aiController) {
+    aiRequestAbortReasonMap.set(tabKey, 'manual');
+    aiController.abort();
   }
   const tabs = [...queryTabs.value];
   tabs.splice(index, 1);
@@ -3028,7 +3077,7 @@ async function runAiTextActionWithSql(tab: QueryWorkspaceTab, actionType: 'expla
 
   try {
     const endpoint = actionType === 'explain' ? '/api/ai/query/explain' : '/api/ai/query/analyze';
-    const result = await postAiApiWithTimeout<AiTextResponseVO>(endpoint, {
+    const result = await postAiApiWithTimeout<AiTextResponseVO>(tab, endpoint, {
       connectionId: tab.connectionId,
       sessionId: tab.sessionId,
       prompt: mergePromptWithSqlSnippet(promptText, normalizedSqlText),
@@ -3048,6 +3097,10 @@ async function runAiTextActionWithSql(tab: QueryWorkspaceTab, actionType: 'expla
     message.success(actionType === 'explain' ? 'SQL 含义解释已生成' : 'SQL 合理性分析已生成');
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
+    if (isAiRequestAbortedMessage(msg)) {
+      message.info('已终止对话执行');
+      return;
+    }
     message.error(msg);
   } finally {
     tab.aiGenerating = false;
@@ -3204,6 +3257,10 @@ async function loadConnections() {
       workflow.connectionId = 0;
       selectedTreeKeys.value = [];
       expandedTreeKeys.value = [];
+      clearAllTableStatsPollingTimers();
+      tableStatsCache.value = {};
+      tableStatsLoadingState.value = {};
+      tableStatsLastRequestAt.value = {};
       schemaOverview.value = null;
       queryTabs.value = [];
       activeWorkbenchTab.value = browserTabKey;
@@ -3407,6 +3464,143 @@ async function loadOverview() {
       [objectCacheKey(workflow.connectionId, databaseName, 'tables')]: tableNames,
     };
     expandConnectionNode(workflow.connectionId);
+    if (databaseName && databaseName !== '未发现数据库' && isDatabaseNodeExpanded(workflow.connectionId, databaseName)) {
+      void fetchTableStatsForDatabase(workflow.connectionId, databaseName);
+    }
+  });
+}
+
+function clearTableStatsPollingTimer(cacheKey: string) {
+  const timer = tableStatsPollingTimers.get(cacheKey);
+  if (timer !== undefined) {
+    window.clearTimeout(timer);
+    tableStatsPollingTimers.delete(cacheKey);
+  }
+}
+
+function clearAllTableStatsPollingTimers() {
+  tableStatsPollingTimers.forEach((timer) => {
+    window.clearTimeout(timer);
+  });
+  tableStatsPollingTimers.clear();
+}
+
+function applyTableStatsSnapshot(connectionId: number, databaseName: string, payload: SchemaTableStatsVO) {
+  const cacheKey = tableCacheKey(connectionId, databaseName);
+  const next: Record<string, { rowEstimate: number; tableSizeBytes: number }> = {};
+  (payload.tableStats ?? []).forEach((item) => {
+    const tableName = (item.tableName || '').trim();
+    if (!tableName) {
+      return;
+    }
+    next[tableName] = {
+      rowEstimate: Math.max(0, Number(item.rowEstimate ?? 0)),
+      tableSizeBytes: Math.max(0, Number(item.tableSizeBytes ?? 0)),
+    };
+  });
+  tableStatsCache.value = {
+    ...tableStatsCache.value,
+    [cacheKey]: next,
+  };
+}
+
+function isDatabaseNodeExpanded(connectionId: number, databaseName: string) {
+  const nodeKey = buildDatabaseNodeKey(connectionId, databaseName);
+  return expandedTreeKeys.value.some((item) => item === nodeKey || item.startsWith(`${nodeKey}-`));
+}
+
+function collectExpandedDatabaseTargets(keys: string[]) {
+  const map = new Map<string, { connectionId: number; databaseName: string }>();
+  keys.forEach((key) => {
+    let match = key.match(/^conn-(\d+)-db-(.+?)-category-[a-z]+$/);
+    if (!match) {
+      match = key.match(/^conn-(\d+)-db-(.+?)-obj-[a-z]+-.+$/);
+    }
+    if (!match) {
+      match = key.match(/^conn-(\d+)-db-(.+)$/);
+    }
+    if (!match) {
+      return;
+    }
+    const connectionId = Number(match[1]);
+    const databaseName = decodeURIComponent(match[2] || '').trim();
+    if (!connectionId || !databaseName || databaseName === '未发现数据库') {
+      return;
+    }
+    map.set(`${connectionId}|${databaseName}`, { connectionId, databaseName });
+  });
+  return Array.from(map.values());
+}
+
+async function fetchTableStatsForDatabase(
+  connectionId: number,
+  databaseName: string,
+  options?: { force?: boolean; polling?: boolean },
+) {
+  if (!connectionId || !databaseName || databaseName === '未发现数据库') {
+    return;
+  }
+  if (!isDatabaseNodeExpanded(connectionId, databaseName)) {
+    clearTableStatsPollingTimer(tableCacheKey(connectionId, databaseName));
+    return;
+  }
+  const cacheKey = tableCacheKey(connectionId, databaseName);
+  if (tableStatsLoadingState.value[cacheKey]) {
+    return;
+  }
+  const now = Date.now();
+  const lastRequestAt = tableStatsLastRequestAt.value[cacheKey] ?? 0;
+  if (!options?.force && !options?.polling && now - lastRequestAt < tableStatsMinRequestIntervalMs) {
+    return;
+  }
+
+  tableStatsLastRequestAt.value = {
+    ...tableStatsLastRequestAt.value,
+    [cacheKey]: now,
+  };
+  tableStatsLoadingState.value = {
+    ...tableStatsLoadingState.value,
+    [cacheKey]: true,
+  };
+  try {
+    const result = await getApi<SchemaTableStatsVO>(
+      `/api/schema/tableStats?connectionId=${connectionId}&databaseName=${encodeURIComponent(databaseName)}`,
+    );
+    applyTableStatsSnapshot(connectionId, databaseName, result);
+    if (result.refreshing && isDatabaseNodeExpanded(connectionId, databaseName)) {
+      clearTableStatsPollingTimer(cacheKey);
+      const timer = window.setTimeout(() => {
+        void fetchTableStatsForDatabase(connectionId, databaseName, { polling: true });
+      }, tableStatsPollIntervalMs);
+      tableStatsPollingTimers.set(cacheKey, timer);
+    } else {
+      clearTableStatsPollingTimer(cacheKey);
+    }
+  } catch {
+    clearTableStatsPollingTimer(cacheKey);
+  } finally {
+    tableStatsLoadingState.value = {
+      ...tableStatsLoadingState.value,
+      [cacheKey]: false,
+    };
+  }
+}
+
+function scheduleTableStatsForExpandedDatabases(keys: string[]) {
+  const targets = collectExpandedDatabaseTargets(keys);
+  targets.forEach((item) => {
+    void fetchTableStatsForDatabase(item.connectionId, item.databaseName);
+  });
+  Array.from(tableStatsPollingTimers.keys()).forEach((cacheKey) => {
+    const [connectionIdText, ...dbParts] = cacheKey.split('|');
+    const connectionId = Number(connectionIdText);
+    const databaseName = dbParts.join('|');
+    if (!connectionId || !databaseName) {
+      return;
+    }
+    if (!isDatabaseNodeExpanded(connectionId, databaseName)) {
+      clearTableStatsPollingTimer(cacheKey);
+    }
   });
 }
 
@@ -3760,6 +3954,41 @@ async function loadCategoryObjects(connectionId: number, databaseName: string, c
   });
 }
 
+async function loadTreeChildrenByKey(nodeKey: string) {
+  const connectionMatch = nodeKey.match(/^conn-(\d+)$/);
+  if (connectionMatch) {
+    await prepareConnectionTreeData(Number(connectionMatch[1]));
+    return;
+  }
+
+  const databaseMatch = nodeKey.match(/^conn-(\d+)-db-(.+)$/);
+  if (databaseMatch && !nodeKey.includes('-category-') && !nodeKey.includes('-obj-')) {
+    const connectionId = Number(databaseMatch[1]);
+    const databaseName = decodeURIComponent(databaseMatch[2] || '').trim();
+    if (!connectionId || !databaseName || databaseName === '未发现数据库') {
+      return;
+    }
+    await ensureTableNamesLoaded(connectionId, databaseName);
+    return;
+  }
+
+  const categoryMatch = nodeKey.match(/^conn-(\d+)-db-(.+?)-category-([a-z]+)$/);
+  if (!categoryMatch) {
+    return;
+  }
+  const connectionId = Number(categoryMatch[1]);
+  const databaseName = decodeURIComponent(categoryMatch[2] || '').trim();
+  const category = toObjectType(categoryMatch[3] || '');
+  if (!connectionId || !databaseName || databaseName === '未发现数据库') {
+    return;
+  }
+  if (category === 'tables') {
+    await ensureTableNamesLoaded(connectionId, databaseName);
+    return;
+  }
+  await loadObjectNames(connectionId, databaseName, category);
+}
+
 async function handleTreeSelect(keys: (string | number)[]) {
   if (!keys.length) {
     return;
@@ -3768,6 +3997,11 @@ async function handleTreeSelect(keys: (string | number)[]) {
   const value = String(keys[0]);
   selectedTreeKeys.value = [value];
   activateBrowserTab();
+  try {
+    await loadTreeChildrenByKey(value);
+  } catch {
+    // 点击节点时若预加载失败，继续走原有选择逻辑，由后续请求兜底。
+  }
 
   const connectionMatch = value.match(/^conn-(\d+)$/);
   if (connectionMatch) {
@@ -3839,8 +4073,19 @@ async function handleTreeSelect(keys: (string | number)[]) {
   }
 }
 
-function handleTreeExpand(keys: (string | number)[]) {
-  expandedTreeKeys.value = keys.map((item) => String(item));
+async function handleTreeExpand(keys: (string | number)[]) {
+  const previousExpanded = new Set(expandedTreeKeys.value);
+  const normalizedKeys = keys.map((item) => String(item));
+  expandedTreeKeys.value = normalizedKeys;
+  const newExpandedKeys = normalizedKeys.filter((item) => !previousExpanded.has(item));
+  await Promise.all(newExpandedKeys.map(async (nodeKey) => {
+    try {
+      await loadTreeChildrenByKey(nodeKey);
+    } catch {
+      // 展开时的懒加载失败不阻塞其余节点展开。
+    }
+  }));
+  scheduleTableStatsForExpandedDatabases(expandedTreeKeys.value);
 }
 
 async function handleTreeRightClick(event: { event: MouseEvent; node: { key?: string | number } }) {
@@ -3849,6 +4094,27 @@ async function handleTreeRightClick(event: { event: MouseEvent; node: { key?: st
   const keyValue = String(event.node?.key ?? '');
   const objectMatch = keyValue.match(/^conn-(\d+)-db-(.+?)-obj-([a-z]+)-(.+)$/);
   if (objectMatch) {
+    const connectionId = Number(objectMatch[1]);
+    const databaseName = decodeURIComponent(objectMatch[2]);
+    const objectType = toObjectType(objectMatch[3]);
+    const objectName = decodeURIComponent(objectMatch[4]);
+    workflow.connectionId = connectionId;
+    activeDatabaseMap.value = {
+      ...activeDatabaseMap.value,
+      [connectionId]: databaseName,
+    };
+    selectedTreeKeys.value = [keyValue];
+    contextMenu.visible = true;
+    contextMenu.x = Math.min(event.event.clientX, window.innerWidth - 220);
+    contextMenu.y = Math.min(event.event.clientY, window.innerHeight - 180);
+    contextMenu.targetType = 'object';
+    contextMenu.connectionId = connectionId;
+    contextMenu.databaseName = databaseName;
+    contextMenu.objectType = objectType;
+    contextMenu.objectName = objectName;
+    void runSafely(async () => {
+      await selectObject(connectionId, databaseName, objectType, objectName);
+    });
     return;
   }
   const categoryMatch = keyValue.match(/^conn-(\d+)-db-(.+?)-category-([a-z]+)$/);
@@ -3872,6 +4138,8 @@ async function handleTreeRightClick(event: { event: MouseEvent; node: { key?: st
     contextMenu.targetType = 'connection';
     contextMenu.connectionId = connectionId;
     contextMenu.databaseName = '';
+    contextMenu.objectType = '';
+    contextMenu.objectName = '';
     return;
   }
 
@@ -3900,6 +4168,8 @@ async function handleTreeRightClick(event: { event: MouseEvent; node: { key?: st
   contextMenu.targetType = 'database';
   contextMenu.connectionId = connectionId;
   contextMenu.databaseName = databaseName;
+  contextMenu.objectType = '';
+  contextMenu.objectName = '';
 }
 
 function closeContextMenu() {
@@ -3910,7 +4180,9 @@ function closeContextMenu() {
   contextMenu.objectName = '';
 }
 
-async function triggerContextAction(action: 'edit' | 'test' | 'sync' | 'delete' | 'revectorize' | 'interruptVectorize' | 'viewVectorizedData' | 'queryData') {
+async function triggerContextAction(
+  action: 'edit' | 'test' | 'sync' | 'delete' | 'revectorize' | 'interruptVectorize' | 'viewVectorizedData' | 'queryData' | 'vectorizeTable',
+) {
   const id = contextMenu.connectionId;
   const databaseName = contextMenu.databaseName;
   const targetType = contextMenu.targetType;
@@ -3931,6 +4203,13 @@ async function triggerContextAction(action: 'edit' | 'test' | 'sync' | 'delete' 
       tableSize: '-',
       description: '',
     }, true);
+    return;
+  }
+  if (action === 'vectorizeTable') {
+    if (targetType !== 'object' || !objectName || objectType !== 'tables' || !databaseName) {
+      return;
+    }
+    await vectorizeSingleTable(id, databaseName, objectName);
     return;
   }
   if (action === 'revectorize') {
@@ -4018,6 +4297,28 @@ async function enqueueDatabaseRevectorize(connectionId: number, databaseName: st
       return;
     }
     message.info(`${result.message}（队列数: ${result.queueSize}）`);
+  });
+}
+
+async function vectorizeSingleTable(connectionId: number, databaseName: string, tableName: string) {
+  await runSafely(async () => {
+    const result = await postApi<RagVectorizeTableVO>('/api/rag/vectorize/table/manual', {
+      connectionId,
+      databaseName,
+      tableName,
+    });
+    const key = vectorizeStatusCacheKey(connectionId, databaseName);
+    databaseVectorizeStatusMap.value = {
+      ...databaseVectorizeStatusMap.value,
+      [key]: {
+        databaseName,
+        status: 'SUCCESS',
+        message: result.message || `表 ${tableName} 向量化完成`,
+        updatedAt: result.updatedAt ?? Date.now(),
+      },
+    };
+    await refreshVectorizeStatusForConnection(connectionId);
+    message.success(result.message || `表 ${tableName} 向量化完成`);
   });
 }
 
@@ -4422,6 +4723,14 @@ function isTimeoutErrorMessage(rawMessage: string) {
     || normalized.includes('http 408');
 }
 
+function isAbortError(error: unknown) {
+  if (error instanceof DOMException && error.name === 'AbortError') {
+    return true;
+  }
+  const normalized = getErrorMessage(error).trim().toLowerCase();
+  return normalized.includes('abort');
+}
+
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
@@ -4460,16 +4769,63 @@ function mergePromptWithSqlSnippet(promptText: string, selectedSqlText?: string)
 }
 
 const aiRequestTimeoutMs = 120000;
+const AI_REQUEST_ABORTED = 'AI_REQUEST_ABORTED';
 
-async function postAiApiWithTimeout<T>(path: string, payload: unknown, timeoutMs = aiRequestTimeoutMs) {
-  return await Promise.race<T>([
-    postApi<T>(path, payload),
-    new Promise<T>((_, reject) => {
-      setTimeout(() => {
-        reject(new Error(`请求超时（>${Math.floor(timeoutMs / 1000)}s）`));
-      }, timeoutMs);
-    }),
-  ]);
+function isAiRequestAbortedMessage(rawMessage: string) {
+  return rawMessage.trim() === AI_REQUEST_ABORTED;
+}
+
+function terminateAiExecutionForTab(tab: QueryWorkspaceTab) {
+  const controller = aiRequestAbortControllerMap.get(tab.key);
+  if (!controller) {
+    return;
+  }
+  aiRequestAbortReasonMap.set(tab.key, 'manual');
+  controller.abort();
+}
+
+function terminateSqlExecutionForTab(tab: QueryWorkspaceTab) {
+  const controller = sqlExecutionAbortControllerMap.get(tab.key);
+  if (!controller) {
+    return;
+  }
+  sqlExecutionAbortReasonMap.set(tab.key, 'manual');
+  controller.abort();
+}
+
+async function postAiApiWithTimeout<T>(
+  tab: QueryWorkspaceTab,
+  path: string,
+  payload: unknown,
+  timeoutMs = aiRequestTimeoutMs,
+) {
+  const controller = new AbortController();
+  aiRequestAbortControllerMap.set(tab.key, controller);
+  aiRequestAbortReasonMap.delete(tab.key);
+  const timeoutHandle = window.setTimeout(() => {
+    aiRequestAbortReasonMap.set(tab.key, 'timeout');
+    controller.abort();
+  }, timeoutMs);
+  try {
+    return await postApi<T>(path, payload, {
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (isAbortError(error)) {
+      const reason = aiRequestAbortReasonMap.get(tab.key);
+      if (reason === 'timeout') {
+        throw new Error(`请求超时（>${Math.floor(timeoutMs / 1000)}s）`);
+      }
+      throw new Error(AI_REQUEST_ABORTED);
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutHandle);
+    if (aiRequestAbortControllerMap.get(tab.key) === controller) {
+      aiRequestAbortControllerMap.delete(tab.key);
+    }
+    aiRequestAbortReasonMap.delete(tab.key);
+  }
 }
 
 function looksLikeSqlText(text: string) {
@@ -4522,7 +4878,7 @@ async function generateSqlForTab(
   tab.aiGenerating = true;
   try {
     if (actionType === 'generate') {
-      const generated = await postAiApiWithTimeout<AiGenerateSqlVO>('/api/ai/query/generate', {
+      const generated = await postAiApiWithTimeout<AiGenerateSqlVO>(tab, '/api/ai/query/generate', {
         connectionId: tab.connectionId,
         sessionId: tab.sessionId,
         prompt: finalPrompt,
@@ -4546,7 +4902,7 @@ async function generateSqlForTab(
     }
 
     const endpoint = actionType === 'explain' ? '/api/ai/query/explain' : '/api/ai/query/analyze';
-    const result = await postAiApiWithTimeout<AiTextResponseVO>(endpoint, {
+    const result = await postAiApiWithTimeout<AiTextResponseVO>(tab, endpoint, {
       connectionId: tab.connectionId,
       sessionId: tab.sessionId,
       prompt: finalPrompt,
@@ -4567,6 +4923,11 @@ async function generateSqlForTab(
     clearUserRetryState(userMessage);
   } catch (error) {
     const msg = getErrorMessage(error);
+    if (isAiRequestAbortedMessage(msg)) {
+      clearUserRetryState(userMessage);
+      message.info('已终止对话执行');
+      return;
+    }
     if (isTimeoutErrorMessage(msg)) {
       markUserMessageRetryable(tab, userMessage, retryMeta);
       message.error(timeoutRetryErrorMessage(msg));
@@ -4616,7 +4977,7 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
   };
   tab.aiGenerating = true;
   try {
-    const result = await postAiApiWithTimeout<AiAutoQueryVO>('/api/ai/query/auto', {
+    const result = await postAiApiWithTimeout<AiAutoQueryVO>(tab, '/api/ai/query/auto', {
       connectionId: tab.connectionId,
       sessionId: tab.sessionId,
       prompt: finalPrompt,
@@ -4703,6 +5064,11 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
     clearUserRetryState(userMessage);
   } catch (error) {
     const msg = getErrorMessage(error);
+    if (isAiRequestAbortedMessage(msg)) {
+      clearUserRetryState(userMessage);
+      message.info('已终止对话执行');
+      return;
+    }
     if (isTimeoutErrorMessage(msg)) {
       markUserMessageRetryable(tab, userMessage, retryMeta);
       message.error(timeoutRetryErrorMessage(msg));
@@ -4840,16 +5206,44 @@ function chatExecutionColumns(preview: QueryExecutionPreview) {
   }));
 }
 
-async function exportChartPngDataUrl() {
+const chartExportPixelRatioCandidates = [2, 1.5, 1];
+
+async function exportChartPngDataUrl(pixelRatio = 2) {
   for (let attempt = 0; attempt < 6; attempt += 1) {
     await nextTick();
     await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 40 : 90));
-    const dataUrl = (await queryChartPanelRef.value?.exportPngDataUrl?.()) || '';
+    const dataUrl = (await queryChartPanelRef.value?.exportPngDataUrl?.({ pixelRatio })) || '';
     if (dataUrl) {
       return dataUrl;
     }
   }
   return '';
+}
+
+function isChartCacheRetryableError(rawMessage: string) {
+  const normalized = rawMessage.trim().toLowerCase();
+  return normalized.includes('超过大小限制')
+    || normalized.includes('too large')
+    || normalized.includes('http 413');
+}
+
+function normalizeChartCacheErrorMessage(rawMessage: string) {
+  const normalized = rawMessage.trim();
+  if (!normalized || /^http \d+$/i.test(normalized)) {
+    return '图表已生成，但图片缓存失败，仅本次可见';
+  }
+  return `图表已生成，但图片缓存失败：${normalized}`;
+}
+
+function isLikelyLocalFilePath(rawPath: string) {
+  const normalized = rawPath.trim();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized.startsWith('/')) {
+    return true;
+  }
+  return /^[a-zA-Z]:[\\/]/.test(normalized);
 }
 
 async function saveChartImageCache(
@@ -4863,8 +5257,63 @@ async function saveChartImageCache(
     imageBase64Png: imageDataUrl,
     suggestedFileName,
   };
+  const bridge = getDesktopBridge();
+  if (bridge && typeof bridge.saveChartCache === 'function') {
+    const saved = await bridge.saveChartCache(payload);
+    return (saved?.filePath || '').trim();
+  }
   const saved = await postApi<ChartCacheSaveVO>('/api/editor/chart/cache/save', payload);
-  return saved.cacheKey || '';
+  return (saved.filePath || saved.cacheKey || '').trim();
+}
+
+async function loadChartImageDataUrl(cachePathOrKey: string) {
+  const normalized = cachePathOrKey.trim();
+  if (!normalized) {
+    return '';
+  }
+  const bridge = getDesktopBridge();
+  if (bridge && typeof bridge.readChartCache === 'function' && isLikelyLocalFilePath(normalized)) {
+    return (await bridge.readChartCache(normalized)) || '';
+  }
+  const loaded = await getApi<ChartCacheReadVO>(
+    `/api/editor/chart/cache/read?cacheKey=${encodeURIComponent(normalized)}`,
+  );
+  return loaded.dataUrl || '';
+}
+
+interface CacheChartImageResult {
+  imageDataUrl: string;
+  cacheKey: string;
+  cacheErrorMessage?: string;
+}
+
+async function cacheChartImageWithRetry(tab: QueryWorkspaceTab, suggestedFileName: string): Promise<CacheChartImageResult> {
+  let fallbackImageDataUrl = '';
+  let lastErrorMessage = '';
+  for (const pixelRatio of chartExportPixelRatioCandidates) {
+    const imageDataUrl = await exportChartPngDataUrl(pixelRatio);
+    if (!imageDataUrl) {
+      continue;
+    }
+    fallbackImageDataUrl = imageDataUrl;
+    try {
+      const cacheKey = await saveChartImageCache(tab, imageDataUrl, suggestedFileName);
+      return {
+        imageDataUrl,
+        cacheKey,
+      };
+    } catch (error) {
+      lastErrorMessage = getErrorMessage(error);
+      if (!isChartCacheRetryableError(lastErrorMessage)) {
+        break;
+      }
+    }
+  }
+  return {
+    imageDataUrl: fallbackImageDataUrl,
+    cacheKey: '',
+    cacheErrorMessage: lastErrorMessage,
+  };
 }
 
 function downloadImage(dataUrl: string, fileName: string) {
@@ -4900,7 +5349,7 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
   };
   tab.aiGenerating = true;
   try {
-    const generated = await postAiApiWithTimeout<AiGenerateChartVO>('/api/ai/query/generate-chart', {
+    const generated = await postAiApiWithTimeout<AiGenerateChartVO>(tab, '/api/ai/query/generate-chart', {
       connectionId: tab.connectionId,
       sessionId: tab.sessionId,
       prompt: finalPrompt,
@@ -4944,6 +5393,11 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
     clearUserRetryState(userMessage);
   } catch (error) {
     const msg = getErrorMessage(error);
+    if (isAiRequestAbortedMessage(msg)) {
+      clearUserRetryState(userMessage);
+      message.info('已终止对话执行');
+      return;
+    }
     if (isTimeoutErrorMessage(msg)) {
       markUserMessageRetryable(tab, userMessage, retryMeta);
       message.error(timeoutRetryErrorMessage(msg));
@@ -4994,20 +5448,19 @@ async function generateChartFromMessage(
   tab.chartReadonly = false;
   touchQueryTab(tab);
 
-  const imageDataUrl = await exportChartPngDataUrl();
+  const cached = await cacheChartImageWithRetry(tab, `chart-auto-${Date.now()}`);
+  const imageDataUrl = cached.imageDataUrl;
   if (!imageDataUrl) {
     message.warning('图表渲染完成，但图片导出失败');
     return false;
   }
   tab.chartImageDataUrl = imageDataUrl;
   item.chartImageDataUrl = imageDataUrl;
-  let cacheKey = '';
-  try {
-    cacheKey = await saveChartImageCache(tab, imageDataUrl, `chart-auto-${Date.now()}`);
-    tab.chartImageCacheKey = cacheKey;
-    item.chartImageCacheKey = cacheKey;
-  } catch {
-    message.warning('图表已生成，但图片缓存失败，仅本次可见');
+  const cacheKey = cached.cacheKey || '';
+  tab.chartImageCacheKey = cacheKey;
+  item.chartImageCacheKey = cacheKey;
+  if (cached.cacheErrorMessage) {
+    message.warning(normalizeChartCacheErrorMessage(cached.cacheErrorMessage));
   }
   if (options?.appendRenderMessage !== false) {
     const renderMessage = appendAssistantSqlMessage(
@@ -5050,18 +5503,16 @@ async function generateManualChartForTab(tab: QueryWorkspaceTab) {
   tab.chartReadonly = false;
   touchQueryTab(tab);
 
-  const imageDataUrl = await exportChartPngDataUrl();
+  const cached = await cacheChartImageWithRetry(tab, `chart-manual-${Date.now()}`);
+  const imageDataUrl = cached.imageDataUrl;
   if (!imageDataUrl) {
     message.warning('图表渲染完成，但图片导出失败');
     return;
   }
   tab.chartImageDataUrl = imageDataUrl;
-  let cacheKey = '';
-  try {
-    cacheKey = await saveChartImageCache(tab, imageDataUrl, `chart-manual-${Date.now()}`);
-    tab.chartImageCacheKey = cacheKey;
-  } catch {
-    message.warning('图表已生成，但图片缓存失败，仅本次可见');
+  tab.chartImageCacheKey = cached.cacheKey || '';
+  if (cached.cacheErrorMessage) {
+    message.warning(normalizeChartCacheErrorMessage(cached.cacheErrorMessage));
   }
   message.success('手动图表已生成');
 }
@@ -5082,10 +5533,7 @@ async function downloadMessageChart(item: QueryChatMessage) {
   let dataUrl = item.chartImageDataUrl || '';
   if (!dataUrl && item.chartImageCacheKey) {
     try {
-      const loaded = await getApi<ChartCacheReadVO>(
-        `/api/editor/chart/cache/read?cacheKey=${encodeURIComponent(item.chartImageCacheKey)}`,
-      );
-      dataUrl = loaded.dataUrl || '';
+      dataUrl = await loadChartImageDataUrl(item.chartImageCacheKey);
       item.chartImageDataUrl = dataUrl;
     } catch {
       message.error('缓存图表不存在，请重跑 SQL 后重新生成');
@@ -5106,10 +5554,7 @@ async function hydrateHistoryChartImages(tab: QueryWorkspaceTab) {
       continue;
     }
     try {
-      const loaded = await getApi<ChartCacheReadVO>(
-        `/api/editor/chart/cache/read?cacheKey=${encodeURIComponent(item.chartImageCacheKey)}`,
-      );
-      item.chartImageDataUrl = loaded.dataUrl || '';
+      item.chartImageDataUrl = await loadChartImageDataUrl(item.chartImageCacheKey);
     } catch {
       // 历史图缺失不阻断会话加载。
     }
@@ -5138,17 +5583,23 @@ async function explainSqlForTab(tab: QueryWorkspaceTab, sqlOverride?: string) {
 }
 
 const RISK_EXECUTION_CANCELLED = 'RISK_EXECUTION_CANCELLED';
+const SQL_EXECUTION_ABORTED = 'SQL_EXECUTION_ABORTED';
 
 function connectionEnvLabel(connectionId: number) {
   const env = connections.value.find((item) => item.id === connectionId)?.env ?? 'DEV';
   return env.toUpperCase();
 }
 
-async function ensureRiskConfirmedBeforeExecute(tab: QueryWorkspaceTab, sqlText: string) {
+async function ensureRiskConfirmedBeforeExecute(tab: QueryWorkspaceTab, sqlText: string, signal?: AbortSignal) {
   const result = await postApi<RiskEvaluateVO>('/api/sql/risk/evaluate', {
     connectionId: tab.connectionId,
     sqlText,
+  }, {
+    signal,
   });
+  if (signal?.aborted) {
+    throw new Error(SQL_EXECUTION_ABORTED);
+  }
   tab.riskInfo = result;
   touchQueryTab(tab);
   const riskAckToken = (result.riskAckToken ?? '').trim();
@@ -5160,6 +5611,9 @@ async function ensureRiskConfirmedBeforeExecute(tab: QueryWorkspaceTab, sqlText:
   const riskItemsText = (result.riskItems ?? [])
     .map((item, index) => `${index + 1}. [${item.level}] ${item.description}`)
     .join('\n') || '无风险明细';
+  if (signal?.aborted) {
+    throw new Error(SQL_EXECUTION_ABORTED);
+  }
   const confirmed = await new Promise<boolean>((resolve) => {
     Modal.confirm({
       title: `${connectionEnvLabel(tab.connectionId)} 环境 SQL 风险确认`,
@@ -5200,12 +5654,20 @@ async function executeSqlForTab(
     return false;
   }
   tab.sqlExecuting = true;
+  const controller = new AbortController();
+  sqlExecutionAbortControllerMap.set(tab.key, controller);
+  sqlExecutionAbortReasonMap.delete(tab.key);
   touchQueryTab(tab);
   let riskAckToken = '';
   try {
     try {
-      riskAckToken = await ensureRiskConfirmedBeforeExecute(tab, sqlText);
+      riskAckToken = await ensureRiskConfirmedBeforeExecute(tab, sqlText, controller.signal);
     } catch (error) {
+      const manualAborted = sqlExecutionAbortReasonMap.get(tab.key) === 'manual' || isAbortError(error);
+      if (manualAborted) {
+        message.info('已终止执行');
+        return false;
+      }
       const errMsg = error instanceof Error ? error.message : String(error);
       if (errMsg === RISK_EXECUTION_CANCELLED) {
         message.info('已取消执行');
@@ -5223,6 +5685,8 @@ async function executeSqlForTab(
         databaseName: tab.databaseName || undefined,
         riskAckToken: riskAckToken || undefined,
         operatorName: 'desktop-user',
+      }, {
+        signal: controller.signal,
       });
       tab.executeResult = result;
       tab.explainResult = null;
@@ -5240,6 +5704,15 @@ async function executeSqlForTab(
       }
       return true;
     } catch (error) {
+      const manualAborted = sqlExecutionAbortReasonMap.get(tab.key) === 'manual' || isAbortError(error);
+      if (manualAborted) {
+        tab.riskAckToken = '';
+        tab.lastExecuteFailed = false;
+        tab.lastExecuteErrorMessage = '';
+        tab.lastFailedSqlText = '';
+        message.info('已终止执行');
+        return false;
+      }
       const errMsg = error instanceof Error ? error.message : String(error);
       tab.executeResult = null;
       tab.explainResult = null;
@@ -5250,6 +5723,10 @@ async function executeSqlForTab(
       return false;
     }
   } finally {
+    if (sqlExecutionAbortControllerMap.get(tab.key) === controller) {
+      sqlExecutionAbortControllerMap.delete(tab.key);
+    }
+    sqlExecutionAbortReasonMap.delete(tab.key);
     tab.sqlExecuting = false;
     touchQueryTab(tab);
   }
@@ -5271,11 +5748,8 @@ async function repairSqlForTab(tab: QueryWorkspaceTab) {
   }
   tab.aiGenerating = true;
   try {
-    appendUserChatMessage(
-      tab,
-      `请修复以下 SQL 执行错误。\n错误信息：${errorMessage}\n\nSQL:\n${failedSql}`,
-      'repair',
-    );
+    const promptText = `请修复以下 SQL 执行错误。\n错误信息：${errorMessage}\n\nSQL:\n${failedSql}`;
+    const userMessage = appendUserChatMessage(tab, promptText, 'repair');
     const repaired = await postApi<AiRepairVO>('/api/ai/query/repair', {
       connectionId: tab.connectionId,
       sessionId: tab.sessionId,
@@ -5284,12 +5758,19 @@ async function repairSqlForTab(tab: QueryWorkspaceTab) {
       databaseName: tab.databaseName || undefined,
       modelName: tab.selectedAiModel || undefined,
     });
+    const repairedSql = (repaired.repairedSql || failedSql || '').trim();
+    const assistantContent = (repaired.errorExplanation || repaired.repairNote || '已尝试修复 SQL').trim();
     appendAssistantSqlMessage(
       tab,
-      repaired.repairedSql || failedSql,
+      repairedSql,
       'repair',
-      (repaired.errorExplanation || repaired.repairNote || '已尝试修复 SQL').trim(),
+      assistantContent,
     );
+    await saveConversationHistoryOnce(tab, userMessage, promptText, repairedSql, {
+      actionType: 'repair',
+      assistantContent,
+      databaseName: tab.databaseName,
+    });
     tab.lastExecuteFailed = false;
     tab.lastExecuteErrorMessage = '';
     tab.lastFailedSqlText = '';
@@ -5386,6 +5867,26 @@ function formatTime(ts?: number) {
   return `${y}-${m}-${d} ${hh}:${mm}:${ss}`;
 }
 
+function handleChatComposerKeydown(event: KeyboardEvent, tab: QueryWorkspaceTab) {
+  if (!tab.autoMode) {
+    return;
+  }
+  if (event.isComposing) {
+    return;
+  }
+  if (event.key !== 'Enter') {
+    return;
+  }
+  if (event.shiftKey) {
+    return;
+  }
+  event.preventDefault();
+  if (tab.aiGenerating) {
+    return;
+  }
+  void sendAutoForTab(tab);
+}
+
 function handleWindowResize() {
   viewportHeight.value = window.innerHeight;
   viewportWidth.value = window.innerWidth;
@@ -5407,6 +5908,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   stopVectorizeStatusPolling();
+  clearAllTableStatsPollingTimers();
   window.removeEventListener('resize', handleWindowResize);
   window.removeEventListener('mousemove', handleResizeBrowserPane);
   window.removeEventListener('mouseup', stopResizeBrowserPane);

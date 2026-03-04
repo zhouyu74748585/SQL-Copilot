@@ -45,6 +45,12 @@ public class SchemaController {
         return ApiResponse.success(overview);
     }
 
+    @GetMapping("/tableStats")
+    public ApiResponse<SchemaTableStatsVO> tableStats(@RequestParam("connectionId") Long connectionId,
+                                                      @RequestParam(value = "databaseName", required = false) String databaseName) {
+        return ApiResponse.success(schemaService.getTableStats(connectionId, databaseName));
+    }
+
     @GetMapping("/tableDetail")
     public ApiResponse<TableDetailVO> tableDetail(@RequestParam("connectionId") Long connectionId,
                                                    @RequestParam(value = "databaseName", required = false) String databaseName,

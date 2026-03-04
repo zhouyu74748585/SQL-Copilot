@@ -5,6 +5,7 @@ const http = require('http');
 const path = require('path');
 
 let qdrantProcess = null;
+const MAX_CHART_CACHE_BYTES = 20 * 1024 * 1024;
 
 function createWindow() {
   const rendererUrl = process.env.ELECTRON_RENDERER_URL;
@@ -69,6 +70,38 @@ function normalizeDialogFilters(filters) {
     .filter((item) => !!item);
 }
 
+function sanitizePathSegment(value) {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  if (!normalized) {
+    return '';
+  }
+  return normalized
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\.\./g, '_')
+    .replace(/\s+/g, '_');
+}
+
+function sanitizeFileName(value) {
+  const normalized = sanitizePathSegment(value);
+  if (!normalized) {
+    return '';
+  }
+  return normalized.slice(0, 80);
+}
+
+function resolveChartCacheBaseDir() {
+  return path.resolve(app.getPath('userData'), 'chart-cache');
+}
+
+function toPngDataUrl(bytes) {
+  return `data:image/png;base64,${bytes.toString('base64')}`;
+}
+
+function isSubPath(baseDir, targetPath) {
+  const relative = path.relative(baseDir, targetPath);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
 function registerIpcHandlers() {
   ipcMain.handle('dialog:pick-file', async (_event, rawOptions) => {
     const options = rawOptions && typeof rawOptions === 'object' ? rawOptions : {};
@@ -110,6 +143,79 @@ function registerIpcHandlers() {
       return '';
     }
     return result.filePaths[0];
+  });
+
+  ipcMain.handle('chart-cache:save', async (_event, rawPayload) => {
+    const payload = rawPayload && typeof rawPayload === 'object' ? rawPayload : {};
+    const connectionId = Number(payload.connectionId);
+    if (!Number.isFinite(connectionId) || connectionId <= 0) {
+      throw new Error('连接 ID 非法');
+    }
+
+    const sessionId = sanitizePathSegment(payload.sessionId);
+    if (!sessionId) {
+      throw new Error('会话 ID 不能为空');
+    }
+
+    let imageBase64 = typeof payload.imageBase64Png === 'string' ? payload.imageBase64Png.trim() : '';
+    if (!imageBase64) {
+      throw new Error('图表图片不能为空');
+    }
+    if (imageBase64.startsWith('data:image/png;base64,')) {
+      imageBase64 = imageBase64.slice('data:image/png;base64,'.length);
+    }
+    imageBase64 = imageBase64.replace(/\s+/g, '');
+    if (!/^[A-Za-z0-9+/=]+$/.test(imageBase64)) {
+      throw new Error('图表图片 Base64 内容无效');
+    }
+
+    let imageBytes;
+    try {
+      imageBytes = Buffer.from(imageBase64, 'base64');
+    } catch (error) {
+      throw new Error('图表图片 Base64 内容无效');
+    }
+    if (!imageBytes.length) {
+      throw new Error('图表图片内容为空');
+    }
+    if (imageBytes.length > MAX_CHART_CACHE_BYTES) {
+      throw new Error('图表图片超过大小限制（20MB）');
+    }
+
+    const safeFileName = sanitizeFileName(payload.suggestedFileName)
+      || `chart-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+    const baseDir = resolveChartCacheBaseDir();
+    const relativePath = path.join(String(connectionId), sessionId, `${safeFileName}.png`);
+    const targetPath = path.resolve(baseDir, relativePath);
+    if (!isSubPath(baseDir, targetPath)) {
+      throw new Error('图表缓存路径非法');
+    }
+
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.writeFileSync(targetPath, imageBytes);
+
+    return {
+      filePath: targetPath,
+      width: Number(payload.width) || 0,
+      height: Number(payload.height) || 0,
+    };
+  });
+
+  ipcMain.handle('chart-cache:read', async (_event, rawFilePath) => {
+    const filePath = typeof rawFilePath === 'string' ? rawFilePath.trim() : '';
+    if (!filePath) {
+      throw new Error('图片路径不能为空');
+    }
+    const baseDir = resolveChartCacheBaseDir();
+    const targetPath = path.resolve(filePath);
+    if (!isSubPath(baseDir, targetPath)) {
+      throw new Error('图片路径非法');
+    }
+    if (!fs.existsSync(targetPath)) {
+      throw new Error('缓存图表不存在');
+    }
+    const imageBytes = fs.readFileSync(targetPath);
+    return toPngDataUrl(imageBytes);
   });
 }
 

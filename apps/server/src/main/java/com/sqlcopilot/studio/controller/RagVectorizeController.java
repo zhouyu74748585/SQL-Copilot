@@ -9,6 +9,8 @@ import com.sqlcopilot.studio.dto.rag.RagVectorizeInterruptVO;
 import com.sqlcopilot.studio.dto.rag.RagVectorizeOverviewQueryReq;
 import com.sqlcopilot.studio.dto.rag.RagVectorizeOverviewVO;
 import com.sqlcopilot.studio.dto.rag.RagVectorizeStatusQueryReq;
+import com.sqlcopilot.studio.dto.rag.RagVectorizeTableReq;
+import com.sqlcopilot.studio.dto.rag.RagVectorizeTableVO;
 import com.sqlcopilot.studio.service.RagVectorizeQueueService;
 import jakarta.validation.Valid;
 import java.util.List;
@@ -40,6 +42,16 @@ public class RagVectorizeController {
     public ApiResponse<RagVectorizeInterruptVO> interrupt(@Valid @RequestBody RagVectorizeInterruptReq req) {
         // 关键操作：中断仅改变当前库任务状态，不影响其他数据库队列任务。
         return ApiResponse.success(ragVectorizeQueueService.interrupt(req.getConnectionId(), req.getDatabaseName()));
+    }
+
+    @PostMapping("/table/manual")
+    public ApiResponse<RagVectorizeTableVO> vectorizeTable(@Valid @RequestBody RagVectorizeTableReq req) {
+        // 关键操作：单表向量化直接写入 schema_table/schema_column 集合，不进入数据库全量队列。
+        return ApiResponse.success(ragVectorizeQueueService.vectorizeTable(
+            req.getConnectionId(),
+            req.getDatabaseName(),
+            req.getTableName()
+        ));
     }
 
     @GetMapping("/status/list")

@@ -7,4 +7,10 @@ contextBridge.exposeInMainWorld('sqlCopilotDesktop', {
   pickDirectory(options = {}) {
     return ipcRenderer.invoke('dialog:pick-directory', options);
   },
+  saveChartCache(payload = {}) {
+    return ipcRenderer.invoke('chart-cache:save', payload);
+  },
+  readChartCache(filePath = '') {
+    return ipcRenderer.invoke('chart-cache:read', filePath);
+  },
 });

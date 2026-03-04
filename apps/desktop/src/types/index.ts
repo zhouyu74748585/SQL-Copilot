@@ -91,6 +91,18 @@ export interface SchemaDatabaseVO {
   vectorizeUpdatedAt?: number;
 }
 
+export interface SchemaTableStatsVO {
+  connectionId: number;
+  databaseName?: string;
+  refreshing: boolean;
+  updatedAt?: number;
+  tableStats: Array<{
+    tableName: string;
+    rowEstimate?: number;
+    tableSizeBytes?: number;
+  }>;
+}
+
 export interface TableDetailVO {
   connectionId: number;
   tableName: string;
@@ -253,6 +265,20 @@ export interface RagVectorizeInterruptReq {
 export interface RagVectorizeInterruptVO {
   interrupted: boolean;
   status: 'NOT_VECTORIZED' | 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED';
+  message: string;
+  updatedAt?: number;
+}
+
+export interface RagVectorizeTableReq {
+  connectionId: number;
+  databaseName: string;
+  tableName: string;
+}
+
+export interface RagVectorizeTableVO {
+  success: boolean;
+  databaseName: string;
+  tableName: string;
   message: string;
   updatedAt?: number;
 }

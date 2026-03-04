@@ -4,11 +4,17 @@ import com.sqlcopilot.studio.dto.rag.RagDatabaseVectorizeStatusVO;
 import com.sqlcopilot.studio.dto.rag.RagVectorizeEnqueueVO;
 import com.sqlcopilot.studio.dto.rag.RagVectorizeInterruptVO;
 import com.sqlcopilot.studio.dto.rag.RagVectorizeOverviewVO;
+import com.sqlcopilot.studio.dto.rag.RagVectorizeTableVO;
+import com.sqlcopilot.studio.dto.schema.TableDetailVO;
 import com.sqlcopilot.studio.entity.RagVectorizeStatusEntity;
+import com.sqlcopilot.studio.entity.SchemaColumnCacheEntity;
+import com.sqlcopilot.studio.entity.SchemaTableCacheEntity;
 import com.sqlcopilot.studio.mapper.RagVectorizeStatusMapper;
+import com.sqlcopilot.studio.mapper.SchemaCacheMapper;
 import com.sqlcopilot.studio.service.RagVectorizeQueueService;
 import com.sqlcopilot.studio.service.SchemaService;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
+import com.sqlcopilot.studio.service.rag.RagIngestionService;
 import com.sqlcopilot.studio.service.rag.model.QdrantCollectionMetric;
 import com.sqlcopilot.studio.service.rag.model.RagCollectionNames;
 import com.sqlcopilot.studio.util.BusinessException;
@@ -36,6 +42,8 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
 
     private final SchemaService schemaService;
     private final RagVectorizeStatusMapper ragVectorizeStatusMapper;
+    private final SchemaCacheMapper schemaCacheMapper;
+    private final RagIngestionService ragIngestionService;
     private final QdrantClientService qdrantClientService;
     private final RagCollectionNames collectionNames;
     private final LinkedBlockingQueue<VectorizeTask> taskQueue = new LinkedBlockingQueue<>();
@@ -54,6 +62,8 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
 
     public RagVectorizeQueueServiceImpl(SchemaService schemaService,
                                         RagVectorizeStatusMapper ragVectorizeStatusMapper,
+                                        SchemaCacheMapper schemaCacheMapper,
+                                        RagIngestionService ragIngestionService,
                                         QdrantClientService qdrantClientService,
                                         @Value("${rag.collection.schema-table:schema_table}") String schemaTableCollection,
                                         @Value("${rag.collection.schema-column:schema_column}") String schemaColumnCollection,
@@ -61,6 +71,8 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
                                         @Value("${rag.collection.sql-fragment:sql_fragment}") String sqlFragmentCollection) {
         this.schemaService = schemaService;
         this.ragVectorizeStatusMapper = ragVectorizeStatusMapper;
+        this.schemaCacheMapper = schemaCacheMapper;
+        this.ragIngestionService = ragIngestionService;
         this.qdrantClientService = qdrantClientService;
         this.collectionNames = new RagCollectionNames(
             schemaTableCollection,
@@ -111,6 +123,101 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
         vo.setEnqueued(Boolean.TRUE);
         vo.setQueueSize(dedupeKeys.size());
         vo.setMessage("已加入向量化队列，任务将按顺序执行");
+        return vo;
+    }
+
+    @Override
+    public RagVectorizeTableVO vectorizeTable(Long connectionId, String databaseName, String tableName) {
+        String normalizedDatabaseName = normalizeDatabaseName(databaseName);
+        String normalizedTableName = normalizeTableName(tableName);
+        if (connectionId == null) {
+            throw new BusinessException(400, "connectionId 不能为空");
+        }
+        if (normalizedDatabaseName.isBlank()) {
+            throw new BusinessException(400, "databaseName 不能为空");
+        }
+        if (normalizedTableName.isBlank()) {
+            throw new BusinessException(400, "tableName 不能为空");
+        }
+
+        String taskKey = buildTaskKey(connectionId, normalizedDatabaseName);
+        VectorizeStatusRecord runtimeStatus = statusMap.get(taskKey);
+        if (runtimeStatus != null
+            && (VectorizeStatus.PENDING.name().equals(runtimeStatus.status())
+            || VectorizeStatus.RUNNING.name().equals(runtimeStatus.status()))) {
+            throw new BusinessException(400, "当前数据库正在向量化，请稍后再试");
+        }
+
+        // 关键操作：单表手动向量化只处理指定表，避免触发整库 Schema 同步。
+        List<SchemaTableCacheEntity> tableCacheList = schemaCacheMapper.findTables(connectionId, normalizedDatabaseName);
+        SchemaTableCacheEntity matchedTable = tableCacheList.stream()
+            .filter(item -> normalizedTableName.equalsIgnoreCase(Objects.toString(item.getTableName(), "").trim()))
+            .findFirst()
+            .orElse(null);
+        String actualTableName = matchedTable == null
+            ? normalizedTableName
+            : Objects.toString(matchedTable.getTableName(), normalizedTableName).trim();
+
+        TableDetailVO detail = schemaService.getTableDetail(connectionId, normalizedDatabaseName, actualTableName);
+        if (detail == null || detail.getColumns() == null || detail.getColumns().isEmpty()) {
+            throw new BusinessException(400, "未读取到目标表字段信息，无法向量化");
+        }
+
+        long now = System.currentTimeMillis();
+        SchemaTableCacheEntity tableMeta = matchedTable == null ? new SchemaTableCacheEntity() : matchedTable;
+        tableMeta.setConnectionId(connectionId);
+        tableMeta.setDatabaseName(normalizedDatabaseName);
+        tableMeta.setTableName(actualTableName);
+        tableMeta.setUpdatedAt(now);
+        if (tableMeta.getRowEstimate() == null) {
+            tableMeta.setRowEstimate(0L);
+        }
+        if (tableMeta.getTableSizeBytes() == null) {
+            tableMeta.setTableSizeBytes(0L);
+        }
+
+        List<SchemaColumnCacheEntity> columnMetaList = detail.getColumns().stream().map(column -> {
+            SchemaColumnCacheEntity entity = new SchemaColumnCacheEntity();
+            entity.setConnectionId(connectionId);
+            entity.setDatabaseName(normalizedDatabaseName);
+            entity.setTableName(actualTableName);
+            entity.setColumnName(Objects.toString(column.getColumnName(), "").trim());
+            entity.setDataType(column.getDataType());
+            entity.setColumnSize(column.getColumnSize());
+            entity.setDecimalDigits(column.getDecimalDigits());
+            entity.setColumnDefault(column.getDefaultValue());
+            entity.setAutoIncrementFlag(toIntFlag(column.getAutoIncrement()));
+            entity.setNullableFlag(toIntFlag(column.getNullable()));
+            entity.setColumnComment(column.getColumnComment());
+            entity.setIndexedFlag(toIntFlag(column.getIndexed()));
+            entity.setPrimaryKeyFlag(toIntFlag(column.getPrimaryKey()));
+            entity.setUpdatedAt(now);
+            return entity;
+        }).filter(item -> !Objects.toString(item.getColumnName(), "").isBlank()).toList();
+        if (columnMetaList.isEmpty()) {
+            throw new BusinessException(400, "未读取到目标表字段信息，无法向量化");
+        }
+
+        ragIngestionService.ingestSchema(
+            connectionId,
+            normalizedDatabaseName,
+            List.of(tableMeta),
+            columnMetaList
+        );
+        upsertStatus(
+            connectionId,
+            normalizedDatabaseName,
+            taskKey,
+            VectorizeStatus.SUCCESS,
+            "表 " + actualTableName + " 已完成手动向量化"
+        );
+
+        RagVectorizeTableVO vo = new RagVectorizeTableVO();
+        vo.setSuccess(Boolean.TRUE);
+        vo.setDatabaseName(normalizedDatabaseName);
+        vo.setTableName(actualTableName);
+        vo.setMessage("已完成单表手动向量化");
+        vo.setUpdatedAt(now);
         return vo;
     }
 
@@ -378,6 +485,17 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
 
     private String normalizeDatabaseName(String databaseName) {
         return Objects.toString(databaseName, "").trim();
+    }
+
+    private String normalizeTableName(String tableName) {
+        return Objects.toString(tableName, "")
+            .replace("`", "")
+            .replace("\"", "")
+            .trim();
+    }
+
+    private Integer toIntFlag(Boolean value) {
+        return Boolean.TRUE.equals(value) ? 1 : 0;
     }
 
     private long safeCount(Long count) {

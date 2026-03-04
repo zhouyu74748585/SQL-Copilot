@@ -146,7 +146,7 @@ public class SqlServiceImpl implements SqlService {
             throw new BusinessException(500, "SQL 执行失败: " + ex.getMessage());
         } finally {
             result.setExecutionMs(System.currentTimeMillis() - start);
-            appendHistory(req, result);
+            appendHistory(req, result, targetDatabaseName);
             appendAudit(req, riskLevel, "EXECUTE");
         }
         return result;
@@ -320,7 +320,7 @@ public class SqlServiceImpl implements SqlService {
         return item;
     }
 
-    private void appendHistory(SqlExecuteReq req, SqlExecuteVO result) {
+    private void appendHistory(SqlExecuteReq req, SqlExecuteVO result, String targetDatabaseName) {
         QueryHistoryEntity history = new QueryHistoryEntity();
         history.setConnectionId(req.getConnectionId());
         history.setSessionId(req.getSessionId());
@@ -329,7 +329,7 @@ public class SqlServiceImpl implements SqlService {
         history.setHistoryType("EXECUTE");
         history.setActionType("execute");
         history.setAssistantContent(result.getMessage());
-        history.setDatabaseName(normalize(req.getDatabaseName()));
+        history.setDatabaseName(normalize(targetDatabaseName));
         history.setChartConfigJson(null);
         history.setChartImageCacheKey(null);
         history.setExecutionMs(result.getExecutionMs());

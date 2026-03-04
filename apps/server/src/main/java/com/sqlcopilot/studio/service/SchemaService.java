@@ -10,6 +10,8 @@ public interface SchemaService {
 
     SchemaOverviewVO getOverview(Long connectionId, String databaseName);
 
+    SchemaTableStatsVO getTableStats(Long connectionId, String databaseName);
+
     TableDetailVO getTableDetail(Long connectionId, String databaseName, String tableName);
 
     List<String> listDatabases(Long connectionId);
