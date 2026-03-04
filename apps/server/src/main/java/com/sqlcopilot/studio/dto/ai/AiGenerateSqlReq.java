@@ -23,9 +23,6 @@ public class AiGenerateSqlReq {
     /** 当前查询目标数据库（可选，RAG 检索过滤使用）。 */
     private String databaseName;
 
-    /** 用户提供的 SQL 片段（可选，用于补全、修复与语义检索）。 */
-    private String sqlSnippet;
-
     /** 本次会话指定模型选项 ID（兼容旧版模型名透传）。 */
     private String modelName;
 }

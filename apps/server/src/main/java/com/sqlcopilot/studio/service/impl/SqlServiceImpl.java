@@ -326,6 +326,12 @@ public class SqlServiceImpl implements SqlService {
         history.setSessionId(req.getSessionId());
         history.setPromptText(null);
         history.setSqlText(req.getSqlText());
+        history.setHistoryType("EXECUTE");
+        history.setActionType("execute");
+        history.setAssistantContent(result.getMessage());
+        history.setDatabaseName(normalize(req.getDatabaseName()));
+        history.setChartConfigJson(null);
+        history.setChartImageCacheKey(null);
         history.setExecutionMs(result.getExecutionMs());
         history.setSuccessFlag(Boolean.TRUE.equals(result.getSuccess()) ? 1 : 0);
         history.setCreatedAt(System.currentTimeMillis());

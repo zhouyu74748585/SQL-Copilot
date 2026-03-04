@@ -1,6 +1,30 @@
-import type {QueryRowVO, RiskEvaluateVO, SqlExecuteVO} from '@sqlcopilot/shared-contracts';
+import type {
+  AiAutoQueryVO,
+  AiGenerateChartVO,
+  AiIntentType,
+  ChartCacheReadVO,
+  ChartCacheSaveVO,
+  ChartConfigVO,
+  ChartType,
+  QueryRowVO,
+  RiskEvaluateVO,
+  SortDirection,
+  SqlExecuteVO,
+} from '@sqlcopilot/shared-contracts';
 
-export type { QueryRowVO, RiskEvaluateVO, SqlExecuteVO };
+export type {
+  AiAutoQueryVO,
+  AiGenerateChartVO,
+  AiIntentType,
+  ChartCacheReadVO,
+  ChartCacheSaveVO,
+  ChartConfigVO,
+  ChartType,
+  QueryRowVO,
+  RiskEvaluateVO,
+  SortDirection,
+  SqlExecuteVO,
+};
 
 export interface ConnectionCreateReq {
   name: string;
@@ -114,9 +138,24 @@ export interface QueryHistoryVO {
   sessionId?: string;
   promptText?: string;
   sqlText: string;
+  historyType?: 'CHAT' | 'EXECUTE';
+  actionType?: string;
+  assistantContent?: string;
+  databaseName?: string;
+  chartConfig?: ChartConfigVO;
+  chartImageCacheKey?: string;
   executionMs?: number;
   success?: boolean;
   createdAt?: number;
+}
+
+export interface ChartCacheSaveReq {
+  connectionId: number;
+  sessionId: string;
+  imageBase64Png: string;
+  suggestedFileName?: string;
+  width?: number;
+  height?: number;
 }
 
 export interface QueryHistorySessionVO {

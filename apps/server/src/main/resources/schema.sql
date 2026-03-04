@@ -32,6 +32,12 @@ CREATE TABLE IF NOT EXISTS query_history (
     session_id TEXT,
     prompt_text TEXT,
     sql_text TEXT NOT NULL,
+    history_type TEXT DEFAULT 'CHAT',
+    action_type TEXT,
+    assistant_content TEXT,
+    database_name TEXT,
+    chart_config_json TEXT,
+    chart_image_cache_key TEXT,
     execution_ms INTEGER,
     success_flag INTEGER NOT NULL,
     created_at INTEGER NOT NULL

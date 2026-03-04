@@ -11,3 +11,5 @@ apps/server/exports
 /apps/server/sql-copilot.db
 /apps/server/models/
 /model/
+/exports/
+/docs/review/

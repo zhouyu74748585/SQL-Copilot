@@ -487,9 +487,11 @@ body {
 }
 
 .tree-title-row {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 6px;
+  width: 100%;
+  min-width: 0;
 }
 
 .tree-icon-img {
@@ -507,6 +509,44 @@ body {
 
 .tree-title-text {
   color: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-env-tag {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  line-height: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+}
+
+.tree-env-tag-icon {
+  font-size: 10px;
+}
+
+.tree-env-tag.is-dev {
+  color: #1665c1;
+  background: #eaf3ff;
+  border-color: #cbe1ff;
+}
+
+.tree-env-tag.is-test {
+  color: #0f7a4a;
+  background: #e8f7ef;
+  border-color: #c9ecd8;
+}
+
+.tree-env-tag.is-prod {
+  color: #9e4f00;
+  background: #fff3e4;
+  border-color: #ffd6ad;
 }
 
 .db-vectorize-status {
@@ -565,7 +605,7 @@ body {
   padding: 0 8px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   border-bottom: 1px solid var(--line);
   background: #fbfdff;
 }
@@ -589,6 +629,10 @@ body {
 .table-name-cell.is-active {
   color: #1d5de6;
   font-weight: 600;
+}
+
+.table-name-cell.is-queryable {
+  cursor: pointer;
 }
 
 .object-desc-ellipsis {
@@ -802,19 +846,57 @@ body {
 .detail-table-panel {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px 12px;
 }
 
-.detail-table-panel .ant-table-wrapper {
+.detail-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #344865;
+}
+
+.detail-code-block {
+  margin: 0;
   flex: 1;
   min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-1) 93%, transparent);
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-1);
+  font-family: SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  white-space: pre;
 }
 
-.detail-pane .ant-table-cell,
-.detail-pane .ant-table-thead > tr > th {
-  padding-top: 4px !important;
-  padding-bottom: 4px !important;
-  font-size: 12px;
-  line-height: 1.2;
+.detail-code-block code {
+  color: inherit;
+}
+
+.detail-code-block .sql-keyword {
+  color: #1a5be6;
+  font-weight: 700;
+}
+
+.detail-code-block .sql-datatype {
+  color: #0b7a68;
+  font-weight: 600;
+}
+
+.studio-root.theme-dark .detail-code-block .sql-keyword {
+  color: #7cb2ff;
+}
+
+.studio-root.theme-dark .detail-code-block .sql-datatype {
+  color: #53d6bf;
 }
 
 .detail-note {
@@ -970,8 +1052,15 @@ body {
   justify-content: flex-start;
 }
 
-.query-chat-user-bubble {
+.query-chat-user-bubble-wrap {
   max-width: 85%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.query-chat-user-bubble {
   border-radius: 12px 12px 2px 12px;
   background: linear-gradient(180deg, #2f6ff8 0%, #295fda 100%);
   color: #fff;
@@ -1001,6 +1090,16 @@ body {
 .query-chat-user-bubble.is-repair {
   background: linear-gradient(180deg, #b15a92 0%, #9c477f 100%);
   box-shadow: 0 4px 12px rgba(126, 32, 95, 0.16);
+}
+
+.query-chat-user-retry-row {
+  min-height: 18px;
+}
+
+.query-chat-user-retry-btn {
+  height: 18px;
+  padding: 0 4px;
+  font-size: 11px;
 }
 
 .query-chat-assistant-card {
@@ -1052,6 +1151,31 @@ body {
   word-break: break-word;
 }
 
+.query-chat-chart-summary {
+  margin-top: 8px;
+  border-radius: 8px;
+  border: 1px solid #e0e8f6;
+  background: #f7faff;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: #35537a;
+}
+
+.query-chat-chart-image-wrap {
+  margin-top: 8px;
+  border: 1px solid #e0e8f6;
+  border-radius: 8px;
+  padding: 6px;
+  background: #fbfdff;
+}
+
+.query-chat-chart-image {
+  width: 100%;
+  max-height: 260px;
+  object-fit: contain;
+  border-radius: 6px;
+}
+
 .query-chat-composer {
   border-top: 1px solid var(--line);
   background: #fff;
@@ -1070,9 +1194,15 @@ body {
 .query-chat-model-box {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   font-size: 12px;
   color: #51627d;
+}
+
+.query-chat-auto-label {
+  margin-left: 6px;
+  color: var(--text-sub);
 }
 
 .query-chat-composer-actions {
@@ -1209,6 +1339,40 @@ body {
   font-size: 12px;
   font-weight: 700;
   color: #334766;
+  background: #fbfdff;
+}
+
+.query-result-title-row {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--line);
+  background: #fbfdff;
+}
+
+.query-chart-manual-panel {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  background: #fbfdff;
+}
+
+.query-chart-render-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 10px 10px;
+  gap: 8px;
+}
+
+.query-chart-readonly-tip {
+  border: 1px dashed #d6dfef;
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: #62779a;
   background: #fbfdff;
 }
 
@@ -1697,6 +1861,24 @@ body {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--surface-0) 50%, transparent);
 }
 
+.studio-root.theme-dark .tree-env-tag.is-dev {
+  color: #8ec2ff;
+  background: color-mix(in srgb, #1b4f89 52%, var(--surface-0) 48%);
+  border-color: color-mix(in srgb, #5e9ee9 42%, transparent);
+}
+
+.studio-root.theme-dark .tree-env-tag.is-test {
+  color: #9be7bb;
+  background: color-mix(in srgb, #1d5a3a 54%, var(--surface-0) 46%);
+  border-color: color-mix(in srgb, #57be84 42%, transparent);
+}
+
+.studio-root.theme-dark .tree-env-tag.is-prod {
+  color: #ffd194;
+  background: color-mix(in srgb, #6e4720 58%, var(--surface-0) 42%);
+  border-color: color-mix(in srgb, #d08e3f 38%, transparent);
+}
+
 .studio-root .query-editor-pane,
 .studio-root .query-chat-pane,
 .studio-root .query-pane-right {
@@ -1737,6 +1919,10 @@ body {
   background: var(--bubble-repair);
 }
 
+.studio-root .query-chat-user-retry-btn {
+  color: var(--text-2);
+}
+
 .studio-root .query-chat-assistant-head,
 .studio-root .query-chat-sql,
 .studio-root .query-chat-text {
@@ -1747,6 +1933,20 @@ body {
 .studio-root .query-chat-text {
   border: 1px solid var(--line-soft);
   background: color-mix(in srgb, var(--surface-1) 90%, transparent);
+}
+
+.studio-root .query-chat-chart-summary,
+.studio-root .query-chat-chart-image-wrap,
+.studio-root .query-chart-readonly-tip {
+  border: 1px solid var(--line-soft);
+  background: color-mix(in srgb, var(--surface-1) 90%, transparent);
+  color: var(--text-2);
+}
+
+.studio-root .query-result-title-row,
+.studio-root .query-chart-manual-panel {
+  border-bottom: 1px solid var(--line-soft);
+  background: color-mix(in srgb, var(--surface-1) 92%, transparent);
 }
 
 .studio-root .query-chat-composer {

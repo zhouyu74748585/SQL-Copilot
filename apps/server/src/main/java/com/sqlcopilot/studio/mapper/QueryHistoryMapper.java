@@ -13,8 +13,36 @@ import java.util.List;
 public interface QueryHistoryMapper {
 
     @Insert("""
-        INSERT INTO query_history(connection_id, session_id, prompt_text, sql_text, execution_ms, success_flag, created_at)
-        VALUES(#{connectionId}, #{sessionId}, #{promptText}, #{sqlText}, #{executionMs}, #{successFlag}, #{createdAt})
+        INSERT INTO query_history(
+            connection_id,
+            session_id,
+            prompt_text,
+            sql_text,
+            history_type,
+            action_type,
+            assistant_content,
+            database_name,
+            chart_config_json,
+            chart_image_cache_key,
+            execution_ms,
+            success_flag,
+            created_at
+        )
+        VALUES(
+            #{connectionId},
+            #{sessionId},
+            #{promptText},
+            #{sqlText},
+            #{historyType},
+            #{actionType},
+            #{assistantContent},
+            #{databaseName},
+            #{chartConfigJson},
+            #{chartImageCacheKey},
+            #{executionMs},
+            #{successFlag},
+            #{createdAt}
+        )
         """)
     @Options(useGeneratedKeys = true, keyProperty = "id")
     int insert(QueryHistoryEntity entity);
@@ -37,6 +65,7 @@ public interface QueryHistoryMapper {
                     FROM query_history q1
                     WHERE q1.connection_id = q.connection_id
                       AND q1.session_id = q.session_id
+                      AND COALESCE(TRIM(q1.history_type), 'CHAT') = 'CHAT'
                       AND q1.prompt_text IS NOT NULL
                       AND TRIM(q1.prompt_text) <> ''
                     ORDER BY q1.id ASC
@@ -49,6 +78,7 @@ public interface QueryHistoryMapper {
             WHERE q.connection_id = #{connectionId}
               AND q.session_id IS NOT NULL
               AND TRIM(q.session_id) <> ''
+              AND COALESCE(TRIM(q.history_type), 'CHAT') = 'CHAT'
             GROUP BY q.connection_id, q.session_id
         )
         SELECT connectionId, sessionId, title, createdAt, updatedAt, messageCount
@@ -72,6 +102,7 @@ public interface QueryHistoryMapper {
                     FROM query_history q1
                     WHERE q1.connection_id = q.connection_id
                       AND q1.session_id = q.session_id
+                      AND COALESCE(TRIM(q1.history_type), 'CHAT') = 'CHAT'
                       AND q1.prompt_text IS NOT NULL
                       AND TRIM(q1.prompt_text) <> ''
                     ORDER BY q1.id ASC
@@ -81,6 +112,7 @@ public interface QueryHistoryMapper {
             WHERE q.connection_id = #{connectionId}
               AND q.session_id IS NOT NULL
               AND TRIM(q.session_id) <> ''
+              AND COALESCE(TRIM(q.history_type), 'CHAT') = 'CHAT'
             GROUP BY q.connection_id, q.session_id
         )
         SELECT COUNT(1)
@@ -93,6 +125,7 @@ public interface QueryHistoryMapper {
         SELECT * FROM query_history
         WHERE connection_id = #{connectionId}
           AND session_id = #{sessionId}
+          AND COALESCE(TRIM(history_type), 'CHAT') = 'CHAT'
         ORDER BY id ASC
         LIMIT #{limit}
         """)

@@ -21,6 +21,7 @@
     "@guolao/vue-monaco-editor": "^1.6.0",
     "@sqlcopilot/shared-contracts": "file:../../packages/shared-contracts",
     "ant-design-vue": "^4.2.6",
+    "echarts": "^5.6.0",
     "monaco-editor": "^0.55.1",
     "vue": "^3.5.13"
   },

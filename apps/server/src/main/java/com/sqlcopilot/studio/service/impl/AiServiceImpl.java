@@ -5,12 +5,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sqlcopilot.studio.dto.ai.AiConfigVO;
+import com.sqlcopilot.studio.dto.ai.AiAutoQueryVO;
+import com.sqlcopilot.studio.dto.ai.AiGenerateChartVO;
 import com.sqlcopilot.studio.dto.ai.AiGenerateSqlReq;
 import com.sqlcopilot.studio.dto.ai.AiGenerateSqlVO;
 import com.sqlcopilot.studio.dto.ai.AiModelOptionVO;
 import com.sqlcopilot.studio.dto.ai.AiRepairReq;
 import com.sqlcopilot.studio.dto.ai.AiRepairVO;
 import com.sqlcopilot.studio.dto.ai.AiTextResponseVO;
+import com.sqlcopilot.studio.dto.ai.ChartConfigVO;
 import com.sqlcopilot.studio.dto.schema.ContextBuildReq;
 import com.sqlcopilot.studio.dto.schema.ContextBuildVO;
 import com.sqlcopilot.studio.dto.schema.SchemaOverviewVO;
@@ -65,7 +68,46 @@ public class AiServiceImpl implements AiService {
         "a", "resume", "fork", "cloud", "features", "help"
     );
     private static final long CLI_TIMEOUT_SECONDS = 45L;
+    private static final double AUTO_INTENT_MIN_CONFIDENCE = 0.70D;
     private static final String OPENAI_SYSTEM_PROMPT = "你是数据库 SQL 专家。基于提供的 RAG 上下文生成 SQL。仅返回可执行 SQL，不要输出解释。";
+    private static final String INTENT_CLASSIFY_SYSTEM_PROMPT = """
+        你是数据库助手的意图识别器。请根据用户输入识别唯一意图，并输出严格 JSON，不要输出任何额外文本。
+        JSON 格式：
+        {
+          "intentType": "GENERATE_SQL|EXPLAIN_SQL|ANALYZE_SQL|GENERATE_CHART",
+          "confidence": 0.00,
+          "reason": "中文简述判断依据"
+        }
+        识别规则：
+        1) 用户要“画图/可视化/图表/趋势图/柱状图/饼图”等，intentType=GENERATE_CHART；
+        2) 用户要“解释 SQL 含义”，intentType=EXPLAIN_SQL；
+        3) 用户要“分析 SQL 合理性/性能风险”，intentType=ANALYZE_SQL；
+        4) 其他自然语言查询默认 intentType=GENERATE_SQL。
+        """;
+    private static final String GENERATE_CHART_SYSTEM_PROMPT = """
+        你是数据库图表方案助手。请基于用户需求和数据库上下文，输出严格 JSON，不要输出任何额外文本。
+        JSON 格式：
+        {
+          "sqlText": "可执行 SQL",
+          "chartConfig": {
+            "chartType": "LINE|BAR|PIE|SCATTER|TREND",
+            "xField": "x轴字段(折线/柱状/散点/趋势必填)",
+            "yFields": ["y轴字段1","y轴字段2"],
+            "categoryField": "饼图分类字段",
+            "valueField": "饼图数值字段",
+            "sortField": "排序字段",
+            "sortDirection": "NONE|ASC|DESC",
+            "title": "图表标题",
+            "description": "图表说明"
+          },
+          "configSummary": "配置摘要"
+        }
+        约束：
+        1) chartType=LINE/BAR/TREND 时必须提供 xField + yFields(至少1项)；
+        2) chartType=PIE 时必须提供 categoryField + valueField；
+        3) chartType=SCATTER 时必须提供 xField + yFields(仅1项)；
+        4) SQL 必须可执行，不要使用 markdown 代码块。
+        """;
     private static final String EXPLAIN_SQL_SYSTEM_PROMPT = """
         你是数据库讲解助手。请用中文解释 SQL 的业务含义。
         要求：
@@ -117,23 +159,26 @@ public class AiServiceImpl implements AiService {
     @Override
     public AiGenerateSqlVO generateSql(AiGenerateSqlReq req) {
         long startAt = System.currentTimeMillis();
+        StepTimer timer = new StepTimer();
         log.info(
-            "[AI-GENERATE-REQ] connectionId={}, sessionId={}, databaseName={}, modelName={}, promptLength={}, sqlSnippetLength={}",
+            "[AI-GENERATE-REQ] connectionId={}, sessionId={}, databaseName={}, modelName={}, promptLength={}",
             req.getConnectionId(),
             safe(req.getSessionId()),
             safe(req.getDatabaseName()),
             safe(req.getModelName()),
-            safe(req.getPrompt()).length(),
-            safe(req.getSqlSnippet()).length()
+            safe(req.getPrompt()).length()
         );
-        // 关键操作：先将用户需求/SQL片段向量化并做 Qdrant 分层检索，构造 Prompt 上下文。
-        String retrievalInput = buildRetrievalInput(req.getPrompt(), req.getSqlSnippet());
+        // 关键操作：先将用户需求向量化并做 Qdrant 分层检索，构造 Prompt 上下文。
+        String retrievalInput = buildRetrievalInput(req.getPrompt());
+        timer.mark("build_retrieval_input");
         RagPromptContext ragPromptContext = ragRetrievalService.retrievePromptContext(
             req.getConnectionId(),
             req.getDatabaseName(),
             retrievalInput
         );
+        timer.mark("rag_retrieve");
         GenerationContext generationContext = buildGenerationContext(req, ragPromptContext);
+        timer.mark("build_generation_context");
 
         String reasoning;
         String generatedSql;
@@ -142,10 +187,12 @@ public class AiServiceImpl implements AiService {
             ProviderResult result = generateByConfiguredProvider(req, generationContext);
             generatedSql = safe(result.sqlText());
             reasoning = safe(result.reasoning());
+            timer.mark("provider_generate_sql");
         } catch (Exception ex) {
             generatedSql = fallbackOutputText("模型调用失败: " + safe(ex.getMessage()));
             reasoning = "AI 配置调用失败，已返回说明内容。原因: " + safe(ex.getMessage());
             fallbackUsed = true;
+            timer.mark("provider_generate_sql_failed");
             log.warn(
                 "[AI-GENERATE-PROVIDER-FAILED] connectionId={}, sessionId={}, databaseName={}, modelName={}, reason={}",
                 req.getConnectionId(),
@@ -159,12 +206,14 @@ public class AiServiceImpl implements AiService {
         if (!looksLikeSql(generatedSql)) {
             fallbackUsed = true;
             generatedSql = fallbackOutputText(generatedSql);
+            timer.mark("extract_sql_or_fallback");
             if (!reasoning.isBlank()) {
                 reasoning = reasoning + "；";
             }
             reasoning = reasoning + "模型未返回可识别 SQL，已返回说明内容。";
         } else {
             AstValidationResult astResult = validateByAst(req, generatedSql);
+            timer.mark("ast_validate");
             if (!astResult.valid()) {
                 fallbackUsed = true;
                 generatedSql = fallbackOutputText("SQL 结构校验未通过: " + astResult.message() + "\n模型输出:\n" + generatedSql);
@@ -185,6 +234,7 @@ public class AiServiceImpl implements AiService {
         vo.setSqlText(generatedSql);
         vo.setReasoning(reasoning);
         vo.setFallbackUsed(fallbackUsed);
+        timer.mark("assemble_response");
         log.info(
             "[AI-GENERATE-RESP] connectionId={}, sessionId={}, databaseName={}, modelName={}, ragHit={}, relatedTableCount={}, contextLength={}, sqlLength={}, fallbackUsed={}, elapsedMs={}",
             req.getConnectionId(),
@@ -198,24 +248,251 @@ public class AiServiceImpl implements AiService {
             fallbackUsed,
             System.currentTimeMillis() - startAt
         );
+        log.info(
+            "[AI-GENERATE-TIMING] connectionId={}, sessionId={}, databaseName={}, modelName={}, steps={}, totalMs={}",
+            req.getConnectionId(),
+            safe(req.getSessionId()),
+            safe(req.getDatabaseName()),
+            safe(req.getModelName()),
+            timer.stepsSummary(),
+            timer.totalElapsedMs()
+        );
+        return vo;
+    }
+
+    @Override
+    public AiAutoQueryVO autoQuery(AiGenerateSqlReq req) {
+        long startAt = System.currentTimeMillis();
+        StepTimer timer = new StepTimer();
+        log.info(
+            "[AI-AUTO-REQ] connectionId={}, sessionId={}, databaseName={}, modelName={}, promptLength={}",
+            req.getConnectionId(),
+            safe(req.getSessionId()),
+            safe(req.getDatabaseName()),
+            safe(req.getModelName()),
+            safe(req.getPrompt()).length()
+        );
+
+        IntentResult intentResult = identifyIntent(req);
+        timer.mark("identify_intent");
+        IntentType intentType = intentResult.intentType();
+        boolean hasSqlSnippet = hasSqlSnippetInPrompt(req.getPrompt());
+        timer.mark("detect_sql_snippet");
+
+        AiAutoQueryVO vo = new AiAutoQueryVO();
+        vo.setIntentType(intentType.name());
+        vo.setIntentLabel(intentType.label());
+        vo.setIntentConfidence(intentResult.confidence());
+
+        String baseReasoning = "意图识别: " + intentType.name()
+            + "（置信度 " + String.format(Locale.ROOT, "%.2f", intentResult.confidence()) + "）";
+        if (!safe(intentResult.reason()).isBlank()) {
+            baseReasoning += "，依据：" + safe(intentResult.reason());
+        }
+
+        if (intentType == IntentType.GENERATE_SQL) {
+            AiGenerateSqlVO generated = generateSql(req);
+            timer.mark("route_generate_sql");
+            vo.setSqlText(generated.getSqlText());
+            vo.setFallbackUsed(Boolean.TRUE.equals(generated.getFallbackUsed()));
+            vo.setReasoning(joinReasoning(baseReasoning, generated.getReasoning()));
+        } else if (intentType == IntentType.EXPLAIN_SQL) {
+            if (!hasSqlSnippet) {
+                throw new BusinessException(400, "自动识别为“解释 SQL”时，提示词中必须包含 SQL 片段");
+            }
+            AiTextResponseVO explained = explainSql(req);
+            timer.mark("route_explain_sql");
+            vo.setContent(explained.getContent());
+            vo.setFallbackUsed(Boolean.TRUE.equals(explained.getFallbackUsed()));
+            vo.setReasoning(joinReasoning(baseReasoning, explained.getReasoning()));
+        } else if (intentType == IntentType.ANALYZE_SQL) {
+            if (!hasSqlSnippet) {
+                throw new BusinessException(400, "自动识别为“分析 SQL”时，提示词中必须包含 SQL 片段");
+            }
+            AiTextResponseVO analyzed = analyzeSql(req);
+            timer.mark("route_analyze_sql");
+            vo.setContent(analyzed.getContent());
+            vo.setFallbackUsed(Boolean.TRUE.equals(analyzed.getFallbackUsed()));
+            vo.setReasoning(joinReasoning(baseReasoning, analyzed.getReasoning()));
+        } else {
+            AiGenerateChartVO chart = generateChart(req);
+            timer.mark("route_generate_chart");
+            vo.setSqlText(chart.getSqlText());
+            vo.setChartConfig(chart.getChartConfig());
+            vo.setConfigSummary(chart.getConfigSummary());
+            vo.setFallbackUsed(Boolean.TRUE.equals(chart.getFallbackUsed()));
+            vo.setReasoning(joinReasoning(baseReasoning, chart.getReasoning()));
+        }
+
+        log.info(
+            "[AI-AUTO-RESP] connectionId={}, sessionId={}, databaseName={}, modelName={}, intentType={}, intentConfidence={}, fallbackUsed={}, elapsedMs={}",
+            req.getConnectionId(),
+            safe(req.getSessionId()),
+            safe(req.getDatabaseName()),
+            safe(req.getModelName()),
+            intentType.name(),
+            intentResult.confidence(),
+            Boolean.TRUE.equals(vo.getFallbackUsed()),
+            System.currentTimeMillis() - startAt
+        );
+        log.info(
+            "[AI-AUTO-TIMING] connectionId={}, sessionId={}, databaseName={}, modelName={}, intentType={}, steps={}, totalMs={}",
+            req.getConnectionId(),
+            safe(req.getSessionId()),
+            safe(req.getDatabaseName()),
+            safe(req.getModelName()),
+            intentType.name(),
+            timer.stepsSummary(),
+            timer.totalElapsedMs()
+        );
+        return vo;
+    }
+
+    @Override
+    public AiGenerateChartVO generateChart(AiGenerateSqlReq req) {
+        long startAt = System.currentTimeMillis();
+        StepTimer timer = new StepTimer();
+        log.info(
+            "[AI-GENERATE-CHART-REQ] connectionId={}, sessionId={}, databaseName={}, modelName={}, promptLength={}",
+            req.getConnectionId(),
+            safe(req.getSessionId()),
+            safe(req.getDatabaseName()),
+            safe(req.getModelName()),
+            safe(req.getPrompt()).length()
+        );
+
+        String retrievalInput = buildRetrievalInput(req.getPrompt());
+        timer.mark("build_retrieval_input");
+        RagPromptContext ragPromptContext = ragRetrievalService.retrievePromptContext(
+            req.getConnectionId(),
+            req.getDatabaseName(),
+            retrievalInput
+        );
+        timer.mark("rag_retrieve");
+        GenerationContext generationContext = buildGenerationContext(req, ragPromptContext);
+        timer.mark("build_generation_context");
+
+        String reasoning;
+        String rawContent;
+        boolean fallbackUsed = false;
+        try {
+            TextProviderResult result = generateTextByConfiguredProvider(
+                req,
+                generationContext,
+                GENERATE_CHART_SYSTEM_PROMPT,
+                "图表方案生成"
+            );
+            rawContent = safe(result.content());
+            reasoning = safe(result.reasoning());
+            timer.mark("provider_generate_chart");
+        } catch (Exception ex) {
+            rawContent = "未能生成图表方案：" + safe(ex.getMessage());
+            reasoning = "AI 配置调用失败，已返回说明内容。原因: " + safe(ex.getMessage());
+            fallbackUsed = true;
+            timer.mark("provider_generate_chart_failed");
+            log.warn(
+                "[AI-GENERATE-CHART-PROVIDER-FAILED] connectionId={}, sessionId={}, databaseName={}, modelName={}, reason={}",
+                req.getConnectionId(),
+                safe(req.getSessionId()),
+                safe(req.getDatabaseName()),
+                safe(req.getModelName()),
+                safe(ex.getMessage())
+            );
+        }
+
+        ParsedChartResponse parsed = parseChartResponse(rawContent);
+        timer.mark("parse_chart_response");
+        String sqlText = safe(parsed.sqlText());
+        ChartConfigVO chartConfig = parsed.chartConfig();
+        String configSummary = safe(parsed.configSummary());
+        if (!parsed.parsed()) {
+            fallbackUsed = true;
+            if (!reasoning.isBlank()) {
+                reasoning += "；";
+            }
+            reasoning += "模型返回非结构化内容，已降级解析。";
+        }
+
+        if (sqlText.isBlank()) {
+            sqlText = extractSql(rawContent);
+            timer.mark("extract_sql_from_output");
+        }
+        if (sqlText.isBlank()) {
+            fallbackUsed = true;
+            sqlText = fallbackOutputText(rawContent);
+            if (!reasoning.isBlank()) {
+                reasoning += "；";
+            }
+            reasoning += "未识别到可执行 SQL，已返回说明内容。";
+        }
+
+        if (chartConfig != null) {
+            ChartConfigValidationResult validationResult = validateChartConfig(chartConfig);
+            timer.mark("validate_chart_config");
+            if (!validationResult.valid()) {
+                fallbackUsed = true;
+                chartConfig = null;
+                if (!reasoning.isBlank()) {
+                    reasoning += "；";
+                }
+                reasoning += "图表配置校验未通过：" + validationResult.message();
+                if (configSummary.isBlank()) {
+                    configSummary = "未返回可用图表配置，请手动配置后生成图表。";
+                }
+            }
+        } else if (configSummary.isBlank()) {
+            configSummary = "未返回可用图表配置，请手动配置后生成图表。";
+        }
+        if (configSummary.isBlank()) {
+            configSummary = buildChartConfigSummary(chartConfig);
+        }
+
+        AiGenerateChartVO vo = new AiGenerateChartVO();
+        vo.setSqlText(sqlText);
+        vo.setChartConfig(chartConfig);
+        vo.setConfigSummary(configSummary);
+        vo.setReasoning(reasoning);
+        vo.setFallbackUsed(fallbackUsed);
+        timer.mark("assemble_response");
+        log.info(
+            "[AI-GENERATE-CHART-RESP] connectionId={}, sessionId={}, databaseName={}, modelName={}, ragHit={}, relatedTableCount={}, sqlLength={}, hasChartConfig={}, fallbackUsed={}, elapsedMs={}",
+            req.getConnectionId(),
+            safe(req.getSessionId()),
+            safe(req.getDatabaseName()),
+            safe(req.getModelName()),
+            Boolean.TRUE.equals(ragPromptContext.getHit()),
+            generationContext.relatedTables().size(),
+            safe(sqlText).length(),
+            chartConfig != null,
+            fallbackUsed,
+            System.currentTimeMillis() - startAt
+        );
+        log.info(
+            "[AI-GENERATE-CHART-TIMING] connectionId={}, sessionId={}, databaseName={}, modelName={}, steps={}, totalMs={}",
+            req.getConnectionId(),
+            safe(req.getSessionId()),
+            safe(req.getDatabaseName()),
+            safe(req.getModelName()),
+            timer.stepsSummary(),
+            timer.totalElapsedMs()
+        );
         return vo;
     }
 
     @Override
     public AiTextResponseVO explainSql(AiGenerateSqlReq req) {
-        ensureExplainOrAnalyzeSnippet(req, "解释 SQL");
         return generateTextResponse(req, "EXPLAIN-TEXT", EXPLAIN_SQL_SYSTEM_PROMPT, "SQL 含义解释");
     }
 
     @Override
     public AiTextResponseVO analyzeSql(AiGenerateSqlReq req) {
-        ensureExplainOrAnalyzeSnippet(req, "分析 SQL");
         return generateTextResponse(req, "ANALYZE-SQL", ANALYZE_SQL_SYSTEM_PROMPT, "SQL 合理性分析");
     }
 
     @Override
     public AiRepairVO repairSql(AiRepairReq req) {
         long startAt = System.currentTimeMillis();
+        StepTimer timer = new StepTimer();
         String sourceSql = safe(req.getSqlText());
         String errorMessage = safe(req.getErrorMessage());
         log.info(
@@ -231,21 +508,27 @@ public class AiServiceImpl implements AiService {
         AiRepairVO vo = new AiRepairVO();
         try {
             AiGenerateSqlReq providerReq = buildRepairGenerateReq(req, sourceSql, errorMessage);
+            timer.mark("build_repair_prompt");
             String retrievalInput = buildRetrievalInput(providerReq.getPrompt(), sourceSql + "\n" + errorMessage);
+            timer.mark("build_retrieval_input");
             RagPromptContext ragPromptContext = ragRetrievalService.retrievePromptContext(
                 req.getConnectionId(),
                 req.getDatabaseName(),
                 retrievalInput
             );
+            timer.mark("rag_retrieve");
             GenerationContext generationContext = buildGenerationContext(providerReq, ragPromptContext);
+            timer.mark("build_generation_context");
             TextProviderResult providerResult = generateTextByConfiguredProvider(
                 providerReq,
                 generationContext,
                 REPAIR_SQL_SYSTEM_PROMPT,
                 "SQL 修复"
             );
+            timer.mark("provider_repair_sql");
 
             ParsedRepairResult parsed = parseRepairResult(providerResult.content(), sourceSql, errorMessage);
+            timer.mark("parse_repair_output");
             boolean fallbackUsed = safe(parsed.repairedSql()).isBlank();
             if (fallbackUsed) {
                 ParsedRepairResult fallback = fallbackRepairResult(sourceSql, errorMessage);
@@ -259,6 +542,7 @@ public class AiServiceImpl implements AiService {
                 vo.setRepairedSql(parsed.repairedSql());
                 vo.setRepairNote("模型修复完成");
             }
+            timer.mark("assemble_response");
 
             log.info(
                 "[AI-REPAIR-RESP] connectionId={}, sessionId={}, databaseName={}, modelName={}, ragHit={}, repairedSqlLength={}, elapsedMs={}, fallbackUsed={}",
@@ -270,6 +554,15 @@ public class AiServiceImpl implements AiService {
                 safe(vo.getRepairedSql()).length(),
                 System.currentTimeMillis() - startAt,
                 fallbackUsed
+            );
+            log.info(
+                "[AI-REPAIR-TIMING] connectionId={}, sessionId={}, databaseName={}, modelName={}, steps={}, totalMs={}",
+                req.getConnectionId(),
+                safe(req.getSessionId()),
+                safe(req.getDatabaseName()),
+                safe(req.getModelName()),
+                timer.stepsSummary(),
+                timer.totalElapsedMs()
             );
             return vo;
         } catch (Exception ex) {
@@ -287,6 +580,15 @@ public class AiServiceImpl implements AiService {
                 safe(ex.getMessage()),
                 System.currentTimeMillis() - startAt
             );
+            log.info(
+                "[AI-REPAIR-TIMING] connectionId={}, sessionId={}, databaseName={}, modelName={}, steps={}, totalMs={}",
+                req.getConnectionId(),
+                safe(req.getSessionId()),
+                safe(req.getDatabaseName()),
+                safe(req.getModelName()),
+                timer.stepsSummary(),
+                timer.totalElapsedMs()
+            );
             return vo;
         }
     }
@@ -297,7 +599,6 @@ public class AiServiceImpl implements AiService {
         aiReq.setSessionId(req.getSessionId());
         aiReq.setDatabaseName(req.getDatabaseName());
         aiReq.setModelName(req.getModelName());
-        aiReq.setSqlSnippet(sqlText);
         aiReq.setPrompt(buildRepairPrompt(sqlText, errorMessage));
         return aiReq;
     }
@@ -404,10 +705,182 @@ public class AiServiceImpl implements AiService {
         return new ParsedRepairResult(explanation, repairedSql);
     }
 
-    private void ensureExplainOrAnalyzeSnippet(AiGenerateSqlReq req, String actionName) {
-        if (safe(req.getSqlSnippet()).isBlank()) {
-            throw new BusinessException(400, "请先提供需要" + actionName + "的 SQL 片段");
+    private IntentResult identifyIntent(AiGenerateSqlReq req) {
+        StepTimer timer = new StepTimer();
+        TextProviderResult providerResult;
+        try {
+            // 关键操作：意图识别不走 RAG 检索，仅基于当前输入降低噪声和延迟。
+            providerResult = generateTextByConfiguredProvider(
+                req,
+                new GenerationContext("", List.of()),
+                INTENT_CLASSIFY_SYSTEM_PROMPT,
+                "意图识别"
+            );
+            timer.mark("provider_identify_intent");
+        } catch (Exception ex) {
+            timer.mark("provider_identify_intent_failed");
+            log.info(
+                "[AI-IDENTIFY-INTENT-TIMING] connectionId={}, sessionId={}, databaseName={}, modelName={}, steps={}, totalMs={}",
+                req.getConnectionId(),
+                safe(req.getSessionId()),
+                safe(req.getDatabaseName()),
+                safe(req.getModelName()),
+                timer.stepsSummary(),
+                timer.totalElapsedMs()
+            );
+            throw new BusinessException(400, "意图识别失败: " + safe(ex.getMessage()));
         }
+
+        ParsedIntentResponse parsed = parseIntentResponse(providerResult.content());
+        timer.mark("parse_intent_response");
+        if (parsed == null || parsed.intentType() == null) {
+            log.info(
+                "[AI-IDENTIFY-INTENT-TIMING] connectionId={}, sessionId={}, databaseName={}, modelName={}, steps={}, totalMs={}",
+                req.getConnectionId(),
+                safe(req.getSessionId()),
+                safe(req.getDatabaseName()),
+                safe(req.getModelName()),
+                timer.stepsSummary(),
+                timer.totalElapsedMs()
+            );
+            throw new BusinessException(400, "意图识别失败，请明确输入需求（生成SQL/解释SQL/分析SQL/生成图表）");
+        }
+        double confidence = normalizeIntentConfidence(parsed.confidence());
+        timer.mark("validate_intent_confidence");
+        if (confidence < AUTO_INTENT_MIN_CONFIDENCE) {
+            log.info(
+                "[AI-IDENTIFY-INTENT-TIMING] connectionId={}, sessionId={}, databaseName={}, modelName={}, steps={}, totalMs={}",
+                req.getConnectionId(),
+                safe(req.getSessionId()),
+                safe(req.getDatabaseName()),
+                safe(req.getModelName()),
+                timer.stepsSummary(),
+                timer.totalElapsedMs()
+            );
+            throw new BusinessException(
+                400,
+                "意图识别置信度不足(" + String.format(Locale.ROOT, "%.2f", confidence) + ")，请补充更明确的需求"
+            );
+        }
+        log.info(
+            "[AI-IDENTIFY-INTENT-TIMING] connectionId={}, sessionId={}, databaseName={}, modelName={}, intentType={}, confidence={}, steps={}, totalMs={}",
+            req.getConnectionId(),
+            safe(req.getSessionId()),
+            safe(req.getDatabaseName()),
+            safe(req.getModelName()),
+            parsed.intentType().name(),
+            confidence,
+            timer.stepsSummary(),
+            timer.totalElapsedMs()
+        );
+        return new IntentResult(parsed.intentType(), confidence, safe(parsed.reason()));
+    }
+
+    private ParsedIntentResponse parseIntentResponse(String rawOutput) {
+        String normalized = safe(rawOutput);
+        if (normalized.isBlank()) {
+            return null;
+        }
+        List<String> candidates = new ArrayList<>();
+        candidates.add(normalized);
+        Matcher fenceMatcher = Pattern.compile("(?is)```(?:json)?\\s*(\\{.*?\\})\\s*```").matcher(normalized);
+        if (fenceMatcher.find()) {
+            candidates.add(fenceMatcher.group(1));
+        }
+        int jsonStart = normalized.indexOf('{');
+        int jsonEnd = normalized.lastIndexOf('}');
+        if (jsonStart >= 0 && jsonEnd > jsonStart) {
+            candidates.add(normalized.substring(jsonStart, jsonEnd + 1));
+        }
+
+        for (String candidate : candidates) {
+            try {
+                JsonNode root = objectMapper.readTree(candidate);
+                if (root == null || !root.isObject()) {
+                    continue;
+                }
+                IntentType intentType = parseIntentType(safe(root.path("intentType").asText("")));
+                if (intentType == null) {
+                    continue;
+                }
+                double confidence = parseIntentConfidence(root.path("confidence"));
+                String reason = safe(root.path("reason").asText(""));
+                if (reason.isBlank()) {
+                    reason = safe(root.path("reasoning").asText(""));
+                }
+                if (reason.isBlank()) {
+                    reason = safe(root.path("message").asText(""));
+                }
+                return new ParsedIntentResponse(intentType, confidence, reason, true);
+            } catch (Exception ignore) {
+                // ignore malformed JSON candidate
+            }
+        }
+        return null;
+    }
+
+    private IntentType parseIntentType(String rawIntent) {
+        String normalized = safe(rawIntent).toUpperCase(Locale.ROOT).replace('-', '_');
+        if ("GENERATE_SQL".equals(normalized) || "GENERATE".equals(normalized) || "SQL_GENERATE".equals(normalized)) {
+            return IntentType.GENERATE_SQL;
+        }
+        if ("EXPLAIN_SQL".equals(normalized) || "EXPLAIN".equals(normalized)) {
+            return IntentType.EXPLAIN_SQL;
+        }
+        if ("ANALYZE_SQL".equals(normalized) || "ANALYSE_SQL".equals(normalized) || "ANALYZE".equals(normalized)) {
+            return IntentType.ANALYZE_SQL;
+        }
+        if ("GENERATE_CHART".equals(normalized) || "CHART".equals(normalized) || "CHART_PLAN".equals(normalized)) {
+            return IntentType.GENERATE_CHART;
+        }
+        return null;
+    }
+
+    private double parseIntentConfidence(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return 0D;
+        }
+        if (node.isNumber()) {
+            return node.asDouble(0D);
+        }
+        String value = safe(node.asText(""));
+        if (value.isBlank()) {
+            return 0D;
+        }
+        try {
+            return Double.parseDouble(value);
+        } catch (Exception ignore) {
+            return 0D;
+        }
+    }
+
+    private double normalizeIntentConfidence(double rawValue) {
+        if (Double.isNaN(rawValue) || Double.isInfinite(rawValue)) {
+            return 0D;
+        }
+        double value = rawValue;
+        if (value > 1D && value <= 100D) {
+            value = value / 100D;
+        }
+        if (value < 0D) {
+            return 0D;
+        }
+        if (value > 1D) {
+            return 1D;
+        }
+        return value;
+    }
+
+    private String joinReasoning(String first, String second) {
+        String left = safe(first);
+        String right = safe(second);
+        if (left.isBlank()) {
+            return right;
+        }
+        if (right.isBlank()) {
+            return left;
+        }
+        return left + "；" + right;
     }
 
     private AiTextResponseVO generateTextResponse(AiGenerateSqlReq req,
@@ -415,24 +888,27 @@ public class AiServiceImpl implements AiService {
                                                   String systemPrompt,
                                                   String taskLabel) {
         long startAt = System.currentTimeMillis();
+        StepTimer timer = new StepTimer();
         log.info(
-            "[AI-{}-REQ] connectionId={}, sessionId={}, databaseName={}, modelName={}, promptLength={}, sqlSnippetLength={}",
+            "[AI-{}-REQ] connectionId={}, sessionId={}, databaseName={}, modelName={}, promptLength={}",
             logScene,
             req.getConnectionId(),
             safe(req.getSessionId()),
             safe(req.getDatabaseName()),
             safe(req.getModelName()),
-            safe(req.getPrompt()).length(),
-            safe(req.getSqlSnippet()).length()
+            safe(req.getPrompt()).length()
         );
 
-        String retrievalInput = buildRetrievalInput(req.getPrompt(), req.getSqlSnippet());
+        String retrievalInput = buildRetrievalInput(req.getPrompt());
+        timer.mark("build_retrieval_input");
         RagPromptContext ragPromptContext = ragRetrievalService.retrievePromptContext(
             req.getConnectionId(),
             req.getDatabaseName(),
             retrievalInput
         );
+        timer.mark("rag_retrieve");
         GenerationContext generationContext = buildGenerationContext(req, ragPromptContext);
+        timer.mark("build_generation_context");
 
         String content;
         String reasoning;
@@ -441,10 +917,12 @@ public class AiServiceImpl implements AiService {
             TextProviderResult result = generateTextByConfiguredProvider(req, generationContext, systemPrompt, taskLabel);
             content = result.content();
             reasoning = result.reasoning();
+            timer.mark("provider_generate_text");
         } catch (Exception ex) {
             content = "未能完成本次" + taskLabel + "，请稍后重试。";
             reasoning = "AI 配置调用失败，已降级为错误提示。原因: " + ex.getMessage();
             fallbackUsed = true;
+            timer.mark("provider_generate_text_failed");
             log.warn(
                 "[AI-{}-PROVIDER-FAILED] connectionId={}, sessionId={}, databaseName={}, modelName={}, reason={}",
                 logScene,
@@ -460,6 +938,7 @@ public class AiServiceImpl implements AiService {
         vo.setContent(safe(content));
         vo.setReasoning(safe(reasoning));
         vo.setFallbackUsed(fallbackUsed);
+        timer.mark("assemble_response");
         log.info(
             "[AI-{}-RESP] connectionId={}, sessionId={}, databaseName={}, modelName={}, ragHit={}, relatedTableCount={}, contextLength={}, contentLength={}, fallbackUsed={}, elapsedMs={}",
             logScene,
@@ -473,6 +952,16 @@ public class AiServiceImpl implements AiService {
             safe(content).length(),
             fallbackUsed,
             System.currentTimeMillis() - startAt
+        );
+        log.info(
+            "[AI-{}-TIMING] connectionId={}, sessionId={}, databaseName={}, modelName={}, steps={}, totalMs={}",
+            logScene,
+            req.getConnectionId(),
+            safe(req.getSessionId()),
+            safe(req.getDatabaseName()),
+            safe(req.getModelName()),
+            timer.stepsSummary(),
+            timer.totalElapsedMs()
         );
         return vo;
     }
@@ -673,6 +1162,24 @@ public class AiServiceImpl implements AiService {
         return "";
     }
 
+    private boolean hasSqlSnippetInPrompt(String prompt) {
+        String sql = extractSql(prompt);
+        if (!sql.isBlank()) {
+            return true;
+        }
+        String normalized = safe(prompt).trim().toLowerCase(Locale.ROOT);
+        return normalized.contains("select ")
+            || normalized.contains("with ")
+            || normalized.contains("insert ")
+            || normalized.contains("update ")
+            || normalized.contains("delete ")
+            || normalized.contains("merge ")
+            || normalized.contains("create ")
+            || normalized.contains("alter ")
+            || normalized.contains("drop ")
+            || normalized.contains("truncate ");
+    }
+
     private String parseResponsesJsonText(JsonNode root) {
         String directText = safe(root.path("output_text").asText(""));
         if (!directText.isBlank()) {
@@ -765,7 +1272,7 @@ public class AiServiceImpl implements AiService {
         ProcessBuilder processBuilder = new ProcessBuilder(cliInvocation.commandLine());
         processBuilder.redirectErrorStream(true);
         log.info(
-            "[AI-CLI-CALL] providerName={}, providerId={}, rawCommand={}, resolvedCommandHead={}, commandArgCount={}, promptAsArg={}, connectionId={}, sessionId={}, databaseName={}, modelName={}, userPromptLength={}, sqlSnippetLength={}, ragContextLength={}, finalPromptLength={}, ignoredWorkingDirSet={}",
+            "[AI-CLI-CALL] providerName={}, providerId={}, rawCommand={}, resolvedCommandHead={}, commandArgCount={}, promptAsArg={}, connectionId={}, sessionId={}, databaseName={}, modelName={}, userPromptLength={}, ragContextLength={}, finalPromptLength={}, ignoredWorkingDirSet={}",
             safe(option.getName()),
             safe(option.getId()),
             command,
@@ -777,7 +1284,6 @@ public class AiServiceImpl implements AiService {
             safe(req.getDatabaseName()),
             safe(req.getModelName()),
             safe(req.getPrompt()).length(),
-            safe(req.getSqlSnippet()).length(),
             safe(context.promptContext()).length(),
             constrainedPrompt.length(),
             !safe(option.getCliWorkingDir()).isBlank()
@@ -987,10 +1493,6 @@ public class AiServiceImpl implements AiService {
         }
         builder.append("\n\n");
         builder.append("用户需求:\n").append(req.getPrompt());
-        String sqlSnippet = safe(req.getSqlSnippet());
-        if (!sqlSnippet.isBlank()) {
-            builder.append("\n\n用户 SQL 片段:\n").append(sqlSnippet);
-        }
         builder.append("\n\nRAG Context:\n").append(contextText);
         return builder.toString();
     }
@@ -1157,6 +1659,133 @@ public class AiServiceImpl implements AiService {
         return "未能生成可执行 SQL，请补充更明确的需求后重试。";
     }
 
+    private ParsedChartResponse parseChartResponse(String rawOutput) {
+        String normalized = safe(rawOutput);
+        if (normalized.isBlank()) {
+            return new ParsedChartResponse("", null, "", false);
+        }
+        ParsedChartResponse jsonParsed = tryParseChartJson(normalized);
+        if (jsonParsed != null) {
+            return jsonParsed;
+        }
+        return new ParsedChartResponse("", null, normalized, false);
+    }
+
+    private ParsedChartResponse tryParseChartJson(String rawOutput) {
+        List<String> candidates = new ArrayList<>();
+        String trimmed = safe(rawOutput);
+        candidates.add(trimmed);
+        Matcher fenceMatcher = Pattern.compile("(?is)```(?:json)?\\s*(\\{.*?\\})\\s*```").matcher(trimmed);
+        if (fenceMatcher.find()) {
+            candidates.add(fenceMatcher.group(1));
+        }
+        int jsonStart = trimmed.indexOf('{');
+        int jsonEnd = trimmed.lastIndexOf('}');
+        if (jsonStart >= 0 && jsonEnd > jsonStart) {
+            candidates.add(trimmed.substring(jsonStart, jsonEnd + 1));
+        }
+
+        for (String candidate : candidates) {
+            try {
+                JsonNode root = objectMapper.readTree(candidate);
+                if (root == null || !root.isObject()) {
+                    continue;
+                }
+                String sqlText = normalizeSqlText(safe(root.path("sqlText").asText("")));
+                ChartConfigVO chartConfig = null;
+                JsonNode configNode = root.path("chartConfig");
+                if (configNode != null && configNode.isObject()) {
+                    chartConfig = objectMapper.convertValue(configNode, ChartConfigVO.class);
+                    normalizeChartConfig(chartConfig);
+                }
+                String configSummary = safe(root.path("configSummary").asText(""));
+                if (configSummary.isBlank()) {
+                    configSummary = buildChartConfigSummary(chartConfig);
+                }
+                return new ParsedChartResponse(sqlText, chartConfig, configSummary, true);
+            } catch (Exception ignore) {
+                // ignore malformed JSON candidate
+            }
+        }
+        return null;
+    }
+
+    private void normalizeChartConfig(ChartConfigVO chartConfig) {
+        if (chartConfig == null) {
+            return;
+        }
+        chartConfig.setChartType(safe(chartConfig.getChartType()).toUpperCase(Locale.ROOT));
+        chartConfig.setXField(safe(chartConfig.getXField()));
+        chartConfig.setCategoryField(safe(chartConfig.getCategoryField()));
+        chartConfig.setValueField(safe(chartConfig.getValueField()));
+        chartConfig.setSortField(safe(chartConfig.getSortField()));
+        chartConfig.setSortDirection(safe(chartConfig.getSortDirection()).toUpperCase(Locale.ROOT));
+        chartConfig.setTitle(safe(chartConfig.getTitle()));
+        chartConfig.setDescription(safe(chartConfig.getDescription()));
+        if (chartConfig.getYFields() != null) {
+            chartConfig.setYFields(
+                chartConfig.getYFields().stream()
+                    .map(this::safe)
+                    .filter(item -> !item.isBlank())
+                    .distinct()
+                    .toList()
+            );
+        }
+    }
+
+    private ChartConfigValidationResult validateChartConfig(ChartConfigVO chartConfig) {
+        if (chartConfig == null) {
+            return new ChartConfigValidationResult(false, "图表配置为空");
+        }
+        String chartType = safe(chartConfig.getChartType()).toUpperCase(Locale.ROOT);
+        if (chartType.isBlank()) {
+            return new ChartConfigValidationResult(false, "chartType 不能为空");
+        }
+        switch (chartType) {
+            case "LINE", "BAR", "TREND" -> {
+                if (safe(chartConfig.getXField()).isBlank()) {
+                    return new ChartConfigValidationResult(false, chartType + " 缺少 xField");
+                }
+                if (chartConfig.getYFields() == null || chartConfig.getYFields().isEmpty()) {
+                    return new ChartConfigValidationResult(false, chartType + " 缺少 yFields");
+                }
+                return new ChartConfigValidationResult(true, "ok");
+            }
+            case "PIE" -> {
+                if (safe(chartConfig.getCategoryField()).isBlank() || safe(chartConfig.getValueField()).isBlank()) {
+                    return new ChartConfigValidationResult(false, "PIE 需要 categoryField 和 valueField");
+                }
+                return new ChartConfigValidationResult(true, "ok");
+            }
+            case "SCATTER" -> {
+                if (safe(chartConfig.getXField()).isBlank()) {
+                    return new ChartConfigValidationResult(false, "SCATTER 缺少 xField");
+                }
+                if (chartConfig.getYFields() == null || chartConfig.getYFields().size() != 1) {
+                    return new ChartConfigValidationResult(false, "SCATTER 需要且仅支持 1 个 yField");
+                }
+                return new ChartConfigValidationResult(true, "ok");
+            }
+            default -> {
+                return new ChartConfigValidationResult(false, "不支持的 chartType: " + chartType);
+            }
+        }
+    }
+
+    private String buildChartConfigSummary(ChartConfigVO chartConfig) {
+        if (chartConfig == null) {
+            return "未返回可用图表配置，请手动配置后生成图表。";
+        }
+        String type = safe(chartConfig.getChartType());
+        if ("PIE".equals(type)) {
+            return "图表类型: PIE，分类字段: " + safe(chartConfig.getCategoryField())
+                + "，数值字段: " + safe(chartConfig.getValueField());
+        }
+        String yFields = chartConfig.getYFields() == null ? "" : String.join(", ", chartConfig.getYFields());
+        return "图表类型: " + type + "，X轴: " + safe(chartConfig.getXField())
+            + "，Y轴: " + yFields;
+    }
+
     /**
      * 关键操作：生成 SQL 后强制做 AST 解析和表结构校验，减少不可执行 SQL 返回给前端。
      */
@@ -1256,7 +1885,7 @@ public class AiServiceImpl implements AiService {
         ContextBuildReq contextReq = new ContextBuildReq();
         contextReq.setConnectionId(req.getConnectionId());
         contextReq.setDatabaseName(req.getDatabaseName());
-        contextReq.setQuestion(buildRetrievalInput(req.getPrompt(), req.getSqlSnippet()));
+        contextReq.setQuestion(buildRetrievalInput(req.getPrompt()));
         contextReq.setTokenBudget(1200);
         ContextBuildVO schemaContext = schemaService.buildContext(contextReq);
         if (schemaContext.getRelatedTables() != null && !schemaContext.getRelatedTables().isEmpty()) {
@@ -1265,13 +1894,17 @@ public class AiServiceImpl implements AiService {
         return new GenerationContext(safe(schemaContext.getContext()), relatedTables);
     }
 
-    private String buildRetrievalInput(String prompt, String sqlSnippet) {
+    private String buildRetrievalInput(String prompt) {
+        return buildRetrievalInput(prompt, "");
+    }
+
+    private String buildRetrievalInput(String prompt, String extraContext) {
         String normalizedPrompt = safe(prompt);
-        String normalizedSnippet = safe(sqlSnippet);
-        if (normalizedSnippet.isBlank()) {
+        String normalizedExtraContext = safe(extraContext);
+        if (normalizedExtraContext.isBlank()) {
             return normalizedPrompt;
         }
-        return normalizedPrompt + "\nSQL片段:\n" + normalizedSnippet;
+        return normalizedPrompt + "\n补充上下文:\n" + normalizedExtraContext;
     }
 
     /**
@@ -1367,6 +2000,37 @@ public class AiServiceImpl implements AiService {
         return "gpt-4.1-mini";
     }
 
+    /**
+     * 关键操作：记录 AI 链路分阶段耗时，便于快速定位性能瓶颈。
+     */
+    private static final class StepTimer {
+        private final long startAt;
+        private long lastMarkAt;
+        private final List<String> steps = new ArrayList<>();
+
+        private StepTimer() {
+            this.startAt = System.currentTimeMillis();
+            this.lastMarkAt = this.startAt;
+        }
+
+        private void mark(String stepName) {
+            long now = System.currentTimeMillis();
+            steps.add(stepName + "=" + Math.max(0L, now - lastMarkAt) + "ms");
+            lastMarkAt = now;
+        }
+
+        private String stepsSummary() {
+            if (steps.isEmpty()) {
+                return "-";
+            }
+            return String.join(", ", steps);
+        }
+
+        private long totalElapsedMs() {
+            return Math.max(0L, System.currentTimeMillis() - startAt);
+        }
+    }
+
     private record CliInvocation(List<String> commandLine, boolean writePromptToStdin) {
     }
 
@@ -1379,6 +2043,21 @@ public class AiServiceImpl implements AiService {
     private record ParsedRepairResult(String errorExplanation, String repairedSql) {
     }
 
+    private record ParsedChartResponse(String sqlText,
+                                       ChartConfigVO chartConfig,
+                                       String configSummary,
+                                       boolean parsed) {
+    }
+
+    private record ParsedIntentResponse(IntentType intentType,
+                                        double confidence,
+                                        String reason,
+                                        boolean parsed) {
+    }
+
+    private record ChartConfigValidationResult(boolean valid, String message) {
+    }
+
     private record AstValidationResult(boolean valid, String sqlText, String message) {
     }
 
@@ -1389,6 +2068,26 @@ public class AiServiceImpl implements AiService {
                                      String dbVersion,
                                      String configuredDatabaseName,
                                      String requestDatabaseName) {
+    }
+
+    private record IntentResult(IntentType intentType, double confidence, String reason) {
+    }
+
+    private enum IntentType {
+        GENERATE_SQL("生成 SQL"),
+        EXPLAIN_SQL("解释 SQL"),
+        ANALYZE_SQL("分析 SQL"),
+        GENERATE_CHART("图表方案");
+
+        private final String label;
+
+        IntentType(String label) {
+            this.label = label;
+        }
+
+        public String label() {
+            return label;
+        }
     }
 
     private enum OpenAiApiType {

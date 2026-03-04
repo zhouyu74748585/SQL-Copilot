@@ -1,5 +1,10 @@
 package com.sqlcopilot.studio.service.impl;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sqlcopilot.studio.dto.ai.ChartConfigVO;
+import com.sqlcopilot.studio.dto.editor.ChartCacheReadVO;
+import com.sqlcopilot.studio.dto.editor.ChartCacheSaveReq;
+import com.sqlcopilot.studio.dto.editor.ChartCacheSaveVO;
 import com.sqlcopilot.studio.dto.editor.ExportReq;
 import com.sqlcopilot.studio.dto.editor.ExportResultVO;
 import com.sqlcopilot.studio.dto.editor.DeleteHistorySessionReq;
@@ -28,19 +33,26 @@ import java.sql.Statement;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Objects;
+import java.util.UUID;
 
 @Service
 public class EditorServiceImpl implements EditorService {
 
+    private static final long MAX_CHART_IMAGE_BYTES = 8L * 1024L * 1024L;
+
     private final QueryHistoryMapper queryHistoryMapper;
     private final ConnectionService connectionService;
+    private final ObjectMapper objectMapper;
 
     public EditorServiceImpl(QueryHistoryMapper queryHistoryMapper,
-                             ConnectionService connectionService) {
+                             ConnectionService connectionService,
+                             ObjectMapper objectMapper) {
         this.queryHistoryMapper = queryHistoryMapper;
         this.connectionService = connectionService;
+        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -98,10 +110,104 @@ public class EditorServiceImpl implements EditorService {
         entity.setSessionId(req.getSessionId());
         entity.setPromptText(req.getPromptText());
         entity.setSqlText(req.getSqlText());
+        entity.setHistoryType(resolveHistoryType(req.getHistoryType()));
+        entity.setActionType(safe(req.getActionType()));
+        entity.setAssistantContent(safe(req.getAssistantContent()));
+        entity.setDatabaseName(safe(req.getDatabaseName()));
+        entity.setChartConfigJson(safe(req.getChartConfigJson()));
+        entity.setChartImageCacheKey(safe(req.getChartImageCacheKey()));
         entity.setExecutionMs(req.getExecutionMs());
         entity.setSuccessFlag(Boolean.TRUE.equals(req.getSuccess()) ? 1 : 0);
         entity.setCreatedAt(System.currentTimeMillis());
         queryHistoryMapper.insert(entity);
+    }
+
+    @Override
+    public ChartCacheSaveVO saveChartCache(ChartCacheSaveReq req) {
+        String base64Text = safe(req.getImageBase64Png());
+        if (base64Text.startsWith("data:image/png;base64,")) {
+            base64Text = base64Text.substring("data:image/png;base64,".length());
+        }
+        byte[] imageBytes;
+        try {
+            imageBytes = Base64.getDecoder().decode(base64Text);
+        } catch (Exception ex) {
+            throw new BusinessException(400, "图表图片 Base64 内容无效");
+        }
+        if (imageBytes.length == 0) {
+            throw new BusinessException(400, "图表图片内容为空");
+        }
+        if (imageBytes.length > MAX_CHART_IMAGE_BYTES) {
+            throw new BusinessException(400, "图表图片超过大小限制（8MB）");
+        }
+
+        String safeSessionId = sanitizePathSegment(req.getSessionId());
+        if (safeSessionId.isBlank()) {
+            throw new BusinessException(400, "会话 ID 非法");
+        }
+        String fileName = sanitizeFileName(req.getSuggestedFileName());
+        if (fileName.isBlank()) {
+            fileName = "chart-" + System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 8);
+        }
+        Path baseDir = Path.of("exports", "chart-cache").toAbsolutePath().normalize();
+        Path relativePath = Path.of(
+            String.valueOf(req.getConnectionId()),
+            safeSessionId,
+            fileName + ".png"
+        );
+        Path target = baseDir.resolve(relativePath).normalize();
+        if (!target.startsWith(baseDir)) {
+            throw new BusinessException(400, "图表缓存路径非法");
+        }
+        try {
+            Files.createDirectories(target.getParent());
+            Files.write(target, imageBytes);
+        } catch (Exception ex) {
+            throw new BusinessException(500, "图表缓存保存失败: " + ex.getMessage());
+        }
+
+        String cacheKey = Base64.getUrlEncoder()
+            .withoutPadding()
+            .encodeToString(relativePath.toString().getBytes(StandardCharsets.UTF_8));
+        ChartCacheSaveVO vo = new ChartCacheSaveVO();
+        vo.setCacheKey(cacheKey);
+        vo.setFilePath(target.toAbsolutePath().toString());
+        vo.setWidth(req.getWidth() == null ? 0 : req.getWidth());
+        vo.setHeight(req.getHeight() == null ? 0 : req.getHeight());
+        return vo;
+    }
+
+    @Override
+    public ChartCacheReadVO readChartCache(String cacheKey) {
+        String normalizedKey = safe(cacheKey);
+        if (normalizedKey.isBlank()) {
+            throw new BusinessException(400, "cacheKey 不能为空");
+        }
+
+        String relative;
+        try {
+            byte[] decoded = Base64.getUrlDecoder().decode(normalizedKey);
+            relative = new String(decoded, StandardCharsets.UTF_8);
+        } catch (Exception ex) {
+            throw new BusinessException(400, "cacheKey 非法");
+        }
+        Path baseDir = Path.of("exports", "chart-cache").toAbsolutePath().normalize();
+        Path target = baseDir.resolve(relative).normalize();
+        if (!target.startsWith(baseDir)) {
+            throw new BusinessException(400, "cacheKey 非法");
+        }
+        if (!Files.exists(target) || !Files.isRegularFile(target)) {
+            throw new BusinessException(404, "图表缓存不存在");
+        }
+        try {
+            byte[] imageBytes = Files.readAllBytes(target);
+            ChartCacheReadVO vo = new ChartCacheReadVO();
+            vo.setCacheKey(normalizedKey);
+            vo.setDataUrl("data:image/png;base64," + Base64.getEncoder().encodeToString(imageBytes));
+            return vo;
+        } catch (Exception ex) {
+            throw new BusinessException(500, "图表缓存读取失败: " + ex.getMessage());
+        }
     }
 
     @Override
@@ -199,6 +305,12 @@ public class EditorServiceImpl implements EditorService {
         vo.setSessionId(entity.getSessionId());
         vo.setPromptText(entity.getPromptText());
         vo.setSqlText(entity.getSqlText());
+        vo.setHistoryType(resolveHistoryType(entity.getHistoryType()));
+        vo.setActionType(safe(entity.getActionType()));
+        vo.setAssistantContent(safe(entity.getAssistantContent()));
+        vo.setDatabaseName(safe(entity.getDatabaseName()));
+        vo.setChartConfig(parseChartConfig(entity.getChartConfigJson()));
+        vo.setChartImageCacheKey(safe(entity.getChartImageCacheKey()));
         vo.setExecutionMs(entity.getExecutionMs());
         vo.setSuccess(entity.getSuccessFlag() == 1);
         vo.setCreatedAt(entity.getCreatedAt());
@@ -214,5 +326,48 @@ public class EditorServiceImpl implements EditorService {
         String oneLine = title.replaceAll("\\s+", " ").trim();
         item.setTitle(oneLine.length() > 60 ? oneLine.substring(0, 60) : oneLine);
         return item;
+    }
+
+    private ChartConfigVO parseChartConfig(String chartConfigJson) {
+        String normalized = safe(chartConfigJson);
+        if (normalized.isBlank()) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(normalized, ChartConfigVO.class);
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private String resolveHistoryType(String historyType) {
+        String normalized = safe(historyType).toUpperCase();
+        if ("EXECUTE".equals(normalized)) {
+            return "EXECUTE";
+        }
+        return "CHAT";
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value.trim();
+    }
+
+    private String sanitizePathSegment(String value) {
+        String normalized = safe(value).replace("\\", "_").replace("/", "_");
+        normalized = normalized.replace("..", "_");
+        return normalized;
+    }
+
+    private String sanitizeFileName(String value) {
+        String normalized = safe(value);
+        if (normalized.isBlank()) {
+            return "";
+        }
+        normalized = normalized.replaceAll("[\\\\/:*?\"<>|]+", "_");
+        normalized = normalized.replaceAll("\\s+", "_");
+        if (normalized.toLowerCase().endsWith(".png")) {
+            normalized = normalized.substring(0, normalized.length() - 4);
+        }
+        return normalized;
     }
 }

@@ -1,6 +1,8 @@
 package com.sqlcopilot.studio.controller;
 
 import com.sqlcopilot.studio.dto.ai.AiGenerateSqlReq;
+import com.sqlcopilot.studio.dto.ai.AiAutoQueryVO;
+import com.sqlcopilot.studio.dto.ai.AiGenerateChartVO;
 import com.sqlcopilot.studio.dto.ai.AiGenerateSqlVO;
 import com.sqlcopilot.studio.dto.ai.AiRepairReq;
 import com.sqlcopilot.studio.dto.ai.AiRepairVO;
@@ -27,6 +29,18 @@ public class AiController {
     public ApiResponse<AiGenerateSqlVO> generate(@Valid @RequestBody AiGenerateSqlReq req) {
         // 关键操作：先构建 Schema 上下文再生成 SQL，避免无结构盲猜。
         return ApiResponse.success(aiService.generateSql(req));
+    }
+
+    @PostMapping("/auto")
+    public ApiResponse<AiAutoQueryVO> auto(@Valid @RequestBody AiGenerateSqlReq req) {
+        // 关键操作：自动模式先识别用户意图，再按意图路由到不同能力。
+        return ApiResponse.success(aiService.autoQuery(req));
+    }
+
+    @PostMapping("/generate-chart")
+    public ApiResponse<AiGenerateChartVO> generateChart(@Valid @RequestBody AiGenerateSqlReq req) {
+        // 关键操作：图表生成返回 SQL + 结构化图表配置，前端可一键执行并渲染。
+        return ApiResponse.success(aiService.generateChart(req));
     }
 
     @PostMapping("/explain")

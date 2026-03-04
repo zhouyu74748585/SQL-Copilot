@@ -2,6 +2,9 @@ package com.sqlcopilot.studio.controller;
 
 import com.sqlcopilot.studio.dto.common.ApiResponse;
 import com.sqlcopilot.studio.dto.editor.DeleteHistorySessionReq;
+import com.sqlcopilot.studio.dto.editor.ChartCacheReadVO;
+import com.sqlcopilot.studio.dto.editor.ChartCacheSaveReq;
+import com.sqlcopilot.studio.dto.editor.ChartCacheSaveVO;
 import com.sqlcopilot.studio.dto.editor.ExportReq;
 import com.sqlcopilot.studio.dto.editor.ExportResultVO;
 import com.sqlcopilot.studio.dto.editor.QueryHistorySessionPageVO;
@@ -54,6 +57,16 @@ public class EditorController {
     public ApiResponse<Boolean> removeHistorySession(@Valid @RequestBody DeleteHistorySessionReq req) {
         editorService.removeHistorySession(req);
         return ApiResponse.success(Boolean.TRUE);
+    }
+
+    @PostMapping("/chart/cache/save")
+    public ApiResponse<ChartCacheSaveVO> saveChartCache(@Valid @RequestBody ChartCacheSaveReq req) {
+        return ApiResponse.success(editorService.saveChartCache(req));
+    }
+
+    @GetMapping("/chart/cache/read")
+    public ApiResponse<ChartCacheReadVO> readChartCache(@RequestParam("cacheKey") String cacheKey) {
+        return ApiResponse.success(editorService.readChartCache(cacheKey));
     }
 
     @PostMapping("/result/export")

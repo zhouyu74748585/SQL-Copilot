@@ -163,6 +163,14 @@
               <component v-else :is="nodeIconComponent(dataRef)" class="tree-icon-font" />
               <span class="tree-title-text">{{ title }}</span>
               <span
+                v-if="dataRef.nodeType === 'connection'"
+                class="tree-env-tag"
+                :class="envTagClass(dataRef.env)"
+              >
+                <component :is="envTagIcon(dataRef.env)" class="tree-env-tag-icon" />
+                {{ envTagText(dataRef.env) }}
+              </span>
+              <span
                 v-if="dataRef.nodeType === 'database'"
                 class="db-vectorize-status"
                 :class="databaseStatusClass(dataRef.vectorizeStatus)"
@@ -187,9 +195,6 @@
         <section class="pane pane-center">
           <div class="pane-title">对象浏览</div>
           <div class="center-toolbar">
-            <a-space size="small">
-              <a-button size="small" @click="quickSelectAll">SELECT</a-button>
-            </a-space>
             <div class="center-toolbar-right">
               <a-input v-model:value="tableKeyword" size="small" placeholder="搜索表名" allow-clear>
                 <template #prefix>
@@ -222,7 +227,11 @@
           >
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'objectName'">
-                <div class="table-name-cell" :class="{ 'is-active': selectedObjectName === record.objectName }">
+                <div
+                  class="table-name-cell"
+                  :class="{ 'is-active': selectedObjectName === record.objectName, 'is-queryable': record.objectType === 'tables' }"
+                  @dblclick.stop="openQueryTabByObject(record)"
+                >
                   <database-outlined />
                   <span>{{ record.objectName }}</span>
                 </div>
@@ -240,6 +249,8 @@
               class="object-card"
               :class="{ 'is-active': selectedObjectName === item.objectName }"
               @click="onObjectRow(item).onClick()"
+              @dblclick="onObjectRow(item).onDblclick()"
+              @contextmenu.prevent.stop="onObjectRow(item).onContextmenu($event)"
             >
               <div class="object-card-title">{{ item.objectName }}</div>
               <div class="object-card-meta">{{ objectTypeLabel(item.objectType) }}</div>
@@ -258,8 +269,8 @@
 
         <aside class="pane pane-right detail-pane">
           <div class="pane-title">对象详情</div>
-          <div v-if="!selectedObjectRecord" class="empty-pane">请从对象浏览中选择表、视图或其他对象</div>
-          <div v-else class="detail-wrapper">
+          <div v-if="!selectedObjectRecord && !selectedTreeDetail" class="empty-pane">请从对象浏览中选择连接、数据库或对象</div>
+          <div v-else-if="selectedObjectRecord" class="detail-wrapper">
             <div class="detail-summary">
               <div class="detail-row"><span>对象</span><strong>{{ selectedObjectRecord.objectName }}</strong></div>
               <div class="detail-row"><span>类型</span><strong>{{ objectTypeLabel(selectedObjectRecord.objectType) }}</strong></div>
@@ -270,43 +281,44 @@
 
             <div v-if="selectedObjectRecord.objectType === 'tables'" class="detail-table-panel">
               <a-spin :spinning="tableDetailLoading">
-                <a-table
-                  size="small"
-                  :pagination="false"
-                  :columns="detailColumns"
-                  :data-source="tableDetail?.columns ?? []"
-                  row-key="columnName"
-                  :scroll="{ y: detailScrollY }"
-                >
-                  <template #bodyCell="{ column, record }">
-                    <template v-if="column.key === 'nullable'">
-                      {{ record.nullable ? '是' : '否' }}
-                    </template>
-                    <template v-else-if="column.key === 'indexed'">
-                      {{ record.indexed ? '是' : '否' }}
-                    </template>
-                    <template v-else-if="column.key === 'primaryKey'">
-                      {{ record.primaryKey ? '是' : '否' }}
-                    </template>
-                    <template v-else-if="column.key === 'autoIncrement'">
-                      {{ record.autoIncrement ? '是' : '否' }}
-                    </template>
-                    <template v-else-if="column.key === 'defaultValue'">
-                      {{ record.defaultValue || '-' }}
-                    </template>
-                    <template v-else-if="column.key === 'columnSize'">
-                      {{ record.columnSize ?? '-' }}
-                    </template>
-                    <template v-else-if="column.key === 'decimalDigits'">
-                      {{ record.decimalDigits ?? '-' }}
-                    </template>
-                  </template>
-                </a-table>
+                <div class="detail-code-head">
+                  <span>建表语句</span>
+                  <a-button size="small" type="text" @click="copyCreateTableSql">
+                    <template #icon><copy-outlined /></template>
+                    复制
+                  </a-button>
+                </div>
+                <pre class="detail-code-block"><code v-html="createTableSqlHighlighted"></code></pre>
               </a-spin>
             </div>
 
             <div v-else class="detail-note">当前对象类型暂无结构详情，仅展示基本信息。</div>
           </div>
+          <div v-else-if="selectedTreeDetail?.kind === 'connection'" class="detail-wrapper">
+            <div class="detail-summary">
+              <div class="detail-row"><span>连接</span><strong>{{ selectedTreeConnection?.name ?? '-' }}</strong></div>
+              <div class="detail-row"><span>数据库类型</span><strong>{{ selectedTreeConnection?.dbType ?? '-' }}</strong></div>
+              <div class="detail-row"><span>所属环境</span><strong>{{ envTagText(selectedTreeConnection?.env) }}</strong></div>
+              <div class="detail-row"><span>主机</span><strong>{{ selectedTreeConnection?.host || '本地连接' }}</strong></div>
+              <div class="detail-row"><span>端口</span><strong>{{ selectedTreeConnection?.port ?? '-' }}</strong></div>
+              <div class="detail-row"><span>用户名</span><strong>{{ selectedTreeConnection?.username || '-' }}</strong></div>
+              <div class="detail-row"><span>默认库</span><strong>{{ selectedTreeConnection?.databaseName || '未指定库' }}</strong></div>
+              <div class="detail-row"><span>只读</span><strong>{{ selectedTreeConnection?.readOnly ? '是' : '否' }}</strong></div>
+              <div class="detail-row"><span>SSH 隧道</span><strong>{{ selectedTreeConnection?.sshEnabled ? '已启用' : '未启用' }}</strong></div>
+            </div>
+          </div>
+          <div v-else-if="selectedTreeDetail?.kind === 'database' || selectedTreeDetail?.kind === 'category'" class="detail-wrapper">
+            <div class="detail-summary">
+              <div class="detail-row"><span>数据库</span><strong>{{ selectedTreeDetail.databaseName || '-' }}</strong></div>
+              <div class="detail-row"><span>连接</span><strong>{{ selectedTreeConnection?.name ?? '-' }}</strong></div>
+              <div class="detail-row"><span>数据库类型</span><strong>{{ selectedTreeConnection?.dbType ?? '-' }}</strong></div>
+              <div class="detail-row"><span>所属环境</span><strong>{{ envTagText(selectedTreeConnection?.env) }}</strong></div>
+              <div class="detail-row"><span>向量化</span><strong>{{ selectedTreeDatabaseStatusLabel }}</strong></div>
+              <div class="detail-row"><span>表数量</span><strong>{{ selectedTreeDatabaseTableCount }}</strong></div>
+              <div class="detail-row"><span>字段数</span><strong>{{ selectedTreeDatabaseColumnCount }}</strong></div>
+            </div>
+          </div>
+          <div v-else class="empty-pane">对象详情加载中...</div>
         </aside>
       </template>
 
@@ -339,7 +351,7 @@
 
           <div class="query-chat-scroll">
             <div v-if="!activeQueryTab.chatMessages.length" class="query-chat-empty">
-              输入自然语言后点击“生成 SQL”“解释 SQL”或“分析 SQL”，这里会按对话展示历史。
+              输入自然语言后发送消息；可使用 Auto 自动识别意图，或关闭 Auto 后手动选择“生成 SQL”“解释 SQL”“分析 SQL”“生成图表”。
             </div>
             <div
               v-for="item in activeQueryTab.chatMessages"
@@ -348,7 +360,21 @@
               :class="{ 'is-user': item.role === 'user', 'is-assistant': item.role === 'assistant' }"
             >
               <template v-if="item.role === 'user'">
-                <div class="query-chat-user-bubble" :class="userBubbleClass(item.actionType)">{{ item.content }}</div>
+                <div class="query-chat-user-bubble-wrap">
+                  <div class="query-chat-user-bubble" :class="userBubbleClass(item.actionType)">{{ item.content }}</div>
+                  <div v-if="item.retryable" class="query-chat-user-retry-row">
+                    <a-button
+                      size="small"
+                      type="link"
+                      class="query-chat-user-retry-btn"
+                      :loading="!!item.retryLoading"
+                      @click="retryUserMessage(activeQueryTab, item)"
+                    >
+                      <template #icon><reload-outlined /></template>
+                      重试
+                    </a-button>
+                  </div>
+                </div>
               </template>
               <template v-else>
                 <div class="query-chat-assistant-card">
@@ -357,6 +383,12 @@
                     <span>{{ formatTime(item.createdAt) }}</span>
                   </div>
                   <div v-if="item.content" class="query-chat-text">{{ item.content }}</div>
+                  <div v-if="item.chartConfig" class="query-chat-chart-summary">
+                    {{ item.chartConfigSummary || chartSummaryText(item.chartConfig) }}
+                  </div>
+                  <div v-if="item.chartImageDataUrl" class="query-chat-chart-image-wrap">
+                    <img class="query-chat-chart-image" :src="item.chartImageDataUrl" alt="chart-preview" />
+                  </div>
                   <template v-if="item.sqlText">
                     <pre class="query-chat-sql">{{ item.sqlText }}</pre>
                     <a-space size="small" wrap>
@@ -371,8 +403,30 @@
                         </a-button>
                       </a-tooltip>
                       <a-tooltip title="执行 SQL">
-                        <a-button size="small" type="primary" class="sql-action-icon-btn" @click="executeSqlForTab(activeQueryTab, item.sqlText || '')">
+                        <a-button
+                          size="small"
+                          type="primary"
+                          class="sql-action-icon-btn"
+                          :loading="activeQueryTab.sqlExecuting"
+                          :disabled="activeQueryTab.sqlExecuting"
+                          @click="executeSqlForTab(activeQueryTab, item.sqlText || '')"
+                        >
                           <template #icon><play-circle-outlined /></template>
+                        </a-button>
+                      </a-tooltip>
+                      <a-tooltip v-if="item.chartConfig" title="生成图表">
+                        <a-button size="small" class="sql-action-icon-btn" @click="generateChartFromMessage(activeQueryTab, item)">
+                          <template #icon><area-chart-outlined /></template>
+                        </a-button>
+                      </a-tooltip>
+                      <a-tooltip v-if="item.chartConfig && item.chartImageCacheKey" title="编辑图表（重跑SQL）">
+                        <a-button size="small" class="sql-action-icon-btn" @click="editChartFromHistory(activeQueryTab, item)">
+                          <template #icon><line-chart-outlined /></template>
+                        </a-button>
+                      </a-tooltip>
+                      <a-tooltip v-if="item.chartImageDataUrl || item.chartImageCacheKey" title="下载图表 PNG">
+                        <a-button size="small" class="sql-action-icon-btn" @click="downloadMessageChart(item)">
+                          <template #icon><download-outlined /></template>
                         </a-button>
                       </a-tooltip>
                     </a-space>
@@ -397,8 +451,24 @@
                   style="min-width: 190px"
                   :options="aiModelOptions"
                 />
+                <span class="query-chat-auto-label">Auto</span>
+                <a-switch v-model:checked="activeQueryTab.autoMode" size="small" />
               </div>
-              <div class="query-chat-composer-actions">
+              <div v-if="activeQueryTab.autoMode" class="query-chat-composer-actions">
+                <a-tooltip title="Auto 发送">
+                  <a-button
+                    size="small"
+                    type="primary"
+                    class="sql-action-icon-btn"
+                    :loading="activeQueryTab.aiGenerating"
+                    :disabled="activeQueryTab.aiGenerating"
+                    @click="sendAutoForTab(activeQueryTab)"
+                  >
+                    <template #icon><send-outlined /></template>
+                  </a-button>
+                </a-tooltip>
+              </div>
+              <div v-else class="query-chat-composer-actions">
                 <a-tooltip title="生成 SQL">
                   <a-button
                     size="small"
@@ -430,7 +500,18 @@
                     :disabled="activeQueryTab.aiGenerating"
                     @click="generateSqlForTab(activeQueryTab, 'analyze')"
                   >
-                    <template #icon><bar-chart-outlined /></template>
+                    <template #icon><experiment-outlined /></template>
+                  </a-button>
+                </a-tooltip>
+                <a-tooltip title="生成图表">
+                  <a-button
+                    size="small"
+                    class="sql-action-icon-btn"
+                    :loading="activeQueryTab.aiGenerating"
+                    :disabled="activeQueryTab.aiGenerating"
+                    @click="generateChartPlanForTab(activeQueryTab)"
+                  >
+                    <template #icon><area-chart-outlined /></template>
                   </a-button>
                 </a-tooltip>
               </div>
@@ -485,7 +566,7 @@
                     :disabled="activeQueryTab.aiGenerating"
                     @click="analyzeSelectedSqlInChat(activeQueryTab)"
                   >
-                    <template #icon><bar-chart-outlined /></template>
+                    <template #icon><experiment-outlined /></template>
                   </a-button>
                 </a-tooltip>
               </a-space>
@@ -508,6 +589,8 @@
                   size="small"
                   type="primary"
                   :class="['sql-action-icon-btn', { 'is-selection-active': !!activeQueryTab.selectedSqlText }]"
+                  :loading="activeQueryTab.sqlExecuting"
+                  :disabled="activeQueryTab.sqlExecuting"
                   @click="executeSqlForTab(activeQueryTab)"
                 >
                   <template #icon><play-circle-outlined /></template>
@@ -536,19 +619,134 @@
           </div>
 
           <div class="query-result-panel">
-            <div class="query-result-title">查询结果</div>
+            <div class="query-result-title-row">
+              <div class="query-result-title">查询结果</div>
+              <a-space size="small">
+                <a-tooltip title="表格结果">
+                  <a-button
+                    size="small"
+                    :class="['sql-action-icon-btn', { 'is-selection-active': activeQueryTab.resultViewMode === 'table' }]"
+                    @click="activeQueryTab.resultViewMode = 'table'"
+                  >
+                    <template #icon><table-outlined /></template>
+                  </a-button>
+                </a-tooltip>
+                <a-tooltip title="图表结果">
+                  <a-button
+                    size="small"
+                    :class="['sql-action-icon-btn', { 'is-selection-active': activeQueryTab.resultViewMode === 'chart' }]"
+                    @click="activeQueryTab.resultViewMode = 'chart'"
+                  >
+                    <template #icon><area-chart-outlined /></template>
+                  </a-button>
+                </a-tooltip>
+                <a-tooltip v-if="activeQueryTab.resultViewMode === 'chart'" title="下载图表 PNG">
+                  <a-button size="small" class="sql-action-icon-btn" @click="downloadActiveChart(activeQueryTab)">
+                    <template #icon><download-outlined /></template>
+                  </a-button>
+                </a-tooltip>
+              </a-space>
+            </div>
             <div v-if="activeQueryTab.lastExecuteFailed" class="query-result-error">
               <span class="query-result-error-text">{{ activeQueryTab.lastExecuteErrorMessage || 'SQL 执行失败' }}</span>
               <a-button size="small" type="primary" danger @click="repairSqlForTab(activeQueryTab)">修复 SQL</a-button>
             </div>
-            <a-table
-              size="small"
-              :pagination="false"
-              :columns="activeResultColumns"
-              :data-source="activeResultRows"
-              :scroll="{ x: queryResultScrollX, y: queryResultScrollY }"
-              row-key="__rowKey"
-            />
+            <template v-if="activeQueryTab.resultViewMode === 'table'">
+              <a-table
+                size="small"
+                :pagination="false"
+                :columns="activeResultColumns"
+                :data-source="activeResultRows"
+                :scroll="{ x: queryResultScrollX, y: queryResultScrollY }"
+                row-key="__rowKey"
+              />
+            </template>
+            <template v-else>
+              <div class="query-chart-manual-panel">
+                <a-space wrap size="small">
+                  <a-select
+                    v-model:value="activeQueryTab.manualChartConfig.chartType"
+                    size="small"
+                    style="width: 104px"
+                    :options="chartTypeOptions"
+                  />
+                  <a-select
+                    v-if="['LINE', 'BAR', 'SCATTER', 'TREND'].includes(activeQueryTab.manualChartConfig.chartType || '')"
+                    v-model:value="activeQueryTab.manualChartConfig.xField"
+                    size="small"
+                    style="width: 132px"
+                    :options="activeChartFieldOptions"
+                    placeholder="X 轴"
+                  />
+                  <a-select
+                    v-if="['LINE', 'BAR', 'TREND'].includes(activeQueryTab.manualChartConfig.chartType || '')"
+                    v-model:value="activeQueryTab.manualChartConfig.yFields"
+                    size="small"
+                    mode="multiple"
+                    :max-tag-count="2"
+                    style="width: 184px"
+                    :options="activeNumericFieldOptions"
+                    placeholder="Y 轴（多选）"
+                  />
+                  <a-select
+                    v-if="activeQueryTab.manualChartConfig.chartType === 'SCATTER'"
+                    v-model:value="activeQueryTab.manualChartConfig.yFields"
+                    size="small"
+                    mode="multiple"
+                    style="width: 148px"
+                    :options="activeNumericFieldOptions"
+                    placeholder="Y 轴"
+                    :max-tag-count="1"
+                    :max-count="1"
+                  />
+                  <a-select
+                    v-if="activeQueryTab.manualChartConfig.chartType === 'PIE'"
+                    v-model:value="activeQueryTab.manualChartConfig.categoryField"
+                    size="small"
+                    style="width: 128px"
+                    :options="activeChartFieldOptions"
+                    placeholder="分类字段"
+                  />
+                  <a-select
+                    v-if="activeQueryTab.manualChartConfig.chartType === 'PIE'"
+                    v-model:value="activeQueryTab.manualChartConfig.valueField"
+                    size="small"
+                    style="width: 128px"
+                    :options="activeNumericFieldOptions"
+                    placeholder="数值字段"
+                  />
+                  <a-select
+                    v-model:value="activeQueryTab.manualChartConfig.sortField"
+                    size="small"
+                    style="width: 132px"
+                    :options="activeChartFieldOptions"
+                    placeholder="排序字段"
+                    allow-clear
+                  />
+                  <a-select
+                    v-model:value="activeQueryTab.manualChartConfig.sortDirection"
+                    size="small"
+                    style="width: 94px"
+                    :options="chartSortDirectionOptions"
+                  />
+                  <a-tooltip title="按当前配置生成图表">
+                    <a-button size="small" type="primary" class="sql-action-icon-btn" @click="generateManualChartForTab(activeQueryTab)">
+                      <template #icon><area-chart-outlined /></template>
+                    </a-button>
+                  </a-tooltip>
+                </a-space>
+              </div>
+              <div class="query-chart-render-panel">
+                <QueryChartPanel
+                  ref="queryChartPanelRef"
+                  :rows="activeChartRows"
+                  :config="activeQueryTab.activeChartConfig"
+                />
+                <div v-if="activeQueryTab.chartReadonly" class="query-chart-readonly-tip">
+                  历史图表预览为只读，点击对话中的“编辑图表（重跑SQL）”可恢复可编辑状态。
+                </div>
+              </div>
+            </template>
           </div>
         </aside>
       </template>
@@ -716,7 +914,6 @@
 
     <a-modal
       v-model:open="aiConfigModalOpen"
-      title="AI 接入配置"
       width="760px"
       ok-text="保存配置"
       cancel-text="取消"
@@ -926,6 +1123,15 @@
           查看向量化数据
         </button>
       </template>
+      <template v-else-if="contextMenu.targetType === 'object'">
+        <button
+          class="context-menu-item"
+          :disabled="contextMenu.objectType !== 'tables' && contextMenu.objectType !== 'views'"
+          @click="triggerContextAction('queryData')"
+        >
+          查询数据
+        </button>
+      </template>
     </div>
 
     <a-modal
@@ -991,12 +1197,14 @@
 
 <script setup lang="ts">
 import {
+  AreaChartOutlined,
   AppstoreOutlined,
-  BarChartOutlined,
+  ExperimentOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
   CloseCircleOutlined,
   CloseOutlined,
+  CopyOutlined,
   DeleteOutlined,
   DownloadOutlined,
   BulbFilled,
@@ -1010,14 +1218,17 @@ import {
   HistoryOutlined,
   LinkOutlined,
   LoadingOutlined,
+  LineChartOutlined,
   MessageOutlined,
   MinusCircleOutlined,
   ArrowLeftOutlined,
   PlayCircleOutlined,
   PlusOutlined,
+  TableOutlined,
   ReadOutlined,
   ReloadOutlined,
   SearchOutlined,
+  SendOutlined,
   SettingOutlined,
   ToolOutlined,
   UnorderedListOutlined,
@@ -1027,8 +1238,9 @@ import type {IDisposable} from 'monaco-editor';
 import type * as MonacoApi from 'monaco-editor';
 import type {ConnectionVO} from '@sqlcopilot/shared-contracts';
 import {message, Modal, theme as antdTheme} from 'ant-design-vue';
-import {computed, h, onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue';
+import {computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue';
 import {getApi, postApi} from './api/client';
+import QueryChartPanel from './components/QueryChartPanel.vue';
 import mysqlIcon from './assets/db/mysql.svg';
 import oracleIcon from './assets/db/oracle.svg';
 import postgresqlIcon from './assets/db/postgresql.svg';
@@ -1037,6 +1249,14 @@ import sqlserverIcon from './assets/db/sqlserver.svg';
 import type {
   AiConfigSaveReq,
   AiConfigVO,
+  AiAutoQueryVO,
+  AiGenerateChartVO,
+  ChartCacheReadVO,
+  ChartCacheSaveReq,
+  ChartCacheSaveVO,
+  ChartConfigVO,
+  ChartType,
+  AiIntentType,
   AiGenerateSqlVO,
   AiRepairVO,
   AiModelOption,
@@ -1058,6 +1278,7 @@ import type {
   SchemaDatabaseVO,
   SchemaOverviewVO,
   SqlExecuteVO,
+  SortDirection,
   TableDetailVO,
 } from './types';
 
@@ -1085,9 +1306,30 @@ interface ObjectRow {
   description: string;
 }
 
-type QueryActionType = 'generate' | 'explain' | 'analyze' | 'repair';
+type QueryActionType =
+  | 'generate'
+  | 'explain'
+  | 'analyze'
+  | 'auto_generate'
+  | 'auto_explain'
+  | 'auto_analyze'
+  | 'auto_chart_auto_plan'
+  | 'repair'
+  | 'chart_auto_plan'
+  | 'chart_manual_render'
+  | 'chart_auto_render';
 type AiActionType = 'generate' | 'explain' | 'analyze';
 type UiTheme = 'light' | 'dark';
+type QueryResultViewMode = 'table' | 'chart';
+type RetryActionKind = 'ai_action' | 'auto' | 'chart_plan';
+
+interface RetryRequestMeta {
+  kind: RetryActionKind;
+  actionType?: AiActionType;
+  promptText: string;
+  finalPrompt: string;
+  actionSqlSnippet?: string;
+}
 
 interface QueryChatMessage {
   id: string;
@@ -1095,6 +1337,14 @@ interface QueryChatMessage {
   content: string;
   sqlText?: string;
   actionType: QueryActionType;
+  chartConfig?: ChartConfigVO;
+  chartConfigSummary?: string;
+  chartImageCacheKey?: string;
+  chartImageDataUrl?: string;
+  retryable?: boolean;
+  retryLoading?: boolean;
+  retryMeta?: RetryRequestMeta;
+  historySaved?: boolean;
   createdAt: number;
 }
 
@@ -1111,12 +1361,20 @@ interface QueryWorkspaceTab {
   executeResult: SqlExecuteVO | null;
   explainResult: ExplainVO | null;
   selectedAiModel: string;
+  autoMode: boolean;
   aiGenerating: boolean;
+  sqlExecuting: boolean;
   selectedSqlText: string;
   chatMessages: QueryChatMessage[];
   lastExecuteFailed: boolean;
   lastExecuteErrorMessage: string;
   lastFailedSqlText: string;
+  resultViewMode: QueryResultViewMode;
+  manualChartConfig: ChartConfigVO;
+  activeChartConfig: ChartConfigVO | null;
+  chartImageDataUrl: string;
+  chartImageCacheKey: string;
+  chartReadonly: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -1175,6 +1433,7 @@ const sessionTitleOverrides = ref<Record<string, string>>({});
 const tableDetail = ref<TableDetailVO | null>(null);
 const tableDetailLoading = ref(false);
 const sqlEditorContainerRef = ref<HTMLElement | null>(null);
+const queryChartPanelRef = ref<InstanceType<typeof QueryChartPanel> | null>(null);
 const sqlSelectionPopover = reactive({
   visible: false,
   left: 0,
@@ -1192,9 +1451,11 @@ const contextMenu = reactive({
   visible: false,
   x: 0,
   y: 0,
-  targetType: 'none' as 'none' | 'connection' | 'database',
+  targetType: 'none' as 'none' | 'connection' | 'database' | 'object',
   connectionId: 0,
   databaseName: '',
+  objectType: '' as '' | ObjectRow['objectType'],
+  objectName: '',
 });
 
 const connectionForm = reactive<ConnectionCreateReq>(defaultConnectionForm());
@@ -1209,7 +1470,7 @@ const pickingRagModelDataPath = ref(false);
 
 const workflow = reactive({
   connectionId: 0,
-  prompt: '统计当前数据库的表数量',
+  prompt: '',
   sqlText: '',
 });
 
@@ -1386,21 +1647,7 @@ const connectionTreeData = computed(() => {
   const filtered = keyword
     ? connections.value.filter((item) => item.name.toLowerCase().includes(keyword))
     : connections.value;
-
-  const envMap = new Map<string, ConnectionVO[]>();
-  filtered.forEach((item) => {
-    const list = envMap.get(item.env) ?? [];
-    list.push(item);
-    envMap.set(item.env, list);
-  });
-
-  return Array.from(envMap.entries()).map(([env, list]) => ({
-    key: `env-${env}`,
-    title: `${env}`,
-    nodeType: 'env',
-    selectable: false,
-    children: list.map((conn) => buildConnectionNode(conn)),
-  }));
+  return filtered.map((conn) => buildConnectionNode(conn));
 });
 
 const objectRows = computed<ObjectRow[]>(() => {
@@ -1428,6 +1675,100 @@ const selectedObjectRecord = computed(() =>
   objectRows.value.find((item) => item.objectName === selectedObjectName.value) ?? null,
 );
 
+const selectedTreeDetail = computed(() => {
+  const key = selectedTreeKeys.value[0];
+  if (!key) {
+    return null;
+  }
+  const keyValue = String(key);
+  const objectMatch = keyValue.match(/^conn-(\d+)-db-(.+?)-obj-([a-z]+)-(.+)$/);
+  if (objectMatch) {
+    return {
+      kind: 'object' as const,
+      connectionId: Number(objectMatch[1]),
+      databaseName: decodeURIComponent(objectMatch[2]),
+      objectType: toObjectType(objectMatch[3]),
+      objectName: decodeURIComponent(objectMatch[4]),
+    };
+  }
+  const categoryMatch = keyValue.match(/^conn-(\d+)-db-(.+?)-category-([a-z]+)$/);
+  if (categoryMatch) {
+    return {
+      kind: 'category' as const,
+      connectionId: Number(categoryMatch[1]),
+      databaseName: decodeURIComponent(categoryMatch[2]),
+      category: categoryMatch[3],
+    };
+  }
+  const databaseMatch = keyValue.match(/^conn-(\d+)-db-(.+)$/);
+  if (databaseMatch) {
+    return {
+      kind: 'database' as const,
+      connectionId: Number(databaseMatch[1]),
+      databaseName: decodeURIComponent(databaseMatch[2]),
+    };
+  }
+  const connectionMatch = keyValue.match(/^conn-(\d+)$/);
+  if (connectionMatch) {
+    return {
+      kind: 'connection' as const,
+      connectionId: Number(connectionMatch[1]),
+    };
+  }
+  return null;
+});
+
+const selectedTreeConnection = computed(() => {
+  const connectionId = selectedTreeDetail.value?.connectionId ?? workflow.connectionId;
+  return connections.value.find((item) => item.id === connectionId) ?? null;
+});
+
+const selectedTreeDatabaseStatusLabel = computed(() => {
+  const detail = selectedTreeDetail.value;
+  if (!detail || (detail.kind !== 'database' && detail.kind !== 'category')) {
+    return '-';
+  }
+  return databaseStatusLabel(getDatabaseVectorizeStatus(detail.connectionId, detail.databaseName));
+});
+
+const selectedTreeDatabaseTableCount = computed(() => {
+  const detail = selectedTreeDetail.value;
+  if (!detail || (detail.kind !== 'database' && detail.kind !== 'category')) {
+    return '-';
+  }
+  if (schemaOverview.value && schemaOverview.value.databaseName === detail.databaseName) {
+    return `${schemaOverview.value.tableCount ?? 0}`;
+  }
+  const tableNames = tableNameCache.value[tableCacheKey(detail.connectionId, detail.databaseName)] ?? [];
+  return `${tableNames.length}`;
+});
+
+const selectedTreeDatabaseColumnCount = computed(() => {
+  const detail = selectedTreeDetail.value;
+  if (!detail || (detail.kind !== 'database' && detail.kind !== 'category')) {
+    return '-';
+  }
+  if (schemaOverview.value && schemaOverview.value.databaseName === detail.databaseName) {
+    return `${schemaOverview.value.columnCount ?? 0}`;
+  }
+  return '-';
+});
+
+const createTableSqlText = computed(() => {
+  if (!selectedObjectRecord.value || selectedObjectRecord.value.objectType !== 'tables') {
+    return '-- 当前未选中表';
+  }
+  const tableName = selectedObjectRecord.value.objectName;
+  const dbType = selectedConnection.value?.dbType ?? selectedTreeConnection.value?.dbType ?? 'MYSQL';
+  const columns = tableDetail.value?.columns ?? [];
+  if (!columns.length) {
+    return `-- 未读取到表 ${tableName} 的字段元数据`;
+  }
+  return buildCreateTableSql(tableName, columns, dbType);
+});
+
+const createTableSqlHighlighted = computed(() => highlightSqlForDisplay(createTableSqlText.value));
+
 const filteredObjectRows = computed(() => {
   const keyword = tableKeyword.value.trim().toLowerCase();
   if (!keyword) {
@@ -1451,21 +1792,7 @@ const objectColumns = computed(() => {
   ];
 });
 
-const detailColumns = [
-  { title: '字段', dataIndex: 'columnName', key: 'columnName', width: 120, ellipsis: true },
-  { title: '类型', dataIndex: 'dataType', key: 'dataType', width: 110, ellipsis: true },
-  { title: '长度', dataIndex: 'columnSize', key: 'columnSize', width: 70, ellipsis: true },
-  { title: '小数位', dataIndex: 'decimalDigits', key: 'decimalDigits', width: 70, ellipsis: true },
-  { title: '默认值', dataIndex: 'defaultValue', key: 'defaultValue', width: 120, ellipsis: true },
-  { title: '自增', dataIndex: 'autoIncrement', key: 'autoIncrement', width: 60, ellipsis: true },
-  { title: '可空', dataIndex: 'nullable', key: 'nullable', width: 70, ellipsis: true },
-  { title: '索引', dataIndex: 'indexed', key: 'indexed', width: 60, ellipsis: true },
-  { title: '主键', dataIndex: 'primaryKey', key: 'primaryKey', width: 60, ellipsis: true },
-  { title: '备注', dataIndex: 'columnComment', key: 'columnComment', ellipsis: true },
-];
-
 const tableScrollY = computed(() => Math.max(300, viewportHeight.value - 300));
-const detailScrollY = computed(() => Math.max(220, viewportHeight.value - 360));
 const queryResultScrollY = computed(() => Math.max(200, viewportHeight.value - 520));
 const aiModelOptions = computed(() =>
   (aiConfigForm.modelOptions ?? []).map((item) => ({
@@ -1520,6 +1847,121 @@ const activeResultColumns = computed(() => {
 
 const queryResultScrollX = computed(() => Math.max(activeResultColumns.value.length * 180, 960));
 
+const chartTypeOptions = [
+  { label: '折线图', value: 'LINE' as ChartType },
+  { label: '柱状图', value: 'BAR' as ChartType },
+  { label: '饼图', value: 'PIE' as ChartType },
+  { label: '散点图', value: 'SCATTER' as ChartType },
+  { label: '趋势图', value: 'TREND' as ChartType },
+];
+
+const chartSortDirectionOptions = [
+  { label: '不排序', value: 'NONE' as SortDirection },
+  { label: '升序', value: 'ASC' as SortDirection },
+  { label: '降序', value: 'DESC' as SortDirection },
+];
+
+const activeChartRows = computed(() => activeResultRows.value.map((row) => {
+  const normalized: Record<string, string | null> = {};
+  Object.keys(row).forEach((key) => {
+    if (key === '__rowKey') {
+      return;
+    }
+    normalized[key] = row[key] ?? null;
+  });
+  return normalized;
+}));
+
+const activeChartFieldOptions = computed(() => activeResultColumns.value.map((column) => ({
+  label: String(column.title || column.key),
+  value: String(column.dataIndex),
+})));
+
+const activeNumericFieldOptions = computed(() => {
+  const rows = activeChartRows.value;
+  const fields = activeChartFieldOptions.value.map((item) => String(item.value));
+  const numericFields = fields.filter((field) => isNumericField(rows, field));
+  return numericFields.map((field) => ({
+    label: field,
+    value: field,
+  }));
+});
+
+function emptyManualChartConfig(): ChartConfigVO {
+  return {
+    chartType: 'LINE',
+    xField: '',
+    yFields: [],
+    categoryField: '',
+    valueField: '',
+    sortField: '',
+    sortDirection: 'NONE',
+    title: '',
+    description: '',
+  };
+}
+
+function cloneChartConfig(config: ChartConfigVO | null | undefined): ChartConfigVO {
+  if (!config) {
+    return emptyManualChartConfig();
+  }
+  return {
+    chartType: (config.chartType || 'LINE') as ChartType,
+    xField: config.xField || '',
+    yFields: [...(config.yFields || [])],
+    categoryField: config.categoryField || '',
+    valueField: config.valueField || '',
+    sortField: config.sortField || '',
+    sortDirection: (config.sortDirection || 'NONE') as SortDirection,
+    title: config.title || '',
+    description: config.description || '',
+  };
+}
+
+function isNumericField(rows: Array<Record<string, string | null>>, field: string) {
+  const values = rows
+    .map((row) => row[field])
+    .filter((value): value is string => value != null && String(value).trim() !== '')
+    .slice(0, 120);
+  if (!values.length) {
+    return false;
+  }
+  return values.every((value) => Number.isFinite(Number(value)));
+}
+
+function setupManualChartConfigByResult(tab: QueryWorkspaceTab) {
+  const rows = (tab.executeResult?.rows ?? tab.explainResult?.rows ?? []);
+  if (!rows.length) {
+    tab.manualChartConfig = emptyManualChartConfig();
+    return;
+  }
+  const fields = rows[0].cells.map((cell) => cell.columnName).filter((item) => !!item);
+  if (!fields.length) {
+    tab.manualChartConfig = emptyManualChartConfig();
+    return;
+  }
+  const rowObjects = rows.map((row) => {
+    const result: Record<string, string | null> = {};
+    row.cells.forEach((cell) => {
+      result[cell.columnName] = cell.cellValue;
+    });
+    return result;
+  });
+  const numericFields = fields.filter((field) => isNumericField(rowObjects, field));
+  const fallbackY = numericFields[0] || fields[1] || fields[0];
+  tab.manualChartConfig = {
+    chartType: 'LINE',
+    xField: fields[0],
+    yFields: fallbackY ? [fallbackY] : [],
+    categoryField: fields[0],
+    valueField: numericFields[0] || '',
+    sortField: '',
+    sortDirection: 'NONE',
+    title: '',
+    description: '',
+  };
+}
+
 function buildConnectionNode(conn: ConnectionVO) {
   if (requiresDatabaseLayer(conn)) {
     const databases = visibleDatabasesForConnection(conn);
@@ -1536,6 +1978,7 @@ function buildConnectionNode(conn: ConnectionVO) {
       key: `conn-${conn.id}`,
       title: conn.name,
       nodeType: 'connection',
+      env: conn.env,
       dbType: conn.dbType,
       children: databaseNodes,
     };
@@ -1546,6 +1989,7 @@ function buildConnectionNode(conn: ConnectionVO) {
     key: `conn-${conn.id}`,
     title: conn.name,
     nodeType: 'connection',
+    env: conn.env,
     dbType: conn.dbType,
     children: buildCategoryChildren(conn.id, configuredDbName),
   };
@@ -1799,12 +2243,20 @@ function openAiQueryTab(initialPrompt = '') {
     executeResult: null,
     explainResult: null,
     selectedAiModel: models[0] ?? '',
+    autoMode: true,
     aiGenerating: false,
+    sqlExecuting: false,
     selectedSqlText: '',
     chatMessages: [],
     lastExecuteFailed: false,
     lastExecuteErrorMessage: '',
     lastFailedSqlText: '',
+    resultViewMode: 'table',
+    manualChartConfig: emptyManualChartConfig(),
+    activeChartConfig: null,
+    chartImageDataUrl: '',
+    chartImageCacheKey: '',
+    chartReadonly: false,
     createdAt: now,
     updatedAt: now,
   };
@@ -1816,6 +2268,7 @@ function openAiQueryTab(initialPrompt = '') {
     tab.databaseName = tab.databaseName || getActiveDatabaseName(tab.connectionId);
     await warmupTableSuggestions(tab);
   });
+  return tab;
 }
 
 function closeQueryTab(tabKey: string) {
@@ -2101,25 +2554,32 @@ function buildHistoryChatMessages(connectionId: number, sessionId: string, rows:
   ordered.forEach((item, index) => {
     const promptText = (item.promptText ?? '').trim();
     const sqlText = (item.sqlText ?? '').trim();
-    if (!promptText || !sqlText) {
-      return;
-    }
+    const actionType = normalizeHistoryActionType(item.actionType);
     const ts = item.createdAt ?? Date.now() + index;
-    messages.push({
-      id: `chat-history-user-${connectionId}-${encodeURIComponent(sessionId)}-${item.id ?? index}`,
-      role: 'user',
-      content: promptText,
-      actionType: 'generate',
-      createdAt: ts,
-    });
-    messages.push({
-      id: `chat-history-assistant-${connectionId}-${encodeURIComponent(sessionId)}-${item.id ?? index}`,
-      role: 'assistant',
-      content: '',
-      sqlText,
-      actionType: 'generate',
-      createdAt: ts + 1,
-    });
+    if (promptText) {
+      messages.push({
+        id: `chat-history-user-${connectionId}-${encodeURIComponent(sessionId)}-${item.id ?? index}`,
+        role: 'user',
+        content: promptText,
+        actionType,
+        createdAt: ts,
+      });
+    }
+    const assistantContent = (item.assistantContent ?? '').trim();
+    const hasAssistantPayload = !!assistantContent || !!sqlText || !!item.chartConfig || !!item.chartImageCacheKey;
+    if (hasAssistantPayload) {
+      messages.push({
+        id: `chat-history-assistant-${connectionId}-${encodeURIComponent(sessionId)}-${item.id ?? index}`,
+        role: 'assistant',
+        content: assistantContent,
+        sqlText: sqlText || undefined,
+        actionType,
+        chartConfig: item.chartConfig ?? undefined,
+        chartConfigSummary: assistantContent || undefined,
+        chartImageCacheKey: (item.chartImageCacheKey || '').trim() || undefined,
+        createdAt: ts + 1,
+      });
+    }
   });
   return messages;
 }
@@ -2134,7 +2594,7 @@ function buildHistoryTabFromRows(connectionId: number, sessionId: string, rows: 
     key: `query-history-${connectionId}-${encodeURIComponent(sessionId)}`,
     title: '未命名会话',
     connectionId,
-    databaseName: getActiveDatabaseName(connectionId),
+    databaseName: (last?.databaseName || '').trim() || getActiveDatabaseName(connectionId),
     sessionId,
     prompt: '',
     sqlText: (last?.sqlText ?? '').trim(),
@@ -2143,12 +2603,20 @@ function buildHistoryTabFromRows(connectionId: number, sessionId: string, rows: 
     executeResult: null,
     explainResult: null,
     selectedAiModel: models[0] ?? '',
+    autoMode: true,
     aiGenerating: false,
+    sqlExecuting: false,
     selectedSqlText: '',
     chatMessages: messages,
     lastExecuteFailed: false,
     lastExecuteErrorMessage: '',
     lastFailedSqlText: '',
+    resultViewMode: 'table',
+    manualChartConfig: emptyManualChartConfig(),
+    activeChartConfig: null,
+    chartImageDataUrl: '',
+    chartImageCacheKey: '',
+    chartReadonly: false,
     createdAt: first?.createdAt ?? Date.now(),
     updatedAt: last?.createdAt ?? Date.now(),
   };
@@ -2271,6 +2739,12 @@ async function openHistorySession(item: QueryHistorySessionVO) {
       tab.riskInfo = null;
       tab.riskAckToken = '';
       tab.prompt = '';
+      tab.resultViewMode = 'table';
+      tab.manualChartConfig = emptyManualChartConfig();
+      tab.activeChartConfig = null;
+      tab.chartImageDataUrl = '';
+      tab.chartImageCacheKey = '';
+      tab.chartReadonly = true;
       tab.createdAt = item.createdAt ?? loaded.createdAt;
       tab.updatedAt = item.updatedAt ?? loaded.updatedAt;
       tab.databaseName = tab.databaseName || loaded.databaseName;
@@ -2280,6 +2754,8 @@ async function openHistorySession(item: QueryHistorySessionVO) {
       tab.prompt = '';
       tab.selectedSqlText = '';
       tab.title = customTitle || fallbackTitle;
+      tab.resultViewMode = 'table';
+      tab.chartReadonly = true;
       tab.createdAt = item.createdAt ?? tab.createdAt;
       tab.updatedAt = item.updatedAt ?? tab.updatedAt;
       queryTabs.value = [...queryTabs.value, tab];
@@ -2288,6 +2764,7 @@ async function openHistorySession(item: QueryHistorySessionVO) {
     await prepareConnectionTreeData(tab.connectionId);
     tab.databaseName = tab.databaseName || getActiveDatabaseName(tab.connectionId);
     await warmupTableSuggestions(tab);
+    await hydrateHistoryChartImages(tab);
   } finally {
     historySessionLoadingKey.value = '';
   }
@@ -2307,6 +2784,18 @@ function lastPromptText(tab: QueryWorkspaceTab) {
 }
 
 function assistantActionLabel(actionType: QueryChatMessage['actionType']) {
+  if (actionType === 'auto_generate') {
+    return 'Auto · 生成 SQL';
+  }
+  if (actionType === 'auto_explain') {
+    return 'Auto · 解释 SQL';
+  }
+  if (actionType === 'auto_analyze') {
+    return 'Auto · 分析 SQL';
+  }
+  if (actionType === 'auto_chart_auto_plan') {
+    return 'Auto · 图表方案';
+  }
   if (actionType === 'explain') {
     return '解释 SQL';
   }
@@ -2316,10 +2805,60 @@ function assistantActionLabel(actionType: QueryChatMessage['actionType']) {
   if (actionType === 'repair') {
     return '修复 SQL';
   }
+  if (actionType === 'chart_auto_plan') {
+    return '图表方案';
+  }
+  if (actionType === 'chart_manual_render') {
+    return '手动制图';
+  }
+  if (actionType === 'chart_auto_render') {
+    return '自动制图';
+  }
   return '生成 SQL';
 }
 
+function normalizeHistoryActionType(actionType?: string): QueryActionType {
+  const normalized = (actionType || '').trim().toLowerCase();
+  if (normalized === 'auto_generate') {
+    return 'auto_generate';
+  }
+  if (normalized === 'auto_explain') {
+    return 'auto_explain';
+  }
+  if (normalized === 'auto_analyze') {
+    return 'auto_analyze';
+  }
+  if (normalized === 'auto_chart_auto_plan') {
+    return 'auto_chart_auto_plan';
+  }
+  if (normalized === 'explain') {
+    return 'explain';
+  }
+  if (normalized === 'analyze') {
+    return 'analyze';
+  }
+  if (normalized === 'repair') {
+    return 'repair';
+  }
+  if (normalized === 'chart_auto_plan') {
+    return 'chart_auto_plan';
+  }
+  if (normalized === 'chart_manual_render') {
+    return 'chart_manual_render';
+  }
+  if (normalized === 'chart_auto_render') {
+    return 'chart_auto_render';
+  }
+  return 'generate';
+}
+
 function userBubbleClass(actionType: QueryActionType) {
+  if (actionType === 'auto_explain') {
+    return 'is-explain';
+  }
+  if (actionType === 'auto_analyze') {
+    return 'is-analyze';
+  }
   if (actionType === 'explain') {
     return 'is-explain';
   }
@@ -2338,15 +2877,20 @@ function touchQueryTab(tab: QueryWorkspaceTab) {
 
 function appendUserChatMessage(tab: QueryWorkspaceTab, promptText: string, actionType: QueryChatMessage['actionType']) {
   const now = Date.now();
-  tab.chatMessages.push({
+  const messageItem: QueryChatMessage = {
     id: `chat-user-${now}-${Math.random().toString(16).slice(2, 8)}`,
     role: 'user',
     content: promptText,
     actionType,
+    retryable: false,
+    retryLoading: false,
+    historySaved: false,
     createdAt: now,
-  });
+  };
+  tab.chatMessages.push(messageItem);
   applySessionTitle(tab);
   touchQueryTab(tab);
+  return messageItem;
 }
 
 function appendAssistantSqlMessage(
@@ -2354,17 +2898,25 @@ function appendAssistantSqlMessage(
   sqlText: string,
   actionType: QueryChatMessage['actionType'],
   content = '',
+  chartConfig?: ChartConfigVO | null,
+  chartConfigSummary?: string,
+  chartImageCacheKey?: string,
 ) {
   const now = Date.now();
-  tab.chatMessages.push({
+  const messageItem: QueryChatMessage = {
     id: `chat-assistant-${now}-${Math.random().toString(16).slice(2, 8)}`,
     role: 'assistant',
     content: content.trim(),
     sqlText,
     actionType,
+    chartConfig: chartConfig ? cloneChartConfig(chartConfig) : undefined,
+    chartConfigSummary: (chartConfigSummary || '').trim() || undefined,
+    chartImageCacheKey: (chartImageCacheKey || '').trim() || undefined,
     createdAt: now,
-  });
+  };
+  tab.chatMessages.push(messageItem);
   touchQueryTab(tab);
+  return messageItem;
 }
 
 function appendAssistantTextMessage(tab: QueryWorkspaceTab, content: string, actionType: QueryChatMessage['actionType']) {
@@ -2414,14 +2966,14 @@ async function runAiTextActionWithSelectedSql(tab: QueryWorkspaceTab, actionType
   if (tab.aiGenerating) {
     return;
   }
-  const sqlSnippet = tab.selectedSqlText.trim();
-  if (!sqlSnippet) {
+  const selectedSqlText = tab.selectedSqlText.trim();
+  if (!selectedSqlText) {
     message.info('请先选择一段 SQL');
     return;
   }
 
   const promptText = actionType === 'explain' ? '请解释这段 SQL 的含义。' : '请分析这段 SQL 的合理性。';
-  appendUserChatMessage(tab, `${promptText}\n\n${sqlSnippet}`, actionType);
+  appendUserChatMessage(tab, `${promptText}\n\n${selectedSqlText}`, actionType);
   tab.aiGenerating = true;
   hideSqlSelectionPopover();
 
@@ -2430,9 +2982,8 @@ async function runAiTextActionWithSelectedSql(tab: QueryWorkspaceTab, actionType
     const result = await postApi<AiTextResponseVO>(endpoint, {
       connectionId: tab.connectionId,
       sessionId: tab.sessionId,
-      prompt: buildAiPrompt(promptText, actionType, sqlSnippet),
+      prompt: mergePromptWithSqlSnippet(promptText, selectedSqlText),
       databaseName: tab.databaseName || undefined,
-      sqlSnippet,
       modelName: tab.selectedAiModel || undefined,
     });
     appendAssistantTextMessage(tab, result.content || '未返回内容', actionType);
@@ -3300,14 +3851,31 @@ function closeContextMenu() {
   contextMenu.visible = false;
   contextMenu.targetType = 'none';
   contextMenu.databaseName = '';
+  contextMenu.objectType = '';
+  contextMenu.objectName = '';
 }
 
-async function triggerContextAction(action: 'edit' | 'test' | 'sync' | 'delete' | 'revectorize' | 'interruptVectorize' | 'viewVectorizedData') {
+async function triggerContextAction(action: 'edit' | 'test' | 'sync' | 'delete' | 'revectorize' | 'interruptVectorize' | 'viewVectorizedData' | 'queryData') {
   const id = contextMenu.connectionId;
   const databaseName = contextMenu.databaseName;
   const targetType = contextMenu.targetType;
+  const objectType = contextMenu.objectType;
+  const objectName = contextMenu.objectName;
   closeContextMenu();
   if (!id) {
+    return;
+  }
+  if (action === 'queryData') {
+    if (targetType !== 'object' || !objectName || (objectType !== 'tables' && objectType !== 'views')) {
+      return;
+    }
+    openQueryTabByObject({
+      objectName,
+      objectType,
+      rowEstimate: 0,
+      tableSize: '-',
+      description: '',
+    }, true);
     return;
   }
   if (action === 'revectorize') {
@@ -3426,10 +3994,31 @@ async function interruptDatabaseVectorize(connectionId: number, databaseName: st
 function onObjectRow(record: ObjectRow) {
   return {
     onClick: () => {
+      closeContextMenu();
       const databaseName = getActiveDatabaseName(workflow.connectionId);
       void runSafely(async () => {
         await selectObject(workflow.connectionId, databaseName, record.objectType, record.objectName);
       });
+    },
+    onDblclick: () => {
+      openQueryTabByObject(record);
+    },
+    onContextmenu: (event: MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      closeContextMenu();
+      const databaseName = getActiveDatabaseName(workflow.connectionId);
+      void runSafely(async () => {
+        await selectObject(workflow.connectionId, databaseName, record.objectType, record.objectName);
+      });
+      contextMenu.visible = true;
+      contextMenu.x = Math.min(event.clientX, window.innerWidth - 220);
+      contextMenu.y = Math.min(event.clientY, window.innerHeight - 180);
+      contextMenu.targetType = 'object';
+      contextMenu.connectionId = workflow.connectionId;
+      contextMenu.databaseName = databaseName;
+      contextMenu.objectType = record.objectType;
+      contextMenu.objectName = record.objectName;
     },
   };
 }
@@ -3500,18 +4089,27 @@ function stopResizeBrowserPane() {
   window.removeEventListener('mouseup', stopResizeBrowserPane);
 }
 
-function quickSelectAll() {
-  if (!selectedObjectName.value) {
-    message.warning('请先在中间列表选择一个对象');
+function openQueryTabByObject(record: ObjectRow, autoExecute = false) {
+  if (record.objectType !== 'tables' && record.objectType !== 'views') {
     return;
   }
-  if (currentObjectType.value !== 'tables' && currentObjectType.value !== 'views') {
-    message.warning('当前对象类型不支持自动生成 SELECT');
+  const sql = `SELECT * FROM ${record.objectName} LIMIT 100`;
+  const prompt = `查询 ${record.objectName} 最近数据`;
+  workflow.sqlText = sql;
+  workflow.prompt = prompt;
+  const tab = openAiQueryTab(prompt);
+  if (!tab) {
     return;
   }
-  workflow.sqlText = `SELECT * FROM ${selectedObjectName.value} LIMIT 100`;
-  workflow.prompt = `查询 ${selectedObjectName.value} 最近数据`;
-  openAiQueryTab(workflow.prompt);
+  tab.sqlText = sql;
+  tab.prompt = '';
+  tab.databaseName = getActiveDatabaseName(tab.connectionId);
+  touchQueryTab(tab);
+  if (autoExecute) {
+    void runSafely(async () => {
+      await executeSqlForTab(tab, sql);
+    });
+  }
 }
 
 function getDesktopBridge(): DesktopBridge | null {
@@ -3663,6 +4261,12 @@ async function handleQueryConnectionChange(tab: QueryWorkspaceTab) {
     tab.lastExecuteErrorMessage = '';
     tab.lastFailedSqlText = '';
     tab.selectedSqlText = '';
+    tab.resultViewMode = 'table';
+    tab.manualChartConfig = emptyManualChartConfig();
+    tab.activeChartConfig = null;
+    tab.chartImageDataUrl = '';
+    tab.chartImageCacheKey = '';
+    tab.chartReadonly = false;
     touchQueryTab(tab);
     await warmupTableSuggestions(tab);
   });
@@ -3673,6 +4277,12 @@ function handleQueryDatabaseChange(tab: QueryWorkspaceTab) {
   tab.lastExecuteFailed = false;
   tab.lastExecuteErrorMessage = '';
   tab.lastFailedSqlText = '';
+  tab.resultViewMode = 'table';
+  tab.manualChartConfig = emptyManualChartConfig();
+  tab.activeChartConfig = null;
+  tab.chartImageDataUrl = '';
+  tab.chartImageCacheKey = '';
+  tab.chartReadonly = false;
   touchQueryTab(tab);
   void warmupTableSuggestions(tab);
 }
@@ -3689,51 +4299,122 @@ function resolveSqlForAction(tab: QueryWorkspaceTab, sqlOverride?: string) {
   return tab.sqlText.trim();
 }
 
-async function saveConversationHistory(tab: QueryWorkspaceTab, promptText: string, sqlText: string) {
+interface SaveConversationHistoryOptions {
+  actionType?: QueryActionType;
+  assistantContent?: string;
+  databaseName?: string;
+  chartConfig?: ChartConfigVO | null;
+  chartImageCacheKey?: string;
+  historyType?: 'CHAT' | 'EXECUTE';
+  executionMs?: number;
+  success?: boolean;
+}
+
+async function saveConversationHistory(
+  tab: QueryWorkspaceTab,
+  promptText: string,
+  sqlText: string,
+  options?: SaveConversationHistoryOptions,
+) {
   try {
     await postApi<boolean>('/api/editor/history/save', {
       connectionId: tab.connectionId,
       sessionId: tab.sessionId,
       promptText,
       sqlText,
-      success: true,
+      historyType: options?.historyType || 'CHAT',
+      actionType: options?.actionType || 'generate',
+      assistantContent: options?.assistantContent || '',
+      databaseName: options?.databaseName || tab.databaseName || '',
+      chartConfigJson: options?.chartConfig ? JSON.stringify(options.chartConfig) : '',
+      chartImageCacheKey: options?.chartImageCacheKey || '',
+      executionMs: options?.executionMs,
+      success: options?.success ?? true,
     });
   } catch {
     // 关键操作：会话历史持久化失败不阻塞主流程。
   }
 }
 
-function buildAiPrompt(promptText: string, actionType: AiActionType, sqlSnippet?: string) {
-  const snippet = (sqlSnippet ?? '').trim();
-  if (actionType === 'explain') {
-    return [
-      '请用中文解释下面 SQL 的业务含义。',
-      '要求：',
-      '1) 不要执行 EXPLAIN；',
-      '2) 用自然语言解释查询目的、条件、关联和聚合。',
-      `用户补充：${promptText}`,
-      snippet ? `SQL片段：\n${snippet}` : '',
-    ].filter((item) => !!item).join('\n');
+async function saveConversationHistoryOnce(
+  tab: QueryWorkspaceTab,
+  userMessage: QueryChatMessage,
+  promptText: string,
+  sqlText: string,
+  options?: SaveConversationHistoryOptions,
+) {
+  if (userMessage.historySaved) {
+    return;
   }
-  if (actionType === 'analyze') {
-    return [
-      '请基于数据库元数据分析下面 SQL 的合理性。',
-      '要求：',
-      '1) 输出结论、问题、优化建议；',
-      '2) 不要执行 EXPLAIN；',
-      '3) 指出不确定项。',
-      `用户补充：${promptText}`,
-      snippet ? `SQL片段：\n${snippet}` : '',
-    ].filter((item) => !!item).join('\n');
+  await saveConversationHistory(tab, promptText, sqlText, options);
+  userMessage.historySaved = true;
+}
+
+function timeoutRetryErrorMessage(rawMessage: string) {
+  const normalized = rawMessage.trim();
+  if (!normalized) {
+    return '请求超时，请点击重试';
+  }
+  return normalized;
+}
+
+function isTimeoutErrorMessage(rawMessage: string) {
+  const normalized = rawMessage.trim().toLowerCase();
+  return normalized.includes('timeout')
+    || normalized.includes('timed out')
+    || normalized.includes('超时')
+    || normalized.includes('http 504')
+    || normalized.includes('http 408');
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function clearUserRetryState(userMessage: QueryChatMessage) {
+  userMessage.retryable = false;
+  userMessage.retryLoading = false;
+  userMessage.retryMeta = undefined;
+}
+
+function markUserMessageRetryable(
+  tab: QueryWorkspaceTab,
+  userMessage: QueryChatMessage,
+  retryMeta: RetryRequestMeta,
+) {
+  userMessage.retryable = true;
+  userMessage.retryLoading = false;
+  userMessage.retryMeta = retryMeta;
+  touchQueryTab(tab);
+}
+
+function mergePromptWithSqlSnippet(promptText: string, selectedSqlText?: string) {
+  const basePrompt = promptText.trim();
+  const snippet = (selectedSqlText ?? '').trim();
+  if (!snippet) {
+    return basePrompt;
+  }
+  if (!basePrompt) {
+    return snippet;
   }
   return [
-    '你是 SQL 生成助手。',
-    '请根据用户需求生成可直接执行的 SQL。',
-    '要求：',
-    '1) 只返回 SQL，不要解释和 markdown；',
-    '2) 语句尽量完整且可执行。',
-    `用户需求：${promptText}`,
+    basePrompt,
+    '',
+    snippet,
   ].join('\n');
+}
+
+const aiRequestTimeoutMs = 120000;
+
+async function postAiApiWithTimeout<T>(path: string, payload: unknown, timeoutMs = aiRequestTimeoutMs) {
+  return await Promise.race<T>([
+    postApi<T>(path, payload),
+    new Promise<T>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error(`请求超时（>${Math.floor(timeoutMs / 1000)}s）`));
+      }, timeoutMs);
+    }),
+  ]);
 }
 
 function looksLikeSqlText(text: string) {
@@ -3741,42 +4422,62 @@ function looksLikeSqlText(text: string) {
   return /^(select|with|insert|update|delete|replace|create|alter|drop|truncate|merge|show|explain)\b/.test(normalized);
 }
 
-async function generateSqlForTab(tab: QueryWorkspaceTab, actionType: AiActionType = 'generate') {
+interface RetryInvokeOptions {
+  userMessage: QueryChatMessage;
+  promptText: string;
+  finalPrompt: string;
+  actionSqlSnippet?: string;
+}
+
+async function generateSqlForTab(
+  tab: QueryWorkspaceTab,
+  actionType: AiActionType = 'generate',
+  retryOptions?: RetryInvokeOptions,
+) {
   if (tab.aiGenerating) {
     return;
   }
-  const rawPrompt = tab.prompt.trim();
-  const actionSqlSnippet = actionType === 'generate' ? '' : resolveSqlForAction(tab);
-  if (actionType === 'generate' && !rawPrompt) {
+  const rawPrompt = retryOptions?.promptText ?? tab.prompt.trim();
+  const actionSqlSnippet = retryOptions?.actionSqlSnippet ?? (actionType === 'generate' ? '' : resolveSqlForAction(tab));
+  if (actionType === 'generate' && !rawPrompt.trim()) {
     message.info('请先输入自然语言需求');
     return;
   }
-  if (actionType !== 'generate' && !rawPrompt && !actionSqlSnippet) {
+  if (actionType !== 'generate' && !rawPrompt.trim() && !actionSqlSnippet) {
     message.info('请先输入说明，或在右侧编辑器中选择 SQL');
     return;
   }
-  const promptText = rawPrompt || (actionType === 'explain'
+  const promptText = rawPrompt.trim() || (actionType === 'explain'
     ? '请解释这段 SQL 的含义。'
     : '请分析这段 SQL 的合理性。');
-  appendUserChatMessage(tab, promptText, actionType);
-  tab.prompt = '';
-  const finalPrompt = buildAiPrompt(promptText, actionType, actionSqlSnippet);
-  const sqlSnippet = actionType === 'generate' ? undefined : (actionSqlSnippet || undefined);
+  const userMessage = retryOptions?.userMessage ?? appendUserChatMessage(tab, promptText, actionType);
+  if (!retryOptions) {
+    tab.prompt = '';
+  }
+  const finalPrompt = retryOptions?.finalPrompt ?? (actionType === 'generate'
+    ? promptText
+    : mergePromptWithSqlSnippet(promptText, actionSqlSnippet));
+  const retryMeta: RetryRequestMeta = {
+    kind: 'ai_action',
+    actionType,
+    promptText,
+    finalPrompt,
+    actionSqlSnippet,
+  };
   tab.aiGenerating = true;
-  await runSafely(async () => {
+  try {
     if (actionType === 'generate') {
-      const generated = await postApi<AiGenerateSqlVO>('/api/ai/query/generate', {
+      const generated = await postAiApiWithTimeout<AiGenerateSqlVO>('/api/ai/query/generate', {
         connectionId: tab.connectionId,
         sessionId: tab.sessionId,
         prompt: finalPrompt,
         databaseName: tab.databaseName || undefined,
-        sqlSnippet: undefined,
         modelName: tab.selectedAiModel || undefined,
       });
       const generatedText = (generated.sqlText || '').trim();
       if (looksLikeSqlText(generatedText)) {
         appendAssistantSqlMessage(tab, generatedText, actionType);
-        await saveConversationHistory(tab, promptText, generatedText);
+        await saveConversationHistoryOnce(tab, userMessage, promptText, generatedText);
         message.success('SQL 已生成');
       } else {
         appendAssistantTextMessage(tab, generatedText || '未返回可执行 SQL', actionType);
@@ -3785,16 +4486,16 @@ async function generateSqlForTab(tab: QueryWorkspaceTab, actionType: AiActionTyp
       if (generated.reasoning) {
         message.info(generated.reasoning);
       }
+      clearUserRetryState(userMessage);
       return;
     }
 
     const endpoint = actionType === 'explain' ? '/api/ai/query/explain' : '/api/ai/query/analyze';
-    const result = await postApi<AiTextResponseVO>(endpoint, {
+    const result = await postAiApiWithTimeout<AiTextResponseVO>(endpoint, {
       connectionId: tab.connectionId,
       sessionId: tab.sessionId,
       prompt: finalPrompt,
       databaseName: tab.databaseName || undefined,
-      sqlSnippet,
       modelName: tab.selectedAiModel || undefined,
     });
     appendAssistantTextMessage(tab, result.content || '未返回内容', actionType);
@@ -3802,8 +4503,509 @@ async function generateSqlForTab(tab: QueryWorkspaceTab, actionType: AiActionTyp
       message.info(result.reasoning);
     }
     message.success(actionType === 'explain' ? 'SQL 含义解释已生成' : 'SQL 合理性分析已生成');
+    clearUserRetryState(userMessage);
+  } catch (error) {
+    const msg = getErrorMessage(error);
+    if (isTimeoutErrorMessage(msg)) {
+      markUserMessageRetryable(tab, userMessage, retryMeta);
+      message.error(timeoutRetryErrorMessage(msg));
+    } else {
+      clearUserRetryState(userMessage);
+      message.error(msg);
+    }
+  } finally {
+    tab.aiGenerating = false;
+    touchQueryTab(tab);
+  }
+}
+
+function autoActionTypeByIntent(intentType: AiIntentType): QueryActionType {
+  if (intentType === 'EXPLAIN_SQL') {
+    return 'auto_explain';
+  }
+  if (intentType === 'ANALYZE_SQL') {
+    return 'auto_analyze';
+  }
+  if (intentType === 'GENERATE_CHART') {
+    return 'auto_chart_auto_plan';
+  }
+  return 'auto_generate';
+}
+
+async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvokeOptions) {
+  if (tab.aiGenerating) {
+    return;
+  }
+  const rawPrompt = retryOptions?.promptText ?? tab.prompt.trim();
+  if (!rawPrompt) {
+    message.info('请先输入自然语言需求');
+    return;
+  }
+  const sqlSnippet = retryOptions?.actionSqlSnippet ?? resolveSqlForAction(tab);
+  const finalPrompt = retryOptions?.finalPrompt ?? mergePromptWithSqlSnippet(rawPrompt, sqlSnippet);
+  const userMessage = retryOptions?.userMessage ?? appendUserChatMessage(tab, rawPrompt, 'auto_generate');
+  if (!retryOptions) {
+    tab.prompt = '';
+  }
+  const retryMeta: RetryRequestMeta = {
+    kind: 'auto',
+    promptText: rawPrompt,
+    finalPrompt,
+    actionSqlSnippet: sqlSnippet,
+  };
+  tab.aiGenerating = true;
+  try {
+    const result = await postAiApiWithTimeout<AiAutoQueryVO>('/api/ai/query/auto', {
+      connectionId: tab.connectionId,
+      sessionId: tab.sessionId,
+      prompt: finalPrompt,
+      databaseName: tab.databaseName || undefined,
+      modelName: tab.selectedAiModel || undefined,
+    });
+    const actionType = autoActionTypeByIntent(result.intentType);
+    if (result.intentType === 'GENERATE_SQL') {
+      const sqlText = (result.sqlText || '').trim();
+      if (looksLikeSqlText(sqlText)) {
+        appendAssistantSqlMessage(tab, sqlText, actionType);
+        await saveConversationHistoryOnce(tab, userMessage, rawPrompt, sqlText, {
+          actionType,
+          databaseName: tab.databaseName,
+        });
+      } else {
+        const contentText = sqlText || '未返回可执行 SQL';
+        appendAssistantTextMessage(tab, contentText, actionType);
+        await saveConversationHistoryOnce(tab, userMessage, rawPrompt, sqlText || '', {
+          actionType,
+          assistantContent: contentText,
+          databaseName: tab.databaseName,
+        });
+      }
+    } else if (result.intentType === 'GENERATE_CHART') {
+      const sqlText = (result.sqlText || '').trim();
+      const config = result.chartConfig ? cloneChartConfig(result.chartConfig) : null;
+      const summary = (result.configSummary || '').trim() || chartSummaryText(config);
+      if (!sqlText) {
+        appendAssistantTextMessage(tab, summary || '未返回图表方案', actionType);
+        await saveConversationHistoryOnce(tab, userMessage, rawPrompt, '', {
+          actionType,
+          assistantContent: summary || '未返回图表方案',
+          chartConfig: config,
+          databaseName: tab.databaseName,
+        });
+      } else {
+        const plannedMessage = appendAssistantSqlMessage(
+          tab,
+          sqlText,
+          actionType,
+          summary,
+          config,
+          summary,
+        );
+        await saveConversationHistoryOnce(tab, userMessage, rawPrompt, sqlText, {
+          actionType,
+          assistantContent: summary,
+          chartConfig: config,
+          databaseName: tab.databaseName,
+        });
+        const generatedChart = await generateChartFromMessage(tab, plannedMessage, {
+          appendRenderMessage: false,
+          silentSuccess: true,
+        });
+        if (!generatedChart) {
+          message.warning('图表方案已生成，自动执行失败，请手动点击“生成图表”');
+        }
+      }
+    } else if (result.intentType === 'EXPLAIN_SQL' || result.intentType === 'ANALYZE_SQL') {
+      const content = (result.content || '').trim() || '未返回内容';
+      appendAssistantTextMessage(tab, content, actionType);
+      await saveConversationHistoryOnce(tab, userMessage, rawPrompt, sqlSnippet || '', {
+        actionType,
+        assistantContent: content,
+        databaseName: tab.databaseName,
+      });
+    } else {
+      throw new Error('未识别的 Auto 意图类型');
+    }
+
+    if (result.fallbackUsed) {
+      message.warning('Auto 模式已触发降级，请检查返回内容');
+    }
+    clearUserRetryState(userMessage);
+  } catch (error) {
+    const msg = getErrorMessage(error);
+    if (isTimeoutErrorMessage(msg)) {
+      markUserMessageRetryable(tab, userMessage, retryMeta);
+      message.error(timeoutRetryErrorMessage(msg));
+    } else {
+      clearUserRetryState(userMessage);
+      message.error(msg);
+    }
+  } finally {
+    tab.aiGenerating = false;
+    touchQueryTab(tab);
+  }
+}
+
+async function retryUserMessage(tab: QueryWorkspaceTab, userMessage: QueryChatMessage) {
+  const retryMeta = userMessage.retryMeta;
+  if (!retryMeta || tab.aiGenerating) {
+    return;
+  }
+  userMessage.retryLoading = true;
+  touchQueryTab(tab);
+  try {
+    const retryOptions: RetryInvokeOptions = {
+      userMessage,
+      promptText: retryMeta.promptText,
+      finalPrompt: retryMeta.finalPrompt,
+      actionSqlSnippet: retryMeta.actionSqlSnippet || '',
+    };
+    if (retryMeta.kind === 'ai_action') {
+      await generateSqlForTab(tab, retryMeta.actionType || 'generate', retryOptions);
+      return;
+    }
+    if (retryMeta.kind === 'auto') {
+      await sendAutoForTab(tab, retryOptions);
+      return;
+    }
+    await generateChartPlanForTab(tab, retryOptions);
+  } finally {
+    userMessage.retryLoading = false;
+    touchQueryTab(tab);
+  }
+}
+
+function buildChartPrompt(promptText: string) {
+  return [
+    '请生成图表方案。',
+    '要求：',
+    '1) 返回可执行 SQL 和结构化图表配置；',
+    '2) 配置需包含图表类型、字段映射、排序建议；',
+    '3) 仅基于当前数据库上下文。',
+    `用户需求：${promptText}`,
+  ].join('\n');
+}
+
+function chartTypeLabel(chartType?: string) {
+  const normalized = (chartType || '').toUpperCase();
+  if (normalized === 'BAR') {
+    return '柱状图';
+  }
+  if (normalized === 'PIE') {
+    return '饼图';
+  }
+  if (normalized === 'SCATTER') {
+    return '散点图';
+  }
+  if (normalized === 'TREND') {
+    return '趋势图';
+  }
+  return '折线图';
+}
+
+function chartSummaryText(config?: ChartConfigVO | null) {
+  if (!config) {
+    return '未返回可用图表配置，请手动配置。';
+  }
+  const type = chartTypeLabel(config.chartType);
+  if ((config.chartType || '').toUpperCase() === 'PIE') {
+    return `${type} · 分类: ${config.categoryField || '-'} · 数值: ${config.valueField || '-'}`;
+  }
+  const y = (config.yFields || []).join(', ') || '-';
+  return `${type} · X: ${config.xField || '-'} · Y: ${y}`;
+}
+
+function isChartConfigRenderable(config: ChartConfigVO | null | undefined, rows: Array<Record<string, string | null>>) {
+  if (!config) {
+    return false;
+  }
+  const fields = rows.length ? Object.keys(rows[0]) : [];
+  const hasField = (field?: string) => !!field && fields.includes(field);
+  const chartType = (config.chartType || '').toUpperCase();
+  if (chartType === 'PIE') {
+    return hasField(config.categoryField) && hasField(config.valueField);
+  }
+  if (chartType === 'SCATTER') {
+    return hasField(config.xField) && !!config.yFields?.[0] && hasField(config.yFields[0]);
+  }
+  return hasField(config.xField) && !!config.yFields?.length && config.yFields.every((field) => hasField(field));
+}
+
+async function exportChartPngDataUrl() {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    await nextTick();
+    await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 40 : 90));
+    const dataUrl = (await queryChartPanelRef.value?.exportPngDataUrl?.()) || '';
+    if (dataUrl) {
+      return dataUrl;
+    }
+  }
+  return '';
+}
+
+async function saveChartImageCache(
+  tab: QueryWorkspaceTab,
+  imageDataUrl: string,
+  suggestedFileName: string,
+) {
+  const payload: ChartCacheSaveReq = {
+    connectionId: tab.connectionId,
+    sessionId: tab.sessionId,
+    imageBase64Png: imageDataUrl,
+    suggestedFileName,
+  };
+  const saved = await postApi<ChartCacheSaveVO>('/api/editor/chart/cache/save', payload);
+  return saved.cacheKey || '';
+}
+
+function downloadImage(dataUrl: string, fileName: string) {
+  if (!dataUrl) {
+    return;
+  }
+  const anchor = document.createElement('a');
+  anchor.href = dataUrl;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+}
+
+async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvokeOptions) {
+  if (tab.aiGenerating) {
+    return;
+  }
+  const rawPrompt = retryOptions?.promptText ?? tab.prompt.trim();
+  if (!rawPrompt) {
+    message.info('请先输入图表需求');
+    return;
+  }
+  const finalPrompt = retryOptions?.finalPrompt ?? buildChartPrompt(rawPrompt);
+  const userMessage = retryOptions?.userMessage ?? appendUserChatMessage(tab, rawPrompt, 'chart_auto_plan');
+  if (!retryOptions) {
+    tab.prompt = '';
+  }
+  const retryMeta: RetryRequestMeta = {
+    kind: 'chart_plan',
+    promptText: rawPrompt,
+    finalPrompt,
+  };
+  tab.aiGenerating = true;
+  try {
+    const generated = await postAiApiWithTimeout<AiGenerateChartVO>('/api/ai/query/generate-chart', {
+      connectionId: tab.connectionId,
+      sessionId: tab.sessionId,
+      prompt: finalPrompt,
+      databaseName: tab.databaseName || undefined,
+      modelName: tab.selectedAiModel || undefined,
+    });
+    const sqlText = (generated.sqlText || '').trim();
+    const config = generated.chartConfig ? cloneChartConfig(generated.chartConfig) : null;
+    const summary = (generated.configSummary || '').trim() || chartSummaryText(config);
+    if (!sqlText) {
+      appendAssistantTextMessage(tab, summary || '未返回图表方案', 'chart_auto_plan');
+      message.warning('未生成可执行 SQL');
+      return;
+    }
+    const plannedMessage = appendAssistantSqlMessage(
+      tab,
+      sqlText,
+      'chart_auto_plan',
+      summary,
+      config,
+      summary,
+    );
+    await saveConversationHistoryOnce(tab, userMessage, rawPrompt, sqlText, {
+      actionType: 'chart_auto_plan',
+      assistantContent: summary,
+      chartConfig: config,
+      databaseName: tab.databaseName,
+    });
+    if (generated.reasoning) {
+      message.info(generated.reasoning);
+    }
+    const generatedChart = await generateChartFromMessage(tab, plannedMessage, {
+      appendRenderMessage: false,
+      silentSuccess: true,
+    });
+    if (!generatedChart) {
+      message.warning('图表方案已生成，自动执行失败，请手动点击“生成图表”');
+      return;
+    }
+    message.success('AI 图表方案已执行并生成图表');
+    clearUserRetryState(userMessage);
+  } catch (error) {
+    const msg = getErrorMessage(error);
+    if (isTimeoutErrorMessage(msg)) {
+      markUserMessageRetryable(tab, userMessage, retryMeta);
+      message.error(timeoutRetryErrorMessage(msg));
+    } else {
+      clearUserRetryState(userMessage);
+      message.error(msg);
+    }
+  } finally {
+    tab.aiGenerating = false;
+    touchQueryTab(tab);
+  }
+}
+
+interface GenerateChartFromMessageOptions {
+  appendRenderMessage?: boolean;
+  silentSuccess?: boolean;
+}
+
+async function generateChartFromMessage(
+  tab: QueryWorkspaceTab,
+  item: QueryChatMessage,
+  options?: GenerateChartFromMessageOptions,
+) {
+  const sqlText = (item.sqlText || '').trim();
+  if (!sqlText) {
+    message.warning('当前消息不包含 SQL，无法生成图表');
+    return;
+  }
+  const success = await executeSqlForTab(tab, sqlText, { silentSuccess: true });
+  if (!success) {
+    return;
+  }
+
+  const rows = activeChartRows.value;
+  let config = item.chartConfig ? cloneChartConfig(item.chartConfig) : null;
+  if (!isChartConfigRenderable(config, rows)) {
+    setupManualChartConfigByResult(tab);
+    config = cloneChartConfig(tab.manualChartConfig);
+    message.warning('AI 配置与结果字段不匹配，已切换为手动默认配置');
+  } else {
+    tab.manualChartConfig = cloneChartConfig(config);
+  }
+  tab.activeChartConfig = config;
+  tab.resultViewMode = 'chart';
+  tab.chartReadonly = false;
+  touchQueryTab(tab);
+
+  const imageDataUrl = await exportChartPngDataUrl();
+  if (!imageDataUrl) {
+    message.warning('图表渲染完成，但图片导出失败');
+    return false;
+  }
+  tab.chartImageDataUrl = imageDataUrl;
+  item.chartImageDataUrl = imageDataUrl;
+  let cacheKey = '';
+  try {
+    cacheKey = await saveChartImageCache(tab, imageDataUrl, `chart-auto-${Date.now()}`);
+    tab.chartImageCacheKey = cacheKey;
+    item.chartImageCacheKey = cacheKey;
+  } catch {
+    message.warning('图表已生成，但图片缓存失败，仅本次可见');
+  }
+  if (options?.appendRenderMessage !== false) {
+    const renderMessage = appendAssistantSqlMessage(
+      tab,
+      sqlText,
+      'chart_auto_render',
+      '图表已生成',
+      config,
+      chartSummaryText(config),
+      cacheKey,
+    );
+    renderMessage.chartImageDataUrl = imageDataUrl;
+  }
+  await saveConversationHistory(tab, '生成图表', sqlText, {
+    actionType: 'chart_auto_render',
+    assistantContent: chartSummaryText(config),
+    chartConfig: config,
+    chartImageCacheKey: cacheKey,
+    databaseName: tab.databaseName,
   });
-  tab.aiGenerating = false;
+  if (!options?.silentSuccess) {
+    message.success('图表已生成');
+  }
+  return true;
+}
+
+async function generateManualChartForTab(tab: QueryWorkspaceTab) {
+  if (!tab.executeResult?.rows?.length) {
+    message.info('当前没有可用于制图的查询结果');
+    return;
+  }
+  const config = cloneChartConfig(tab.manualChartConfig);
+  const rows = activeChartRows.value;
+  if (!isChartConfigRenderable(config, rows)) {
+    message.warning('图表字段配置不完整，请先选择有效字段');
+    return;
+  }
+  tab.activeChartConfig = config;
+  tab.resultViewMode = 'chart';
+  tab.chartReadonly = false;
+  touchQueryTab(tab);
+
+  const imageDataUrl = await exportChartPngDataUrl();
+  if (!imageDataUrl) {
+    message.warning('图表渲染完成，但图片导出失败');
+    return;
+  }
+  tab.chartImageDataUrl = imageDataUrl;
+  let cacheKey = '';
+  try {
+    cacheKey = await saveChartImageCache(tab, imageDataUrl, `chart-manual-${Date.now()}`);
+    tab.chartImageCacheKey = cacheKey;
+  } catch {
+    message.warning('图表已生成，但图片缓存失败，仅本次可见');
+  }
+  message.success('手动图表已生成');
+}
+
+async function downloadActiveChart(tab: QueryWorkspaceTab) {
+  let dataUrl = tab.chartImageDataUrl;
+  if (!dataUrl) {
+    dataUrl = await exportChartPngDataUrl();
+  }
+  if (!dataUrl) {
+    message.info('暂无可下载的图表图片');
+    return;
+  }
+  downloadImage(dataUrl, `chart-${Date.now()}.png`);
+}
+
+async function downloadMessageChart(item: QueryChatMessage) {
+  let dataUrl = item.chartImageDataUrl || '';
+  if (!dataUrl && item.chartImageCacheKey) {
+    try {
+      const loaded = await getApi<ChartCacheReadVO>(
+        `/api/editor/chart/cache/read?cacheKey=${encodeURIComponent(item.chartImageCacheKey)}`,
+      );
+      dataUrl = loaded.dataUrl || '';
+      item.chartImageDataUrl = dataUrl;
+    } catch {
+      message.error('缓存图表不存在，请重跑 SQL 后重新生成');
+      return;
+    }
+  }
+  if (!dataUrl) {
+    message.info('当前消息暂无图表图片');
+    return;
+  }
+  downloadImage(dataUrl, `chart-${Date.now()}.png`);
+}
+
+async function hydrateHistoryChartImages(tab: QueryWorkspaceTab) {
+  const targets = tab.chatMessages.filter((item) => item.role === 'assistant' && !!item.chartImageCacheKey);
+  for (const item of targets) {
+    if (item.chartImageDataUrl || !item.chartImageCacheKey) {
+      continue;
+    }
+    try {
+      const loaded = await getApi<ChartCacheReadVO>(
+        `/api/editor/chart/cache/read?cacheKey=${encodeURIComponent(item.chartImageCacheKey)}`,
+      );
+      item.chartImageDataUrl = loaded.dataUrl || '';
+    } catch {
+      // 历史图缺失不阻断会话加载。
+    }
+  }
+}
+
+async function editChartFromHistory(tab: QueryWorkspaceTab, item: QueryChatMessage) {
+  await generateChartFromMessage(tab, item);
 }
 
 async function explainSqlForTab(tab: QueryWorkspaceTab, sqlOverride?: string) {
@@ -3872,50 +5074,71 @@ async function ensureRiskConfirmedBeforeExecute(tab: QueryWorkspaceTab, sqlText:
   return riskAckToken;
 }
 
-async function executeSqlForTab(tab: QueryWorkspaceTab, sqlOverride?: string) {
+async function executeSqlForTab(
+  tab: QueryWorkspaceTab,
+  sqlOverride?: string,
+  options?: { silentSuccess?: boolean },
+) {
+  if (tab.sqlExecuting) {
+    return false;
+  }
   const sqlText = resolveSqlForAction(tab, sqlOverride);
   if (!sqlText) {
     message.error('请先输入或选择 SQL');
-    return;
+    return false;
   }
+  tab.sqlExecuting = true;
+  touchQueryTab(tab);
   let riskAckToken = '';
   try {
-    riskAckToken = await ensureRiskConfirmedBeforeExecute(tab, sqlText);
-  } catch (error) {
-    const errMsg = error instanceof Error ? error.message : String(error);
-    if (errMsg === RISK_EXECUTION_CANCELLED) {
-      message.info('已取消执行');
-      return;
+    try {
+      riskAckToken = await ensureRiskConfirmedBeforeExecute(tab, sqlText);
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      if (errMsg === RISK_EXECUTION_CANCELLED) {
+        message.info('已取消执行');
+        return false;
+      }
+      message.error(errMsg);
+      return false;
     }
-    message.error(errMsg);
-    return;
-  }
-  try {
-    tab.riskAckToken = riskAckToken;
-    const result = await postApi<SqlExecuteVO>('/api/sql/execute', {
-      connectionId: tab.connectionId,
-      sessionId: tab.sessionId,
-      sqlText,
-      databaseName: tab.databaseName || undefined,
-      riskAckToken: riskAckToken || undefined,
-      operatorName: 'desktop-user',
-    });
-    tab.executeResult = result;
-    tab.explainResult = null;
-    tab.riskAckToken = '';
-    tab.lastExecuteFailed = false;
-    tab.lastExecuteErrorMessage = '';
-    tab.lastFailedSqlText = '';
-    touchQueryTab(tab);
-    message.success(`执行成功，耗时 ${result.executionMs}ms`);
-  } catch (error) {
-    const errMsg = error instanceof Error ? error.message : String(error);
-    tab.executeResult = null;
-    tab.explainResult = null;
-    tab.riskAckToken = '';
-    tab.lastExecuteFailed = true;
-    tab.lastExecuteErrorMessage = errMsg;
-    tab.lastFailedSqlText = sqlText;
+    try {
+      tab.riskAckToken = riskAckToken;
+      const result = await postApi<SqlExecuteVO>('/api/sql/execute', {
+        connectionId: tab.connectionId,
+        sessionId: tab.sessionId,
+        sqlText,
+        databaseName: tab.databaseName || undefined,
+        riskAckToken: riskAckToken || undefined,
+        operatorName: 'desktop-user',
+      });
+      tab.executeResult = result;
+      tab.explainResult = null;
+      tab.riskAckToken = '';
+      tab.lastExecuteFailed = false;
+      tab.lastExecuteErrorMessage = '';
+      tab.lastFailedSqlText = '';
+      tab.resultViewMode = 'table';
+      tab.chartReadonly = false;
+      tab.chartImageDataUrl = '';
+      tab.chartImageCacheKey = '';
+      setupManualChartConfigByResult(tab);
+      if (!options?.silentSuccess) {
+        message.success(`执行成功，耗时 ${result.executionMs}ms`);
+      }
+      return true;
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      tab.executeResult = null;
+      tab.explainResult = null;
+      tab.riskAckToken = '';
+      tab.lastExecuteFailed = true;
+      tab.lastExecuteErrorMessage = errMsg;
+      tab.lastFailedSqlText = sqlText;
+      return false;
+    }
+  } finally {
+    tab.sqlExecuting = false;
     touchQueryTab(tab);
   }
 }
@@ -4216,7 +5439,6 @@ function expandConnectionNode(connectionId: number) {
     return;
   }
   const keys = new Set(expandedTreeKeys.value);
-  keys.add(`env-${connection.env}`);
   keys.add(`conn-${connectionId}`);
   const activeDb = getActiveDatabaseName(connectionId);
   const activeCategory = currentObjectType.value || 'tables';
@@ -4280,6 +5502,47 @@ function objectTypeLabel(value: string) {
   return value;
 }
 
+function normalizeEnv(value?: string) {
+  const env = (value || '').trim().toUpperCase();
+  if (env === 'PROD' || env === 'TEST' || env === 'DEV') {
+    return env;
+  }
+  return 'DEV';
+}
+
+function envTagText(value?: string) {
+  const env = normalizeEnv(value);
+  if (env === 'PROD') {
+    return '生产';
+  }
+  if (env === 'TEST') {
+    return '测试';
+  }
+  return '开发';
+}
+
+function envTagClass(value?: string) {
+  const env = normalizeEnv(value);
+  if (env === 'PROD') {
+    return 'is-prod';
+  }
+  if (env === 'TEST') {
+    return 'is-test';
+  }
+  return 'is-dev';
+}
+
+function envTagIcon(value?: string) {
+  const env = normalizeEnv(value);
+  if (env === 'PROD') {
+    return CloseCircleOutlined;
+  }
+  if (env === 'TEST') {
+    return CheckCircleOutlined;
+  }
+  return ToolOutlined;
+}
+
 function nodeIconComponent(dataRef: { nodeType?: string }) {
   if (dataRef.nodeType === 'database') {
     return DatabaseOutlined;
@@ -4303,6 +5566,174 @@ function nodeIconComponent(dataRef: { nodeType?: string }) {
     return HddOutlined;
   }
   return AppstoreOutlined;
+}
+
+function quoteSqlIdentifier(identifier: string, dbType: string) {
+  const text = String(identifier || '').trim();
+  if (!text) {
+    return '';
+  }
+  if (dbType === 'SQLSERVER') {
+    return `[${text}]`;
+  }
+  if (dbType === 'POSTGRESQL' || dbType === 'ORACLE') {
+    return `"${text}"`;
+  }
+  return `\`${text}\``;
+}
+
+function buildColumnSqlDefinition(
+  column: TableDetailVO['columns'][number],
+  dbType: string,
+) {
+  const colName = quoteSqlIdentifier(column.columnName, dbType) || column.columnName;
+  const baseType = (column.dataType || 'TEXT').trim();
+  let typeSql = baseType;
+  if (!/\(/.test(baseType) && column.columnSize && column.columnSize > 0) {
+    if (column.decimalDigits && column.decimalDigits > 0) {
+      typeSql = `${baseType}(${column.columnSize},${column.decimalDigits})`;
+    } else if (/char|binary|var|text|int|number|decimal|numeric/i.test(baseType)) {
+      typeSql = `${baseType}(${column.columnSize})`;
+    }
+  }
+  const fragments = [`${colName} ${typeSql}`];
+  if (column.nullable === false) {
+    fragments.push('NOT NULL');
+  }
+  if (column.defaultValue != null && String(column.defaultValue).trim() !== '') {
+    fragments.push(`DEFAULT ${String(column.defaultValue).trim()}`);
+  }
+  if (column.autoIncrement) {
+    if (dbType === 'SQLSERVER') {
+      fragments.push('IDENTITY(1,1)');
+    } else if (dbType === 'POSTGRESQL') {
+      fragments.push('GENERATED BY DEFAULT AS IDENTITY');
+    } else {
+      fragments.push('AUTO_INCREMENT');
+    }
+  }
+  if (column.columnComment && dbType === 'MYSQL') {
+    fragments.push(`COMMENT '${column.columnComment.replace(/'/g, "''")}'`);
+  }
+  return fragments.join(' ');
+}
+
+function buildCreateTableSql(tableName: string, columns: TableDetailVO['columns'], dbTypeRaw: string) {
+  const dbType = (dbTypeRaw || 'MYSQL').toUpperCase();
+  const lines = columns.map((column) => `  ${buildColumnSqlDefinition(column, dbType)}`);
+  const primaryKeys = columns
+    .filter((column) => column.primaryKey)
+    .map((column) => quoteSqlIdentifier(column.columnName, dbType) || column.columnName);
+  if (primaryKeys.length) {
+    lines.push(`  PRIMARY KEY (${primaryKeys.join(', ')})`);
+  }
+  const tableQuoted = quoteSqlIdentifier(tableName, dbType) || tableName;
+  return `CREATE TABLE ${tableQuoted} (\n${lines.join(',\n')}\n);`;
+}
+
+function escapeHtml(raw: string) {
+  return raw
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function highlightSqlForDisplay(sqlText: string) {
+  const escaped = escapeHtml(sqlText || '');
+  const keywords = [
+    'CREATE',
+    'TABLE',
+    'PRIMARY',
+    'KEY',
+    'NOT',
+    'NULL',
+    'DEFAULT',
+    'AUTO_INCREMENT',
+    'COMMENT',
+    'GENERATED',
+    'BY',
+    'AS',
+    'IDENTITY',
+  ];
+  const dataTypes = [
+    'BIGINT',
+    'INT',
+    'INTEGER',
+    'SMALLINT',
+    'TINYINT',
+    'MEDIUMINT',
+    'SERIAL',
+    'BIGSERIAL',
+    'DECIMAL',
+    'NUMERIC',
+    'FLOAT',
+    'DOUBLE',
+    'REAL',
+    'BOOLEAN',
+    'BIT',
+    'CHAR',
+    'NCHAR',
+    'VARCHAR',
+    'NVARCHAR',
+    'TEXT',
+    'MEDIUMTEXT',
+    'LONGTEXT',
+    'DATE',
+    'TIME',
+    'DATETIME',
+    'TIMESTAMP',
+    'YEAR',
+    'BLOB',
+    'LONGBLOB',
+    'JSON',
+    'UUID',
+  ];
+  const keywordSet = new Set(keywords.map((item) => item.toUpperCase()));
+  const typeSet = new Set(dataTypes.map((item) => item.toUpperCase()));
+  const tokens = Array.from(new Set([...keywords, ...dataTypes]))
+    .sort((a, b) => b.length - a.length);
+  const tokenPattern = new RegExp(`\\b(${tokens.join('|')})\\b`, 'gi');
+  return escaped.replace(tokenPattern, (matched) => {
+    const upper = matched.toUpperCase();
+    if (keywordSet.has(upper)) {
+      return `<span class="sql-keyword">${matched}</span>`;
+    }
+    if (typeSet.has(upper)) {
+      return `<span class="sql-datatype">${matched}</span>`;
+    }
+    return matched;
+  });
+}
+
+async function copyTextContent(text: string, successText: string) {
+  if (!text.trim()) {
+    return;
+  }
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      message.success(successText);
+      return;
+    }
+    throw new Error('clipboard unavailable');
+  } catch {
+    const input = document.createElement('textarea');
+    input.value = text;
+    input.setAttribute('readonly', 'true');
+    input.style.position = 'fixed';
+    input.style.opacity = '0';
+    document.body.appendChild(input);
+    input.select();
+    document.execCommand('copy');
+    document.body.removeChild(input);
+    message.success(successText);
+  }
+}
+
+async function copyCreateTableSql() {
+  await copyTextContent(createTableSqlText.value, '建表语句已复制');
 }
 
 function dbIconUrl(dbType: string) {

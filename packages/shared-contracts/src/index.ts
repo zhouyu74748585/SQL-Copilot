@@ -59,3 +59,53 @@ export interface SqlExecuteVO {
   rows: QueryRowVO[];
   message: string;
 }
+
+export type ChartType = 'LINE' | 'BAR' | 'PIE' | 'SCATTER' | 'TREND';
+
+export type SortDirection = 'NONE' | 'ASC' | 'DESC';
+
+export interface ChartConfigVO {
+  chartType: ChartType;
+  xField?: string;
+  yFields?: string[];
+  categoryField?: string;
+  valueField?: string;
+  sortField?: string;
+  sortDirection?: SortDirection;
+  title?: string;
+  description?: string;
+}
+
+export interface AiGenerateChartVO {
+  sqlText: string;
+  chartConfig?: ChartConfigVO;
+  configSummary: string;
+  reasoning: string;
+  fallbackUsed: boolean;
+}
+
+export type AiIntentType = 'GENERATE_SQL' | 'EXPLAIN_SQL' | 'ANALYZE_SQL' | 'GENERATE_CHART';
+
+export interface AiAutoQueryVO {
+  intentType: AiIntentType;
+  intentLabel: string;
+  intentConfidence: number;
+  reasoning: string;
+  fallbackUsed: boolean;
+  sqlText?: string;
+  content?: string;
+  chartConfig?: ChartConfigVO;
+  configSummary?: string;
+}
+
+export interface ChartCacheSaveVO {
+  cacheKey: string;
+  filePath: string;
+  width: number;
+  height: number;
+}
+
+export interface ChartCacheReadVO {
+  cacheKey: string;
+  dataUrl: string;
+}
