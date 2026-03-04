@@ -1,6 +1,7 @@
 package com.sqlcopilot.studio.controller;
 
 import com.sqlcopilot.studio.dto.common.ApiResponse;
+import com.sqlcopilot.studio.dto.editor.DeleteHistorySessionReq;
 import com.sqlcopilot.studio.dto.editor.ExportReq;
 import com.sqlcopilot.studio.dto.editor.ExportResultVO;
 import com.sqlcopilot.studio.dto.editor.QueryHistorySessionPageVO;
@@ -46,6 +47,12 @@ public class EditorController {
     @PostMapping("/history/save")
     public ApiResponse<Boolean> saveHistory(@Valid @RequestBody SaveQueryHistoryReq req) {
         editorService.saveHistory(req);
+        return ApiResponse.success(Boolean.TRUE);
+    }
+
+    @PostMapping("/history/session/remove")
+    public ApiResponse<Boolean> removeHistorySession(@Valid @RequestBody DeleteHistorySessionReq req) {
+        editorService.removeHistorySession(req);
         return ApiResponse.success(Boolean.TRUE);
     }
 

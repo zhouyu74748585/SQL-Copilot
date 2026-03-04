@@ -2,6 +2,7 @@ package com.sqlcopilot.studio.service.impl;
 
 import com.sqlcopilot.studio.dto.editor.ExportReq;
 import com.sqlcopilot.studio.dto.editor.ExportResultVO;
+import com.sqlcopilot.studio.dto.editor.DeleteHistorySessionReq;
 import com.sqlcopilot.studio.dto.editor.QueryHistorySessionPageVO;
 import com.sqlcopilot.studio.dto.editor.QueryHistorySessionVO;
 import com.sqlcopilot.studio.dto.editor.QueryHistoryVO;
@@ -78,6 +79,16 @@ public class EditorServiceImpl implements EditorService {
         }
         int actualLimit = (limit == null || limit <= 0) ? 1000 : Math.min(limit, 5000);
         return queryHistoryMapper.listBySession(connectionId, normalizedSessionId, actualLimit).stream().map(this::toHistoryVO).toList();
+    }
+
+    @Override
+    public void removeHistorySession(DeleteHistorySessionReq req) {
+        String normalizedSessionId = Objects.toString(req.getSessionId(), "").trim();
+        if (normalizedSessionId.isBlank()) {
+            throw new BusinessException(400, "会话 ID 不能为空");
+        }
+        // 关键操作：按连接与会话 ID 一次性删除整组历史记录，避免残留碎片数据。
+        queryHistoryMapper.deleteBySession(req.getConnectionId(), normalizedSessionId);
     }
 
     @Override

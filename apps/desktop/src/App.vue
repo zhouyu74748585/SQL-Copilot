@@ -58,6 +58,17 @@
                     <a-button size="small" type="link" class="history-menu-rename-btn" title="改名" @click.stop="startHistoryTitleEdit(item)">
                       <template #icon><edit-outlined /></template>
                     </a-button>
+                    <a-button
+                      size="small"
+                      type="link"
+                      danger
+                      class="history-menu-delete-btn"
+                      title="删除会话"
+                      :disabled="historySessionLoadingKey === historyItemKey(item)"
+                      @click.stop="removeHistorySession(item)"
+                    >
+                      <template #icon><delete-outlined /></template>
+                    </a-button>
                   </div>
                 </div>
                 <div class="history-menu-item-meta">
@@ -885,6 +896,7 @@ import {
   ClockCircleOutlined,
   CloseCircleOutlined,
   CloseOutlined,
+  DeleteOutlined,
   DownloadOutlined,
   CodeOutlined,
   DatabaseOutlined,
@@ -1728,6 +1740,61 @@ function persistSessionTitleOverrides() {
 function startHistoryTitleEdit(item: QueryHistorySessionVO) {
   editingHistoryTabKey.value = historyItemKey(item);
   editingHistoryTitle.value = historyItemDisplayTitle(item);
+}
+
+async function removeHistorySession(item: QueryHistorySessionVO) {
+  const targetKey = historyItemKey(item);
+  if (historySessionLoadingKey.value === targetKey) {
+    return;
+  }
+  const confirmed = await new Promise<boolean>((resolve) => {
+    Modal.confirm({
+      title: '删除会话历史',
+      content: `确定删除会话“${historyItemDisplayTitle(item)}”的全部历史记录吗？`,
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: () => resolve(true),
+      onCancel: () => resolve(false),
+    });
+  });
+  if (!confirmed) {
+    return;
+  }
+
+  historySessionLoadingKey.value = targetKey;
+  try {
+    await postApi<boolean>('/api/editor/history/session/remove', {
+      connectionId: item.connectionId,
+      sessionId: item.sessionId,
+    });
+    const overrideKey = sessionTitleOverrideKey(item);
+    if (sessionTitleOverrides.value[overrideKey]) {
+      const next = {...sessionTitleOverrides.value};
+      delete next[overrideKey];
+      sessionTitleOverrides.value = next;
+      persistSessionTitleOverrides();
+    }
+    if (editingHistoryTabKey.value === targetKey) {
+      cancelHistoryTitleEdit();
+    }
+    historySessionItems.value = historySessionItems.value.filter((entry) => historyItemKey(entry) !== targetKey);
+    queryTabs.value = queryTabs.value.filter((tab) => !(tab.connectionId === item.connectionId && tab.sessionId === item.sessionId));
+    if (!queryTabs.value.some((tab) => tab.key === activeWorkbenchTab.value)) {
+      activeWorkbenchTab.value = queryTabs.value[0]?.key ?? browserTabKey;
+    }
+    message.success('会话已删除');
+    if (!historySessionItems.value.length) {
+      historySessionPageNo.value = 1;
+      historySessionHasMore.value = true;
+      await loadHistorySessionPage(true);
+    }
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    message.error(msg);
+  } finally {
+    historySessionLoadingKey.value = '';
+  }
 }
 
 function commitHistoryTitleEdit(item: QueryHistorySessionVO) {
@@ -3494,7 +3561,6 @@ async function executeSqlForTab(tab: QueryWorkspaceTab, sqlOverride?: string) {
     tab.lastExecuteErrorMessage = errMsg;
     tab.lastFailedSqlText = sqlText;
     touchQueryTab(tab);
-    message.error(errMsg);
   }
 }
 

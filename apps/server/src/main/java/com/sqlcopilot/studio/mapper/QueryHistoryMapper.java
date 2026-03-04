@@ -2,6 +2,7 @@ package com.sqlcopilot.studio.mapper;
 
 import com.sqlcopilot.studio.dto.editor.QueryHistorySessionVO;
 import com.sqlcopilot.studio.entity.QueryHistoryEntity;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Options;
 import org.apache.ibatis.annotations.Param;
@@ -98,4 +99,12 @@ public interface QueryHistoryMapper {
     List<QueryHistoryEntity> listBySession(@Param("connectionId") Long connectionId,
                                            @Param("sessionId") String sessionId,
                                            @Param("limit") Integer limit);
+
+    @Delete("""
+        DELETE FROM query_history
+        WHERE connection_id = #{connectionId}
+          AND session_id = #{sessionId}
+        """)
+    int deleteBySession(@Param("connectionId") Long connectionId,
+                        @Param("sessionId") String sessionId);
 }
