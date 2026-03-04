@@ -9,12 +9,22 @@ let qdrantProcess = null;
 function createWindow() {
   const rendererUrl = process.env.ELECTRON_RENDERER_URL;
   const isDebug = process.env.ELECTRON_DEBUG === '1';
+  const isMac = process.platform === 'darwin';
+  const useTitleBarOverlay = process.platform === 'win32' || process.platform === 'linux';
   const win = new BrowserWindow({
     width: 1440,
     height: 900,
     title: 'SQL Copilot',
     autoHideMenuBar: true,
-    titleBarStyle: process.platform === 'darwin' ? 'hidden' : 'default',
+    titleBarStyle: 'hidden',
+    ...(useTitleBarOverlay
+      ? {
+          titleBarOverlay: {
+            color: '#00000000',
+            height: 35,
+          },
+        }
+      : {}),
     backgroundColor: '#f8faff',
     webPreferences: {
       contextIsolation: true,
@@ -22,6 +32,10 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
     },
   });
+
+  if (isMac && typeof win.setWindowButtonVisibility === 'function') {
+    win.setWindowButtonVisibility(true);
+  }
 
   if (rendererUrl) {
     win.loadURL(rendererUrl);
@@ -251,4 +265,3 @@ app.whenReady().then(async () => {
   }
   createWindow();
 });
-

@@ -1,115 +1,132 @@
 <template>
-  <div class="studio-root" :class="{ 'is-mac': isMacOS }">
-    <section class="tool-ribbon">
-      <div class="window-app-title">SQL Copilot</div>
-      <button class="tool-item" @click="openCreateModal" title="新建连接">
-        <plus-outlined />
-        <span>新建连接</span>
-      </button>
-      <button class="tool-item" @click="openAiQueryTab" title="AI 查询">
-        <robot-outlined />
-        <span>AI查询</span>
-      </button>
-      <a-dropdown placement="bottomLeft" :trigger="['click']">
-        <button class="tool-item" :disabled="!canOpenHistory" title="会话历史" @click="handleHistoryMenuClick">
-          <history-outlined />
-          <span>会话历史</span>
-        </button>
-        <template #overlay>
-          <div class="history-menu-panel">
-            <div class="history-menu-title">
-              <span>会话历史 · {{ queryTabConnectionNameById(historySessionConnectionId) || '-' }}</span>
-              <span v-if="historyReloading" class="history-menu-loading">刷新中...</span>
-            </div>
-            <div class="history-menu-toolbar">
-              <a-input
-                v-model:value="historyKeywordInput"
-                size="small"
-                allow-clear
-                placeholder="按标题搜索会话"
-                @pressEnter="applyHistoryKeywordSearch"
-              />
-              <a-button size="small" class="history-search-btn" @click="applyHistoryKeywordSearch">搜索</a-button>
-            </div>
-            <div class="history-menu-list" @scroll="handleHistoryMenuScroll">
-              <div v-if="!sessionHistoryTabs.length" class="history-menu-empty">暂无 AI 会话</div>
-              <button
-                v-for="item in sessionHistoryTabs"
-                :key="historyItemKey(item)"
-                class="history-menu-item"
-                :class="{ 'is-active': isHistoryItemActive(item), 'is-loading': historySessionLoadingKey === historyItemKey(item) }"
-                @click="openHistorySession(item)"
-              >
-                <div class="history-menu-item-head">
-                  <a-input
-                    v-if="editingHistoryTabKey === historyItemKey(item)"
-                    v-model:value="editingHistoryTitle"
-                    size="small"
-                    class="history-menu-title-input"
-                    maxlength="60"
-                    @click.stop
-                    @pressEnter="commitHistoryTitleEdit(item)"
-                    @blur="commitHistoryTitleEdit(item)"
-                    @keydown.esc.stop.prevent="cancelHistoryTitleEdit"
-                  />
-                  <span v-else class="history-menu-item-title">{{ historyItemDisplayTitle(item) }}</span>
-                  <div class="history-menu-item-head-actions">
-                    <span>{{ formatTime(item.updatedAt) }}</span>
-                    <a-button size="small" type="link" class="history-menu-rename-btn" title="改名" @click.stop="startHistoryTitleEdit(item)">
-                      <template #icon><edit-outlined /></template>
-                    </a-button>
-                    <a-button
-                      size="small"
-                      type="link"
-                      danger
-                      class="history-menu-delete-btn"
-                      title="删除会话"
-                      :disabled="historySessionLoadingKey === historyItemKey(item)"
-                      @click.stop="removeHistorySession(item)"
-                    >
-                      <template #icon><delete-outlined /></template>
-                    </a-button>
-                  </div>
-                </div>
-                <div class="history-menu-item-meta">
-                  会话ID: {{ item.sessionId }} | 记录数: {{ item.messageCount ?? 0 }}
-                </div>
-                <div class="history-menu-item-desc">创建于 {{ formatTime(item.createdAt) }}</div>
-              </button>
-              <div v-if="historyLoadingMore" class="history-menu-load-tip">加载中...</div>
-              <div v-else-if="sessionHistoryTabs.length && !historySessionHasMore" class="history-menu-load-tip">没有更多会话</div>
-            </div>
-          </div>
-        </template>
-      </a-dropdown>
-      <button class="tool-item" @click="openAiConfigModal" title="AI 配置">
-        <setting-outlined />
-        <span>AI 配置</span>
-      </button>
-      <div class="tool-status">
-        <a-tag color="blue">Debug</a-tag>
-        <span>{{ selectedConnection?.name ?? activeQueryConnectionName ?? '未选择连接' }}</span>
+  <a-config-provider :theme="antdThemeConfig">
+    <div
+      class="studio-root"
+      :class="{
+        'is-mac': isMacOS,
+        'is-win': isWindows,
+        'is-linux': isLinux,
+        'theme-dark': isDarkTheme,
+        'theme-light': !isDarkTheme,
+      }"
+    >
+    <section class="top-chrome">
+      <div class="top-chrome-safe top-chrome-safe-left" />
+      <div class="top-chrome-center">
+        <div class="top-chrome-tabs-scroll">
+          <button
+            class="workspace-tab workspace-tab-browser"
+            :class="{ 'is-active': activeWorkbenchTab === browserTabKey }"
+            @click="activateBrowserTab"
+          >
+            <span>对象浏览</span>
+          </button>
+          <button
+            v-for="tab in queryTabs"
+            :key="tab.key"
+            class="workspace-tab"
+            :class="{ 'is-active': activeWorkbenchTab === tab.key }"
+            @click="activeWorkbenchTab = tab.key"
+          >
+            <span>{{ tab.title }}</span>
+            <close-outlined class="tab-close" @click.stop="closeQueryTab(tab.key)" />
+          </button>
+          <a-tooltip title="新建 AI 查询页签">
+            <button class="top-chrome-tab-add" @click="openAiQueryTab()">
+              <plus-outlined />
+            </button>
+          </a-tooltip>
+        </div>
       </div>
-    </section>
-
-    <section class="workspace-tabs">
-      <button
-        class="workspace-tab"
-        :class="{ 'is-active': activeWorkbenchTab === browserTabKey }"
-        @click="activateBrowserTab"
-      >
-        <span>对象浏览</span>
-      </button>
-      <button
-        v-for="tab in queryTabs"
-        :key="tab.key"
-        class="workspace-tab"
-        :class="{ 'is-active': activeWorkbenchTab === tab.key }"
-        @click="activeWorkbenchTab = tab.key"
-      >
-        <span>{{ tab.title }}</span>
-        <close-outlined class="tab-close" @click.stop="closeQueryTab(tab.key)" />
-      </button>
+      <div class="top-chrome-actions">
+        <button class="tool-item top-action-btn" @click="openCreateModal" title="连接">
+          <link-outlined />
+          <span>连接</span>
+        </button>
+        <a-dropdown placement="bottomLeft" :trigger="['click']">
+          <button class="tool-item top-action-btn" :disabled="!canOpenHistory" title="会话历史" @click="handleHistoryMenuClick">
+            <history-outlined />
+            <span>历史</span>
+          </button>
+          <template #overlay>
+            <div class="history-menu-panel">
+              <div class="history-menu-title">
+                <span>会话历史 · {{ queryTabConnectionNameById(historySessionConnectionId) || '-' }}</span>
+                <span v-if="historyReloading" class="history-menu-loading">刷新中...</span>
+              </div>
+              <div class="history-menu-toolbar">
+                <a-input
+                  v-model:value="historyKeywordInput"
+                  size="small"
+                  allow-clear
+                  placeholder="按标题搜索会话"
+                  @pressEnter="applyHistoryKeywordSearch"
+                />
+                <a-button size="small" class="history-search-btn" @click="applyHistoryKeywordSearch">搜索</a-button>
+              </div>
+              <div class="history-menu-list" @scroll="handleHistoryMenuScroll">
+                <div v-if="!sessionHistoryTabs.length" class="history-menu-empty">暂无 AI 会话</div>
+                <button
+                  v-for="item in sessionHistoryTabs"
+                  :key="historyItemKey(item)"
+                  class="history-menu-item"
+                  :class="{ 'is-active': isHistoryItemActive(item), 'is-loading': historySessionLoadingKey === historyItemKey(item) }"
+                  @click="openHistorySession(item)"
+                >
+                  <div class="history-menu-item-head">
+                    <a-input
+                      v-if="editingHistoryTabKey === historyItemKey(item)"
+                      v-model:value="editingHistoryTitle"
+                      size="small"
+                      class="history-menu-title-input"
+                      maxlength="60"
+                      @click.stop
+                      @pressEnter="commitHistoryTitleEdit(item)"
+                      @blur="commitHistoryTitleEdit(item)"
+                      @keydown.esc.stop.prevent="cancelHistoryTitleEdit"
+                    />
+                    <span v-else class="history-menu-item-title">{{ historyItemDisplayTitle(item) }}</span>
+                    <div class="history-menu-item-head-actions">
+                      <span>{{ formatTime(item.updatedAt) }}</span>
+                      <a-button size="small" type="link" class="history-menu-rename-btn" title="改名" @click.stop="startHistoryTitleEdit(item)">
+                        <template #icon><edit-outlined /></template>
+                      </a-button>
+                      <a-button
+                        size="small"
+                        type="link"
+                        danger
+                        class="history-menu-delete-btn"
+                        title="删除会话"
+                        :disabled="historySessionLoadingKey === historyItemKey(item)"
+                        @click.stop="removeHistorySession(item)"
+                      >
+                        <template #icon><delete-outlined /></template>
+                      </a-button>
+                    </div>
+                  </div>
+                  <div class="history-menu-item-meta">
+                    会话ID: {{ item.sessionId }} | 记录数: {{ item.messageCount ?? 0 }}
+                  </div>
+                  <div class="history-menu-item-desc">创建于 {{ formatTime(item.createdAt) }}</div>
+                </button>
+                <div v-if="historyLoadingMore" class="history-menu-load-tip">加载中...</div>
+                <div v-else-if="sessionHistoryTabs.length && !historySessionHasMore" class="history-menu-load-tip">没有更多会话</div>
+              </div>
+            </div>
+          </template>
+        </a-dropdown>
+        <button class="tool-item top-action-btn" @click="openAiConfigModal" title="AI 配置">
+          <setting-outlined />
+          <span>配置</span>
+        </button>
+        <a-tooltip :title="isDarkTheme ? '切换到浅色' : '切换到深色'">
+          <button class="tool-item tool-theme-toggle top-action-btn top-action-icon-btn" @click="toggleTheme">
+            <bulb-filled v-if="isDarkTheme" />
+            <bulb-outlined v-else />
+          </button>
+        </a-tooltip>
+      </div>
+      <div class="top-chrome-safe top-chrome-safe-right" />
     </section>
 
     <main class="workbench" :class="{ 'workbench-query': activeWorkbenchTab !== browserTabKey }" :style="workbenchStyle">
@@ -430,7 +447,7 @@
               language="sql"
               width="100%"
               height="240px"
-              theme="vs"
+              :theme="monacoTheme"
               :options="sqlEditorOptions"
               class="sql-editor"
               @mount="handleSqlEditorMount"
@@ -968,7 +985,8 @@
         <div v-else class="empty-pane">暂无可展示的向量化数据概要</div>
       </a-spin>
     </a-modal>
-  </div>
+    </div>
+  </a-config-provider>
 </template>
 
 <script setup lang="ts">
@@ -981,6 +999,8 @@ import {
   CloseOutlined,
   DeleteOutlined,
   DownloadOutlined,
+  BulbFilled,
+  BulbOutlined,
   CodeOutlined,
   DatabaseOutlined,
   EditOutlined,
@@ -988,6 +1008,7 @@ import {
   FolderOpenOutlined,
   HddOutlined,
   HistoryOutlined,
+  LinkOutlined,
   LoadingOutlined,
   MessageOutlined,
   MinusCircleOutlined,
@@ -996,7 +1017,6 @@ import {
   PlusOutlined,
   ReadOutlined,
   ReloadOutlined,
-  RobotOutlined,
   SearchOutlined,
   SettingOutlined,
   ToolOutlined,
@@ -1006,7 +1026,7 @@ import {Editor as MonacoEditor} from '@guolao/vue-monaco-editor';
 import type {IDisposable} from 'monaco-editor';
 import type * as MonacoApi from 'monaco-editor';
 import type {ConnectionVO} from '@sqlcopilot/shared-contracts';
-import {message, Modal} from 'ant-design-vue';
+import {message, Modal, theme as antdTheme} from 'ant-design-vue';
 import {computed, h, onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue';
 import {getApi, postApi} from './api/client';
 import mysqlIcon from './assets/db/mysql.svg';
@@ -1067,6 +1087,7 @@ interface ObjectRow {
 
 type QueryActionType = 'generate' | 'explain' | 'analyze' | 'repair';
 type AiActionType = 'generate' | 'explain' | 'analyze';
+type UiTheme = 'light' | 'dark';
 
 interface QueryChatMessage {
   id: string;
@@ -1101,7 +1122,11 @@ interface QueryWorkspaceTab {
 }
 
 const browserTabKey = 'browser';
+const uiThemeStorageKey = 'sqlcopilot.ui-theme.v1';
+const {defaultAlgorithm, darkAlgorithm} = antdTheme;
 const isMacOS = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform);
+const isWindows = typeof navigator !== 'undefined' && /win/i.test(navigator.platform);
+const isLinux = typeof navigator !== 'undefined' && /linux/i.test(navigator.platform);
 let vectorizeStatusPollTimer: number | null = null;
 const vectorizeStatusPollIntervalMs = 30000;
 
@@ -1130,6 +1155,7 @@ const vectorizeOverviewLoading = ref(false);
 const vectorizeOverviewData = ref<RagVectorizeOverviewVO | null>(null);
 const aiConfigModalOpen = ref(false);
 const aiConfigActiveTab = ref<'model' | 'embedding'>('model');
+const uiTheme = ref<UiTheme>('light');
 const selectedAiModel = ref('');
 const activeWorkbenchTab = ref(browserTabKey);
 const queryTabs = ref<QueryWorkspaceTab[]>([]);
@@ -1251,16 +1277,33 @@ const activeQueryTab = computed(() =>
   queryTabs.value.find((item) => item.key === activeWorkbenchTab.value) ?? null,
 );
 
-const activeQueryConnectionName = computed(() => {
-  if (!activeQueryTab.value) {
-    return '';
-  }
-  return queryTabConnectionName(activeQueryTab.value);
-});
-
 const canOpenHistory = computed(() => {
   return connections.value.length > 0;
 });
+
+const isDarkTheme = computed(() => uiTheme.value === 'dark');
+
+const monacoTheme = computed(() => (isDarkTheme.value ? 'vs-dark' : 'vs'));
+
+const antdThemeConfig = computed(() => ({
+  algorithm: isDarkTheme.value ? darkAlgorithm : defaultAlgorithm,
+  token: {
+    colorPrimary: '#3b82f6',
+    borderRadius: 10,
+    wireframe: false,
+  },
+  components: {
+    Button: {
+      controlHeightSM: 28,
+    },
+    Input: {
+      controlHeightSM: 28,
+    },
+    Select: {
+      controlHeightSM: 28,
+    },
+  },
+}));
 
 const currentHistoryConnectionId = computed(() => {
   if (activeQueryTab.value?.connectionId) {
@@ -1738,15 +1781,14 @@ function openEditModal(targetConnectionId?: number) {
   createModalOpen.value = true;
 }
 
-function openAiQueryTab() {
+function openAiQueryTab(initialPrompt = '') {
   ensureConnection();
   const now = Date.now();
   const databaseName = getActiveDatabaseName(workflow.connectionId);
   const models = aiModelOptions.value.map((item) => String(item.value)).filter((item) => !!item);
-  const initialPrompt = workflow.prompt || `查询 ${selectedObjectName.value || '当前数据库'} 最近数据`;
   const tab: QueryWorkspaceTab = {
     key: `query-${now}-${Math.round(Math.random() * 1000)}`,
-    title: '未命名会话',
+    title: '新的查询',
     connectionId: workflow.connectionId,
     databaseName,
     sessionId: `session-${now}`,
@@ -1808,6 +1850,37 @@ function handleHistoryMenuClick() {
   });
 }
 
+function toggleTheme() {
+  uiTheme.value = uiTheme.value === 'dark' ? 'light' : 'dark';
+}
+
+function loadUiThemePreference() {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  try {
+    const raw = window.localStorage.getItem(uiThemeStorageKey);
+    if (raw === 'light' || raw === 'dark') {
+      uiTheme.value = raw;
+      return;
+    }
+    uiTheme.value = 'light';
+  } catch {
+    uiTheme.value = 'light';
+  }
+}
+
+function persistUiThemePreference() {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  try {
+    window.localStorage.setItem(uiThemeStorageKey, uiTheme.value);
+  } catch {
+    // 忽略本地存储异常，避免阻塞主流程。
+  }
+}
+
 function sessionRefKey(connectionId: number, sessionId: string) {
   return `${connectionId}::${sessionId}`;
 }
@@ -1853,13 +1926,24 @@ function firstPromptForTitle(tab: QueryWorkspaceTab) {
   return tab.prompt;
 }
 
+function buildNewQueryPlaceholderTitle(tab: QueryWorkspaceTab) {
+  const connectionName = (queryTabConnectionNameById(tab.connectionId) || '').trim() || '未命名连接';
+  const databaseName = (tab.databaseName || getActiveDatabaseName(tab.connectionId) || '').trim() || '未指定库';
+  return `${connectionName} / ${databaseName} · 新的查询`;
+}
+
 function applySessionTitle(tab: QueryWorkspaceTab) {
   const custom = (sessionTitleOverrides.value[sessionTitleOverrideKey(tab)] ?? '').trim();
   if (custom) {
     tab.title = custom;
     return;
   }
-  tab.title = buildSessionDefaultTitle(firstPromptForTitle(tab));
+  const firstPrompt = firstPromptForTitle(tab).trim();
+  if (firstPrompt) {
+    tab.title = buildSessionDefaultTitle(firstPrompt);
+    return;
+  }
+  tab.title = buildNewQueryPlaceholderTitle(tab);
 }
 
 function historyItemDisplayTitle(item: QueryHistorySessionVO) {
@@ -3077,6 +3161,7 @@ async function handleTreeSelect(keys: (string | number)[]) {
   closeContextMenu();
   const value = String(keys[0]);
   selectedTreeKeys.value = [value];
+  activateBrowserTab();
 
   const connectionMatch = value.match(/^conn-(\d+)$/);
   if (connectionMatch) {
@@ -3426,7 +3511,7 @@ function quickSelectAll() {
   }
   workflow.sqlText = `SELECT * FROM ${selectedObjectName.value} LIMIT 100`;
   workflow.prompt = `查询 ${selectedObjectName.value} 最近数据`;
-  openAiQueryTab();
+  openAiQueryTab(workflow.prompt);
 }
 
 function getDesktopBridge(): DesktopBridge | null {
@@ -3973,6 +4058,7 @@ function handleWindowResize() {
 
 onMounted(async () => {
   window.addEventListener('resize', handleWindowResize);
+  loadUiThemePreference();
   loadSessionTitleOverrides();
   startVectorizeStatusPolling();
   await loadConnections();
@@ -4004,6 +4090,13 @@ onBeforeUnmount(() => {
     sqlAutoSuggestTimer = null;
   }
 });
+
+watch(
+  () => uiTheme.value,
+  () => {
+    persistUiThemePreference();
+  },
+);
 
 watch(
   () => [activeWorkbenchTab.value, activeQueryTab.value?.connectionId ?? 0, activeQueryTab.value?.databaseName ?? ''],
