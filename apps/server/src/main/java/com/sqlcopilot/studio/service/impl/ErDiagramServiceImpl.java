@@ -1,35 +1,19 @@
 package com.sqlcopilot.studio.service.impl;
 
-import com.sqlcopilot.studio.dto.schema.ErAiInferenceReq;
-import com.sqlcopilot.studio.dto.schema.ErAiInferenceResultVO;
-import com.sqlcopilot.studio.dto.schema.ErAiInferenceStatusVO;
-import com.sqlcopilot.studio.dto.schema.ErColumnNodeVO;
-import com.sqlcopilot.studio.dto.schema.ErGraphReq;
-import com.sqlcopilot.studio.dto.schema.ErGraphVO;
-import com.sqlcopilot.studio.dto.schema.ErRelationVO;
-import com.sqlcopilot.studio.dto.schema.ErTableNodeVO;
-import com.sqlcopilot.studio.dto.schema.SchemaOverviewVO;
-import com.sqlcopilot.studio.dto.schema.TableDetailVO;
+import com.sqlcopilot.studio.dto.schema.*;
 import com.sqlcopilot.studio.entity.ConnectionEntity;
 import com.sqlcopilot.studio.service.AiService;
 import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.ErDiagramService;
 import com.sqlcopilot.studio.service.SchemaService;
 import com.sqlcopilot.studio.util.BusinessException;
+import org.springframework.stereotype.Service;
+
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-import org.springframework.stereotype.Service;
+import java.util.*;
 
 @Service
 public class ErDiagramServiceImpl implements ErDiagramService {

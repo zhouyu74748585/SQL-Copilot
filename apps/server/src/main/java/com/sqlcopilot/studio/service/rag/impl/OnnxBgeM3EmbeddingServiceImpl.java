@@ -4,34 +4,41 @@ import ai.djl.huggingface.tokenizers.Encoding;
 import ai.djl.huggingface.tokenizers.HuggingFaceTokenizer;
 import ai.onnxruntime.OnnxTensor;
 import ai.onnxruntime.OrtEnvironment;
+import ai.onnxruntime.OrtProvider;
 import ai.onnxruntime.OrtSession;
+import ai.onnxruntime.providers.CoreMLFlags;
 import com.sqlcopilot.studio.dto.rag.RagConfigVO;
-import com.sqlcopilot.studio.service.rag.RagEmbeddingService;
 import com.sqlcopilot.studio.service.RagConfigService;
+import com.sqlcopilot.studio.service.rag.RagEmbeddingService;
 import com.sqlcopilot.studio.util.BusinessException;
-import java.nio.LongBuffer;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Objects;
-import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+
+import java.nio.LongBuffer;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.*;
 
 @Service
 public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
 
     private static final Logger log = LoggerFactory.getLogger(OnnxBgeM3EmbeddingServiceImpl.class);
     private static final long RAG_CONFIG_CACHE_TTL_MS = 10_000L;
+    private static final String PROVIDER_AUTO = "AUTO";
+    private static final String PROVIDER_CPU = "CPU";
+    private static final String PROVIDER_CUDA = "CUDA";
+    private static final String PROVIDER_DIRECT_ML = "DIRECT_ML";
+    private static final String PROVIDER_CORE_ML = "CORE_ML";
+    private static final Set<String> SUPPORTED_PROVIDER_CONFIGS = Set.of(
+        PROVIDER_AUTO,
+        PROVIDER_CPU,
+        PROVIDER_CUDA,
+        PROVIDER_DIRECT_ML,
+        PROVIDER_CORE_ML
+    );
 
     private final RagConfigService ragConfigService;
     private final String defaultModelDataPath;
@@ -45,6 +52,10 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
     private final String defaultSentencepieceFileName;
     private final int maxSeqLen;
     private final int fallbackDimension;
+    private final String configuredExecutionProvider;
+    private final int cudaDeviceId;
+    private final int directMlDeviceId;
+    private final EnumSet<CoreMLFlags> coreMlFlags;
 
     private final Object initLock = new Object();
     private final Object configCacheLock = new Object();
@@ -70,7 +81,11 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
                                          @Value("${rag.embedding.special-tokens-file-name:special_tokens_map.json}") String defaultSpecialTokensFileName,
                                          @Value("${rag.embedding.sentencepiece-file-name:sentencepiece.bpe.model}") String defaultSentencepieceFileName,
                                          @Value("${rag.embedding.max-seq-len:512}") int maxSeqLen,
-                                         @Value("${rag.embedding.fallback-dimension:1024}") int fallbackDimension) {
+                                         @Value("${rag.embedding.fallback-dimension:1024}") int fallbackDimension,
+                                         @Value("${rag.embedding.execution-provider:AUTO}") String executionProvider,
+                                         @Value("${rag.embedding.cuda-device-id:0}") int cudaDeviceId,
+                                         @Value("${rag.embedding.directml-device-id:0}") int directMlDeviceId,
+                                         @Value("${rag.embedding.coreml-flags:}") String coreMlFlagsConfig) {
         this.ragConfigService = ragConfigService;
         this.defaultModelDataPath = defaultModelDataPath;
         this.defaultModelDir = defaultModelDir;
@@ -83,6 +98,10 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
         this.defaultSentencepieceFileName = defaultSentencepieceFileName;
         this.maxSeqLen = Math.max(16, maxSeqLen);
         this.fallbackDimension = Math.max(128, fallbackDimension);
+        this.configuredExecutionProvider = resolveConfiguredExecutionProvider(executionProvider);
+        this.cudaDeviceId = Math.max(0, cudaDeviceId);
+        this.directMlDeviceId = Math.max(0, directMlDeviceId);
+        this.coreMlFlags = resolveCoreMlFlags(coreMlFlagsConfig);
     }
 
     @Override
@@ -183,6 +202,7 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
                 ortEnvironment = OrtEnvironment.getEnvironment();
                 OrtSession.SessionOptions options = new OrtSession.SessionOptions();
                 options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.BASIC_OPT);
+                String selectedProvider = configureExecutionProvider(options);
                 ortSession = ortEnvironment.createSession(modelForSession.toAbsolutePath().toString(), options);
                 tokenizer = HuggingFaceTokenizer.newInstance(targetConfig.tokenizerPath());
                 fallbackOnly = false;
@@ -191,6 +211,7 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
                     targetConfig.sourceDescription(),
                     modelForSession.toAbsolutePath(),
                     targetConfig.tokenizerPath().toAbsolutePath());
+                log.info("ONNX execution provider selected={}", selectedProvider);
             } catch (Exception ex) {
                 fallbackOnly = true;
                 log.warn("初始化 ONNX 向量服务失败，启用哈希向量降级，原因={}", ex.getMessage());
@@ -440,6 +461,96 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
         }
     }
 
+    private String configureExecutionProvider(OrtSession.SessionOptions options) {
+        Set<String> availableProviders = resolveAvailableProviders();
+        List<String> selectionOrder = resolveProviderSelectionOrder();
+        for (String provider : selectionOrder) {
+            if (!PROVIDER_CPU.equals(provider) && !availableProviders.contains(provider)) {
+                continue;
+            }
+            if (tryEnableExecutionProvider(options, provider)) {
+                log.info("ONNX provider resolved: configured={}, selected={}, available={}, os={}, arch={}",
+                    configuredExecutionProvider,
+                    provider,
+                    availableProviders,
+                    System.getProperty("os.name"),
+                    System.getProperty("os.arch"));
+                return provider;
+            }
+        }
+        log.warn("ONNX provider fallback to CPU: configured={}, available={}, os={}, arch={}",
+            configuredExecutionProvider,
+            availableProviders,
+            System.getProperty("os.name"),
+            System.getProperty("os.arch"));
+        return PROVIDER_CPU;
+    }
+
+    private List<String> resolveProviderSelectionOrder() {
+        if (!PROVIDER_AUTO.equals(configuredExecutionProvider)) {
+            return List.of(configuredExecutionProvider, PROVIDER_CPU);
+        }
+
+        String osName = Objects.toString(System.getProperty("os.name"), "").toLowerCase(Locale.ROOT);
+        List<String> providers = new ArrayList<>();
+        if (osName.contains("win")) {
+            providers.add(PROVIDER_CUDA);
+            providers.add(PROVIDER_DIRECT_ML);
+        } else if (osName.contains("mac") && isMacArm64()) {
+            providers.add(PROVIDER_CORE_ML);
+        }
+        providers.add(PROVIDER_CPU);
+        return providers;
+    }
+
+    private boolean tryEnableExecutionProvider(OrtSession.SessionOptions options, String provider) {
+        if (PROVIDER_CPU.equals(provider)) {
+            return true;
+        }
+        try {
+            if (PROVIDER_CUDA.equals(provider)) {
+                options.addCUDA(cudaDeviceId);
+                return true;
+            }
+            if (PROVIDER_DIRECT_ML.equals(provider)) {
+                options.addDirectML(directMlDeviceId);
+                return true;
+            }
+            if (PROVIDER_CORE_ML.equals(provider)) {
+                if (coreMlFlags.isEmpty()) {
+                    options.addCoreML();
+                } else {
+                    options.addCoreML(coreMlFlags);
+                }
+                return true;
+            }
+            return false;
+        } catch (Exception ex) {
+            log.warn("Enable ONNX provider failed: provider={}, reason={}", provider, ex.getMessage());
+            return false;
+        }
+    }
+
+    private Set<String> resolveAvailableProviders() {
+        Set<String> providers = new LinkedHashSet<>();
+        try {
+            for (OrtProvider provider : OrtEnvironment.getAvailableProviders()) {
+                providers.add(normalizeProviderName(provider.name()));
+            }
+        } catch (Exception ex) {
+            log.warn("Read ONNX available providers failed: {}", ex.getMessage());
+        }
+        if (providers.isEmpty()) {
+            providers.add(PROVIDER_CPU);
+        }
+        return providers;
+    }
+
+    private boolean isMacArm64() {
+        String arch = Objects.toString(System.getProperty("os.arch"), "").toLowerCase(Locale.ROOT);
+        return arch.contains("aarch64") || arch.contains("arm64");
+    }
+
     private void closeRuntimeQuietly() {
         if (ortSession != null) {
             try {
@@ -566,6 +677,55 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
 
     private String safeTrim(String value) {
         return Objects.toString(value, "").trim();
+    }
+
+    private String resolveConfiguredExecutionProvider(String provider) {
+        String normalized = normalizeProviderName(provider);
+        if (!SUPPORTED_PROVIDER_CONFIGS.contains(normalized)) {
+            log.warn("Unsupported rag.embedding.execution-provider={}, fallback to AUTO", provider);
+            return PROVIDER_AUTO;
+        }
+        return normalized;
+    }
+
+    private EnumSet<CoreMLFlags> resolveCoreMlFlags(String configText) {
+        EnumSet<CoreMLFlags> flags = EnumSet.noneOf(CoreMLFlags.class);
+        String raw = Objects.toString(configText, "").trim();
+        if (raw.isEmpty()) {
+            return flags;
+        }
+        for (String token : raw.split(",")) {
+            String normalized = Objects.toString(token, "")
+                .trim()
+                .toUpperCase(Locale.ROOT)
+                .replace('-', '_');
+            if (normalized.isEmpty()) {
+                continue;
+            }
+            try {
+                flags.add(CoreMLFlags.valueOf(normalized));
+            } catch (IllegalArgumentException ex) {
+                log.warn("Unsupported CoreML flag '{}', ignored", token);
+            }
+        }
+        return flags;
+    }
+
+    private String normalizeProviderName(String provider) {
+        String normalized = Objects.toString(provider, "").trim().toUpperCase(Locale.ROOT).replace('-', '_');
+        if (normalized.isEmpty()) {
+            return PROVIDER_AUTO;
+        }
+        if ("DIRECTML".equals(normalized) || "DML".equals(normalized)) {
+            return PROVIDER_DIRECT_ML;
+        }
+        if ("CUDA".equals(normalized)) {
+            return PROVIDER_CUDA;
+        }
+        if ("COREML".equals(normalized)) {
+            return PROVIDER_CORE_ML;
+        }
+        return normalized;
     }
 
     private boolean isBlank(String value) {

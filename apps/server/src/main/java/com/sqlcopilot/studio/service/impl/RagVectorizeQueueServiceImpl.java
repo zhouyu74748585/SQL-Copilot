@@ -1,16 +1,11 @@
 package com.sqlcopilot.studio.service.impl;
 
-import com.sqlcopilot.studio.dto.rag.RagDatabaseVectorizeStatusVO;
-import com.sqlcopilot.studio.dto.rag.RagVectorizeEnqueueVO;
-import com.sqlcopilot.studio.dto.rag.RagVectorizeInterruptVO;
-import com.sqlcopilot.studio.dto.rag.RagVectorizeOverviewVO;
-import com.sqlcopilot.studio.dto.rag.RagVectorizeTableVO;
+import com.sqlcopilot.studio.dto.rag.*;
 import com.sqlcopilot.studio.dto.schema.TableDetailVO;
 import com.sqlcopilot.studio.entity.RagVectorizeStatusEntity;
 import com.sqlcopilot.studio.entity.SchemaColumnCacheEntity;
 import com.sqlcopilot.studio.entity.SchemaTableCacheEntity;
 import com.sqlcopilot.studio.mapper.RagVectorizeStatusMapper;
-import com.sqlcopilot.studio.mapper.SchemaCacheMapper;
 import com.sqlcopilot.studio.service.RagVectorizeQueueService;
 import com.sqlcopilot.studio.service.SchemaService;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
@@ -20,20 +15,16 @@ import com.sqlcopilot.studio.service.rag.model.RagCollectionNames;
 import com.sqlcopilot.studio.util.BusinessException;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
-import java.util.Comparator;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.LinkedBlockingQueue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
 
 @Service
 public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
@@ -42,7 +33,6 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
 
     private final SchemaService schemaService;
     private final RagVectorizeStatusMapper ragVectorizeStatusMapper;
-    private final SchemaCacheMapper schemaCacheMapper;
     private final RagIngestionService ragIngestionService;
     private final QdrantClientService qdrantClientService;
     private final RagCollectionNames collectionNames;
@@ -62,7 +52,6 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
 
     public RagVectorizeQueueServiceImpl(SchemaService schemaService,
                                         RagVectorizeStatusMapper ragVectorizeStatusMapper,
-                                        SchemaCacheMapper schemaCacheMapper,
                                         RagIngestionService ragIngestionService,
                                         QdrantClientService qdrantClientService,
                                         @Value("${rag.collection.schema-table:schema_table}") String schemaTableCollection,
@@ -71,7 +60,6 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
                                         @Value("${rag.collection.sql-fragment:sql_fragment}") String sqlFragmentCollection) {
         this.schemaService = schemaService;
         this.ragVectorizeStatusMapper = ragVectorizeStatusMapper;
-        this.schemaCacheMapper = schemaCacheMapper;
         this.ragIngestionService = ragIngestionService;
         this.qdrantClientService = qdrantClientService;
         this.collectionNames = new RagCollectionNames(
@@ -149,14 +137,7 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
         }
 
         // 关键操作：单表手动向量化只处理指定表，避免触发整库 Schema 同步。
-        List<SchemaTableCacheEntity> tableCacheList = schemaCacheMapper.findTables(connectionId, normalizedDatabaseName);
-        SchemaTableCacheEntity matchedTable = tableCacheList.stream()
-            .filter(item -> normalizedTableName.equalsIgnoreCase(Objects.toString(item.getTableName(), "").trim()))
-            .findFirst()
-            .orElse(null);
-        String actualTableName = matchedTable == null
-            ? normalizedTableName
-            : Objects.toString(matchedTable.getTableName(), normalizedTableName).trim();
+        String actualTableName = normalizedTableName;
 
         TableDetailVO detail = schemaService.getTableDetail(connectionId, normalizedDatabaseName, actualTableName);
         if (detail == null || detail.getColumns() == null || detail.getColumns().isEmpty()) {
@@ -164,7 +145,7 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
         }
 
         long now = System.currentTimeMillis();
-        SchemaTableCacheEntity tableMeta = matchedTable == null ? new SchemaTableCacheEntity() : matchedTable;
+        SchemaTableCacheEntity tableMeta = new SchemaTableCacheEntity();
         tableMeta.setConnectionId(connectionId);
         tableMeta.setDatabaseName(normalizedDatabaseName);
         tableMeta.setTableName(actualTableName);

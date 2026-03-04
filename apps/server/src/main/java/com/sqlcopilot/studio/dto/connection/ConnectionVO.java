@@ -1,6 +1,7 @@
 package com.sqlcopilot.studio.dto.connection;
 
 import lombok.Data;
+
 import java.util.List;
 
 /** 数据库连接信息响应对象。 */

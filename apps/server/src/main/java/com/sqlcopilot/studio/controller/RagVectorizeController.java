@@ -1,25 +1,13 @@
 package com.sqlcopilot.studio.controller;
 
-import com.sqlcopilot.studio.dto.rag.RagDatabaseVectorizeStatusVO;
 import com.sqlcopilot.studio.dto.common.ApiResponse;
-import com.sqlcopilot.studio.dto.rag.RagVectorizeEnqueueReq;
-import com.sqlcopilot.studio.dto.rag.RagVectorizeEnqueueVO;
-import com.sqlcopilot.studio.dto.rag.RagVectorizeInterruptReq;
-import com.sqlcopilot.studio.dto.rag.RagVectorizeInterruptVO;
-import com.sqlcopilot.studio.dto.rag.RagVectorizeOverviewQueryReq;
-import com.sqlcopilot.studio.dto.rag.RagVectorizeOverviewVO;
-import com.sqlcopilot.studio.dto.rag.RagVectorizeStatusQueryReq;
-import com.sqlcopilot.studio.dto.rag.RagVectorizeTableReq;
-import com.sqlcopilot.studio.dto.rag.RagVectorizeTableVO;
+import com.sqlcopilot.studio.dto.rag.*;
 import com.sqlcopilot.studio.service.RagVectorizeQueueService;
 import jakarta.validation.Valid;
-import java.util.List;
 import org.springframework.validation.annotation.Validated;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/rag/vectorize")

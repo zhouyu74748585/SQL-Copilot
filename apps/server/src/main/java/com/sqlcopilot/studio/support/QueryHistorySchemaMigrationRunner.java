@@ -1,14 +1,11 @@
 package com.sqlcopilot.studio.support;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Statement;
-import javax.sql.DataSource;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
+
+import javax.sql.DataSource;
+import java.sql.*;
 
 @Component
 public class QueryHistorySchemaMigrationRunner implements ApplicationRunner {

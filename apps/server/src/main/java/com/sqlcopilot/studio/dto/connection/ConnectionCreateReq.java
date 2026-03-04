@@ -3,6 +3,7 @@ package com.sqlcopilot.studio.dto.connection;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
+
 import java.util.List;
 
 /** 新建数据库连接请求对象。 */

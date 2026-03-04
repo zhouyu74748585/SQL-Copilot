@@ -20,7 +20,7 @@
         <java.version>17</java.version>
         <mybatis.spring.boot.version>3.0.3</mybatis.spring.boot.version>
         <spring.ai.version>1.0.0-M6</spring.ai.version>
-        <onnxruntime.version>1.19.2</onnxruntime.version>
+        <onnxruntime.version>1.24.2</onnxruntime.version>
         <djl.tokenizers.version>0.29.0</djl.tokenizers.version>
     </properties>
 
@@ -50,7 +50,7 @@
         </dependency>
         <dependency>
             <groupId>com.microsoft.onnxruntime</groupId>
-            <artifactId>onnxruntime</artifactId>
+            <artifactId>onnxruntime_gpu</artifactId>
             <version>${onnxruntime.version}</version>
         </dependency>
         <dependency>
@@ -87,7 +87,6 @@
             <url>https://repo.spring.io/milestone</url>
         </repository>
     </repositories>
-
     <build>
         <plugins>
             <plugin>

@@ -1,7 +1,8 @@
 package com.sqlcopilot.studio.dto.schema;
 
-import java.util.List;
 import lombok.Data;
+
+import java.util.List;
 
 @Data
 public class ErTableNodeVO {

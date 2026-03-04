@@ -1,8 +1,5 @@
 package com.sqlcopilot.studio.service.rag.impl;
 
-import com.sqlcopilot.studio.entity.SchemaColumnCacheEntity;
-import com.sqlcopilot.studio.entity.SchemaTableCacheEntity;
-import com.sqlcopilot.studio.mapper.SchemaCacheMapper;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
 import com.sqlcopilot.studio.service.rag.RagEmbeddingService;
 import com.sqlcopilot.studio.service.rag.RagRetrievalService;
@@ -14,32 +11,17 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-import java.util.regex.Matcher;
+import java.util.*;
 import java.util.regex.Pattern;
 
 @Service
 public class RagRetrievalServiceImpl implements RagRetrievalService {
 
     private static final Logger log = LoggerFactory.getLogger(RagRetrievalServiceImpl.class);
-    private static final String DEFAULT_CACHE_DATABASE_NAME = "__default__";
-    private static final Pattern RECALL_TOKEN_PATTERN = Pattern.compile("[\\p{IsHan}]+|[a-z0-9_]+");
-    private static final Set<String> RECALL_STOP_WORDS = Set.of(
-        "现在", "当前", "哪些", "哪个", "什么", "请问", "一下", "帮我", "查询", "查看", "列出", "有没有", "的", "了", "吗", "呢"
-    );
 
     private final boolean ragEnabled;
     private final RagEmbeddingService ragEmbeddingService;
     private final QdrantClientService qdrantClientService;
-    private final SchemaCacheMapper schemaCacheMapper;
     private final RagCollectionNames collectionNames;
     private final int schemaTableLimit;
     private final int schemaColumnLimit;
@@ -54,8 +36,7 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
                                    @Value("${rag.retrieval.schema-column-limit:8}") int schemaColumnLimit,
                                    @Value("${rag.retrieval.sql-history-limit:6}") int sqlHistoryLimit,
                                    RagEmbeddingService ragEmbeddingService,
-                                   QdrantClientService qdrantClientService,
-                                   SchemaCacheMapper schemaCacheMapper) {
+                                   QdrantClientService qdrantClientService) {
         this.ragEnabled = ragEnabled;
         this.collectionNames = new RagCollectionNames(
             schemaTableCollection,
@@ -68,7 +49,6 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         this.sqlHistoryLimit = Math.max(1, sqlHistoryLimit);
         this.ragEmbeddingService = ragEmbeddingService;
         this.qdrantClientService = qdrantClientService;
-        this.schemaCacheMapper = schemaCacheMapper;
     }
 
     @Override
@@ -138,17 +118,6 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             connectionId,
             normalizedDatabaseName
         );
-        if (tableHits.isEmpty() && columnHits.isEmpty() && historyHits.isEmpty()) {
-            tableHits = lexicalRecallTables(connectionId, normalizedDatabaseName, userInput);
-            if (!tableHits.isEmpty()) {
-                log.info(
-                    "[RAG-RETRIEVE-LEXICAL-FALLBACK] connectionId={}, databaseName={}, fallbackTableHitCount={}",
-                    connectionId,
-                    normalizedDatabaseName,
-                    tableHits.size()
-                );
-            }
-        }
         Set<String> tableConstraints = collectConstraintTables(tableHits);
         if (!tableConstraints.isEmpty()) {
             int columnBefore = columnHits.size();
@@ -281,29 +250,6 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         }
     }
 
-    private List<QdrantScoredPoint> lexicalRecallTables(Long connectionId, String databaseName, String userInput) {
-        String cacheDatabaseName = databaseName.isBlank() ? DEFAULT_CACHE_DATABASE_NAME : databaseName;
-        List<SchemaTableCacheEntity> tables = schemaCacheMapper.findTables(connectionId, cacheDatabaseName);
-        if (tables.isEmpty()) {
-            // 关键兜底：当库名不一致导致精确过滤无结果时，回退到 connection 维度召回。
-            tables = schemaCacheMapper.findTablesByConnection(connectionId);
-        }
-        if (tables.isEmpty()) {
-            return List.of();
-        }
-        List<String> recallTokens = extractRecallTokens(userInput);
-        if (recallTokens.isEmpty()) {
-            return List.of();
-        }
-        return tables.stream()
-            .map(table -> new ScoredTable(table, lexicalScore(table, recallTokens, userInput)))
-            .filter(item -> item.score() > 0)
-            .sorted(Comparator.comparingInt(ScoredTable::score).reversed())
-            .limit(schemaTableLimit)
-            .map(item -> toLexicalHit(connectionId, item.table(), item.score()))
-            .toList();
-    }
-
     private Set<String> collectConstraintTables(List<QdrantScoredPoint> tableHits) {
         Set<String> constraints = new LinkedHashSet<>();
         if (tableHits == null || tableHits.isEmpty()) {
@@ -348,107 +294,6 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             .toList();
     }
 
-    private QdrantScoredPoint toLexicalHit(Long connectionId, SchemaTableCacheEntity table, int score) {
-        String tableDatabaseName = Objects.toString(table.getDatabaseName(), "").trim();
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("connection_id", connectionId);
-        payload.put("database_name", tableDatabaseName);
-        payload.put("table_name", table.getTableName());
-        payload.put("table_comment", Objects.toString(table.getTableComment(), ""));
-        List<SchemaColumnCacheEntity> columns = schemaCacheMapper.findColumnsByTable(
-            connectionId,
-            tableDatabaseName,
-            table.getTableName()
-        );
-        List<SchemaColumnCacheEntity> safeColumns = columns == null ? List.of() : columns;
-        List<String> columnNames = safeColumns.stream()
-            .map(SchemaColumnCacheEntity::getColumnName)
-            .filter(Objects::nonNull)
-            .limit(30)
-            .toList();
-        payload.put("columns", columnNames);
-        return new QdrantScoredPoint("lexical:" + table.getTableName(), (double) score, payload);
-    }
-
-    private int lexicalScore(SchemaTableCacheEntity table, List<String> tokens, String rawUserInput) {
-        String tableName = Objects.toString(table.getTableName(), "").trim().toLowerCase();
-        String tableComment = Objects.toString(table.getTableComment(), "").trim().toLowerCase();
-        String query = Objects.toString(rawUserInput, "").trim().toLowerCase();
-        int score = 0;
-        if (!tableName.isBlank() && query.contains(tableName)) {
-            score += 20;
-        }
-        if (!tableComment.isBlank() && query.contains(tableComment)) {
-            score += 12;
-        }
-        for (String token : tokens) {
-            if (token.length() < 2) {
-                continue;
-            }
-            if (!tableName.isBlank() && tableName.contains(token)) {
-                score += 6;
-            }
-            if (!tableComment.isBlank() && tableComment.contains(token)) {
-                score += 4;
-            }
-        }
-        return score;
-    }
-
-    private List<String> extractRecallTokens(String userInput) {
-        String input = Objects.toString(userInput, "").trim().toLowerCase();
-        if (input.isBlank()) {
-            return List.of();
-        }
-        Set<String> tokenSet = new LinkedHashSet<>();
-        Matcher matcher = RECALL_TOKEN_PATTERN.matcher(input);
-        while (matcher.find()) {
-            String segment = matcher.group();
-            if (segment == null || segment.isBlank()) {
-                continue;
-            }
-            if (!isStopWord(segment)) {
-                tokenSet.add(segment);
-            }
-            if (segment.indexOf('_') >= 0) {
-                for (String part : segment.split("_")) {
-                    if (!part.isBlank() && !isStopWord(part)) {
-                        tokenSet.add(part);
-                    }
-                }
-            }
-            if (isChineseSegment(segment) && segment.length() >= 2) {
-                int maxWindow = Math.min(4, segment.length());
-                for (int size = 2; size <= maxWindow; size++) {
-                    for (int i = 0; i + size <= segment.length(); i++) {
-                        String token = segment.substring(i, i + size);
-                        if (!isStopWord(token)) {
-                            tokenSet.add(token);
-                        }
-                    }
-                }
-            }
-        }
-        return tokenSet.stream()
-            .map(String::trim)
-            .filter(item -> item.length() >= 2)
-            .filter(item -> !isStopWord(item))
-            .toList();
-    }
-
-    private boolean isChineseSegment(String text) {
-        for (int i = 0; i < text.length(); i++) {
-            Character.UnicodeScript script = Character.UnicodeScript.of(text.charAt(i));
-            if (script != Character.UnicodeScript.HAN) {
-                return false;
-            }
-        }
-        return !text.isBlank();
-    }
-
-    private boolean isStopWord(String token) {
-        return token == null || token.isBlank() || RECALL_STOP_WORDS.contains(token);
-    }
 
     private RagPromptContext emptyContext() {
         RagPromptContext context = new RagPromptContext();
@@ -507,6 +352,4 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         return value == null || value.trim().isEmpty();
     }
 
-    private record ScoredTable(SchemaTableCacheEntity table, int score) {
-    }
 }

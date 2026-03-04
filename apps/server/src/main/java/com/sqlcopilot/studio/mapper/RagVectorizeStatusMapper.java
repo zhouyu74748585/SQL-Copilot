@@ -1,10 +1,11 @@
 package com.sqlcopilot.studio.mapper;
 
 import com.sqlcopilot.studio.entity.RagVectorizeStatusEntity;
-import java.util.List;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+
+import java.util.List;
 
 public interface RagVectorizeStatusMapper {
 

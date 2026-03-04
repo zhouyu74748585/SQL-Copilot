@@ -1,10 +1,7 @@
 package com.sqlcopilot.studio.service;
 
-import com.sqlcopilot.studio.dto.rag.RagDatabaseVectorizeStatusVO;
-import com.sqlcopilot.studio.dto.rag.RagVectorizeEnqueueVO;
-import com.sqlcopilot.studio.dto.rag.RagVectorizeInterruptVO;
-import com.sqlcopilot.studio.dto.rag.RagVectorizeOverviewVO;
-import com.sqlcopilot.studio.dto.rag.RagVectorizeTableVO;
+import com.sqlcopilot.studio.dto.rag.*;
+
 import java.util.List;
 
 public interface RagVectorizeQueueService {

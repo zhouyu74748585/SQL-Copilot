@@ -1,6 +1,7 @@
 package com.sqlcopilot.studio.dto.ai;
 
 import lombok.Data;
+
 import java.util.List;
 
 /** AI 接入配置响应对象。 */

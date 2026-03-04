@@ -3,29 +3,21 @@ package com.sqlcopilot.studio.service.impl;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sqlcopilot.studio.dialect.JdbcUrlBuilder;
-import com.sqlcopilot.studio.dto.connection.ConnectionCreateReq;
-import com.sqlcopilot.studio.dto.connection.ConnectionDatabasePreviewReq;
-import com.sqlcopilot.studio.dto.connection.ConnectionDatabasePreviewVO;
-import com.sqlcopilot.studio.dto.connection.ConnectionTestVO;
-import com.sqlcopilot.studio.dto.connection.ConnectionUpdateReq;
-import com.sqlcopilot.studio.dto.connection.ConnectionVO;
+import com.sqlcopilot.studio.dto.connection.*;
 import com.sqlcopilot.studio.entity.ConnectionEntity;
 import com.sqlcopilot.studio.mapper.ConnectionMapper;
 import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.support.driver.IsolatedJdbcConnectionManager;
 import com.sqlcopilot.studio.support.ssh.SshTunnelManager;
 import com.sqlcopilot.studio.util.BusinessException;
+import org.springframework.stereotype.Service;
+
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Locale;
-import java.util.Objects;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicLong;
-import org.springframework.stereotype.Service;
 
 @Service
 public class ConnectionServiceImpl implements ConnectionService {

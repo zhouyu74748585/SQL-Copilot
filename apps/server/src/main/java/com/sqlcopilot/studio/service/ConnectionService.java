@@ -1,11 +1,6 @@
 package com.sqlcopilot.studio.service;
 
-import com.sqlcopilot.studio.dto.connection.ConnectionCreateReq;
-import com.sqlcopilot.studio.dto.connection.ConnectionDatabasePreviewReq;
-import com.sqlcopilot.studio.dto.connection.ConnectionDatabasePreviewVO;
-import com.sqlcopilot.studio.dto.connection.ConnectionTestVO;
-import com.sqlcopilot.studio.dto.connection.ConnectionUpdateReq;
-import com.sqlcopilot.studio.dto.connection.ConnectionVO;
+import com.sqlcopilot.studio.dto.connection.*;
 import com.sqlcopilot.studio.entity.ConnectionEntity;
 
 import java.util.List;

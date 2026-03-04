@@ -2,11 +2,7 @@ package com.sqlcopilot.studio.mapper;
 
 import com.sqlcopilot.studio.dto.editor.QueryHistorySessionVO;
 import com.sqlcopilot.studio.entity.QueryHistoryEntity;
-import org.apache.ibatis.annotations.Delete;
-import org.apache.ibatis.annotations.Insert;
-import org.apache.ibatis.annotations.Options;
-import org.apache.ibatis.annotations.Param;
-import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.*;
 
 import java.util.List;
 

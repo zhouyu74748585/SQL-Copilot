@@ -1,8 +1,9 @@
 package com.sqlcopilot.studio.dto.ai;
 
-import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
+
 import java.util.List;
 
 /** 保存 AI 接入配置请求对象。 */

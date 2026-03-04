@@ -1,12 +1,6 @@
 package com.sqlcopilot.studio.controller;
 
-import com.sqlcopilot.studio.dto.ai.AiGenerateSqlReq;
-import com.sqlcopilot.studio.dto.ai.AiAutoQueryVO;
-import com.sqlcopilot.studio.dto.ai.AiGenerateChartVO;
-import com.sqlcopilot.studio.dto.ai.AiGenerateSqlVO;
-import com.sqlcopilot.studio.dto.ai.AiRepairReq;
-import com.sqlcopilot.studio.dto.ai.AiRepairVO;
-import com.sqlcopilot.studio.dto.ai.AiTextResponseVO;
+import com.sqlcopilot.studio.dto.ai.*;
 import com.sqlcopilot.studio.dto.common.ApiResponse;
 import com.sqlcopilot.studio.service.AiService;
 import jakarta.validation.Valid;

@@ -49,6 +49,10 @@ rag:
     sentencepiece-file-name: sentencepiece.bpe.model
     max-seq-len: 512
     fallback-dimension: 1024
+    execution-provider: AUTO
+    cuda-device-id: 0
+    directml-device-id: 0
+    coreml-flags: ""
     batch-size: 16
     parallelism: 2
   retrieval:

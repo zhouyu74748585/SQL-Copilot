@@ -4,6 +4,8 @@ import com.jcraft.jsch.JSch;
 import com.jcraft.jsch.Session;
 import com.sqlcopilot.studio.entity.ConnectionEntity;
 import com.sqlcopilot.studio.util.BusinessException;
+import org.springframework.stereotype.Component;
+
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -13,7 +15,6 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import org.springframework.stereotype.Component;
 
 /**
  * SSH 隧道管理器：按连接 ID 复用会话，避免重复建隧道。

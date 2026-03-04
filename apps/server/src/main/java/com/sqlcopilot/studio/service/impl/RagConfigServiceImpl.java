@@ -5,8 +5,9 @@ import com.sqlcopilot.studio.dto.rag.RagConfigVO;
 import com.sqlcopilot.studio.entity.RagEmbeddingConfigEntity;
 import com.sqlcopilot.studio.mapper.RagConfigMapper;
 import com.sqlcopilot.studio.service.RagConfigService;
-import java.util.Objects;
 import org.springframework.stereotype.Service;
+
+import java.util.Objects;
 
 @Service
 public class RagConfigServiceImpl implements RagConfigService {
