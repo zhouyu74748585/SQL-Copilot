@@ -575,19 +575,6 @@
 
         <a-row :gutter="12">
           <a-col :span="12">
-            <a-form-item label="数据库名/路径">
-              <a-input v-model:value="connectionForm.databaseName" />
-            </a-form-item>
-          </a-col>
-          <a-col :span="12">
-            <a-form-item label="环境">
-              <a-select v-model:value="connectionForm.env" :options="envOptions" />
-            </a-form-item>
-          </a-col>
-        </a-row>
-
-        <a-row :gutter="12">
-          <a-col :span="12">
             <a-form-item label="用户名">
               <a-input
                 v-model:value="connectionForm.username"
@@ -607,10 +594,106 @@
           </a-col>
         </a-row>
 
+        <a-row :gutter="12">
+          <a-col :span="16">
+            <a-form-item :label="isMultiDatabaseFormType ? '展示数据库（多选）' : '数据库名/路径'">
+              <template v-if="isMultiDatabaseFormType">
+                <div class="connection-db-selector-row">
+                  <a-select
+                    v-model:value="connectionForm.selectedDatabases"
+                    mode="multiple"
+                    :options="connectionPreviewSelectOptions"
+                    :max-tag-count="3"
+                    allow-clear
+                    placeholder="可选；不勾选默认展示全部数据库"
+                    style="flex: 1"
+                  />
+                  <a-button
+                    :loading="connectionPreviewLoading"
+                    :disabled="!canPreviewDatabases"
+                    @click="previewConnectionDatabases"
+                  >
+                    获取数据库
+                  </a-button>
+                </div>
+                <div class="connection-db-selector-tip">不勾选时，连接树显示该连接下全部数据库。</div>
+                <div v-if="connectionPreviewError" class="connection-db-selector-error">{{ connectionPreviewError }}</div>
+              </template>
+              <a-input
+                v-else
+                v-model:value="connectionForm.databaseName"
+                :placeholder="connectionForm.dbType === 'SQLITE' ? 'SQLite 文件路径' : '数据库名/服务名'"
+              />
+            </a-form-item>
+          </a-col>
+          <a-col :span="8">
+            <a-form-item label="环境">
+              <a-select v-model:value="connectionForm.env" :options="envOptions" />
+            </a-form-item>
+          </a-col>
+        </a-row>
+
         <a-space>
           <a-checkbox v-model:checked="connectionForm.readOnly">只读</a-checkbox>
           <a-checkbox v-model:checked="connectionForm.sshEnabled">SSH 隧道</a-checkbox>
         </a-space>
+
+        <div v-if="connectionForm.sshEnabled" class="connection-ssh-panel">
+          <a-row :gutter="12">
+            <a-col :span="12">
+              <a-form-item label="SSH 主机">
+                <a-input v-model:value="connectionForm.sshHost" placeholder="例如 10.0.0.8" />
+              </a-form-item>
+            </a-col>
+            <a-col :span="12">
+              <a-form-item label="SSH 端口">
+                <a-input-number v-model:value="connectionForm.sshPort" :min="1" :max="65535" style="width: 100%" />
+              </a-form-item>
+            </a-col>
+          </a-row>
+          <a-row :gutter="12">
+            <a-col :span="12">
+              <a-form-item label="SSH 用户名">
+                <a-input v-model:value="connectionForm.sshUser" placeholder="SSH 登录用户名" />
+              </a-form-item>
+            </a-col>
+            <a-col :span="12">
+              <a-form-item label="SSH 认证模式">
+                <a-select v-model:value="connectionForm.sshAuthType" :options="sshAuthTypeOptions" />
+              </a-form-item>
+            </a-col>
+          </a-row>
+
+          <a-form-item v-if="connectionForm.sshAuthType === 'SSH_PASSWORD'" label="SSH 密码">
+            <a-input-password
+              v-model:value="connectionForm.sshPassword"
+              :placeholder="isEditMode ? '留空表示不修改' : '请输入 SSH 密码'"
+            />
+          </a-form-item>
+          <a-form-item v-else-if="connectionForm.sshAuthType === 'SSH_KEY_PATH'" label="SSH 私钥路径">
+            <a-input
+              v-model:value="connectionForm.sshPrivateKeyPath"
+              :placeholder="isEditMode ? '留空表示不修改' : '例如 /Users/me/.ssh/id_rsa'"
+            />
+          </a-form-item>
+          <a-form-item v-else label="SSH 私钥文本">
+            <a-textarea
+              v-model:value="connectionForm.sshPrivateKeyText"
+              :rows="4"
+              :placeholder="isEditMode ? '留空表示不修改' : '粘贴完整 PEM 私钥内容'"
+            />
+          </a-form-item>
+
+          <a-form-item
+            v-if="connectionForm.sshAuthType === 'SSH_KEY_PATH' || connectionForm.sshAuthType === 'SSH_KEY_TEXT'"
+            label="私钥口令（可选）"
+          >
+            <a-input-password
+              v-model:value="connectionForm.sshPrivateKeyPassphrase"
+              :placeholder="isEditMode ? '留空表示不修改' : '私钥解密口令（可选）'"
+            />
+          </a-form-item>
+        </div>
       </a-form>
     </a-modal>
 
@@ -938,6 +1021,8 @@ import type {
   AiRepairVO,
   AiModelOption,
   AiTextResponseVO,
+  ConnectionDatabasePreviewReq,
+  ConnectionDatabasePreviewVO,
   ConnectionCreateReq,
   ExplainVO,
   QueryHistorySessionPageVO,
@@ -1087,6 +1172,9 @@ const contextMenu = reactive({
 });
 
 const connectionForm = reactive<ConnectionCreateReq>(defaultConnectionForm());
+const connectionPreviewDbOptions = ref<string[]>([]);
+const connectionPreviewLoading = ref(false);
+const connectionPreviewError = ref('');
 const aiConfigForm = reactive<AiConfigSaveReq>(defaultAiConfigForm());
 const ragConfigForm = reactive<RagConfigSaveReq>(defaultRagConfigForm());
 const pickingRagModelDir = ref(false);
@@ -1111,6 +1199,12 @@ const envOptions = [
   { label: '开发 DEV', value: 'DEV' },
   { label: '测试 TEST', value: 'TEST' },
   { label: '生产 PROD', value: 'PROD' },
+];
+
+const sshAuthTypeOptions = [
+  { label: '密码', value: 'SSH_PASSWORD' },
+  { label: '私钥路径', value: 'SSH_KEY_PATH' },
+  { label: '私钥文本', value: 'SSH_KEY_TEXT' },
 ];
 
 const sqlEditorOptions = {
@@ -1200,6 +1294,49 @@ const canInterruptContextVectorize = computed(() =>
 const connectionSelectOptions = computed(() =>
   connections.value.map((item) => ({ label: `${item.name} (${item.env})`, value: item.id })),
 );
+
+const isMultiDatabaseFormType = computed(() => isMultiDatabaseType(connectionForm.dbType));
+
+const connectionPreviewSelectOptions = computed(() => {
+  const selected = connectionForm.selectedDatabases ?? [];
+  const merged = Array.from(new Set([
+    ...connectionPreviewDbOptions.value,
+    ...selected.filter((item) => !!item),
+  ]));
+  return merged.map((item) => ({ label: item, value: item }));
+});
+
+const canPreviewDatabases = computed(() => {
+  if (!isMultiDatabaseFormType.value) {
+    return false;
+  }
+  if (!connectionForm.host?.trim() || !connectionForm.username?.trim()) {
+    return false;
+  }
+  if (!connectionForm.port || connectionForm.port <= 0) {
+    return false;
+  }
+  if (connectionForm.sshEnabled) {
+    if (!connectionForm.sshHost?.trim() || !connectionForm.sshUser?.trim()) {
+      return false;
+    }
+    if (!connectionForm.sshPort || connectionForm.sshPort <= 0) {
+      return false;
+    }
+    const mode = connectionForm.sshAuthType || 'SSH_PASSWORD';
+    if (mode === 'SSH_PASSWORD') {
+      return !!connectionForm.sshPassword?.trim();
+    }
+    if (mode === 'SSH_KEY_PATH') {
+      return !!connectionForm.sshPrivateKeyPath?.trim();
+    }
+    if (mode === 'SSH_KEY_TEXT') {
+      return !!connectionForm.sshPrivateKeyText?.trim();
+    }
+    return false;
+  }
+  return true;
+});
 
 const connectionTreeData = computed(() => {
   const keyword = connectionKeyword.value.trim().toLowerCase();
@@ -1342,7 +1479,7 @@ const queryResultScrollX = computed(() => Math.max(activeResultColumns.value.len
 
 function buildConnectionNode(conn: ConnectionVO) {
   if (requiresDatabaseLayer(conn)) {
-    const databases = databaseListCache.value[conn.id] ?? [];
+    const databases = visibleDatabasesForConnection(conn);
     const activeDbName = getActiveDatabaseName(conn.id);
     const databaseNodes = (databases.length ? databases : ['未发现数据库']).map((databaseName) => ({
       key: buildDatabaseNodeKey(conn.id, databaseName),
@@ -1403,7 +1540,41 @@ function getCategoryChildren(connectionId: number, databaseName: string, categor
 }
 
 function requiresDatabaseLayer(connection: ConnectionVO) {
+  if (isMultiDatabaseType(connection.dbType)) {
+    return true;
+  }
   return !parseConfiguredDatabaseName(connection).trim();
+}
+
+function isMultiDatabaseType(dbType: string) {
+  return dbType === 'MYSQL' || dbType === 'POSTGRESQL' || dbType === 'SQLSERVER';
+}
+
+function normalizeSelectedDatabases(values: string[] | undefined) {
+  if (!values?.length) {
+    return [];
+  }
+  const set = new Set<string>();
+  values.forEach((item) => {
+    const value = (item || '').trim();
+    if (value) {
+      set.add(value);
+    }
+  });
+  return Array.from(set);
+}
+
+function visibleDatabasesForConnection(connection: ConnectionVO) {
+  const allDatabases = databaseListCache.value[connection.id] ?? [];
+  if (!isMultiDatabaseType(connection.dbType)) {
+    return allDatabases;
+  }
+  const selected = normalizeSelectedDatabases(connection.selectedDatabases);
+  if (!selected.length) {
+    return allDatabases;
+  }
+  const selectedSet = new Set(selected.map((item) => item.toLowerCase()));
+  return allDatabases.filter((item) => selectedSet.has(item.toLowerCase()));
 }
 
 function parseConfiguredDatabaseName(connection: ConnectionVO) {
@@ -1516,15 +1687,22 @@ function databaseStatusIcon(status: string) {
 
 function getActiveDatabaseName(connectionId: number) {
   const selected = (activeDatabaseMap.value[connectionId] ?? '').trim();
-  if (selected) {
-    return selected;
-  }
   const connection = connections.value.find((item) => item.id === connectionId);
   if (!connection) {
+    return selected;
+  }
+  const visibleDatabases = visibleDatabasesForConnection(connection);
+  if (selected && (!visibleDatabases.length || visibleDatabases.includes(selected))) {
+    return selected;
+  }
+  if (selected && visibleDatabases.length && !visibleDatabases.includes(selected)) {
     return '';
   }
   const configured = parseConfiguredDatabaseName(connection);
-  return configured || '';
+  if (configured && (!visibleDatabases.length || visibleDatabases.includes(configured))) {
+    return configured;
+  }
+  return '';
 }
 
 function activateBrowserTab() {
@@ -1534,6 +1712,8 @@ function activateBrowserTab() {
 function openCreateModal() {
   closeContextMenu();
   resetConnectionForm();
+  connectionPreviewDbOptions.value = [];
+  connectionPreviewError.value = '';
   isEditMode.value = false;
   editingConnectionId.value = null;
   createModalOpen.value = true;
@@ -1551,6 +1731,8 @@ function openEditModal(targetConnectionId?: number) {
     return;
   }
   fillConnectionForm(current);
+  connectionPreviewDbOptions.value = databaseListCache.value[current.id] ?? [];
+  connectionPreviewError.value = '';
   isEditMode.value = true;
   editingConnectionId.value = current.id;
   createModalOpen.value = true;
@@ -2211,6 +2393,17 @@ async function loadDatabaseListForConnection(connectionId: number) {
     ...databaseListCache.value,
     [connectionId]: databaseNames,
   };
+  const connection = connections.value.find((item) => item.id === connectionId);
+  if (connection) {
+    const visibleNames = visibleDatabasesForConnection(connection);
+    const current = (activeDatabaseMap.value[connectionId] || '').trim();
+    if (current && visibleNames.length && !visibleNames.includes(current)) {
+      activeDatabaseMap.value = {
+        ...activeDatabaseMap.value,
+        [connectionId]: '',
+      };
+    }
+  }
   const next = {...databaseVectorizeStatusMap.value};
   const prefix = `${connectionId}|`;
   Object.keys(next).forEach((key) => {
@@ -2306,6 +2499,16 @@ async function loadConnections() {
   try {
     const list = await getApi<ConnectionVO[]>('/api/connection/list');
     connections.value = list;
+    queryTabs.value.forEach((tab) => {
+      const connection = list.find((item) => item.id === tab.connectionId);
+      if (!connection || !isMultiDatabaseType(connection.dbType)) {
+        return;
+      }
+      const visibleNames = visibleDatabasesForConnection(connection);
+      if (tab.databaseName && visibleNames.length && !visibleNames.includes(tab.databaseName)) {
+        tab.databaseName = '';
+      }
+    });
     pruneVectorizeStatusMap(list.map((item) => item.id));
     if (!list.length) {
       workflow.connectionId = 0;
@@ -2360,9 +2563,31 @@ async function refreshConnections() {
 async function saveConnection() {
   await runSafely(async () => {
     const editing = isEditMode.value;
+    const normalizedSelectedDatabases = isMultiDatabaseType(connectionForm.dbType)
+      ? normalizeSelectedDatabases(connectionForm.selectedDatabases)
+      : [];
+    const sshAuthType = connectionForm.sshEnabled ? (connectionForm.sshAuthType || 'SSH_PASSWORD') : undefined;
     const payload: ConnectionCreateReq & { id?: number } = {
       ...connectionForm,
+      selectedDatabases: normalizedSelectedDatabases,
+      sshAuthType,
+      sshPassword: connectionForm.sshEnabled && sshAuthType === 'SSH_PASSWORD'
+        ? (connectionForm.sshPassword || '').trim()
+        : '',
+      sshPrivateKeyPath: connectionForm.sshEnabled && sshAuthType === 'SSH_KEY_PATH'
+        ? (connectionForm.sshPrivateKeyPath || '').trim()
+        : '',
+      sshPrivateKeyText: connectionForm.sshEnabled && sshAuthType === 'SSH_KEY_TEXT'
+        ? (connectionForm.sshPrivateKeyText || '').trim()
+        : '',
+      sshPrivateKeyPassphrase: connectionForm.sshEnabled
+        && (sshAuthType === 'SSH_KEY_PATH' || sshAuthType === 'SSH_KEY_TEXT')
+        ? (connectionForm.sshPrivateKeyPassphrase || '').trim()
+        : '',
     };
+    if (!isMultiDatabaseType(payload.dbType)) {
+      payload.selectedDatabases = [];
+    }
     const endpoint = editing ? '/api/connection/update' : '/api/connection/create';
     if (editing) {
       payload.id = editingConnectionId.value ?? undefined;
@@ -2378,6 +2603,51 @@ async function saveConnection() {
     message.success(editing ? '连接已更新' : '连接已创建');
     await loadConnections();
   });
+}
+
+async function previewConnectionDatabases() {
+  if (!canPreviewDatabases.value) {
+    return;
+  }
+  connectionPreviewLoading.value = true;
+  connectionPreviewError.value = '';
+  try {
+    const payload: ConnectionDatabasePreviewReq = {
+      dbType: connectionForm.dbType,
+      host: (connectionForm.host || '').trim(),
+      port: connectionForm.port,
+      databaseName: (connectionForm.databaseName || '').trim(),
+      username: (connectionForm.username || '').trim(),
+      password: (connectionForm.password || '').trim(),
+      sshEnabled: connectionForm.sshEnabled,
+      sshHost: (connectionForm.sshHost || '').trim(),
+      sshPort: connectionForm.sshPort,
+      sshUser: (connectionForm.sshUser || '').trim(),
+      sshAuthType: connectionForm.sshEnabled ? (connectionForm.sshAuthType || 'SSH_PASSWORD') : undefined,
+      sshPassword: connectionForm.sshEnabled && (connectionForm.sshAuthType || 'SSH_PASSWORD') === 'SSH_PASSWORD'
+        ? (connectionForm.sshPassword || '').trim()
+        : '',
+      sshPrivateKeyPath: connectionForm.sshEnabled && connectionForm.sshAuthType === 'SSH_KEY_PATH'
+        ? (connectionForm.sshPrivateKeyPath || '').trim()
+        : '',
+      sshPrivateKeyText: connectionForm.sshEnabled && connectionForm.sshAuthType === 'SSH_KEY_TEXT'
+        ? (connectionForm.sshPrivateKeyText || '').trim()
+        : '',
+      sshPrivateKeyPassphrase: connectionForm.sshEnabled
+        && (connectionForm.sshAuthType === 'SSH_KEY_PATH' || connectionForm.sshAuthType === 'SSH_KEY_TEXT')
+        ? (connectionForm.sshPrivateKeyPassphrase || '').trim()
+        : '',
+    };
+    const result = await postApi<ConnectionDatabasePreviewVO>('/api/connection/databases/preview', payload);
+    connectionPreviewDbOptions.value = Array.from(
+      new Set((result.databaseNames ?? []).map((item) => (item || '').trim()).filter((item) => !!item)),
+    );
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    connectionPreviewError.value = msg || '获取数据库失败';
+  } finally {
+    connectionPreviewLoading.value = false;
+  }
 }
 
 async function testConnection(id: number) {
@@ -3280,7 +3550,8 @@ async function saveAiConfig() {
 }
 
 function databaseOptionsForTab(tab: QueryWorkspaceTab) {
-  const cached = databaseListCache.value[tab.connectionId] ?? [];
+  const connection = connections.value.find((item) => item.id === tab.connectionId);
+  const cached = connection ? visibleDatabasesForConnection(connection) : [];
   if (cached.length) {
     return cached.map((item) => ({ label: item, value: item }));
   }
@@ -3764,9 +4035,63 @@ watch(
       connectionForm.host = '';
       connectionForm.port = 0;
       connectionForm.username = '';
+      connectionForm.password = '';
+      connectionForm.selectedDatabases = [];
+    }
+    if (!isMultiDatabaseType(dbType)) {
+      connectionForm.selectedDatabases = [];
+    } else if (connectionForm.databaseName === 'sample.db') {
+      connectionForm.databaseName = '';
+    }
+    connectionPreviewDbOptions.value = [];
+    connectionPreviewError.value = '';
+  },
+  { immediate: true },
+);
+
+watch(
+  () => connectionForm.sshEnabled,
+  (enabled) => {
+    if (!enabled) {
+      connectionForm.sshAuthType = 'SSH_PASSWORD';
+      connectionForm.sshPassword = '';
+      connectionForm.sshPrivateKeyPath = '';
+      connectionForm.sshPrivateKeyText = '';
+      connectionForm.sshPrivateKeyPassphrase = '';
+      return;
+    }
+    if (!connectionForm.sshPort || connectionForm.sshPort <= 0) {
+      connectionForm.sshPort = 22;
+    }
+    if (!connectionForm.sshAuthType) {
+      connectionForm.sshAuthType = 'SSH_PASSWORD';
     }
   },
   { immediate: true },
+);
+
+watch(
+  () => connectionForm.sshAuthType,
+  (mode) => {
+    if (!connectionForm.sshEnabled) {
+      return;
+    }
+    if (mode === 'SSH_PASSWORD') {
+      connectionForm.sshPrivateKeyPath = '';
+      connectionForm.sshPrivateKeyText = '';
+      connectionForm.sshPrivateKeyPassphrase = '';
+      return;
+    }
+    if (mode === 'SSH_KEY_PATH') {
+      connectionForm.sshPassword = '';
+      connectionForm.sshPrivateKeyText = '';
+      return;
+    }
+    if (mode === 'SSH_KEY_TEXT') {
+      connectionForm.sshPassword = '';
+      connectionForm.sshPrivateKeyPath = '';
+    }
+  },
 );
 
 watch(
@@ -3984,6 +4309,7 @@ function defaultConnectionForm(): ConnectionCreateReq {
     host: '',
     port: 0,
     databaseName: 'sample.db',
+    selectedDatabases: [],
     username: '',
     password: '',
     authType: 'PASSWORD',
@@ -3993,6 +4319,11 @@ function defaultConnectionForm(): ConnectionCreateReq {
     sshHost: '',
     sshPort: 22,
     sshUser: '',
+    sshAuthType: 'SSH_PASSWORD',
+    sshPassword: '',
+    sshPrivateKeyPath: '',
+    sshPrivateKeyText: '',
+    sshPrivateKeyPassphrase: '',
   };
 }
 
@@ -4007,6 +4338,7 @@ function fillConnectionForm(connection: ConnectionVO) {
     host: connection.host ?? '',
     port: connection.port ?? 0,
     databaseName: connection.databaseName ?? '',
+    selectedDatabases: normalizeSelectedDatabases(connection.selectedDatabases),
     username: connection.username ?? '',
     password: '',
     authType: 'PASSWORD',
@@ -4016,6 +4348,11 @@ function fillConnectionForm(connection: ConnectionVO) {
     sshHost: connection.sshHost ?? '',
     sshPort: connection.sshPort ?? 22,
     sshUser: connection.sshUser ?? '',
+    sshAuthType: (connection.sshAuthType as ConnectionCreateReq['sshAuthType']) || 'SSH_PASSWORD',
+    sshPassword: '',
+    sshPrivateKeyPath: connection.sshPrivateKeyPath ?? '',
+    sshPrivateKeyText: '',
+    sshPrivateKeyPassphrase: '',
   } satisfies ConnectionCreateReq);
 }
 
@@ -4093,5 +4430,7 @@ function resetConnectionModalState() {
   isEditMode.value = false;
   editingConnectionId.value = null;
   resetConnectionForm();
+  connectionPreviewDbOptions.value = [];
+  connectionPreviewError.value = '';
 }
 </script>

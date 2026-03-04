@@ -34,6 +34,12 @@ public class ConnectionController {
         return ApiResponse.success(connectionService.updateConnection(req));
     }
 
+    @PostMapping("/databases/preview")
+    public ApiResponse<ConnectionDatabasePreviewVO> previewDatabases(@RequestBody ConnectionDatabasePreviewReq req) {
+        // 关键操作：弹窗未保存配置下临时建连预览库列表，不写入 connection_info。
+        return ApiResponse.success(connectionService.previewDatabases(req));
+    }
+
     @PostMapping("/remove")
     public ApiResponse<Boolean> remove(@Valid @RequestBody ConnectionRemoveReq req) {
         connectionService.removeConnection(req.getId());

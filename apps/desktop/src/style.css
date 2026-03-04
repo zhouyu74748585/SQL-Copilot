@@ -570,6 +570,32 @@ body {
   flex-shrink: 0;
 }
 
+.connection-db-selector-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.connection-db-selector-tip {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #667b9a;
+}
+
+.connection-db-selector-error {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #b63142;
+}
+
+.connection-ssh-panel {
+  margin-top: 10px;
+  padding: 10px 10px 2px;
+  border: 1px solid #dce6f6;
+  border-radius: 8px;
+  background: #f9fbff;
+}
+
 .pane-center .ant-table-wrapper {
   flex: 1;
   min-height: 0;

@@ -19,6 +19,12 @@ public class ConnectionEntity {
     private String sshHost;
     private Integer sshPort;
     private String sshUser;
+    private String sshAuthType;
+    private String sshPassword;
+    private String sshPrivateKeyPath;
+    private String sshPrivateKeyText;
+    private String sshPrivateKeyPassphrase;
+    private String selectedDatabasesJson;
     private String lastTestStatus;
     private String lastTestMessage;
     private Long createdAt;

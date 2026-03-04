@@ -1,20 +1,12 @@
 package com.sqlcopilot.studio.dto.connection;
 
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
 import lombok.Data;
-import java.util.List;
 
-/** 新建数据库连接请求对象。 */
+/** 连接数据库候选预览请求对象（用于未落库配置临时建连）。 */
 @Data
-public class ConnectionCreateReq {
-
-    /** 连接名称。 */
-    @NotBlank
-    private String name;
+public class ConnectionDatabasePreviewReq {
 
     /** 数据库类型：MYSQL/POSTGRESQL/SQLITE/SQLSERVER/ORACLE。 */
-    @NotBlank
     private String dbType;
 
     /** 数据库主机地址。 */
@@ -26,28 +18,13 @@ public class ConnectionCreateReq {
     /** 数据库名称或 SQLite 文件路径。 */
     private String databaseName;
 
-    /** 勾选展示的数据库列表（仅 MySQL/PostgreSQL/SQLServer 生效）。 */
-    private List<String> selectedDatabases;
-
     /** 登录用户名。 */
     private String username;
 
     /** 登录密码。 */
     private String password;
 
-    /** 认证方式：PASSWORD/SSH_TUNNEL。 */
-    private String authType;
-
-    /** 环境标识：DEV/TEST/PROD。 */
-    @NotBlank
-    private String env;
-
-    /** 是否只读：true 表示仅允许查询。 */
-    @NotNull
-    private Boolean readOnly;
-
     /** 是否启用 SSH 隧道。 */
-    @NotNull
     private Boolean sshEnabled;
 
     /** SSH 主机地址。 */

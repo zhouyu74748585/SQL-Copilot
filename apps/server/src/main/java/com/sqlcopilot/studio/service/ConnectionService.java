@@ -1,6 +1,8 @@
 package com.sqlcopilot.studio.service;
 
 import com.sqlcopilot.studio.dto.connection.ConnectionCreateReq;
+import com.sqlcopilot.studio.dto.connection.ConnectionDatabasePreviewReq;
+import com.sqlcopilot.studio.dto.connection.ConnectionDatabasePreviewVO;
 import com.sqlcopilot.studio.dto.connection.ConnectionTestVO;
 import com.sqlcopilot.studio.dto.connection.ConnectionUpdateReq;
 import com.sqlcopilot.studio.dto.connection.ConnectionVO;
@@ -15,6 +17,8 @@ public interface ConnectionService {
     ConnectionVO createConnection(ConnectionCreateReq req);
 
     ConnectionVO updateConnection(ConnectionUpdateReq req);
+
+    ConnectionDatabasePreviewVO previewDatabases(ConnectionDatabasePreviewReq req);
 
     void removeConnection(Long id);
 

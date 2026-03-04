@@ -11,6 +11,7 @@ export interface ConnectionVO {
   host?: string;
   port?: number;
   databaseName?: string;
+  selectedDatabases?: string[];
   username?: string;
   env: string;
   readOnly: boolean;
@@ -18,6 +19,11 @@ export interface ConnectionVO {
   sshHost?: string;
   sshPort?: number;
   sshUser?: string;
+  sshAuthType?: string;
+  sshPrivateKeyPath?: string;
+  sshPasswordConfigured?: boolean;
+  sshPrivateKeyTextConfigured?: boolean;
+  sshPrivateKeyPassphraseConfigured?: boolean;
   lastTestStatus?: string;
   lastTestMessage?: string;
   riskPolicySummary?: string;

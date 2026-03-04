@@ -1,6 +1,7 @@
 package com.sqlcopilot.studio.dto.connection;
 
 import lombok.Data;
+import java.util.List;
 
 /** 数据库连接信息响应对象。 */
 @Data
@@ -24,6 +25,9 @@ public class ConnectionVO {
     /** 数据库名称或路径。 */
     private String databaseName;
 
+    /** 勾选展示的数据库列表。 */
+    private List<String> selectedDatabases;
+
     /** 登录用户名。 */
     private String username;
 
@@ -44,6 +48,21 @@ public class ConnectionVO {
 
     /** SSH 用户名。 */
     private String sshUser;
+
+    /** SSH 认证方式。 */
+    private String sshAuthType;
+
+    /** SSH 私钥路径（仅路径模式有值）。 */
+    private String sshPrivateKeyPath;
+
+    /** SSH 密码是否已配置。 */
+    private Boolean sshPasswordConfigured;
+
+    /** SSH 私钥文本是否已配置。 */
+    private Boolean sshPrivateKeyTextConfigured;
+
+    /** SSH 私钥解密口令是否已配置。 */
+    private Boolean sshPrivateKeyPassphraseConfigured;
 
     /** 最近一次连通性状态。 */
     private String lastTestStatus;
