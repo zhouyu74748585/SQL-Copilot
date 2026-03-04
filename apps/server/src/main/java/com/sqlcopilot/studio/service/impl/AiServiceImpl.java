@@ -14,6 +14,7 @@ import com.sqlcopilot.studio.dto.ai.AiRepairReq;
 import com.sqlcopilot.studio.dto.ai.AiRepairVO;
 import com.sqlcopilot.studio.dto.ai.AiTextResponseVO;
 import com.sqlcopilot.studio.dto.ai.ChartConfigVO;
+import com.sqlcopilot.studio.dto.sql.QueryRowVO;
 import com.sqlcopilot.studio.dto.schema.ContextBuildReq;
 import com.sqlcopilot.studio.dto.schema.ContextBuildVO;
 import com.sqlcopilot.studio.dto.schema.SchemaOverviewVO;
@@ -26,6 +27,7 @@ import com.sqlcopilot.studio.service.SchemaService;
 import com.sqlcopilot.studio.service.rag.RagRetrievalService;
 import com.sqlcopilot.studio.service.rag.model.RagPromptContext;
 import com.sqlcopilot.studio.util.BusinessException;
+import com.sqlcopilot.studio.util.ResultSetConverter;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.statement.Statement;
 import net.sf.jsqlparser.statement.Statements;
@@ -68,6 +70,8 @@ public class AiServiceImpl implements AiService {
         "a", "resume", "fork", "cloud", "features", "help"
     );
     private static final long CLI_TIMEOUT_SECONDS = 45L;
+    private static final int ANALYZE_EXPLAIN_PLAN_ROW_LIMIT = 200;
+    private static final int ANALYZE_EXPLAIN_PLAN_TEXT_LIMIT = 6000;
     private static final double AUTO_INTENT_MIN_CONFIDENCE = 0.70D;
     private static final String OPENAI_SYSTEM_PROMPT = "你是数据库 SQL 专家。基于提供的 RAG 上下文生成 SQL。仅返回可执行 SQL，不要输出解释。";
     private static final String INTENT_CLASSIFY_SYSTEM_PROMPT = """
@@ -909,6 +913,16 @@ public class AiServiceImpl implements AiService {
         timer.mark("rag_retrieve");
         GenerationContext generationContext = buildGenerationContext(req, ragPromptContext);
         timer.mark("build_generation_context");
+        String extraPromptContext = "";
+        if ("ANALYZE-SQL".equalsIgnoreCase(logScene)) {
+            extraPromptContext = tryBuildExplainPlanPromptContext(req);
+            timer.mark("try_explain_sql");
+        }
+        String mergedPromptContext = mergePromptContext(generationContext.promptContext(), extraPromptContext);
+        if (!Objects.equals(mergedPromptContext, generationContext.promptContext())) {
+            generationContext = new GenerationContext(mergedPromptContext, generationContext.relatedTables());
+            timer.mark("append_explain_plan_context");
+        }
 
         String content;
         String reasoning;
@@ -964,6 +978,159 @@ public class AiServiceImpl implements AiService {
             timer.totalElapsedMs()
         );
         return vo;
+    }
+
+    private String tryBuildExplainPlanPromptContext(AiGenerateSqlReq req) {
+        String sourceSql = extractSqlForAnalyze(req.getPrompt());
+        if (sourceSql.isBlank()) {
+            return "";
+        }
+        if (hasMultipleStatements(sourceSql)) {
+            log.info(
+                "[AI-ANALYZE-EXPLAIN-SKIP] connectionId={}, sessionId={}, reason=multiple_statements",
+                req.getConnectionId(),
+                safe(req.getSessionId())
+            );
+            return "";
+        }
+
+        try {
+            ConnectionEntity connectionEntity = connectionService.getConnectionEntity(req.getConnectionId());
+            String targetDatabaseName = resolveTargetDatabaseName(connectionEntity.getDatabaseName(), req.getDatabaseName());
+            String explainSql = buildExplainSql(connectionEntity.getDbType(), sourceSql);
+
+            try (java.sql.Connection connection = connectionService.openTargetConnection(req.getConnectionId())) {
+                applyDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
+                try (java.sql.Statement statement = connection.createStatement();
+                     java.sql.ResultSet resultSet = statement.executeQuery(explainSql)) {
+                    List<QueryRowVO> rows = ResultSetConverter.readRows(
+                        resultSet,
+                        ANALYZE_EXPLAIN_PLAN_ROW_LIMIT
+                    );
+                    log.info(
+                        "[AI-ANALYZE-EXPLAIN-SUCCESS] connectionId={}, sessionId={}, databaseName={}, rows={}",
+                        req.getConnectionId(),
+                        safe(req.getSessionId()),
+                        safe(targetDatabaseName),
+                        rows.size()
+                    );
+                    return buildExplainPlanPromptContext(sourceSql, explainSql, compactPlanRows(rows));
+                }
+            }
+        } catch (Exception ex) {
+            log.info(
+                "[AI-ANALYZE-EXPLAIN-SKIP] connectionId={}, sessionId={}, databaseName={}, reason={}",
+                req.getConnectionId(),
+                safe(req.getSessionId()),
+                safe(req.getDatabaseName()),
+                safe(ex.getMessage())
+            );
+            return "";
+        }
+    }
+
+    private String extractSqlForAnalyze(String prompt) {
+        String extracted = normalizeSqlText(extractSql(prompt));
+        if (extracted.isBlank()) {
+            String normalizedPrompt = normalizeSqlText(prompt);
+            if (!looksLikeSql(normalizedPrompt)) {
+                return "";
+            }
+            extracted = normalizedPrompt;
+        }
+        return trimTrailingSemicolon(extracted);
+    }
+
+    private boolean hasMultipleStatements(String sql) {
+        try {
+            Statements statements = CCJSqlParserUtil.parseStatements(sql);
+            if (statements == null || statements.getStatements() == null) {
+                return true;
+            }
+            return statements.getStatements().size() != 1;
+        } catch (Exception ex) {
+            return true;
+        }
+    }
+
+    private String trimTrailingSemicolon(String sql) {
+        String normalized = safe(sql);
+        while (normalized.endsWith(";")) {
+            normalized = normalized.substring(0, normalized.length() - 1).trim();
+        }
+        return normalized;
+    }
+
+    private String buildExplainPlanPromptContext(String sourceSql, String explainSql, String planRows) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("Execution plan context from backend pre-executed EXPLAIN.\n");
+        builder.append("Source SQL:\n").append(safe(sourceSql)).append('\n');
+        builder.append("Explain SQL:\n").append(safe(explainSql)).append('\n');
+        builder.append("Plan rows (JSON):\n").append(safe(planRows)).append('\n');
+        builder.append("Use this plan as primary evidence when assessing index usage and scan risks.");
+        return builder.toString();
+    }
+
+    private String compactPlanRows(List<QueryRowVO> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return "[]";
+        }
+        try {
+            String json = objectMapper.writeValueAsString(rows);
+            if (json.length() <= ANALYZE_EXPLAIN_PLAN_TEXT_LIMIT) {
+                return json;
+            }
+            return json.substring(0, ANALYZE_EXPLAIN_PLAN_TEXT_LIMIT) + "...(truncated)";
+        } catch (Exception ex) {
+            String fallback = rows.toString();
+            if (fallback.length() <= ANALYZE_EXPLAIN_PLAN_TEXT_LIMIT) {
+                return fallback;
+            }
+            return fallback.substring(0, ANALYZE_EXPLAIN_PLAN_TEXT_LIMIT) + "...(truncated)";
+        }
+    }
+
+    private String buildExplainSql(String dbType, String sql) {
+        String upper = safe(dbType).toUpperCase(Locale.ROOT);
+        if ("SQLITE".equals(upper)) {
+            return "EXPLAIN QUERY PLAN " + sql;
+        }
+        return "EXPLAIN " + sql;
+    }
+
+    private void applyDatabaseContext(java.sql.Connection connection,
+                                      String dbType,
+                                      String targetDatabaseName) throws java.sql.SQLException {
+        String type = safe(dbType).toUpperCase(Locale.ROOT);
+        if (targetDatabaseName.isBlank()) {
+            return;
+        }
+        if ("MYSQL".equals(type) || "POSTGRESQL".equals(type)) {
+            connection.setCatalog(targetDatabaseName);
+        }
+        if ("SQLSERVER".equals(type) || "ORACLE".equals(type)) {
+            connection.setSchema(targetDatabaseName);
+        }
+    }
+
+    private String resolveTargetDatabaseName(String configuredDatabaseName, String requestedDatabaseName) {
+        String requested = safe(requestedDatabaseName);
+        if (!requested.isBlank()) {
+            return requested;
+        }
+        return safe(configuredDatabaseName);
+    }
+
+    private String mergePromptContext(String promptContext, String extraPromptContext) {
+        String base = safe(promptContext);
+        String extra = safe(extraPromptContext);
+        if (extra.isBlank()) {
+            return base;
+        }
+        if (base.isBlank()) {
+            return extra;
+        }
+        return base + "\n\n" + extra;
     }
 
     /**
