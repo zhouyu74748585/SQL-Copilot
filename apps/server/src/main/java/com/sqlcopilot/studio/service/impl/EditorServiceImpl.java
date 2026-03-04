@@ -12,7 +12,6 @@ import com.sqlcopilot.studio.entity.QueryHistoryEntity;
 import com.sqlcopilot.studio.mapper.QueryHistoryMapper;
 import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.EditorService;
-import com.sqlcopilot.studio.service.rag.RagIngestionService;
 import com.sqlcopilot.studio.util.BusinessException;
 import com.sqlcopilot.studio.util.ResultSetConverter;
 import com.sqlcopilot.studio.util.SqlClassifier;
@@ -36,14 +35,11 @@ public class EditorServiceImpl implements EditorService {
 
     private final QueryHistoryMapper queryHistoryMapper;
     private final ConnectionService connectionService;
-    private final RagIngestionService ragIngestionService;
 
     public EditorServiceImpl(QueryHistoryMapper queryHistoryMapper,
-                             ConnectionService connectionService,
-                             RagIngestionService ragIngestionService) {
+                             ConnectionService connectionService) {
         this.queryHistoryMapper = queryHistoryMapper;
         this.connectionService = connectionService;
-        this.ragIngestionService = ragIngestionService;
     }
 
     @Override
@@ -95,7 +91,6 @@ public class EditorServiceImpl implements EditorService {
         entity.setSuccessFlag(Boolean.TRUE.equals(req.getSuccess()) ? 1 : 0);
         entity.setCreatedAt(System.currentTimeMillis());
         queryHistoryMapper.insert(entity);
-        ragIngestionService.ingestSqlHistory(entity);
     }
 
     @Override

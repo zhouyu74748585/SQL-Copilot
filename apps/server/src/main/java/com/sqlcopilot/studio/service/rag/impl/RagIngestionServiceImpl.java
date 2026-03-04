@@ -149,6 +149,10 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         if (!ragEnabled || historyEntity == null || isBlank(historyEntity.getSqlText())) {
             return;
         }
+        // 关键策略：仅摄入执行成功记录，保证 SQL 历史向量样本质量。
+        if (historyEntity.getSuccessFlag() == null || historyEntity.getSuccessFlag() != 1) {
+            return;
+        }
 
         try {
             ConnectionEntity connectionEntity = connectionService.getConnectionEntity(historyEntity.getConnectionId());

@@ -78,13 +78,17 @@ public class SqlServiceImpl implements SqlService {
     @Override
     public RiskEvaluateVO evaluateRisk(RiskEvaluateReq req) {
         log.info("[SQL-RISK] connectionId={}, sql={}", req.getConnectionId(), req.getSqlText());
-        List<RiskItemVO> items = evaluateRiskItems(req.getSqlText());
+        ConnectionEntity connection = connectionService.getConnectionEntity(req.getConnectionId());
+        List<RiskItemVO> items = evaluateRiskItems(req.getSqlText(), connection.getDbType());
         String riskLevel = decideRiskLevel(items);
+        boolean confirmRequired = requiresRiskConfirm(connection.getEnv(), riskLevel);
 
         RiskEvaluateVO vo = new RiskEvaluateVO();
         vo.setRiskLevel(riskLevel);
         vo.setRiskItems(items);
-        if ("HIGH".equals(riskLevel)) {
+        vo.setConfirmRequired(confirmRequired);
+        if (confirmRequired) {
+            vo.setConfirmReason(buildConfirmReason(connection.getEnv(), riskLevel));
             String token = UUID.randomUUID().toString();
             riskAckStore.put(token, new RiskAckPayload(SqlClassifier.digest(req.getSqlText()),
                 System.currentTimeMillis() + ACK_TOKEN_TTL_MS));
@@ -102,16 +106,16 @@ public class SqlServiceImpl implements SqlService {
         log.info("[SQL-EXECUTE] connectionId={}, sessionId={}, databaseName={}, sql={}",
             req.getConnectionId(), req.getSessionId(), targetDatabaseName, sql);
 
-        List<RiskItemVO> items = evaluateRiskItems(sql);
+        List<RiskItemVO> items = evaluateRiskItems(sql, connection.getDbType());
         String riskLevel = decideRiskLevel(items);
 
-        // 关键拦截：只读模式或生产模式下禁止 DML。
+        // 关键拦截：只读连接禁止 DML。
         if ((connection.getReadOnly() != null && connection.getReadOnly() == 1) && SqlClassifier.isDml(sql)) {
             throw new BusinessException(403, "当前连接为只读模式，禁止执行写入 SQL");
         }
 
-        if ("HIGH".equals(riskLevel)) {
-            validateAckToken(sql, req.getRiskAckToken());
+        if (requiresRiskConfirm(connection.getEnv(), riskLevel)) {
+            validateAckToken(sql, req.getRiskAckToken(), riskLevel, connection.getEnv());
         }
 
         long start = System.currentTimeMillis();
@@ -120,10 +124,9 @@ public class SqlServiceImpl implements SqlService {
             applyDatabaseContext(jdbcConnection, connection.getDbType(), targetDatabaseName);
             try (Statement statement = jdbcConnection.createStatement()) {
                 if (SqlClassifier.isQuery(sql)) {
-                    String executableSql = addLimitIfNeeded(sql);
-                    log.info("[SQL-EXECUTE] connectionId={}, databaseName={}, executableSql={}",
-                        req.getConnectionId(), targetDatabaseName, executableSql);
-                    try (ResultSet resultSet = statement.executeQuery(executableSql)) {
+                    log.info("[SQL-EXECUTE] connectionId={}, databaseName={}, querySql={}",
+                        req.getConnectionId(), targetDatabaseName, sql);
+                    try (ResultSet resultSet = statement.executeQuery(sql)) {
                         result.setColumns(ResultSetConverter.readColumns(resultSet.getMetaData()));
                         result.setRows(ResultSetConverter.readRows(resultSet, 500));
                         result.setAffectedRows(result.getRows().size());
@@ -185,9 +188,9 @@ public class SqlServiceImpl implements SqlService {
         return value == null ? "" : value.trim();
     }
 
-    private void validateAckToken(String sql, String riskAckToken) {
+    private void validateAckToken(String sql, String riskAckToken, String riskLevel, String env) {
         if (riskAckToken == null || riskAckToken.isBlank()) {
-            throw new BusinessException(400, "高风险 SQL 必须提供 riskAckToken");
+            throw new BusinessException(400, "当前风险级别需确认令牌后才能执行");
         }
         RiskAckPayload payload = riskAckStore.get(riskAckToken);
         if (payload == null || payload.expiredAt < System.currentTimeMillis()) {
@@ -197,9 +200,10 @@ public class SqlServiceImpl implements SqlService {
             throw new BusinessException(400, "riskAckToken 与 SQL 不匹配");
         }
         riskAckStore.remove(riskAckToken);
+        log.info("[SQL-RISK-ACK] env={}, riskLevel={}, digest={}", normalizeEnv(env), riskLevel, SqlClassifier.digest(sql));
     }
 
-    private List<RiskItemVO> evaluateRiskItems(String sql) {
+    private List<RiskItemVO> evaluateRiskItems(String sql, String dbType) {
         String normalized = SqlClassifier.normalize(sql);
         List<RiskItemVO> items = new ArrayList<>();
 
@@ -212,8 +216,8 @@ public class SqlServiceImpl implements SqlService {
             items.add(risk("FULL_SCAN", "查询缺少 where 条件，可能触发全表扫描", "MEDIUM"));
         }
 
-        if (normalized.startsWith("select") && !normalized.contains(" limit ")) {
-            items.add(risk("NO_LIMIT", "查询缺少 LIMIT，建议分页执行", "MEDIUM"));
+        if (normalized.startsWith("select") && !hasPaginationClause(normalized, dbType)) {
+            items.add(risk("NO_PAGINATION", "查询缺少分页条件，建议分页执行", "MEDIUM"));
         }
 
         if (normalized.contains(" for update ")) {
@@ -236,6 +240,78 @@ public class SqlServiceImpl implements SqlService {
         return hasMedium ? "MEDIUM" : "LOW";
     }
 
+    private boolean requiresRiskConfirm(String env, String riskLevel) {
+        String normalizedLevel = normalize(riskLevel).toUpperCase(Locale.ROOT);
+        String normalizedEnv = normalizeEnv(env);
+        if ("PROD".equals(normalizedEnv)) {
+            return "MEDIUM".equals(normalizedLevel) || "HIGH".equals(normalizedLevel);
+        }
+        return "HIGH".equals(normalizedLevel);
+    }
+
+    private String buildConfirmReason(String env, String riskLevel) {
+        String normalizedLevel = normalize(riskLevel).toUpperCase(Locale.ROOT);
+        if ("PROD".equals(normalizeEnv(env))) {
+            return "PROD_MEDIUM_PLUS";
+        }
+        if ("HIGH".equals(normalizedLevel)) {
+            return "HIGH_RISK";
+        }
+        return "NONE";
+    }
+
+    private String normalizeEnv(String env) {
+        String value = normalize(env).toUpperCase(Locale.ROOT);
+        if ("PROD".equals(value) || "TEST".equals(value) || "DEV".equals(value)) {
+            return value;
+        }
+        return "DEV";
+    }
+
+    private boolean hasPaginationClause(String normalizedSql, String dbType) {
+        String type = normalize(dbType).toUpperCase(Locale.ROOT);
+        if ("MYSQL".equals(type) || "POSTGRESQL".equals(type) || "SQLITE".equals(type)) {
+            return hasMySqlLikePagination(normalizedSql);
+        }
+        if ("SQLSERVER".equals(type)) {
+            return hasSqlServerPagination(normalizedSql);
+        }
+        if ("ORACLE".equals(type)) {
+            return hasOraclePagination(normalizedSql);
+        }
+        return hasGenericPagination(normalizedSql);
+    }
+
+    private boolean hasMySqlLikePagination(String normalizedSql) {
+        return normalizedSql.contains(" limit ")
+            || normalizedSql.contains(" fetch first ")
+            || normalizedSql.contains(" fetch next ");
+    }
+
+    private boolean hasSqlServerPagination(String normalizedSql) {
+        return normalizedSql.startsWith("select top ")
+            || normalizedSql.startsWith("select top(")
+            || normalizedSql.startsWith("select distinct top ")
+            || normalizedSql.startsWith("select distinct top(")
+            || (normalizedSql.contains(" offset ") && normalizedSql.contains(" fetch "));
+    }
+
+    private boolean hasOraclePagination(String normalizedSql) {
+        return normalizedSql.contains(" rownum ")
+            || normalizedSql.contains(" fetch first ")
+            || normalizedSql.contains(" fetch next ")
+            || (normalizedSql.contains(" offset ") && normalizedSql.contains(" fetch "));
+    }
+
+    private boolean hasGenericPagination(String normalizedSql) {
+        return normalizedSql.contains(" limit ")
+            || normalizedSql.contains(" top ")
+            || normalizedSql.contains(" rownum ")
+            || normalizedSql.contains(" fetch first ")
+            || normalizedSql.contains(" fetch next ")
+            || (normalizedSql.contains(" offset ") && normalizedSql.contains(" fetch "));
+    }
+
     private RiskItemVO risk(String code, String description, String level) {
         RiskItemVO item = new RiskItemVO();
         item.setRuleCode(code);
@@ -254,7 +330,10 @@ public class SqlServiceImpl implements SqlService {
         history.setSuccessFlag(Boolean.TRUE.equals(result.getSuccess()) ? 1 : 0);
         history.setCreatedAt(System.currentTimeMillis());
         queryHistoryMapper.insert(history);
-        ragIngestionService.ingestSqlHistory(history);
+        // 关键策略：仅对执行成功的 SQL 做向量化写入，避免未成功语句污染检索样本。
+        if (history.getSuccessFlag() != null && history.getSuccessFlag() == 1) {
+            ragIngestionService.ingestSqlHistory(history);
+        }
     }
 
     private void appendAudit(SqlExecuteReq req, String riskLevel, String action) {
@@ -267,14 +346,6 @@ public class SqlServiceImpl implements SqlService {
         audit.setAction(action);
         audit.setCreatedAt(System.currentTimeMillis());
         auditLogMapper.insert(audit);
-    }
-
-    private String addLimitIfNeeded(String sql) {
-        String normalized = SqlClassifier.normalize(sql);
-        if (normalized.startsWith("select") && !normalized.contains(" limit ")) {
-            return sql + " LIMIT 200";
-        }
-        return sql;
     }
 
     private void ensureSingleStatement(String sql) {

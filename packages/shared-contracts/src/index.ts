@@ -32,6 +32,8 @@ export interface RiskItemVO {
 export interface RiskEvaluateVO {
   riskLevel: 'LOW' | 'MEDIUM' | 'HIGH';
   riskItems: RiskItemVO[];
+  confirmRequired: boolean;
+  confirmReason?: string;
   riskAckToken?: string;
 }
 

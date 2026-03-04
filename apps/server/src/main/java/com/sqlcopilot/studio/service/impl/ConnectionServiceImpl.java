@@ -40,10 +40,6 @@ public class ConnectionServiceImpl implements ConnectionService {
         ConnectionEntity entity = new ConnectionEntity();
         fillEntity(req, entity);
         validateConnectionConfig(entity);
-        // 生产环境默认只读，防止误操作。
-        if ("PROD".equalsIgnoreCase(req.getEnv())) {
-            entity.setReadOnly(1);
-        }
         entity.setLastTestStatus("UNKNOWN");
         entity.setLastTestMessage("尚未测试");
         entity.setCreatedAt(now);
@@ -62,9 +58,6 @@ public class ConnectionServiceImpl implements ConnectionService {
             existing.setPassword(preservedPassword);
         }
         validateConnectionConfig(existing);
-        if ("PROD".equalsIgnoreCase(req.getEnv())) {
-            existing.setReadOnly(1);
-        }
         existing.setUpdatedAt(System.currentTimeMillis());
         connectionMapper.update(existing);
         isolatedJdbcConnectionManager.release(existing.getId());

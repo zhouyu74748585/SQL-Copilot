@@ -23,7 +23,6 @@ import com.sqlcopilot.studio.service.SchemaService;
 import com.sqlcopilot.studio.service.rag.RagRetrievalService;
 import com.sqlcopilot.studio.service.rag.model.RagPromptContext;
 import com.sqlcopilot.studio.util.BusinessException;
-import com.sqlcopilot.studio.util.SqlClassifier;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.statement.Statement;
 import net.sf.jsqlparser.statement.Statements;
@@ -66,7 +65,7 @@ public class AiServiceImpl implements AiService {
         "a", "resume", "fork", "cloud", "features", "help"
     );
     private static final long CLI_TIMEOUT_SECONDS = 45L;
-    private static final String OPENAI_SYSTEM_PROMPT = "你是数据库 SQL 专家。基于提供的 RAG 上下文生成 SQL。仅返回可执行 SQL，不要输出解释。查询语句默认增加 LIMIT 100。";
+    private static final String OPENAI_SYSTEM_PROMPT = "你是数据库 SQL 专家。基于提供的 RAG 上下文生成 SQL。仅返回可执行 SQL，不要输出解释。";
     private static final String EXPLAIN_SQL_SYSTEM_PROMPT = """
         你是数据库讲解助手。请用中文解释 SQL 的业务含义。
         要求：
@@ -88,7 +87,7 @@ public class AiServiceImpl implements AiService {
         要求：
         1) 请根据提供的执行错误信息和数据库元数据上下文，修复失败的 SQL。
         2) 输出必须且只能是一个 JSON 对象，包含以下字段：
-            - errorExplanation：简要说明 SQL 为什么失败，以及做了哪些修改
+            - errorExplanation：使用中文简要说明 SQL 为什么失败，以及做了哪些修改
             - repairedSql：可执行的修复后 SQL
         3) 不要输出 Markdown、代码块或任何额外文本。
         """;
@@ -141,11 +140,11 @@ public class AiServiceImpl implements AiService {
         boolean fallbackUsed = false;
         try {
             ProviderResult result = generateByConfiguredProvider(req, generationContext);
-            generatedSql = result.sqlText();
-            reasoning = result.reasoning();
+            generatedSql = safe(result.sqlText());
+            reasoning = safe(result.reasoning());
         } catch (Exception ex) {
-            generatedSql = fallbackSql(req.getPrompt(), generationContext.relatedTables());
-            reasoning = "AI 配置调用失败，已降级到本地规则生成。原因: " + ex.getMessage();
+            generatedSql = fallbackOutputText("模型调用失败: " + safe(ex.getMessage()));
+            reasoning = "AI 配置调用失败，已返回说明内容。原因: " + safe(ex.getMessage());
             fallbackUsed = true;
             log.warn(
                 "[AI-GENERATE-PROVIDER-FAILED] connectionId={}, sessionId={}, databaseName={}, modelName={}, reason={}",
@@ -157,20 +156,29 @@ public class AiServiceImpl implements AiService {
             );
         }
 
-        AstValidationResult astResult = validateByAst(req, generatedSql);
-        if (!astResult.valid()) {
-            generatedSql = fallbackSql(req.getPrompt(), generationContext.relatedTables());
+        if (!looksLikeSql(generatedSql)) {
             fallbackUsed = true;
-            reasoning = reasoning + "；AST 校验未通过，已降级。原因: " + astResult.message();
-            AstValidationResult fallbackValidation = validateByAst(req, generatedSql);
-            if (!fallbackValidation.valid()) {
-                throw new BusinessException(500, "SQL 生成后 AST 校验失败: " + fallbackValidation.message());
+            generatedSql = fallbackOutputText(generatedSql);
+            if (!reasoning.isBlank()) {
+                reasoning = reasoning + "；";
             }
-            generatedSql = fallbackValidation.sqlText();
-            reasoning = reasoning + "；降级 SQL 已通过 AST 校验。";
+            reasoning = reasoning + "模型未返回可识别 SQL，已返回说明内容。";
         } else {
-            generatedSql = astResult.sqlText();
-            reasoning = reasoning + "；" + astResult.message();
+            AstValidationResult astResult = validateByAst(req, generatedSql);
+            if (!astResult.valid()) {
+                fallbackUsed = true;
+                generatedSql = fallbackOutputText("SQL 结构校验未通过: " + astResult.message() + "\n模型输出:\n" + generatedSql);
+                if (!reasoning.isBlank()) {
+                    reasoning = reasoning + "；";
+                }
+                reasoning = reasoning + "AST 校验未通过，已返回说明内容。原因: " + astResult.message();
+            } else {
+                generatedSql = astResult.sqlText();
+                if (!reasoning.isBlank()) {
+                    reasoning = reasoning + "；";
+                }
+                reasoning = reasoning + astResult.message();
+            }
         }
 
         AiGenerateSqlVO vo = new AiGenerateSqlVO();
@@ -386,14 +394,13 @@ public class AiServiceImpl implements AiService {
 
     private ParsedRepairResult fallbackRepairResult(String sourceSql, String errorMessage) {
         String repairedSql = safe(sourceSql);
-        if (SqlClassifier.isQuery(repairedSql) && !SqlClassifier.normalize(repairedSql).contains(" limit ")) {
-            repairedSql = repairedSql + " LIMIT 100";
-        }
         if (safe(errorMessage).toLowerCase(Locale.ROOT).contains("unknown column")) {
-            repairedSql = "/* Please verify referenced column names. */\n" + repairedSql;
+            String explanation = "SQL execution failed: " + safe(errorMessage)
+                + ". Rule-based fallback was applied. Please verify referenced column names.";
+            return new ParsedRepairResult(explanation, repairedSql);
         }
         String explanation = "SQL execution failed: " + safe(errorMessage)
-            + ". Rule-based fallback was applied (limit hint / column hint).";
+            + ". Rule-based fallback was applied.";
         return new ParsedRepairResult(explanation, repairedSql);
     }
 
@@ -532,7 +539,10 @@ public class AiServiceImpl implements AiService {
             String content = parseOpenAiResponseText(response, endpoint.apiType());
             String sqlText = extractSql(content);
             if (sqlText.isBlank()) {
-                throw new BusinessException(500, "OpenAI 返回内容未识别出 SQL");
+                return new ProviderResult(
+                    content,
+                    "已通过 OpenAI API(" + safe(option.getName()) + "/" + model + ") 返回说明内容（未识别到 SQL）"
+                );
             }
             return new ProviderResult(sqlText, "已通过 OpenAI API(" + safe(option.getName()) + "/" + model + ") 生成 SQL");
         } catch (BusinessException ex) {
@@ -804,7 +814,7 @@ public class AiServiceImpl implements AiService {
             );
             String sqlText = extractSql(output);
             if (sqlText.isBlank()) {
-                throw new BusinessException(500, "本地 CLI 输出未识别到 SQL");
+                return new ProviderResult(output, "已通过本地 CLI(" + safe(option.getName()) + ") 返回说明内容（未识别到 SQL）");
             }
             return new ProviderResult(sqlText, "已通过本地 CLI(" + safe(option.getName()) + ") 生成 SQL（提示词由后端构建）");
         } catch (BusinessException ex) {
@@ -1139,16 +1149,12 @@ public class AiServiceImpl implements AiService {
             .replace("\\\"", "\"");
     }
 
-    private String fallbackSql(String prompt, List<String> relatedTables) {
-        String table = "sqlite_master";
-        if (relatedTables != null && !relatedTables.isEmpty()) {
-            table = relatedTables.get(0);
+    private String fallbackOutputText(String outputText) {
+        String normalized = normalizeSqlText(outputText);
+        if (!normalized.isBlank()) {
+            return normalized;
         }
-        String normalizedPrompt = safe(prompt).toLowerCase();
-        if (prompt.contains("数量") || normalizedPrompt.contains("count")) {
-            return "SELECT COUNT(1) AS total_count FROM " + table;
-        }
-        return "SELECT * FROM " + table + " LIMIT 100";
+        return "未能生成可执行 SQL，请补充更明确的需求后重试。";
     }
 
     /**
@@ -1393,4 +1399,3 @@ public class AiServiceImpl implements AiService {
     private record OpenAiEndpoint(String url, OpenAiApiType apiType) {
     }
 }
-

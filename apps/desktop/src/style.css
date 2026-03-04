@@ -744,9 +744,11 @@ body {
 }
 
 .sql-selection-popover-btn {
-  height: 26px;
+  width: 30px;
+  min-width: 30px;
+  height: 28px;
+  padding-inline: 0;
   border-radius: 6px;
-  font-size: 12px;
 }
 
 .query-editor-pane .label {
@@ -886,23 +888,23 @@ body {
 }
 
 .query-chat-user-bubble.is-generate {
-  background: linear-gradient(180deg, #2f6ff8 0%, #295fda 100%);
-  box-shadow: 0 4px 12px rgba(33, 89, 216, 0.22);
+  background: linear-gradient(180deg, #5f93ff 0%, #4f82ef 100%);
+  box-shadow: 0 4px 12px rgba(33, 89, 216, 0.14);
 }
 
 .query-chat-user-bubble.is-explain {
-  background: linear-gradient(180deg, #177c61 0%, #106b53 100%);
-  box-shadow: 0 4px 12px rgba(17, 112, 84, 0.24);
+  background: linear-gradient(180deg, #3d9a80 0%, #2f886f 100%);
+  box-shadow: 0 4px 12px rgba(17, 112, 84, 0.15);
 }
 
 .query-chat-user-bubble.is-analyze {
-  background: linear-gradient(180deg, #d48017 0%, #bc6c0c 100%);
-  box-shadow: 0 4px 12px rgba(190, 105, 12, 0.26);
+  background: linear-gradient(180deg, #e3a04e 0%, #cf8b38 100%);
+  box-shadow: 0 4px 12px rgba(190, 105, 12, 0.16);
 }
 
 .query-chat-user-bubble.is-repair {
-  background: linear-gradient(180deg, #9d2f77 0%, #7e205f 100%);
-  box-shadow: 0 4px 12px rgba(126, 32, 95, 0.28);
+  background: linear-gradient(180deg, #b15a92 0%, #9c477f 100%);
+  box-shadow: 0 4px 12px rgba(126, 32, 95, 0.16);
 }
 
 .query-chat-assistant-card {
@@ -1027,6 +1029,79 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.risk-confirm-content {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+  color: #334b6b;
+}
+
+.risk-confirm-level-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.risk-confirm-level-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 58px;
+  padding: 1px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.risk-confirm-pre {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid #d9e4f7;
+  border-radius: 8px;
+  background: #f7faff;
+  padding: 8px 10px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.risk-confirm-content.risk-level-high .risk-confirm-level-badge {
+  color: #b42318;
+  background: #fef3f2;
+  border-color: #fecdca;
+}
+
+.risk-confirm-content.risk-level-high .risk-confirm-pre {
+  border-color: #f9c7bd;
+  background: #fff6f5;
+}
+
+.risk-confirm-content.risk-level-medium .risk-confirm-level-badge {
+  color: #b54708;
+  background: #fffaeb;
+  border-color: #fedf89;
+}
+
+.risk-confirm-content.risk-level-medium .risk-confirm-pre {
+  border-color: #fde5b0;
+  background: #fffaf0;
+}
+
+.risk-confirm-content.risk-level-low .risk-confirm-level-badge {
+  color: #027a48;
+  background: #ecfdf3;
+  border-color: #abefc6;
+}
+
+.risk-confirm-content.risk-level-low .risk-confirm-pre {
+  border-color: #bde7cf;
+  background: #f4fcf7;
 }
 
 .query-result-title {

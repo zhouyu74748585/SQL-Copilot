@@ -433,27 +433,33 @@
               :style="{ left: `${sqlSelectionPopover.left}px`, top: `${sqlSelectionPopover.top}px` }"
             >
               <a-space size="small">
-                <a-button size="small" class="sql-selection-popover-btn" @click="appendSelectedSqlToPrompt(activeQueryTab)">
-                  添加到对话框
-                </a-button>
-                <a-button
-                  size="small"
-                  class="sql-selection-popover-btn"
-                  :loading="activeQueryTab.aiGenerating"
-                  :disabled="activeQueryTab.aiGenerating"
-                  @click="explainSelectedSqlInChat(activeQueryTab)"
-                >
-                  解释 SQL
-                </a-button>
-                <a-button
-                  size="small"
-                  class="sql-selection-popover-btn"
-                  :loading="activeQueryTab.aiGenerating"
-                  :disabled="activeQueryTab.aiGenerating"
-                  @click="analyzeSelectedSqlInChat(activeQueryTab)"
-                >
-                  分析 SQL
-                </a-button>
+                <a-tooltip title="所选 SQL 加入对话">
+                  <a-button size="small" class="sql-action-icon-btn sql-selection-popover-btn" @click="appendSelectedSqlToPrompt(activeQueryTab)">
+                    <template #icon><message-outlined /></template>
+                  </a-button>
+                </a-tooltip>
+                <a-tooltip title="解释 SQL">
+                  <a-button
+                    size="small"
+                    class="sql-action-icon-btn sql-selection-popover-btn"
+                    :loading="activeQueryTab.aiGenerating"
+                    :disabled="activeQueryTab.aiGenerating"
+                    @click="explainSelectedSqlInChat(activeQueryTab)"
+                  >
+                    <template #icon><read-outlined /></template>
+                  </a-button>
+                </a-tooltip>
+                <a-tooltip title="分析 SQL">
+                  <a-button
+                    size="small"
+                    class="sql-action-icon-btn sql-selection-popover-btn"
+                    :loading="activeQueryTab.aiGenerating"
+                    :disabled="activeQueryTab.aiGenerating"
+                    @click="analyzeSelectedSqlInChat(activeQueryTab)"
+                  >
+                    <template #icon><bar-chart-outlined /></template>
+                  </a-button>
+                </a-tooltip>
               </a-space>
             </div>
           </div>
@@ -477,11 +483,6 @@
                   @click="executeSqlForTab(activeQueryTab)"
                 >
                   <template #icon><play-circle-outlined /></template>
-                </a-button>
-              </a-tooltip>
-              <a-tooltip title="风险评估">
-                <a-button size="small" class="sql-action-icon-btn" @click="evaluateRiskForTab(activeQueryTab)">
-                  <template #icon><safety-outlined /></template>
                 </a-button>
               </a-tooltip>
               <a-tooltip v-if="activeQueryTab.lastExecuteFailed" title="自动修复">
@@ -901,7 +902,6 @@ import {
   ReadOutlined,
   ReloadOutlined,
   RobotOutlined,
-  SafetyOutlined,
   SearchOutlined,
   SettingOutlined,
   ToolOutlined,
@@ -911,8 +911,8 @@ import {Editor as MonacoEditor} from '@guolao/vue-monaco-editor';
 import type {IDisposable} from 'monaco-editor';
 import type * as MonacoApi from 'monaco-editor';
 import type {ConnectionVO} from '@sqlcopilot/shared-contracts';
-import {message} from 'ant-design-vue';
-import {computed, onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue';
+import {message, Modal} from 'ant-design-vue';
+import {computed, h, onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue';
 import {getApi, postApi} from './api/client';
 import mysqlIcon from './assets/db/mysql.svg';
 import oracleIcon from './assets/db/oracle.svg';
@@ -1110,10 +1110,10 @@ const sqlEditorOptions = {
   quickSuggestions: {
     comments: false,
     strings: false,
-    other: true,
+    other: false,
   },
   quickSuggestionsDelay: 80,
-  suggestOnTriggerCharacters: true,
+  suggestOnTriggerCharacters: false,
   scrollBeyondLastLine: false,
   tabSize: 2,
   insertSpaces: true,
@@ -2449,6 +2449,9 @@ function tableNameSuggestions(
   databaseName: string,
 ) {
   const keyword = prefix.trim().toLowerCase();
+  if (!keyword) {
+    return [];
+  }
   const uniqueNames = Array.from(new Set(names.filter((item) => !!item)));
   const matched = keyword
     ? uniqueNames.filter((name) => name.toLowerCase().includes(keyword))
@@ -2472,6 +2475,9 @@ function sqlKeywordSuggestions(
   prefix: string,
 ) {
   const keyword = prefix.trim().toUpperCase();
+  if (!keyword) {
+    return [];
+  }
   const matched = keyword
     ? sqlKeywords.filter((item) => item.includes(keyword))
     : sqlKeywords;
@@ -2488,6 +2494,40 @@ function sqlKeywordSuggestions(
   });
 }
 
+function hasKeywordSuggestion(prefix: string) {
+  const keyword = prefix.trim().toUpperCase();
+  if (!keyword) {
+    return false;
+  }
+  return sqlKeywords.some((item) => item.includes(keyword));
+}
+
+function hasTableSuggestion(names: string[], prefix: string) {
+  const keyword = prefix.trim().toLowerCase();
+  if (!keyword) {
+    return false;
+  }
+  return names.some((name) => name.toLowerCase().includes(keyword));
+}
+
+function shouldAutoTriggerSuggest(tab: QueryWorkspaceTab, prefix: string) {
+  if (hasKeywordSuggestion(prefix)) {
+    return true;
+  }
+  const databaseName = resolveQueryDatabaseName(tab);
+  if (!databaseName || databaseName === '未发现数据库') {
+    return false;
+  }
+  const cacheKey = tableCacheKey(tab.connectionId, databaseName);
+  const loaded = !!tableNameLoadedCache.value[cacheKey];
+  if (!loaded) {
+    void ensureTableNamesLoaded(tab.connectionId, databaseName);
+    return false;
+  }
+  const tableNames = tableNameCache.value[cacheKey] ?? [];
+  return hasTableSuggestion(tableNames, prefix);
+}
+
 function registerSqlCompletionProvider(monaco: typeof MonacoApi) {
   if (sqlCompletionProviderDisposable) {
     return;
@@ -2497,26 +2537,32 @@ function registerSqlCompletionProvider(monaco: typeof MonacoApi) {
     provideCompletionItems: async (model, position) => {
       const tab = activeQueryTab.value;
       if (!tab) {
-        return { suggestions: [] };
+        return undefined;
       }
       const word = model.getWordUntilPosition(position);
+      const wordPrefix = (word.word || '').trim();
+      if (!wordPrefix) {
+        return undefined;
+      }
       const range = {
         startLineNumber: position.lineNumber,
         endLineNumber: position.lineNumber,
         startColumn: word.startColumn,
         endColumn: word.endColumn,
       };
-      const keywordSuggestions = sqlKeywordSuggestions(monaco, range, word.word || '');
+      const keywordSuggestions = sqlKeywordSuggestions(monaco, range, wordPrefix);
       const databaseName = resolveQueryDatabaseName(tab);
       if (!databaseName || databaseName === '未发现数据库') {
-        return { suggestions: keywordSuggestions };
+        return keywordSuggestions.length ? { suggestions: keywordSuggestions } : undefined;
       }
       const tableNames = await ensureTableNamesLoaded(tab.connectionId, databaseName);
+      const tableSuggestions = tableNameSuggestions(monaco, tableNames, range, wordPrefix, databaseName);
+      const suggestions = [...tableSuggestions, ...keywordSuggestions];
+      if (!suggestions.length) {
+        return undefined;
+      }
       return {
-        suggestions: [
-          ...tableNameSuggestions(monaco, tableNames, range, word.word || '', databaseName),
-          ...keywordSuggestions,
-        ],
+        suggestions,
       };
     },
   });
@@ -2534,6 +2580,19 @@ function registerSqlAutoSuggest(editor: MonacoApi.editor.IStandaloneCodeEditor) 
       return;
     }
     if (!/[\w.`]/.test(typedText)) {
+      return;
+    }
+    const model = editor.getModel();
+    const position = editor.getPosition();
+    if (!model || !position) {
+      return;
+    }
+    const currentWord = model.getWordUntilPosition(position).word.trim();
+    if (!currentWord) {
+      return;
+    }
+    const tab = activeQueryTab.value;
+    if (!tab || !shouldAutoTriggerSuggest(tab, currentWord)) {
       return;
     }
     if (sqlAutoSuggestTimer !== null) {
@@ -3254,6 +3313,11 @@ function buildAiPrompt(promptText: string, actionType: AiActionType, sqlSnippet?
   ].join('\n');
 }
 
+function looksLikeSqlText(text: string) {
+  const normalized = text.trim().toLowerCase();
+  return /^(select|with|insert|update|delete|replace|create|alter|drop|truncate|merge|show|explain)\b/.test(normalized);
+}
+
 async function generateSqlForTab(tab: QueryWorkspaceTab, actionType: AiActionType = 'generate') {
   if (tab.aiGenerating) {
     return;
@@ -3286,12 +3350,18 @@ async function generateSqlForTab(tab: QueryWorkspaceTab, actionType: AiActionTyp
         sqlSnippet: undefined,
         modelName: tab.selectedAiModel || undefined,
       });
-      appendAssistantSqlMessage(tab, generated.sqlText, actionType);
-      await saveConversationHistory(tab, promptText, generated.sqlText);
+      const generatedText = (generated.sqlText || '').trim();
+      if (looksLikeSqlText(generatedText)) {
+        appendAssistantSqlMessage(tab, generatedText, actionType);
+        await saveConversationHistory(tab, promptText, generatedText);
+        message.success('SQL 已生成');
+      } else {
+        appendAssistantTextMessage(tab, generatedText || '未返回可执行 SQL', actionType);
+        message.warning('未生成可执行 SQL，已返回说明内容');
+      }
       if (generated.reasoning) {
         message.info(generated.reasoning);
       }
-      message.success('SQL 已生成');
       return;
     }
 
@@ -3330,21 +3400,53 @@ async function explainSqlForTab(tab: QueryWorkspaceTab, sqlOverride?: string) {
   });
 }
 
-async function evaluateRiskForTab(tab: QueryWorkspaceTab) {
-  await runSafely(async () => {
-    const sqlText = resolveSqlForAction(tab);
-    if (!sqlText) {
-      throw new Error('请先输入或选择 SQL');
-    }
-    const result = await postApi<RiskEvaluateVO>('/api/sql/risk/evaluate', {
-      connectionId: tab.connectionId,
-      sqlText,
-    });
-    tab.riskInfo = result;
-    tab.riskAckToken = result.riskAckToken ?? '';
-    touchQueryTab(tab);
-    message.info(`风险级别: ${result.riskLevel}`);
+const RISK_EXECUTION_CANCELLED = 'RISK_EXECUTION_CANCELLED';
+
+function connectionEnvLabel(connectionId: number) {
+  const env = connections.value.find((item) => item.id === connectionId)?.env ?? 'DEV';
+  return env.toUpperCase();
+}
+
+async function ensureRiskConfirmedBeforeExecute(tab: QueryWorkspaceTab, sqlText: string) {
+  const result = await postApi<RiskEvaluateVO>('/api/sql/risk/evaluate', {
+    connectionId: tab.connectionId,
+    sqlText,
   });
+  tab.riskInfo = result;
+  touchQueryTab(tab);
+  const riskAckToken = (result.riskAckToken ?? '').trim();
+  if (!result.confirmRequired) {
+    return riskAckToken;
+  }
+  const normalizedRiskLevel = normalizeRiskLevel(result.riskLevel);
+  const confirmLevelClass = `risk-level-${normalizedRiskLevel.toLowerCase()}`;
+  const riskItemsText = (result.riskItems ?? [])
+    .map((item, index) => `${index + 1}. [${item.level}] ${item.description}`)
+    .join('\n') || '无风险明细';
+  const confirmed = await new Promise<boolean>((resolve) => {
+    Modal.confirm({
+      title: `${connectionEnvLabel(tab.connectionId)} 环境 SQL 风险确认`,
+      content: h('div', { class: ['risk-confirm-content', confirmLevelClass] }, [
+        h('div', { class: 'risk-confirm-level-row' }, [
+          h('span', '风险级别'),
+          h('span', { class: 'risk-confirm-level-badge' }, normalizedRiskLevel),
+        ]),
+        h('div', `确认策略: ${result.confirmReason || '-'}`),
+        h('pre', { class: 'risk-confirm-pre' }, riskItemsText),
+      ]),
+      okText: '确认执行',
+      cancelText: '取消',
+      onOk: () => resolve(true),
+      onCancel: () => resolve(false),
+    });
+  });
+  if (!confirmed) {
+    throw new Error(RISK_EXECUTION_CANCELLED);
+  }
+  if (!riskAckToken) {
+    throw new Error('风险确认令牌缺失，请重新执行');
+  }
+  return riskAckToken;
 }
 
 async function executeSqlForTab(tab: QueryWorkspaceTab, sqlOverride?: string) {
@@ -3353,17 +3455,31 @@ async function executeSqlForTab(tab: QueryWorkspaceTab, sqlOverride?: string) {
     message.error('请先输入或选择 SQL');
     return;
   }
+  let riskAckToken = '';
   try {
+    riskAckToken = await ensureRiskConfirmedBeforeExecute(tab, sqlText);
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    if (errMsg === RISK_EXECUTION_CANCELLED) {
+      message.info('已取消执行');
+      return;
+    }
+    message.error(errMsg);
+    return;
+  }
+  try {
+    tab.riskAckToken = riskAckToken;
     const result = await postApi<SqlExecuteVO>('/api/sql/execute', {
       connectionId: tab.connectionId,
       sessionId: tab.sessionId,
       sqlText,
       databaseName: tab.databaseName || undefined,
-      riskAckToken: tab.riskAckToken,
+      riskAckToken: riskAckToken || undefined,
       operatorName: 'desktop-user',
     });
     tab.executeResult = result;
     tab.explainResult = null;
+    tab.riskAckToken = '';
     tab.lastExecuteFailed = false;
     tab.lastExecuteErrorMessage = '';
     tab.lastFailedSqlText = '';
@@ -3373,6 +3489,7 @@ async function executeSqlForTab(tab: QueryWorkspaceTab, sqlOverride?: string) {
     const errMsg = error instanceof Error ? error.message : String(error);
     tab.executeResult = null;
     tab.explainResult = null;
+    tab.riskAckToken = '';
     tab.lastExecuteFailed = true;
     tab.lastExecuteErrorMessage = errMsg;
     tab.lastFailedSqlText = sqlText;
@@ -3442,13 +3559,21 @@ async function exportCsvForTab(tab: QueryWorkspaceTab) {
 }
 
 function riskColor(level: string) {
-  if (level === 'HIGH') {
+  const normalizedLevel = normalizeRiskLevel(level);
+  if (normalizedLevel === 'HIGH') {
     return 'red';
   }
-  if (level === 'MEDIUM') {
+  if (normalizedLevel === 'MEDIUM') {
     return 'orange';
   }
   return 'green';
+}
+
+function normalizeRiskLevel(level?: string): 'LOW' | 'MEDIUM' | 'HIGH' {
+  if (level === 'HIGH' || level === 'MEDIUM' || level === 'LOW') {
+    return level;
+  }
+  return 'LOW';
 }
 
 function ensureConnection() {
@@ -3904,5 +4029,3 @@ function resetConnectionModalState() {
   resetConnectionForm();
 }
 </script>
-
-
