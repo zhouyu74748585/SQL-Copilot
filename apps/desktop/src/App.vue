@@ -389,6 +389,22 @@
                   <div v-if="item.chartImageDataUrl" class="query-chat-chart-image-wrap">
                     <img class="query-chat-chart-image" :src="item.chartImageDataUrl" alt="chart-preview" />
                   </div>
+                  <template v-if="item.executionPreview">
+                    <div class="query-chat-execution-summary">
+                      执行成功 · 耗时 {{ item.executionPreview.executionMs }}ms · 影响行数 {{ item.executionPreview.affectedRows }}
+                      <span v-if="item.executionPreview.truncated">（仅展示部分结果）</span>
+                    </div>
+                    <a-table
+                      v-if="item.executionPreview.rows.length"
+                      size="small"
+                      class="query-chat-execution-table"
+                      :pagination="false"
+                      :columns="chatExecutionColumns(item.executionPreview)"
+                      :data-source="item.executionPreview.rows"
+                      row-key="__rowKey"
+                      :scroll="{ x: true, y: 180 }"
+                    />
+                  </template>
                   <template v-if="item.sqlText">
                     <pre class="query-chat-sql">{{ item.sqlText }}</pre>
                     <a-space size="small" wrap>
@@ -414,14 +430,14 @@
                           <template #icon><play-circle-outlined /></template>
                         </a-button>
                       </a-tooltip>
-                      <a-tooltip v-if="item.chartConfig" title="生成图表">
-                        <a-button size="small" class="sql-action-icon-btn" @click="generateChartFromMessage(activeQueryTab, item)">
-                          <template #icon><area-chart-outlined /></template>
+                      <a-tooltip title="解释 SQL">
+                        <a-button size="small" class="sql-action-icon-btn" @click="explainMessageSqlInChat(activeQueryTab, item.sqlText || '')">
+                          <template #icon><read-outlined /></template>
                         </a-button>
                       </a-tooltip>
-                      <a-tooltip v-if="item.chartConfig && item.chartImageCacheKey" title="编辑图表（重跑SQL）">
-                        <a-button size="small" class="sql-action-icon-btn" @click="editChartFromHistory(activeQueryTab, item)">
-                          <template #icon><line-chart-outlined /></template>
+                      <a-tooltip title="分析 SQL">
+                        <a-button size="small" class="sql-action-icon-btn" @click="analyzeMessageSqlInChat(activeQueryTab, item.sqlText || '')">
+                          <template #icon><experiment-outlined /></template>
                         </a-button>
                       </a-tooltip>
                       <a-tooltip v-if="item.chartImageDataUrl || item.chartImageCacheKey" title="下载图表 PNG">
@@ -453,6 +469,10 @@
                 />
                 <span class="query-chat-auto-label">Auto</span>
                 <a-switch v-model:checked="activeQueryTab.autoMode" size="small" />
+                <template v-if="activeQueryTab.autoMode">
+                  <span class="query-chat-auto-label">自动执行</span>
+                  <a-switch v-model:checked="activeQueryTab.autoExecute" size="small" />
+                </template>
               </div>
               <div v-if="activeQueryTab.autoMode" class="query-chat-composer-actions">
                 <a-tooltip title="Auto 发送">
@@ -1331,6 +1351,14 @@ interface RetryRequestMeta {
   actionSqlSnippet?: string;
 }
 
+interface QueryExecutionPreview {
+  affectedRows: number;
+  executionMs: number;
+  columns: string[];
+  rows: Array<Record<string, string | null>>;
+  truncated: boolean;
+}
+
 interface QueryChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -1341,6 +1369,7 @@ interface QueryChatMessage {
   chartConfigSummary?: string;
   chartImageCacheKey?: string;
   chartImageDataUrl?: string;
+  executionPreview?: QueryExecutionPreview;
   retryable?: boolean;
   retryLoading?: boolean;
   retryMeta?: RetryRequestMeta;
@@ -1362,6 +1391,7 @@ interface QueryWorkspaceTab {
   explainResult: ExplainVO | null;
   selectedAiModel: string;
   autoMode: boolean;
+  autoExecute: boolean;
   aiGenerating: boolean;
   sqlExecuting: boolean;
   selectedSqlText: string;
@@ -2244,6 +2274,7 @@ function openAiQueryTab(initialPrompt = '') {
     explainResult: null,
     selectedAiModel: models[0] ?? '',
     autoMode: true,
+    autoExecute: false,
     aiGenerating: false,
     sqlExecuting: false,
     selectedSqlText: '',
@@ -2604,6 +2635,7 @@ function buildHistoryTabFromRows(connectionId: number, sessionId: string, rows: 
     explainResult: null,
     selectedAiModel: models[0] ?? '',
     autoMode: true,
+    autoExecute: false,
     aiGenerating: false,
     sqlExecuting: false,
     selectedSqlText: '',
@@ -2962,31 +2994,54 @@ async function analyzeSelectedSqlInChat(tab: QueryWorkspaceTab) {
   await runAiTextActionWithSelectedSql(tab, 'analyze');
 }
 
+async function explainMessageSqlInChat(tab: QueryWorkspaceTab, sqlText: string) {
+  await runAiTextActionWithSql(tab, 'explain', sqlText);
+}
+
+async function analyzeMessageSqlInChat(tab: QueryWorkspaceTab, sqlText: string) {
+  await runAiTextActionWithSql(tab, 'analyze', sqlText);
+}
+
 async function runAiTextActionWithSelectedSql(tab: QueryWorkspaceTab, actionType: 'explain' | 'analyze') {
-  if (tab.aiGenerating) {
-    return;
-  }
   const selectedSqlText = tab.selectedSqlText.trim();
   if (!selectedSqlText) {
     message.info('请先选择一段 SQL');
     return;
   }
+  hideSqlSelectionPopover();
+  await runAiTextActionWithSql(tab, actionType, selectedSqlText);
+}
+
+async function runAiTextActionWithSql(tab: QueryWorkspaceTab, actionType: 'explain' | 'analyze', sqlText: string) {
+  if (tab.aiGenerating) {
+    return;
+  }
+  const normalizedSqlText = sqlText.trim();
+  if (!normalizedSqlText) {
+    message.info('当前消息不包含 SQL');
+    return;
+  }
 
   const promptText = actionType === 'explain' ? '请解释这段 SQL 的含义。' : '请分析这段 SQL 的合理性。';
-  appendUserChatMessage(tab, `${promptText}\n\n${selectedSqlText}`, actionType);
+  const userMessage = appendUserChatMessage(tab, `${promptText}\n\n${normalizedSqlText}`, actionType);
   tab.aiGenerating = true;
-  hideSqlSelectionPopover();
 
   try {
     const endpoint = actionType === 'explain' ? '/api/ai/query/explain' : '/api/ai/query/analyze';
-    const result = await postApi<AiTextResponseVO>(endpoint, {
+    const result = await postAiApiWithTimeout<AiTextResponseVO>(endpoint, {
       connectionId: tab.connectionId,
       sessionId: tab.sessionId,
-      prompt: mergePromptWithSqlSnippet(promptText, selectedSqlText),
+      prompt: mergePromptWithSqlSnippet(promptText, normalizedSqlText),
       databaseName: tab.databaseName || undefined,
       modelName: tab.selectedAiModel || undefined,
     });
-    appendAssistantTextMessage(tab, result.content || '未返回内容', actionType);
+    const content = result.content || '未返回内容';
+    appendAssistantTextMessage(tab, content, actionType);
+    await saveConversationHistoryOnce(tab, userMessage, `${promptText}\n\n${normalizedSqlText}`, normalizedSqlText, {
+      actionType,
+      assistantContent: content,
+      databaseName: tab.databaseName,
+    });
     if (result.reasoning) {
       message.info(result.reasoning);
     }
@@ -4498,7 +4553,13 @@ async function generateSqlForTab(
       databaseName: tab.databaseName || undefined,
       modelName: tab.selectedAiModel || undefined,
     });
-    appendAssistantTextMessage(tab, result.content || '未返回内容', actionType);
+    const content = result.content || '未返回内容';
+    appendAssistantTextMessage(tab, content, actionType);
+    await saveConversationHistoryOnce(tab, userMessage, promptText, actionSqlSnippet || '', {
+      actionType,
+      assistantContent: content,
+      databaseName: tab.databaseName,
+    });
     if (result.reasoning) {
       message.info(result.reasoning);
     }
@@ -4566,11 +4627,20 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
     if (result.intentType === 'GENERATE_SQL') {
       const sqlText = (result.sqlText || '').trim();
       if (looksLikeSqlText(sqlText)) {
-        appendAssistantSqlMessage(tab, sqlText, actionType);
+        const assistantMessage = appendAssistantSqlMessage(tab, sqlText, actionType);
         await saveConversationHistoryOnce(tab, userMessage, rawPrompt, sqlText, {
           actionType,
           databaseName: tab.databaseName,
         });
+        if (tab.autoExecute) {
+          const executed = await executeSqlForTab(tab, sqlText, { silentSuccess: true });
+          if (!executed) {
+            message.warning('SQL 已生成，但自动执行失败');
+          } else if (tab.executeResult?.success) {
+            assistantMessage.executionPreview = buildExecutionPreview(tab.executeResult);
+            touchQueryTab(tab);
+          }
+        }
       } else {
         const contentText = sqlText || '未返回可执行 SQL';
         appendAssistantTextMessage(tab, contentText, actionType);
@@ -4731,6 +4801,45 @@ function isChartConfigRenderable(config: ChartConfigVO | null | undefined, rows:
   return hasField(config.xField) && !!config.yFields?.length && config.yFields.every((field) => hasField(field));
 }
 
+function buildExecutionPreview(result: SqlExecuteVO, maxRows = 20, maxColumns = 12): QueryExecutionPreview {
+  const sourceRows = result.rows || [];
+  const firstRow = sourceRows[0];
+  const allColumns = (firstRow?.cells || [])
+    .map((cell) => (cell.columnName || '').trim())
+    .filter((item) => !!item);
+  const columns = allColumns.slice(0, maxColumns);
+  const rows = sourceRows.slice(0, maxRows).map((row, index) => {
+    const mapped: Record<string, string | null> = {
+      __rowKey: String(index + 1),
+    } as Record<string, string | null>;
+    (row.cells || []).forEach((cell) => {
+      const key = (cell.columnName || '').trim();
+      if (!key || !columns.includes(key)) {
+        return;
+      }
+      mapped[key] = cell.cellValue ?? null;
+    });
+    return mapped;
+  });
+  return {
+    affectedRows: result.affectedRows ?? 0,
+    executionMs: result.executionMs ?? 0,
+    columns,
+    rows,
+    truncated: sourceRows.length > maxRows || allColumns.length > maxColumns,
+  };
+}
+
+function chatExecutionColumns(preview: QueryExecutionPreview) {
+  return preview.columns.map((columnName) => ({
+    title: columnName,
+    dataIndex: columnName,
+    key: columnName,
+    ellipsis: true,
+    width: 140,
+  }));
+}
+
 async function exportChartPngDataUrl() {
   for (let attempt = 0; attempt < 6; attempt += 1) {
     await nextTick();
@@ -4866,6 +4975,9 @@ async function generateChartFromMessage(
   const success = await executeSqlForTab(tab, sqlText, { silentSuccess: true });
   if (!success) {
     return;
+  }
+  if (tab.executeResult?.success) {
+    item.executionPreview = buildExecutionPreview(tab.executeResult);
   }
 
   const rows = activeChartRows.value;

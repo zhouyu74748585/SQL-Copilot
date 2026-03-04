@@ -1176,6 +1176,23 @@ body {
   border-radius: 6px;
 }
 
+.query-chat-execution-summary {
+  margin-top: 8px;
+  border-radius: 8px;
+  border: 1px solid #e0e8f6;
+  background: #f7faff;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: #35537a;
+}
+
+.query-chat-execution-table {
+  margin-top: 8px;
+  border: 1px solid #e0e8f6;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
 .query-chat-composer {
   border-top: 1px solid var(--line);
   background: #fff;
@@ -1938,6 +1955,13 @@ body {
 .studio-root .query-chat-chart-summary,
 .studio-root .query-chat-chart-image-wrap,
 .studio-root .query-chart-readonly-tip {
+  border: 1px solid var(--line-soft);
+  background: color-mix(in srgb, var(--surface-1) 90%, transparent);
+  color: var(--text-2);
+}
+
+.studio-root .query-chat-execution-summary,
+.studio-root .query-chat-execution-table {
   border: 1px solid var(--line-soft);
   background: color-mix(in srgb, var(--surface-1) 90%, transparent);
   color: var(--text-2);
