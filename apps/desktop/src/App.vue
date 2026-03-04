@@ -1561,6 +1561,9 @@ const sqlEditorOptions = {
   minimap: { enabled: false },
   fontSize: 12,
   lineHeight: 18,
+  fontFamily: "'Consolas', 'Cascadia Mono', 'JetBrains Mono', 'Menlo', 'Courier New', monospace",
+  fontLigatures: false,
+  disableMonospaceOptimizations: true,
   wordWrap: 'on',
   quickSuggestions: {
     comments: false,
@@ -1587,6 +1590,8 @@ let sqlCompletionProviderDisposable: IDisposable | null = null;
 let sqlEditorTypeDisposable: IDisposable | null = null;
 let sqlEditorSelectionDisposable: IDisposable | null = null;
 let sqlEditorScrollDisposable: IDisposable | null = null;
+let sqlEditorMouseDownDisposable: IDisposable | null = null;
+let sqlEditorMouseUpDisposable: IDisposable | null = null;
 let sqlAutoSuggestTimer: number | null = null;
 let activeSqlEditorInstance: MonacoApi.editor.IStandaloneCodeEditor | null = null;
 const pendingTableNameLoads = new Map<string, Promise<string[]>>();
@@ -3822,7 +3827,7 @@ function registerSqlAutoSuggest(editor: MonacoApi.editor.IStandaloneCodeEditor) 
     sqlAutoSuggestTimer = window.setTimeout(() => {
       editor.trigger('sql-auto-suggest', 'editor.action.triggerSuggest', {});
     }, 60);
-    syncSelectedSqlForActiveTab();
+    syncSelectedSqlForActiveTab(false);
   });
 }
 
@@ -3866,7 +3871,7 @@ function updateSqlSelectionPopoverPosition(editor: MonacoApi.editor.IStandaloneC
   sqlSelectionPopover.visible = true;
 }
 
-function syncSelectedSqlForActiveTab() {
+function syncSelectedSqlForActiveTab(showPopover = true) {
   if (!activeSqlEditorInstance || !activeQueryTab.value) {
     hideSqlSelectionPopover();
     return;
@@ -3876,13 +3881,28 @@ function syncSelectedSqlForActiveTab() {
     hideSqlSelectionPopover();
     return;
   }
+  if (!showPopover) {
+    hideSqlSelectionPopover();
+    return;
+  }
   updateSqlSelectionPopoverPosition(activeSqlEditorInstance);
 }
 
 function registerSqlSelectionTracker(editor: MonacoApi.editor.IStandaloneCodeEditor) {
   sqlEditorSelectionDisposable?.dispose();
   sqlEditorSelectionDisposable = editor.onDidChangeCursorSelection(() => {
-    syncSelectedSqlForActiveTab();
+    syncSelectedSqlForActiveTab(false);
+  });
+}
+
+function registerSqlSelectionPopoverTrigger(editor: MonacoApi.editor.IStandaloneCodeEditor) {
+  sqlEditorMouseDownDisposable?.dispose();
+  sqlEditorMouseDownDisposable = editor.onMouseDown(() => {
+    hideSqlSelectionPopover();
+  });
+  sqlEditorMouseUpDisposable?.dispose();
+  sqlEditorMouseUpDisposable = editor.onMouseUp(() => {
+    syncSelectedSqlForActiveTab(true);
   });
 }
 
@@ -3913,11 +3933,18 @@ function handleSqlEditorMount(
   monaco: typeof MonacoApi,
 ) {
   activeSqlEditorInstance = editor;
+  monaco.editor.remeasureFonts();
+  editor.layout();
+  window.requestAnimationFrame(() => {
+    monaco.editor.remeasureFonts();
+    editor.layout();
+  });
   registerSqlCompletionProvider(monaco);
   registerSqlAutoSuggest(editor);
   registerSqlSelectionTracker(editor);
+  registerSqlSelectionPopoverTrigger(editor);
   registerSqlScrollTracker(editor);
-  syncSelectedSqlForActiveTab();
+  syncSelectedSqlForActiveTab(false);
   void warmupTableSuggestions(activeQueryTab.value);
 }
 
@@ -5918,6 +5945,10 @@ onBeforeUnmount(() => {
   sqlEditorSelectionDisposable = null;
   sqlEditorScrollDisposable?.dispose();
   sqlEditorScrollDisposable = null;
+  sqlEditorMouseDownDisposable?.dispose();
+  sqlEditorMouseDownDisposable = null;
+  sqlEditorMouseUpDisposable?.dispose();
+  sqlEditorMouseUpDisposable = null;
   sqlCompletionProviderDisposable?.dispose();
   sqlCompletionProviderDisposable = null;
   activeSqlEditorInstance = null;
@@ -5945,7 +5976,7 @@ watch(
     activeQueryTab.value.selectedSqlText = '';
     hideSqlSelectionPopover();
     void warmupTableSuggestions(activeQueryTab.value);
-    syncSelectedSqlForActiveTab();
+    syncSelectedSqlForActiveTab(false);
   },
   { immediate: true },
 );

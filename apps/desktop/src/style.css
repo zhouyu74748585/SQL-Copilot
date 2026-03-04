@@ -981,11 +981,6 @@ body {
   overflow: hidden;
 }
 
-.sql-editor .monaco-editor,
-.sql-editor .monaco-editor .view-lines {
-  font-family: 'JetBrains Mono', 'Menlo', monospace !important;
-}
-
 .editor-actions {
   padding: 8px 10px;
   border-bottom: 1px solid var(--line);
