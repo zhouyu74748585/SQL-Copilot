@@ -120,6 +120,55 @@ export interface TableDetailVO {
   }>;
 }
 
+export interface ErGraphReq {
+  connectionId: number;
+  databaseName: string;
+  tableNames: string[];
+  modelName?: string;
+  includeAiInference?: boolean;
+  aiConfidenceThreshold?: number;
+}
+
+export interface ErColumnNodeVO {
+  columnName: string;
+  dataType?: string;
+  primaryKey?: boolean;
+  indexed?: boolean;
+  nullable?: boolean;
+}
+
+export interface ErTableNodeVO {
+  tableName: string;
+  tableComment?: string;
+  columns: ErColumnNodeVO[];
+}
+
+export interface ErRelationVO {
+  sourceTable: string;
+  sourceColumn: string;
+  targetTable: string;
+  targetColumn: string;
+  relationType: 'FK' | 'AI_INFERRED' | string;
+  confidence?: number;
+  reason?: string;
+}
+
+export interface ErAiInferenceStatusVO {
+  requested: boolean;
+  success: boolean;
+  message?: string;
+}
+
+export interface ErGraphVO {
+  connectionId: number;
+  databaseName: string;
+  tables: ErTableNodeVO[];
+  foreignKeyRelations: ErRelationVO[];
+  aiRelations: ErRelationVO[];
+  aiInference: ErAiInferenceStatusVO;
+  generatedAt: number;
+}
+
 export interface AiGenerateSqlVO {
   sqlText: string;
   reasoning: string;

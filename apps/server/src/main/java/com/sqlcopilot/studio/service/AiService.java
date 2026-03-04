@@ -7,6 +7,8 @@ import com.sqlcopilot.studio.dto.ai.AiGenerateSqlVO;
 import com.sqlcopilot.studio.dto.ai.AiRepairReq;
 import com.sqlcopilot.studio.dto.ai.AiRepairVO;
 import com.sqlcopilot.studio.dto.ai.AiTextResponseVO;
+import com.sqlcopilot.studio.dto.schema.ErAiInferenceReq;
+import com.sqlcopilot.studio.dto.schema.ErAiInferenceResultVO;
 
 public interface AiService {
 
@@ -19,6 +21,8 @@ public interface AiService {
     AiTextResponseVO explainSql(AiGenerateSqlReq req);
 
     AiTextResponseVO analyzeSql(AiGenerateSqlReq req);
+
+    ErAiInferenceResultVO inferErRelations(ErAiInferenceReq req);
 
     AiRepairVO repairSql(AiRepairReq req);
 }

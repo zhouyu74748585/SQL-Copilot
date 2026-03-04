@@ -19,7 +19,7 @@
             :class="{ 'is-active': activeWorkbenchTab === browserTabKey }"
             @click="activateBrowserTab"
           >
-            <span>对象浏览</span>
+            <span>瀵硅薄娴忚</span>
           </button>
           <button
             v-for="tab in queryTabs"
@@ -41,7 +41,7 @@
             <span>{{ tab.title }}</span>
             <close-outlined class="tab-close" @click.stop="closeErTab(tab.key)" />
           </button>
-          <a-tooltip title="新建 AI 查询页签">
+          <a-tooltip title="鏂板缓 AI 鏌ヨ椤电">
             <button class="top-chrome-tab-add" @click="openAiQueryTab()">
               <plus-outlined />
             </button>
@@ -49,33 +49,33 @@
         </div>
       </div>
       <div class="top-chrome-actions">
-        <button class="tool-item top-action-btn" @click="openCreateModal" title="连接">
+        <button class="tool-item top-action-btn" @click="openCreateModal" title="杩炴帴">
           <link-outlined />
-          <span>连接</span>
+          <span>杩炴帴</span>
         </button>
         <a-dropdown placement="bottomLeft" :trigger="['click']">
-          <button class="tool-item top-action-btn" :disabled="!canOpenHistory" title="会话历史" @click="handleHistoryMenuClick">
+          <button class="tool-item top-action-btn" :disabled="!canOpenHistory" title="浼氳瘽鍘嗗彶" @click="handleHistoryMenuClick">
             <history-outlined />
-            <span>历史</span>
+            <span>鍘嗗彶</span>
           </button>
           <template #overlay>
             <div class="history-menu-panel">
               <div class="history-menu-title">
-                <span>会话历史 · {{ queryTabConnectionNameById(historySessionConnectionId) || '-' }}</span>
-                <span v-if="historyReloading" class="history-menu-loading">刷新中...</span>
+                <span>浼氳瘽鍘嗗彶 路 {{ queryTabConnectionNameById(historySessionConnectionId) || '-' }}</span>
+                <span v-if="historyReloading" class="history-menu-loading">鍒锋柊涓?..</span>
               </div>
               <div class="history-menu-toolbar">
                 <a-input
                   v-model:value="historyKeywordInput"
                   size="small"
                   allow-clear
-                  placeholder="按标题搜索会话"
+                  placeholder="鎸夋爣棰樻悳绱細璇?
                   @pressEnter="applyHistoryKeywordSearch"
                 />
-                <a-button size="small" class="history-search-btn" @click="applyHistoryKeywordSearch">搜索</a-button>
+                <a-button size="small" class="history-search-btn" @click="applyHistoryKeywordSearch">鎼滅储</a-button>
               </div>
               <div class="history-menu-list" @scroll="handleHistoryMenuScroll">
-                <div v-if="!sessionHistoryTabs.length" class="history-menu-empty">暂无 AI 会话</div>
+                <div v-if="!sessionHistoryTabs.length" class="history-menu-empty">鏆傛棤 AI 浼氳瘽</div>
                 <button
                   v-for="item in sessionHistoryTabs"
                   :key="historyItemKey(item)"
@@ -98,7 +98,7 @@
                     <span v-else class="history-menu-item-title">{{ historyItemDisplayTitle(item) }}</span>
                     <div class="history-menu-item-head-actions">
                       <span>{{ formatTime(item.updatedAt) }}</span>
-                      <a-button size="small" type="link" class="history-menu-rename-btn" title="改名" @click.stop="startHistoryTitleEdit(item)">
+                      <a-button size="small" type="link" class="history-menu-rename-btn" title="鏀瑰悕" @click.stop="startHistoryTitleEdit(item)">
                         <template #icon><edit-outlined /></template>
                       </a-button>
                       <a-button
@@ -106,7 +106,7 @@
                         type="link"
                         danger
                         class="history-menu-delete-btn"
-                        title="删除会话"
+                        title="鍒犻櫎浼氳瘽"
                         :disabled="historySessionLoadingKey === historyItemKey(item)"
                         @click.stop="removeHistorySession(item)"
                       >
@@ -115,21 +115,21 @@
                     </div>
                   </div>
                   <div class="history-menu-item-meta">
-                    会话ID: {{ item.sessionId }} | 记录: {{ item.messageCount ?? 0 }}
+                    浼氳瘽ID: {{ item.sessionId }} | 璁板綍鏁? {{ item.messageCount ?? 0 }}
                   </div>
-                  <div class="history-menu-item-desc">创建: {{ formatTime(item.createdAt) }}</div>
+                  <div class="history-menu-item-desc">鍒涘缓浜?{{ formatTime(item.createdAt) }}</div>
                 </button>
-                <div v-if="historyLoadingMore" class="history-menu-load-tip">加载中...</div>
-                <div v-else-if="sessionHistoryTabs.length && !historySessionHasMore" class="history-menu-load-tip">没有更多会话</div>
+                <div v-if="historyLoadingMore" class="history-menu-load-tip">鍔犺浇涓?..</div>
+                <div v-else-if="sessionHistoryTabs.length && !historySessionHasMore" class="history-menu-load-tip">娌℃湁鏇村浼氳瘽</div>
               </div>
             </div>
           </template>
         </a-dropdown>
-        <button class="tool-item top-action-btn" @click="openAiConfigModal" title="AI 配置">
+        <button class="tool-item top-action-btn" @click="openAiConfigModal" title="AI 閰嶇疆">
           <setting-outlined />
-          <span>配置</span>
+          <span>閰嶇疆</span>
         </button>
-        <a-tooltip :title="isDarkTheme ? '切换到浅色' : '切换到深色'">
+        <a-tooltip :title="isDarkTheme ? '鍒囨崲鍒版祬鑹? : '鍒囨崲鍒版繁鑹?">
           <button class="tool-item tool-theme-toggle top-action-btn top-action-icon-btn" @click="toggleTheme">
             <bulb-filled v-if="isDarkTheme" />
             <bulb-outlined v-else />
@@ -150,15 +150,15 @@
     >
       <aside class="pane pane-left">
         <div class="pane-title pane-title-with-action">
-          <span>我的连接</span>
-          <a-button size="small" type="text" :loading="connectionRefreshing" @click="refreshConnections" title="刷新连接列表">
+          <span>鎴戠殑杩炴帴</span>
+          <a-button size="small" type="text" :loading="connectionRefreshing" @click="refreshConnections" title="鍒锋柊杩炴帴鍒楄〃">
             <template #icon>
               <reload-outlined />
             </template>
           </a-button>
         </div>
         <div class="pane-search">
-          <a-input v-model:value="connectionKeyword" size="small" placeholder="搜索连接" allow-clear>
+          <a-input v-model:value="connectionKeyword" size="small" placeholder="鎼滅储杩炴帴" allow-clear>
             <template #prefix>
               <search-outlined />
             </template>
@@ -202,32 +202,31 @@
         </a-tree>
 
         <div class="pane-footer">
-          <div class="selected-name">{{ selectedConnection?.name ?? '未选择连接' }}</div>
+          <div class="selected-name">{{ selectedConnection?.name ?? '鏈€夋嫨杩炴帴' }}</div>
           <div class="selected-desc">
-            {{ selectedConnection?.host || '本地连接' }} : {{ selectedConnection?.port || '-' }} / {{ getActiveDatabaseName(workflow.connectionId) || '未指定库' }}
+            {{ selectedConnection?.host || '鏈湴杩炴帴' }} : {{ selectedConnection?.port || '-' }} / {{ getActiveDatabaseName(workflow.connectionId) || '鏈寚瀹氬簱' }}
           </div>
         </div>
       </aside>
 
       <template v-if="activeWorkbenchTab === browserTabKey">
         <section class="pane pane-center">
-          <div class="pane-title">对象浏览</div>
+          <div class="pane-title">瀵硅薄娴忚</div>
           <div class="center-toolbar">
-            <div v-if="currentObjectType === 'tables'" class="center-toolbar-left">
-              <a-tooltip title="智能ER图">
+            <div class="center-toolbar-left">
+              <a-tooltip title="鏅鸿兘ER鍥?>
                 <a-button size="small" type="primary" @click="openErTableSelectModal()">
                   <template #icon><apartment-outlined /></template>
-                  智能ER图
-                </a-button>
+                  鏅鸿兘ER鍥?                </a-button>
               </a-tooltip>
             </div>
             <div class="center-toolbar-right">
-              <a-input v-model:value="tableKeyword" size="small" placeholder="搜索表名" allow-clear>
+              <a-input v-model:value="tableKeyword" size="small" placeholder="鎼滅储琛ㄥ悕" allow-clear>
                 <template #prefix>
                   <search-outlined />
                 </template>
               </a-input>
-              <a-button size="small" @click="refreshCurrentObjects" title="刷新当前对象">
+              <a-button size="small" @click="refreshCurrentObjects" title="鍒锋柊褰撳墠瀵硅薄">
                 <reload-outlined />
               </a-button>
               <a-radio-group v-model:value="objectViewMode" size="small">
@@ -301,87 +300,87 @@
           </div>
 
           <div class="center-status">
-            <span>对象: {{ filteredObjectRows.length }}</span>
-            <span>类型: {{ objectTypeLabel(currentObjectType) }}</span>
-            <span>字段: {{ schemaOverview?.columnCount ?? 0 }}</span>
+            <span>瀵硅薄: {{ filteredObjectRows.length }}</span>
+            <span>绫诲瀷: {{ objectTypeLabel(currentObjectType) }}</span>
+            <span>瀛楁: {{ schemaOverview?.columnCount ?? 0 }}</span>
           </div>
         </section>
 
         <div class="pane-splitter" @mousedown="startResizeBrowserPane" />
 
         <aside class="pane pane-right detail-pane">
-          <div class="pane-title">对象详情</div>
-          <div v-if="!selectedObjectRecord && !selectedTreeDetail" class="empty-pane">请从对象浏览中选择连接、数据库或对象</div>
+          <div class="pane-title">瀵硅薄璇︽儏</div>
+          <div v-if="!selectedObjectRecord && !selectedTreeDetail" class="empty-pane">璇蜂粠瀵硅薄娴忚涓€夋嫨杩炴帴銆佹暟鎹簱鎴栧璞?/div>
           <div v-else-if="selectedObjectRecord" class="detail-wrapper">
             <div class="detail-summary">
-              <div class="detail-row"><span>对象</span><strong>{{ selectedObjectRecord.objectName }}</strong></div>
-              <div class="detail-row"><span>类型</span><strong>{{ objectTypeLabel(selectedObjectRecord.objectType) }}</strong></div>
-              <div class="detail-row detail-row-description"><span>说明</span><strong>{{ selectedObjectRecord.description || '-' }}</strong></div>
-              <div class="detail-row"><span>向量化</span><strong>{{ databaseStatusLabel(selectedObjectRecord.vectorizeStatus) }}</strong></div>
-              <div class="detail-row"><span>连接</span><strong>{{ selectedConnection?.name ?? '-' }}</strong></div>
-              <div class="detail-row"><span>数据库</span><strong>{{ getActiveDatabaseName(workflow.connectionId) || '-' }}</strong></div>
+              <div class="detail-row"><span>瀵硅薄</span><strong>{{ selectedObjectRecord.objectName }}</strong></div>
+              <div class="detail-row"><span>绫诲瀷</span><strong>{{ objectTypeLabel(selectedObjectRecord.objectType) }}</strong></div>
+              <div class="detail-row detail-row-description"><span>璇存槑</span><strong>{{ selectedObjectRecord.description || '-' }}</strong></div>
+              <div class="detail-row"><span>鍚戦噺鍖?</span><strong>{{ databaseStatusLabel(selectedObjectRecord.vectorizeStatus) }}</strong></div>
+              <div class="detail-row"><span>杩炴帴</span><strong>{{ selectedConnection?.name ?? '-' }}</strong></div>
+              <div class="detail-row"><span>鏁版嵁搴?/span><strong>{{ getActiveDatabaseName(workflow.connectionId) || '-' }}</strong></div>
             </div>
 
             <div v-if="selectedObjectRecord.objectType === 'tables'" class="detail-table-panel">
               <a-spin :spinning="tableDetailLoading">
                 <div class="detail-code-head">
-                  <span>建表语句</span>
+                  <span>寤鸿〃璇彞</span>
                   <a-button size="small" type="text" @click="copyCreateTableSql">
                     <template #icon><copy-outlined /></template>
-                    复制
+                    澶嶅埗
                   </a-button>
                 </div>
                 <pre class="detail-code-block"><code v-html="createTableSqlHighlighted"></code></pre>
               </a-spin>
             </div>
 
-            <div v-else class="detail-note">当前对象类型暂无结构详情，仅展示基本信息</div>
+            <div v-else class="detail-note">褰撳墠瀵硅薄绫诲瀷鏆傛棤缁撴瀯璇︽儏锛屼粎灞曠ず鍩烘湰淇℃伅銆?/div>
           </div>
           <div v-else-if="selectedTreeDetail?.kind === 'connection'" class="detail-wrapper">
             <div class="detail-summary">
-              <div class="detail-row"><span>连接</span><strong>{{ selectedTreeConnection?.name ?? '-' }}</strong></div>
-              <div class="detail-row"><span>数据库类型</span><strong>{{ selectedTreeConnection?.dbType ?? '-' }}</strong></div>
-              <div class="detail-row"><span>所属环境</span><strong>{{ envTagText(selectedTreeConnection?.env) }}</strong></div>
-              <div class="detail-row"><span>主机</span><strong>{{ selectedTreeConnection?.host || '本地连接' }}</strong></div>
-              <div class="detail-row"><span>端口</span><strong>{{ selectedTreeConnection?.port ?? '-' }}</strong></div>
-              <div class="detail-row"><span>用户</span><strong>{{ selectedTreeConnection?.username || '-' }}</strong></div>
-              <div class="detail-row"><span>默认库</span><strong>{{ selectedTreeConnection?.databaseName || '未指定库' }}</strong></div>
-              <div class="detail-row"><span>只读</span><strong>{{ selectedTreeConnection?.readOnly ? '是' : '否' }}</strong></div>
-              <div class="detail-row"><span>SSH 隧道</span><strong>{{ selectedTreeConnection?.sshEnabled ? '已启用' : '未启用' }}</strong></div>
+              <div class="detail-row"><span>杩炴帴</span><strong>{{ selectedTreeConnection?.name ?? '-' }}</strong></div>
+              <div class="detail-row"><span>鏁版嵁搴撶被鍨?/span><strong>{{ selectedTreeConnection?.dbType ?? '-' }}</strong></div>
+              <div class="detail-row"><span>鎵€灞炵幆澧?/span><strong>{{ envTagText(selectedTreeConnection?.env) }}</strong></div>
+              <div class="detail-row"><span>涓绘満</span><strong>{{ selectedTreeConnection?.host || '鏈湴杩炴帴' }}</strong></div>
+              <div class="detail-row"><span>绔彛</span><strong>{{ selectedTreeConnection?.port ?? '-' }}</strong></div>
+              <div class="detail-row"><span>鐢ㄦ埛鍚?/span><strong>{{ selectedTreeConnection?.username || '-' }}</strong></div>
+              <div class="detail-row"><span>榛樿搴?/span><strong>{{ selectedTreeConnection?.databaseName || '鏈寚瀹氬簱' }}</strong></div>
+              <div class="detail-row"><span>鍙</span><strong>{{ selectedTreeConnection?.readOnly ? '鏄? : '鍚? }}</strong></div>
+              <div class="detail-row"><span>SSH 闅ч亾</span><strong>{{ selectedTreeConnection?.sshEnabled ? '宸插惎鐢? : '鏈惎鐢? }}</strong></div>
             </div>
           </div>
           <div v-else-if="selectedTreeDetail?.kind === 'database' || selectedTreeDetail?.kind === 'category'" class="detail-wrapper">
             <div class="detail-summary">
-              <div class="detail-row"><span>数据库</span><strong>{{ selectedTreeDetail.databaseName || '-' }}</strong></div>
-              <div class="detail-row"><span>连接</span><strong>{{ selectedTreeConnection?.name ?? '-' }}</strong></div>
-              <div class="detail-row"><span>数据库类型</span><strong>{{ selectedTreeConnection?.dbType ?? '-' }}</strong></div>
-              <div class="detail-row"><span>所属环境</span><strong>{{ envTagText(selectedTreeConnection?.env) }}</strong></div>
-              <div class="detail-row"><span>向量化</span><strong>{{ selectedTreeDatabaseStatusLabel }}</strong></div>
-              <div class="detail-row"><span>表数量</span><strong>{{ selectedTreeDatabaseTableCount }}</strong></div>
-              <div class="detail-row"><span>字段数</span><strong>{{ selectedTreeDatabaseColumnCount }}</strong></div>
+              <div class="detail-row"><span>鏁版嵁搴?/span><strong>{{ selectedTreeDetail.databaseName || '-' }}</strong></div>
+              <div class="detail-row"><span>杩炴帴</span><strong>{{ selectedTreeConnection?.name ?? '-' }}</strong></div>
+              <div class="detail-row"><span>鏁版嵁搴撶被鍨?/span><strong>{{ selectedTreeConnection?.dbType ?? '-' }}</strong></div>
+              <div class="detail-row"><span>鎵€灞炵幆澧?/span><strong>{{ envTagText(selectedTreeConnection?.env) }}</strong></div>
+              <div class="detail-row"><span>鍚戦噺鍖?/span><strong>{{ selectedTreeDatabaseStatusLabel }}</strong></div>
+              <div class="detail-row"><span>琛ㄦ暟閲?/span><strong>{{ selectedTreeDatabaseTableCount }}</strong></div>
+              <div class="detail-row"><span>瀛楁鏁?/span><strong>{{ selectedTreeDatabaseColumnCount }}</strong></div>
             </div>
           </div>
-          <div v-else class="empty-pane">对象详情加载中...</div>
+          <div v-else class="empty-pane">瀵硅薄璇︽儏鍔犺浇涓?..</div>
         </aside>
       </template>
 
       <template v-else-if="activeErTab">
         <section class="pane pane-center er-diagram-pane">
-          <div class="pane-title">智能ER图 · {{ activeErTab.title }}</div>
+          <div class="pane-title">鏅鸿兘ER鍥?路 {{ activeErTab.title }}</div>
           <div class="er-toolbar">
             <a-space size="small">
-              <a-button size="small" @click="openErTableSelectModal(activeErTab)">重新选表</a-button>
+              <a-button size="small" @click="openErTableSelectModal(activeErTab)">閲嶆柊閫夎〃</a-button>
               <a-button
                 size="small"
                 type="primary"
                 :loading="activeErTab.loading"
                 @click="refreshErGraphForTab(activeErTab, true)"
               >
-                刷新AI关系
+                鍒锋柊AI鍏崇郴
               </a-button>
             </a-space>
             <a-space size="small">
-              <span class="er-toolbar-label">模型</span>
+              <span class="er-toolbar-label">妯″瀷</span>
               <a-select
                 v-model:value="activeErTab.selectedAiModel"
                 size="small"
@@ -399,37 +398,37 @@
         </section>
 
         <aside class="pane pane-right er-side-pane">
-          <div class="pane-title">ER 图信息</div>
+          <div class="pane-title">ER 鍥句俊鎭?/div>
           <div class="er-side-content">
             <div class="er-kpi-row">
-              <span>连接</span>
+              <span>杩炴帴</span>
               <strong>{{ queryTabConnectionNameById(activeErTab.connectionId) || '-' }}</strong>
             </div>
             <div class="er-kpi-row">
-              <span>数据库</span>
+              <span>鏁版嵁搴?/span>
               <strong>{{ activeErTab.databaseName || '-' }}</strong>
             </div>
             <div class="er-kpi-row">
-              <span>已选表</span>
+              <span>宸查€夎〃</span>
               <strong>{{ activeErTab.selectedTableNames.length }}</strong>
             </div>
             <div class="er-kpi-row">
-              <span>FK关系</span>
+              <span>FK鍏崇郴</span>
               <strong>{{ activeErTab.graph?.foreignKeyRelations?.length ?? 0 }}</strong>
             </div>
             <div class="er-kpi-row">
-              <span>AI关系</span>
+              <span>AI鍏崇郴</span>
               <strong>{{ activeErTab.graph?.aiRelations?.length ?? 0 }}</strong>
             </div>
             <div
               v-if="activeErTab.graph?.aiInference?.requested && !activeErTab.graph?.aiInference?.success"
               class="er-ai-warning"
             >
-              {{ activeErTab.graph?.aiInference?.message || 'AI推断失败，仅显示外键关系' }}
+              {{ activeErTab.graph?.aiInference?.message || 'AI鎺ㄦ柇澶辫触锛屼粎鏄剧ず澶栭敭鍏崇郴' }}
             </div>
 
             <div class="er-side-section">
-              <div class="er-side-title">表清单</div>
+              <div class="er-side-title">琛ㄦ竻鍗?/div>
               <div class="er-table-chip-wrap">
                 <a-tag v-for="tableName in activeErTab.selectedTableNames" :key="tableName" color="blue">
                   {{ tableName }}
@@ -438,8 +437,8 @@
             </div>
 
             <div class="er-side-section">
-              <div class="er-side-title">AI关系（虚线）</div>
-              <div v-if="!(activeErTab.graph?.aiRelations?.length)" class="er-empty-tip">暂无AI关系</div>
+              <div class="er-side-title">AI鍏崇郴锛堣櫄绾匡級</div>
+              <div v-if="!(activeErTab.graph?.aiRelations?.length)" class="er-empty-tip">鏆傛棤AI鍏崇郴</div>
               <div v-else class="er-relation-list">
                 <div
                   v-for="relation in activeErTab.graph?.aiRelations || []"
@@ -447,11 +446,11 @@
                   class="er-relation-item"
                 >
                   <div class="er-relation-main">
-                    {{ relation.sourceTable }}.{{ relation.sourceColumn }} -> {{ relation.targetTable }}.{{ relation.targetColumn }}
+                    {{ relation.sourceTable }}.{{ relation.sourceColumn }} 鈫?{{ relation.targetTable }}.{{ relation.targetColumn }}
                   </div>
                   <div class="er-relation-sub">
-                    置信度 {{ Math.round((relation.confidence || 0) * 100) }}%
-                    <span v-if="relation.reason"> · {{ relation.reason }}</span>
+                    缃俊搴?{{ Math.round((relation.confidence || 0) * 100) }}%
+                    <span v-if="relation.reason"> 路 {{ relation.reason }}</span>
                   </div>
                 </div>
               </div>
@@ -463,7 +462,7 @@
       <template v-else>
         <div v-if="activeQueryTab" class="query-shared-meta">
           <div class="query-meta-item">
-            <span>连接</span>
+            <span>杩炴帴</span>
             <a-select
               v-model:value="activeQueryTab.connectionId"
               size="small"
@@ -473,7 +472,7 @@
             />
           </div>
           <div class="query-meta-item">
-            <span>数据库</span>
+            <span>鏁版嵁搴?/span>
             <a-select
               v-model:value="activeQueryTab.databaseName"
               size="small"
@@ -485,11 +484,11 @@
         </div>
 
         <section v-if="activeQueryTab" class="pane pane-center query-chat-pane">
-          <div class="pane-title">{{ activeQueryTab.title }} · 对话</div>
+          <div class="pane-title">{{ activeQueryTab.title }} 路 瀵硅瘽</div>
 
           <div class="query-chat-scroll">
             <div v-if="!activeQueryTab.chatMessages.length" class="query-chat-empty">
-              输入自然语言后发送消息；可使用 Auto 自动识别意图，或关闭 Auto 后手动选择“生成 SQL”“解释 SQL”“分析 SQL”“生成图表”。
+              杈撳叆鑷劧璇█鍚庡彂閫佹秷鎭紱鍙娇鐢?Auto 鑷姩璇嗗埆鎰忓浘锛屾垨鍏抽棴 Auto 鍚庢墜鍔ㄩ€夋嫨鈥滅敓鎴?SQL鈥濃€滆В閲?SQL鈥濃€滃垎鏋?SQL鈥濃€滅敓鎴愬浘琛ㄢ€濄€?
             </div>
             <div
               v-for="item in activeQueryTab.chatMessages"
@@ -509,7 +508,7 @@
                       @click="retryUserMessage(activeQueryTab, item)"
                     >
                       <template #icon><reload-outlined /></template>
-                      重试
+                      閲嶈瘯
                     </a-button>
                   </div>
                 </div>
@@ -529,8 +528,8 @@
                   </div>
                   <template v-if="item.executionPreview">
                     <div class="query-chat-execution-summary">
-                      执行成功 · 耗时 {{ item.executionPreview.executionMs }}ms · 影响行数 {{ item.executionPreview.affectedRows }}
-                      <span v-if="item.executionPreview.truncated">（仅展示部分结果）</span>
+                      鎵ц鎴愬姛 路 鑰楁椂 {{ item.executionPreview.executionMs }}ms 路 褰卞搷琛屾暟 {{ item.executionPreview.affectedRows }}
+                      <span v-if="item.executionPreview.truncated">锛堜粎灞曠ず閮ㄥ垎缁撴灉锛?/span>
                     </div>
                     <a-table
                       v-if="item.executionPreview.rows.length"
@@ -546,7 +545,7 @@
                   <template v-if="item.sqlText">
                     <pre class="query-chat-sql">{{ item.sqlText }}</pre>
                     <a-space size="small" wrap>
-                      <a-tooltip title="追加到左侧编辑器">
+                      <a-tooltip title="杩藉姞鍒板乏渚х紪杈戝櫒">
                         <a-button size="small" class="sql-action-icon-btn" @click="appendSqlToEditor(activeQueryTab, item.sqlText || '')">
                           <template #icon><arrow-left-outlined /></template>
                         </a-button>
@@ -556,7 +555,7 @@
                           <template #icon><eye-outlined /></template>
                         </a-button>
                       </a-tooltip>
-                      <a-tooltip :title="activeQueryTab.sqlExecuting ? '终止执行' : '执行 SQL'">
+                      <a-tooltip :title="activeQueryTab.sqlExecuting ? '缁堟鎵ц' : '鎵ц SQL'">
                         <a-button
                           size="small"
                           :type="activeQueryTab.sqlExecuting ? 'default' : 'primary'"
@@ -570,17 +569,17 @@
                           </template>
                         </a-button>
                       </a-tooltip>
-                      <a-tooltip title="解释 SQL">
+                      <a-tooltip title="瑙ｉ噴 SQL">
                         <a-button size="small" class="sql-action-icon-btn" @click="explainMessageSqlInChat(activeQueryTab, item.sqlText || '')">
                           <template #icon><read-outlined /></template>
                         </a-button>
                       </a-tooltip>
-                      <a-tooltip title="分析 SQL">
+                      <a-tooltip title="鍒嗘瀽 SQL">
                         <a-button size="small" class="sql-action-icon-btn" @click="analyzeMessageSqlInChat(activeQueryTab, item.sqlText || '')">
                           <template #icon><experiment-outlined /></template>
                         </a-button>
                       </a-tooltip>
-                      <a-tooltip v-if="item.chartImageDataUrl || item.chartImageCacheKey" title="下载图表 PNG">
+                      <a-tooltip v-if="item.chartImageDataUrl || item.chartImageCacheKey" title="涓嬭浇鍥捐〃 PNG">
                         <a-button size="small" class="sql-action-icon-btn" @click="downloadMessageChart(item)">
                           <template #icon><download-outlined /></template>
                         </a-button>
@@ -596,12 +595,12 @@
             <a-textarea
               v-model:value="activeQueryTab.prompt"
               :rows="4"
-              placeholder="例如：查询近 7 天订单量，并按天聚合"
+              placeholder="渚嬪锛氭煡璇㈣繎 7 澶╄鍗曢噺锛屽苟鎸夊ぉ鑱氬悎"
               @keydown="handleChatComposerKeydown($event, activeQueryTab)"
             />
             <div class="query-chat-composer-row">
               <div class="query-chat-model-box">
-                <span>模型</span>
+                <span>妯″瀷</span>
                 <a-select
                   v-model:value="activeQueryTab.selectedAiModel"
                   size="small"
@@ -611,12 +610,12 @@
                 <span class="query-chat-auto-label">Auto</span>
                 <a-switch v-model:checked="activeQueryTab.autoMode" size="small" />
                 <template v-if="activeQueryTab.autoMode">
-                  <span class="query-chat-auto-label">自动执行</span>
+                  <span class="query-chat-auto-label">鑷姩鎵ц</span>
                   <a-switch v-model:checked="activeQueryTab.autoExecute" size="small" />
                 </template>
               </div>
               <div v-if="activeQueryTab.aiGenerating" class="query-chat-composer-actions">
-                <a-tooltip title="终止对话执行">
+                <a-tooltip title="缁堟瀵硅瘽鎵ц">
                   <a-button
                     size="small"
                     danger
@@ -628,7 +627,7 @@
                 </a-tooltip>
               </div>
               <div v-else-if="activeQueryTab.autoMode" class="query-chat-composer-actions">
-                <a-tooltip title="Auto 发送">
+                <a-tooltip title="Auto 鍙戦€?>
                   <a-button
                     size="small"
                     type="primary"
@@ -640,7 +639,7 @@
                 </a-tooltip>
               </div>
               <div v-else class="query-chat-composer-actions">
-                <a-tooltip title="生成 SQL">
+                <a-tooltip title="鐢熸垚 SQL">
                   <a-button
                     size="small"
                     type="primary"
@@ -650,7 +649,7 @@
                     <template #icon><code-outlined /></template>
                   </a-button>
                 </a-tooltip>
-                <a-tooltip title="解释 SQL">
+                <a-tooltip title="瑙ｉ噴 SQL">
                   <a-button
                     size="small"
                     class="sql-action-icon-btn"
@@ -659,7 +658,7 @@
                     <template #icon><read-outlined /></template>
                   </a-button>
                 </a-tooltip>
-                <a-tooltip title="分析 SQL">
+                <a-tooltip title="鍒嗘瀽 SQL">
                   <a-button
                     size="small"
                     class="sql-action-icon-btn"
@@ -668,7 +667,7 @@
                     <template #icon><experiment-outlined /></template>
                   </a-button>
                 </a-tooltip>
-                <a-tooltip title="生成图表">
+                <a-tooltip title="鐢熸垚鍥捐〃">
                   <a-button
                     size="small"
                     class="sql-action-icon-btn"
@@ -683,7 +682,7 @@
         </section>
 
         <aside v-if="activeQueryTab" class="pane pane-right query-editor-pane">
-          <div class="pane-title">SQL 编辑与执行</div>
+          <div class="pane-title">SQL 缂栬緫涓庢墽琛?/div>
 
           <div class="editor-group" ref="sqlEditorContainerRef">
             <MonacoEditor
@@ -696,8 +695,8 @@
               class="sql-editor"
               @mount="handleSqlEditorMount"
             >
-              <template #default>编辑器加载中...</template>
-              <template #failure>编辑器加载失败，请刷新页面重试</template>
+              <template #default>缂栬緫鍣ㄥ姞杞戒腑...</template>
+              <template #failure>缂栬緫鍣ㄥ姞杞藉け璐ワ紝璇峰埛鏂伴〉闈㈤噸璇?/template>
             </MonacoEditor>
             <div
               v-if="sqlSelectionPopover.visible && activeQueryTab.selectedSqlText"
@@ -705,12 +704,12 @@
               :style="{ left: `${sqlSelectionPopover.left}px`, top: `${sqlSelectionPopover.top}px` }"
             >
               <a-space size="small">
-                <a-tooltip title="所选 SQL 加入对话">
+                <a-tooltip title="鎵€閫?SQL 鍔犲叆瀵硅瘽">
                   <a-button size="small" class="sql-action-icon-btn sql-selection-popover-btn" @click="appendSelectedSqlToPrompt(activeQueryTab)">
                     <template #icon><message-outlined /></template>
                   </a-button>
                 </a-tooltip>
-                <a-tooltip title="解释 SQL">
+                <a-tooltip title="瑙ｉ噴 SQL">
                   <a-button
                     size="small"
                     class="sql-action-icon-btn sql-selection-popover-btn"
@@ -721,7 +720,7 @@
                     <template #icon><read-outlined /></template>
                   </a-button>
                 </a-tooltip>
-                <a-tooltip title="分析 SQL">
+                <a-tooltip title="鍒嗘瀽 SQL">
                   <a-button
                     size="small"
                     class="sql-action-icon-btn sql-selection-popover-btn"
@@ -738,7 +737,7 @@
 
           <div class="editor-actions">
             <a-space wrap>
-              <a-tooltip :title="activeQueryTab.selectedSqlText ? '计划选择的SQL' : '计划 SQL'">
+              <a-tooltip :title="activeQueryTab.selectedSqlText ? '璁″垝閫夋嫨鐨凷QL' : '璁″垝 SQL'">
                 <a-button
                   size="small"
                   :class="['sql-action-icon-btn', { 'is-selection-active': !!activeQueryTab.selectedSqlText }]"
@@ -747,7 +746,7 @@
                   <template #icon><eye-outlined /></template>
                 </a-button>
               </a-tooltip>
-              <a-tooltip :title="activeQueryTab.sqlExecuting ? '终止执行' : (activeQueryTab.selectedSqlText ? '执行选中的SQL' : '执行 SQL')">
+              <a-tooltip :title="activeQueryTab.sqlExecuting ? '缁堟鎵ц' : (activeQueryTab.selectedSqlText ? '鎵ц閫変腑鐨凷QL' : '鎵ц SQL')">
                 <a-button
                   size="small"
                   :type="activeQueryTab.sqlExecuting ? 'default' : 'primary'"
@@ -761,17 +760,17 @@
                   </template>
                 </a-button>
               </a-tooltip>
-              <a-tooltip v-if="activeQueryTab.lastExecuteFailed" title="自动修复">
+              <a-tooltip v-if="activeQueryTab.lastExecuteFailed" title="鑷姩淇">
                 <a-button size="small" class="sql-action-icon-btn" @click="repairSqlForTab(activeQueryTab)">
                   <template #icon><tool-outlined /></template>
                 </a-button>
               </a-tooltip>
-              <a-tooltip title="导出结果（CSV）">
+              <a-tooltip title="瀵煎嚭缁撴灉锛圕SV锛?>
                 <a-button size="small" class="sql-action-icon-btn" @click="exportCsvForTab(activeQueryTab)">
                   <template #icon><download-outlined /></template>
                 </a-button>
               </a-tooltip>
-              <a-tooltip v-if="activeQueryTab.selectedSqlText" title="所选 SQL 加入对话">
+              <a-tooltip v-if="activeQueryTab.selectedSqlText" title="鎵€閫?SQL 鍔犲叆瀵硅瘽">
                 <a-button
                   size="small"
                   class="sql-action-icon-btn"
@@ -785,9 +784,9 @@
 
           <div class="query-result-panel">
             <div class="query-result-title-row">
-              <div class="query-result-title">查询结果</div>
+              <div class="query-result-title">鏌ヨ缁撴灉</div>
               <a-space size="small">
-                <a-tooltip title="表格结果">
+                <a-tooltip title="琛ㄦ牸缁撴灉">
                   <a-button
                     size="small"
                     :class="['sql-action-icon-btn', { 'is-selection-active': activeQueryTab.resultViewMode === 'table' }]"
@@ -796,7 +795,7 @@
                     <template #icon><table-outlined /></template>
                   </a-button>
                 </a-tooltip>
-                <a-tooltip title="图表结果">
+                <a-tooltip title="鍥捐〃缁撴灉">
                   <a-button
                     size="small"
                     :class="['sql-action-icon-btn', { 'is-selection-active': activeQueryTab.resultViewMode === 'chart' }]"
@@ -805,7 +804,7 @@
                     <template #icon><area-chart-outlined /></template>
                   </a-button>
                 </a-tooltip>
-                <a-tooltip v-if="activeQueryTab.resultViewMode === 'chart'" title="下载图表 PNG">
+                <a-tooltip v-if="activeQueryTab.resultViewMode === 'chart'" title="涓嬭浇鍥捐〃 PNG">
                   <a-button size="small" class="sql-action-icon-btn" @click="downloadActiveChart(activeQueryTab)">
                     <template #icon><download-outlined /></template>
                   </a-button>
@@ -813,8 +812,8 @@
               </a-space>
             </div>
             <div v-if="activeQueryTab.lastExecuteFailed" class="query-result-error">
-              <span class="query-result-error-text">{{ activeQueryTab.lastExecuteErrorMessage || 'SQL 执行失败' }}</span>
-              <a-button size="small" type="primary" danger @click="repairSqlForTab(activeQueryTab)">修复 SQL</a-button>
+              <span class="query-result-error-text">{{ activeQueryTab.lastExecuteErrorMessage || 'SQL 鎵ц澶辫触' }}</span>
+              <a-button size="small" type="primary" danger @click="repairSqlForTab(activeQueryTab)">淇 SQL</a-button>
             </div>
             <template v-if="activeQueryTab.resultViewMode === 'table'">
               <a-table
@@ -841,7 +840,7 @@
                     size="small"
                     style="width: 132px"
                     :options="activeChartFieldOptions"
-                    placeholder="X 轴"
+                    placeholder="X 杞?
                   />
                   <a-select
                     v-if="['LINE', 'BAR', 'TREND'].includes(activeQueryTab.manualChartConfig.chartType || '')"
@@ -851,7 +850,7 @@
                     :max-tag-count="2"
                     style="width: 184px"
                     :options="activeNumericFieldOptions"
-                    placeholder="Y 轴（多选）"
+                    placeholder="Y 杞达紙澶氶€夛級"
                   />
                   <a-select
                     v-if="activeQueryTab.manualChartConfig.chartType === 'SCATTER'"
@@ -860,7 +859,7 @@
                     mode="multiple"
                     style="width: 148px"
                     :options="activeNumericFieldOptions"
-                    placeholder="Y 轴"
+                    placeholder="Y 杞?
                     :max-tag-count="1"
                     :max-count="1"
                   />
@@ -870,7 +869,7 @@
                     size="small"
                     style="width: 128px"
                     :options="activeChartFieldOptions"
-                    placeholder="分类字段"
+                    placeholder="鍒嗙被瀛楁"
                   />
                   <a-select
                     v-if="activeQueryTab.manualChartConfig.chartType === 'PIE'"
@@ -878,14 +877,14 @@
                     size="small"
                     style="width: 128px"
                     :options="activeNumericFieldOptions"
-                    placeholder="数值字段"
+                    placeholder="鏁板€煎瓧娈?
                   />
                   <a-select
                     v-model:value="activeQueryTab.manualChartConfig.sortField"
                     size="small"
                     style="width: 132px"
                     :options="activeChartFieldOptions"
-                    placeholder="排序字段"
+                    placeholder="鎺掑簭瀛楁"
                     allow-clear
                   />
                   <a-select
@@ -894,7 +893,7 @@
                     style="width: 94px"
                     :options="chartSortDirectionOptions"
                   />
-                  <a-tooltip title="按当前配置生成图表">
+                  <a-tooltip title="鎸夊綋鍓嶉厤缃敓鎴愬浘琛?>
                     <a-button size="small" type="primary" class="sql-action-icon-btn" @click="generateManualChartForTab(activeQueryTab)">
                       <template #icon><area-chart-outlined /></template>
                     </a-button>
@@ -908,7 +907,7 @@
                   :config="activeQueryTab.activeChartConfig"
                 />
                 <div v-if="activeQueryTab.chartReadonly" class="query-chart-readonly-tip">
-                  历史图表预览为只读，点击对话中的“编辑图表（重跑 SQL）”可恢复可编辑状态。
+                  鍘嗗彶鍥捐〃棰勮涓哄彧璇伙紝鐐瑰嚮瀵硅瘽涓殑鈥滅紪杈戝浘琛紙閲嶈窇SQL锛夆€濆彲鎭㈠鍙紪杈戠姸鎬併€?
                 </div>
               </div>
             </template>
@@ -919,22 +918,22 @@
 
     <a-modal
       v-model:open="createModalOpen"
-      :title="isEditMode ? '编辑连接' : '新建连接'"
+      :title="isEditMode ? '缂栬緫杩炴帴' : '鏂板缓杩炴帴'"
       width="640px"
-      :ok-text="isEditMode ? '保存' : '创建'"
-      cancel-text="取消"
+      :ok-text="isEditMode ? '淇濆瓨' : '鍒涘缓'"
+      cancel-text="鍙栨秷"
       @ok="saveConnection"
       @cancel="resetConnectionModalState"
     >
       <a-form layout="vertical">
         <a-row :gutter="12">
           <a-col :span="12">
-            <a-form-item label="连接名称">
+            <a-form-item label="杩炴帴鍚嶇О">
               <a-input v-model:value="connectionForm.name" />
             </a-form-item>
           </a-col>
           <a-col :span="12">
-            <a-form-item label="数据库类型">
+            <a-form-item label="鏁版嵁搴撶被鍨?>
               <a-select v-model:value="connectionForm.dbType" :options="dbTypeOptions" />
             </a-form-item>
           </a-col>
@@ -942,12 +941,12 @@
 
         <a-row :gutter="12">
           <a-col :span="12">
-            <a-form-item label="主机">
+            <a-form-item label="涓绘満">
               <a-input v-model:value="connectionForm.host" />
             </a-form-item>
           </a-col>
           <a-col :span="12">
-            <a-form-item label="端口">
+            <a-form-item label="绔彛">
               <a-input-number v-model:value="connectionForm.port" style="width: 100%" />
             </a-form-item>
           </a-col>
@@ -955,20 +954,20 @@
 
         <a-row :gutter="12">
           <a-col :span="12">
-            <a-form-item label="用户">
+            <a-form-item label="鐢ㄦ埛鍚?>
               <a-input
                 v-model:value="connectionForm.username"
                 :disabled="connectionForm.dbType === 'SQLITE'"
-                placeholder="请输入数据库用户"
+                placeholder="璇疯緭鍏ユ暟鎹簱鐢ㄦ埛鍚?
               />
             </a-form-item>
           </a-col>
           <a-col :span="12">
-            <a-form-item label="密码">
+            <a-form-item label="瀵嗙爜">
               <a-input-password
                 v-model:value="connectionForm.password"
                 :disabled="connectionForm.dbType === 'SQLITE'"
-                placeholder="请输入数据库密码"
+                placeholder="璇疯緭鍏ユ暟鎹簱瀵嗙爜"
               />
             </a-form-item>
           </a-col>
@@ -976,7 +975,7 @@
 
         <a-row :gutter="12">
           <a-col :span="16">
-            <a-form-item :label="isMultiDatabaseFormType ? '展示数据库（多选）' : '数据库名/路径'">
+            <a-form-item :label="isMultiDatabaseFormType ? '灞曠ず鏁版嵁搴擄紙澶氶€夛級' : '鏁版嵁搴撳悕/璺緞'">
               <template v-if="isMultiDatabaseFormType">
                 <div class="connection-db-selector-row">
                   <a-select
@@ -985,7 +984,7 @@
                     :options="connectionPreviewSelectOptions"
                     :max-tag-count="3"
                     allow-clear
-                    placeholder="可选；不勾选默认展示全部数据库"
+                    placeholder="鍙€夛紱涓嶅嬀閫夐粯璁ゅ睍绀哄叏閮ㄦ暟鎹簱"
                     style="flex: 1"
                   />
                   <a-button
@@ -993,84 +992,84 @@
                     :disabled="!canPreviewDatabases"
                     @click="previewConnectionDatabases"
                   >
-                    获取数据库
+                    鑾峰彇鏁版嵁搴?
                   </a-button>
                 </div>
-                <div class="connection-db-selector-tip">不勾选时，连接树显示该连接下全部数据库</div>
+                <div class="connection-db-selector-tip">涓嶅嬀閫夋椂锛岃繛鎺ユ爲鏄剧ず璇ヨ繛鎺ヤ笅鍏ㄩ儴鏁版嵁搴撱€?/div>
                 <div v-if="connectionPreviewError" class="connection-db-selector-error">{{ connectionPreviewError }}</div>
               </template>
               <a-input
                 v-else
                 v-model:value="connectionForm.databaseName"
-                :placeholder="connectionForm.dbType === 'SQLITE' ? 'SQLite 文件路径' : '数据库名/服务名'"
+                :placeholder="connectionForm.dbType === 'SQLITE' ? 'SQLite 鏂囦欢璺緞' : '鏁版嵁搴撳悕/鏈嶅姟鍚?"
               />
             </a-form-item>
           </a-col>
           <a-col :span="8">
-            <a-form-item label="环境">
+            <a-form-item label="鐜">
               <a-select v-model:value="connectionForm.env" :options="envOptions" />
             </a-form-item>
           </a-col>
         </a-row>
 
         <a-space>
-          <a-checkbox v-model:checked="connectionForm.readOnly">只读</a-checkbox>
-          <a-checkbox v-model:checked="connectionForm.sshEnabled">SSH 隧道</a-checkbox>
+          <a-checkbox v-model:checked="connectionForm.readOnly">鍙</a-checkbox>
+          <a-checkbox v-model:checked="connectionForm.sshEnabled">SSH 闅ч亾</a-checkbox>
         </a-space>
 
         <div v-if="connectionForm.sshEnabled" class="connection-ssh-panel">
           <a-row :gutter="12">
             <a-col :span="12">
-              <a-form-item label="SSH 主机">
-                <a-input v-model:value="connectionForm.sshHost" placeholder="例如 10.0.0.8" />
+              <a-form-item label="SSH 涓绘満">
+                <a-input v-model:value="connectionForm.sshHost" placeholder="渚嬪 10.0.0.8" />
               </a-form-item>
             </a-col>
             <a-col :span="12">
-              <a-form-item label="SSH 端口">
+              <a-form-item label="SSH 绔彛">
                 <a-input-number v-model:value="connectionForm.sshPort" :min="1" :max="65535" style="width: 100%" />
               </a-form-item>
             </a-col>
           </a-row>
           <a-row :gutter="12">
             <a-col :span="12">
-              <a-form-item label="SSH 用户">
-                <a-input v-model:value="connectionForm.sshUser" placeholder="SSH 登录用户" />
+              <a-form-item label="SSH 鐢ㄦ埛鍚?>
+                <a-input v-model:value="connectionForm.sshUser" placeholder="SSH 鐧诲綍鐢ㄦ埛鍚? />
               </a-form-item>
             </a-col>
             <a-col :span="12">
-              <a-form-item label="SSH 认证模式">
+              <a-form-item label="SSH 璁よ瘉妯″紡">
                 <a-select v-model:value="connectionForm.sshAuthType" :options="sshAuthTypeOptions" />
               </a-form-item>
             </a-col>
           </a-row>
 
-          <a-form-item v-if="connectionForm.sshAuthType === 'SSH_PASSWORD'" label="SSH 密码">
+          <a-form-item v-if="connectionForm.sshAuthType === 'SSH_PASSWORD'" label="SSH 瀵嗙爜">
             <a-input-password
               v-model:value="connectionForm.sshPassword"
-              :placeholder="isEditMode ? '留空表示不修改' : '请输入 SSH 密码'"
+              :placeholder="isEditMode ? '鐣欑┖琛ㄧず涓嶄慨鏀? : '璇疯緭鍏?SSH 瀵嗙爜'"
             />
           </a-form-item>
-          <a-form-item v-else-if="connectionForm.sshAuthType === 'SSH_KEY_PATH'" label="SSH 私钥路径">
+          <a-form-item v-else-if="connectionForm.sshAuthType === 'SSH_KEY_PATH'" label="SSH 绉侀挜璺緞">
             <a-input
               v-model:value="connectionForm.sshPrivateKeyPath"
-              :placeholder="isEditMode ? '留空表示不修改' : '例如 /Users/me/.ssh/id_rsa'"
+              :placeholder="isEditMode ? '鐣欑┖琛ㄧず涓嶄慨鏀? : '渚嬪 /Users/me/.ssh/id_rsa'"
             />
           </a-form-item>
-          <a-form-item v-else label="SSH 私钥文本">
+          <a-form-item v-else label="SSH 绉侀挜鏂囨湰">
             <a-textarea
               v-model:value="connectionForm.sshPrivateKeyText"
               :rows="4"
-              :placeholder="isEditMode ? '留空表示不修改' : '粘贴完整 PEM 私钥内容'"
+              :placeholder="isEditMode ? '鐣欑┖琛ㄧず涓嶄慨鏀? : '绮樿创瀹屾暣 PEM 绉侀挜鍐呭'"
             />
           </a-form-item>
 
           <a-form-item
             v-if="connectionForm.sshAuthType === 'SSH_KEY_PATH' || connectionForm.sshAuthType === 'SSH_KEY_TEXT'"
-            label="私钥口令（可选）"
+            label="绉侀挜鍙ｄ护锛堝彲閫夛級"
           >
             <a-input-password
               v-model:value="connectionForm.sshPrivateKeyPassphrase"
-              :placeholder="isEditMode ? '留空表示不修改' : '私钥解密口令（可选）'"
+              :placeholder="isEditMode ? '鐣欑┖琛ㄧず涓嶄慨鏀? : '绉侀挜瑙ｅ瘑鍙ｄ护锛堝彲閫夛級'"
             />
           </a-form-item>
         </div>
@@ -1080,25 +1079,25 @@
     <a-modal
       v-model:open="aiConfigModalOpen"
       width="760px"
-      ok-text="保存配置"
-      cancel-text="取消"
+      ok-text="淇濆瓨閰嶇疆"
+      cancel-text="鍙栨秷"
       @ok="saveAiConfig"
     >
       <a-form layout="vertical">
         <a-tabs v-model:activeKey="aiConfigActiveTab">
-          <a-tab-pane key="model" tab="模型配置">
+          <a-tab-pane key="model" tab="妯″瀷閰嶇疆">
             <a-space>
-              <a-button size="small" @click="addOpenAiModelOption">新增 OpenAI 模型</a-button>
-              <a-button size="small" @click="addCliModelOption">新增 CLI 模型</a-button>
+              <a-button size="small" @click="addOpenAiModelOption">鏂板 OpenAI 妯″瀷</a-button>
+              <a-button size="small" @click="addCliModelOption">鏂板 CLI 妯″瀷</a-button>
             </a-space>
-            <div v-if="!aiConfigForm.modelOptions?.length" class="empty-pane" style="margin-top: 12px;">请至少配置一个模型</div>
+            <div v-if="!aiConfigForm.modelOptions?.length" class="empty-pane" style="margin-top: 12px;">璇疯嚦灏戦厤缃竴涓ā鍨?/div>
             <div
               v-for="(item, index) in aiConfigForm.modelOptions"
               :key="item.id || index"
               class="model-option-card"
             >
               <div class="model-option-head">
-                <strong>模型 {{ index + 1 }}</strong>
+                <strong>妯″瀷 {{ index + 1 }}</strong>
                 <a-button
                   size="small"
                   type="text"
@@ -1106,25 +1105,25 @@
                   :disabled="(aiConfigForm.modelOptions?.length ?? 0) <= 1"
                   @click="removeModelOption(index)"
                 >
-                  删除
+                  鍒犻櫎
                 </a-button>
               </div>
               <a-row :gutter="12">
                 <a-col :span="8">
-                  <a-form-item label="标识 ID">
+                  <a-form-item label="鏍囪瘑 ID">
                     <a-input v-model:value="item.id" placeholder="openai-gpt41 / local-cli" />
                   </a-form-item>
                 </a-col>
                 <a-col :span="8">
-                  <a-form-item label="展示名称">
-                    <a-input v-model:value="item.name" placeholder="GPT-4.1 / 本地 Codex CLI" />
+                  <a-form-item label="灞曠ず鍚嶇О">
+                    <a-input v-model:value="item.name" placeholder="GPT-4.1 / 鏈湴 Codex CLI" />
                   </a-form-item>
                 </a-col>
                 <a-col :span="8">
-                  <a-form-item label="类型">
+                  <a-form-item label="绫诲瀷">
                     <a-select
                       v-model:value="item.providerType"
-                      :options="[{ label: 'OpenAI API', value: 'OPENAI' }, { label: '本地 CLI', value: 'LOCAL_CLI' }]"
+                      :options="[{ label: 'OpenAI API', value: 'OPENAI' }, { label: '鏈湴 CLI', value: 'LOCAL_CLI' }]"
                     />
                   </a-form-item>
                 </a-col>
@@ -1144,7 +1143,7 @@
                     </a-form-item>
                   </a-col>
                   <a-col :span="12">
-                    <a-form-item label="模型">
+                    <a-form-item label="妯″瀷鍚?>
                       <a-input v-model:value="item.openaiModel" placeholder="gpt-4.1-mini" />
                     </a-form-item>
                   </a-col>
@@ -1153,13 +1152,13 @@
               <template v-else>
                 <a-row :gutter="12">
                   <a-col :span="12">
-                    <a-form-item label="CLI 命令">
-                      <a-input v-model:value="item.cliCommand" placeholder="codex / claude / 其他命令" />
+                    <a-form-item label="CLI 鍛戒护">
+                      <a-input v-model:value="item.cliCommand" placeholder="codex / claude / 鍏朵粬鍛戒护" />
                     </a-form-item>
                   </a-col>
                   <a-col :span="12">
-                    <a-form-item label="工作目录">
-                      <a-input v-model:value="item.cliWorkingDir" placeholder="/path/to/workdir（可选）" />
+                    <a-form-item label="宸ヤ綔鐩綍">
+                      <a-input v-model:value="item.cliWorkingDir" placeholder="/path/to/workdir锛堝彲閫夛級" />
                     </a-form-item>
                   </a-col>
                 </a-row>
@@ -1167,78 +1166,78 @@
             </div>
           </a-tab-pane>
 
-          <a-tab-pane key="embedding" tab="向量化配置">
-            <a-form-item label="向量模型目录（推荐：填写 clone 的模型仓库目录）">
+          <a-tab-pane key="embedding" tab="鍚戦噺鍖栭厤缃?>
+            <a-form-item label="鍚戦噺妯″瀷鐩綍锛堟帹鑽愶細濉啓 clone 鐨勬ā鍨嬩粨搴撶洰褰曪級">
               <div class="file-picker-row">
                 <a-input
                   :value="ragConfigForm.ragEmbeddingModelDir"
                   readonly
                   placeholder="/path/to/bge-m3-onnx-o4 (directory first)"
                 />
-                <a-button :loading="pickingRagModelDir" @click="pickRagEmbeddingModelDir">选择目录</a-button>
+                <a-button :loading="pickingRagModelDir" @click="pickRagEmbeddingModelDir">閫夋嫨鐩綍</a-button>
               </div>
             </a-form-item>
             <a-row :gutter="12">
               <a-col :span="12">
-                <a-form-item label="ONNX 文件名">
+                <a-form-item label="ONNX 鏂囦欢鍚?>
                   <a-input v-model:value="ragConfigForm.ragEmbeddingModelFileName" placeholder="model_optimized.onnx" />
                 </a-form-item>
               </a-col>
               <a-col :span="12">
-                <a-form-item label="ONNX 数据文件名（可选）">
+                <a-form-item label="ONNX 鏁版嵁鏂囦欢鍚嶏紙鍙€夛級">
                   <a-input v-model:value="ragConfigForm.ragEmbeddingModelDataFileName" placeholder="model_optimized.onnx.data" />
                 </a-form-item>
               </a-col>
             </a-row>
-            <a-form-item label="Tokenizer 文件名（必填）">
+            <a-form-item label="Tokenizer 鏂囦欢鍚嶏紙蹇呭～锛?>
               <a-input v-model:value="ragConfigForm.ragEmbeddingTokenizerFileName" placeholder="tokenizer.json" />
             </a-form-item>
             <a-row :gutter="12">
               <a-col :span="12">
-                <a-form-item label="Tokenizer 配置文件">
+                <a-form-item label="Tokenizer 閰嶇疆鏂囦欢鍚?>
                   <a-input v-model:value="ragConfigForm.ragEmbeddingTokenizerConfigFileName" placeholder="tokenizer_config.json" />
                 </a-form-item>
               </a-col>
               <a-col :span="12">
-                <a-form-item label="模型配置文件">
+                <a-form-item label="妯″瀷閰嶇疆鏂囦欢鍚?>
                   <a-input v-model:value="ragConfigForm.ragEmbeddingConfigFileName" placeholder="config.json" />
                 </a-form-item>
               </a-col>
             </a-row>
             <a-row :gutter="12">
               <a-col :span="12">
-                <a-form-item label="Special Tokens 文件">
+                <a-form-item label="Special Tokens 鏂囦欢鍚?>
                   <a-input v-model:value="ragConfigForm.ragEmbeddingSpecialTokensFileName" placeholder="special_tokens_map.json" />
                 </a-form-item>
               </a-col>
               <a-col :span="12">
-                <a-form-item label="SentencePiece 文件">
+                <a-form-item label="SentencePiece 鏂囦欢鍚?>
                   <a-input v-model:value="ragConfigForm.ragEmbeddingSentencepieceFileName" placeholder="sentencepiece.bpe.model" />
                 </a-form-item>
               </a-col>
             </a-row>
             <a-row :gutter="12">
               <a-col :span="12">
-                <a-form-item label="ONNX 文件绝对路径（目录为空时生效）">
+                <a-form-item label="ONNX 鏂囦欢缁濆璺緞锛堢洰褰曚负绌烘椂鐢熸晥锛?>
                   <div class="file-picker-row">
                     <a-input
                       :value="ragConfigForm.ragEmbeddingModelPath"
                       readonly
                       placeholder="/path/to/model_optimized.onnx"
                     />
-                    <a-button :loading="pickingRagModelPath" @click="pickRagEmbeddingModelPath">选择文件</a-button>
+                    <a-button :loading="pickingRagModelPath" @click="pickRagEmbeddingModelPath">閫夋嫨鏂囦欢</a-button>
                   </div>
                 </a-form-item>
               </a-col>
               <a-col :span="12">
-                <a-form-item label="ONNX 数据绝对路径（可选）">
+                <a-form-item label="ONNX 鏁版嵁缁濆璺緞锛堝彲閫夛級">
                   <div class="file-picker-row">
                     <a-input
                       :value="ragConfigForm.ragEmbeddingModelDataPath"
                       readonly
                       placeholder="/path/to/model_optimized.onnx.data"
                     />
-                    <a-button :loading="pickingRagModelDataPath" @click="pickRagEmbeddingModelDataPath">选择文件</a-button>
+                    <a-button :loading="pickingRagModelDataPath" @click="pickRagEmbeddingModelDataPath">閫夋嫨鏂囦欢</a-button>
                   </div>
                 </a-form-item>
               </a-col>
@@ -1250,24 +1249,24 @@
 
     <a-modal
       v-model:open="erTableSelectModalOpen"
-      title="选择ER图目标表"
+      title="閫夋嫨ER鍥剧洰鏍囪〃"
       width="620px"
-      ok-text="确认生成"
-      cancel-text="取消"
+      ok-text="纭鐢熸垚"
+      cancel-text="鍙栨秷"
       :confirm-loading="erTableSelectSubmitting"
       @ok="confirmErTableSelection"
     >
       <div class="er-select-modal">
         <div class="er-select-meta">
-          <span>连接：{{ queryTabConnectionNameById(erSelectConnectionId) || '-' }}</span>
-          <span>数据库：{{ erSelectDatabaseName || '-' }}</span>
-          <span>已选：{{ erSelectTableValues.length }} / 30</span>
+          <span>杩炴帴锛歿{ queryTabConnectionNameById(erSelectConnectionId) || '-' }}</span>
+          <span>鏁版嵁搴擄細{{ erSelectDatabaseName || '-' }}</span>
+          <span>宸查€夛細{{ erSelectTableValues.length }} / 30</span>
         </div>
         <a-input
           v-model:value="erSelectTableKeyword"
           size="small"
           allow-clear
-          placeholder="搜索表名"
+          placeholder="鎼滅储琛ㄥ悕"
         >
           <template #prefix><search-outlined /></template>
         </a-input>
@@ -1284,7 +1283,7 @@
               </a-checkbox>
             </a-space>
           </a-checkbox-group>
-          <div v-if="!filteredErSelectTableOptions.length" class="er-empty-tip">无可选表</div>
+          <div v-if="!filteredErSelectTableOptions.length" class="er-empty-tip">鏃犲彲閫夎〃</div>
         </div>
       </div>
     </a-modal>
@@ -1301,10 +1300,10 @@
       :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
     >
       <template v-if="contextMenu.targetType === 'connection'">
-        <button class="context-menu-item" @click="triggerContextAction('edit')">编辑连接</button>
-        <button class="context-menu-item" @click="triggerContextAction('test')">测试连接</button>
-        <button class="context-menu-item" @click="triggerContextAction('sync')">同步 Schema</button>
-        <button class="context-menu-item danger" @click="triggerContextAction('delete')">删除连接</button>
+        <button class="context-menu-item" @click="triggerContextAction('edit')">缂栬緫杩炴帴</button>
+        <button class="context-menu-item" @click="triggerContextAction('test')">娴嬭瘯杩炴帴</button>
+        <button class="context-menu-item" @click="triggerContextAction('sync')">鍚屾 Schema</button>
+        <button class="context-menu-item danger" @click="triggerContextAction('delete')">鍒犻櫎杩炴帴</button>
       </template>
       <template v-else-if="contextMenu.targetType === 'database'">
         <button
@@ -1312,21 +1311,21 @@
           :disabled="isContextDatabaseVectorizing"
           @click="triggerContextAction('revectorize')"
         >
-          重新向量化
+          閲嶆柊鍚戦噺鍖?
         </button>
         <button
           class="context-menu-item"
           :disabled="!canInterruptContextVectorize"
           @click="triggerContextAction('interruptVectorize')"
         >
-          中断向量化
+          涓柇鍚戦噺鍖?
         </button>
         <button
           class="context-menu-item"
           :disabled="!canViewContextVectorizedData"
           @click="triggerContextAction('viewVectorizedData')"
         >
-          查看向量化数据
+          鏌ョ湅鍚戦噺鍖栨暟鎹?
         </button>
       </template>
       <template v-else-if="contextMenu.targetType === 'object'">
@@ -1335,21 +1334,21 @@
           :disabled="contextMenu.objectType !== 'tables' && contextMenu.objectType !== 'views'"
           @click="triggerContextAction('queryData')"
         >
-          查询数据
+          鏌ヨ鏁版嵁
         </button>
         <button
           class="context-menu-item"
           :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
           @click="triggerContextAction('vectorizeTable')"
         >
-          向量化
+          鍚戦噺鍖?
         </button>
       </template>
     </div>
 
     <a-modal
       v-model:open="vectorizeOverviewModalOpen"
-      title="向量化数据概览"
+      title="鍚戦噺鍖栨暟鎹瑕?
       width="560px"
       :footer="null"
       @cancel="vectorizeOverviewModalOpen = false"
@@ -1365,43 +1364,43 @@
 
           <div class="vectorize-overview-kpis">
             <div class="vectorize-overview-kpi-card">
-              <span>向量规模</span>
+              <span>鍚戦噺瑙勬ā</span>
               <strong>{{ formatCompactCount(vectorizeOverviewData.totalVectorCount) }}</strong>
             </div>
             <div class="vectorize-overview-kpi-card">
-              <span>向量维度</span>
+              <span>鍚戦噺缁村害</span>
               <strong>{{ vectorizeOverviewData.vectorDimension || '-' }}</strong>
             </div>
             <div class="vectorize-overview-kpi-card">
-              <span>最近更新</span>
+              <span>鏈€杩戞洿鏂?/span>
               <strong>{{ formatTime(vectorizeOverviewData.updatedAt) }}</strong>
             </div>
           </div>
 
           <div class="vectorize-overview-breakdown">
             <div class="vectorize-overview-item">
-              <span>表向量</span>
+              <span>琛ㄥ悜閲?/span>
               <strong>{{ formatCompactCount(vectorizeOverviewData.schemaTableVectorCount) }}</strong>
             </div>
             <div class="vectorize-overview-item">
-              <span>字段向量</span>
+              <span>瀛楁鍚戦噺</span>
               <strong>{{ formatCompactCount(vectorizeOverviewData.schemaColumnVectorCount) }}</strong>
             </div>
             <div class="vectorize-overview-item">
-              <span>SQL 历史</span>
+              <span>SQL 鍘嗗彶</span>
               <strong>{{ formatCompactCount(vectorizeOverviewData.sqlHistoryVectorCount) }}</strong>
             </div>
             <div class="vectorize-overview-item">
-              <span>SQL 片段</span>
+              <span>SQL 鐗囨</span>
               <strong>{{ formatCompactCount(vectorizeOverviewData.sqlFragmentVectorCount) }}</strong>
             </div>
           </div>
 
           <div class="vectorize-overview-note">
-            {{ vectorizeOverviewData.message || '仅展示概要统计，不展示具体向量明细' }}
+            {{ vectorizeOverviewData.message || '浠呭睍绀烘瑕佺粺璁★紝涓嶅睍绀哄叿浣撳悜閲忔槑缁嗐€? }}
           </div>
         </div>
-        <div v-else class="empty-pane">暂无可展示的向量化数据概览</div>
+        <div v-else class="empty-pane">鏆傛棤鍙睍绀虹殑鍚戦噺鍖栨暟鎹瑕?/div>
       </a-spin>
     </a-modal>
     </div>
@@ -1749,15 +1748,15 @@ const dbTypeOptions = [
 ];
 
 const envOptions = [
-  { label: '开发 DEV', value: 'DEV' },
-  { label: '测试 TEST', value: 'TEST' },
-  { label: '生产 PROD', value: 'PROD' },
+  { label: '寮€鍙?DEV', value: 'DEV' },
+  { label: '娴嬭瘯 TEST', value: 'TEST' },
+  { label: '鐢熶骇 PROD', value: 'PROD' },
 ];
 
 const sshAuthTypeOptions = [
-  { label: '密码', value: 'SSH_PASSWORD' },
-  { label: '私钥路径', value: 'SSH_KEY_PATH' },
-  { label: '私钥文本', value: 'SSH_KEY_TEXT' },
+  { label: '瀵嗙爜', value: 'SSH_PASSWORD' },
+  { label: '绉侀挜璺緞', value: 'SSH_KEY_PATH' },
+  { label: '绉侀挜鏂囨湰', value: 'SSH_KEY_TEXT' },
 ];
 
 const sqlEditorOptions = {
@@ -1957,21 +1956,6 @@ const objectRows = computed<ObjectRow[]>(() => {
       vectorizeUpdatedAt: dbVectorizeRecord?.updatedAt,
     }));
   }
-
-  if (currentObjectType.value === 'views') {
-    const names = objectNameCache.value[objectCacheKey(workflow.connectionId, databaseName, currentObjectType.value)] ?? [];
-    return names.map((name) => ({
-      objectName: name,
-      objectType: 'views',
-      rowEstimate: 0,
-      tableSize: '-',
-      description: objectTypeLabel(currentObjectType.value),
-      vectorizeStatus: dbVectorizeStatus,
-      vectorizeMessage: dbVectorizeRecord?.message,
-      vectorizeUpdatedAt: dbVectorizeRecord?.updatedAt,
-    }));
-  }
-
   const names = objectNameCache.value[objectCacheKey(workflow.connectionId, databaseName, currentObjectType.value)] ?? [];
   return names.map((name) => ({
     objectName: name,
@@ -2070,13 +2054,13 @@ const selectedTreeDatabaseColumnCount = computed(() => {
 
 const createTableSqlText = computed(() => {
   if (!selectedObjectRecord.value || selectedObjectRecord.value.objectType !== 'tables') {
-    return '-- 当前未选中表';
+    return '-- 褰撳墠鏈€変腑琛?;
   }
   const tableName = selectedObjectRecord.value.objectName;
   const dbType = selectedConnection.value?.dbType ?? selectedTreeConnection.value?.dbType ?? 'MYSQL';
   const columns = tableDetail.value?.columns ?? [];
   if (!columns.length) {
-    return `-- 未读取到表 ${tableName} 的字段元数据`;
+    return `-- 鏈鍙栧埌琛?${tableName} 鐨勫瓧娈靛厓鏁版嵁`;
   }
   return buildCreateTableSql(tableName, columns, dbType);
 });
@@ -2094,17 +2078,17 @@ const filteredObjectRows = computed(() => {
 const objectColumns = computed(() => {
   if (currentObjectType.value === 'tables') {
     return [
-      { title: '对象', dataIndex: 'objectName', key: 'objectName', width: 250, ellipsis: true },
+      { title: '名称', dataIndex: 'objectName', key: 'objectName', width: 250, ellipsis: true },
       { title: '行数', dataIndex: 'rowEstimate', key: 'rowEstimate', width: 120 },
-      { title: '数据大小', dataIndex: 'tableSize', key: 'tableSize', width: 120 },
-      { title: '向量状态', dataIndex: 'vectorizeStatus', key: 'vectorizeStatus', width: 150 },
+      { title: '数据长度', dataIndex: 'tableSize', key: 'tableSize', width: 120 },
+      { title: '向量化', dataIndex: 'vectorizeStatus', key: 'vectorizeStatus', width: 150 },
       { title: '说明', dataIndex: 'description', key: 'description', width: 300, ellipsis: true },
     ];
   }
   return [
-    { title: '对象', dataIndex: 'objectName', key: 'objectName', width: 320, ellipsis: true },
-    { title: '说明', dataIndex: 'description', key: 'description', width: 180, ellipsis: true },
-    { title: '向量状态', dataIndex: 'vectorizeStatus', key: 'vectorizeStatus', width: 150 },
+    { title: '名称', dataIndex: 'objectName', key: 'objectName', width: 320, ellipsis: true },
+    { title: '类型', dataIndex: 'description', key: 'description', width: 180, ellipsis: true },
+    { title: '向量化', dataIndex: 'vectorizeStatus', key: 'vectorizeStatus', width: 150 },
   ];
 });
 
@@ -2112,7 +2096,7 @@ const tableScrollY = computed(() => Math.max(300, viewportHeight.value - 300));
 const queryResultScrollY = computed(() => Math.max(200, viewportHeight.value - 520));
 const aiModelOptions = computed(() =>
   (aiConfigForm.modelOptions ?? []).map((item) => ({
-    label: `${item.name || item.id || '-'} · ${item.providerType === 'LOCAL_CLI' ? 'CLI' : (item.openaiModel || 'OPENAI')}`,
+    label: `${item.name || item.id || '-'} 路 ${item.providerType === 'LOCAL_CLI' ? 'CLI' : (item.openaiModel || 'OPENAI')}`,
     value: item.id,
   })),
 );
@@ -2169,17 +2153,17 @@ const activeResultColumns = computed(() => {
 const queryResultScrollX = computed(() => Math.max(activeResultColumns.value.length * 180, 960));
 
 const chartTypeOptions = [
-  { label: '折线图', value: 'LINE' as ChartType },
-  { label: '柱状图', value: 'BAR' as ChartType },
-  { label: '饼图', value: 'PIE' as ChartType },
-  { label: '散点图', value: 'SCATTER' as ChartType },
-  { label: '趋势图', value: 'TREND' as ChartType },
+  { label: '鎶樼嚎鍥?, value: 'LINE' as ChartType },
+  { label: '鏌辩姸鍥?, value: 'BAR' as ChartType },
+  { label: '楗煎浘', value: 'PIE' as ChartType },
+  { label: '鏁ｇ偣鍥?, value: 'SCATTER' as ChartType },
+  { label: '瓒嬪娍鍥?, value: 'TREND' as ChartType },
 ];
 
 const chartSortDirectionOptions = [
-  { label: '不排序', value: 'NONE' as SortDirection },
-  { label: '升序', value: 'ASC' as SortDirection },
-  { label: '降序', value: 'DESC' as SortDirection },
+  { label: '涓嶆帓搴?, value: 'NONE' as SortDirection },
+  { label: '鍗囧簭', value: 'ASC' as SortDirection },
+  { label: '闄嶅簭', value: 'DESC' as SortDirection },
 ];
 
 const activeChartRows = computed(() => activeResultRows.value.map((row) => {
@@ -2287,12 +2271,12 @@ function buildConnectionNode(conn: ConnectionVO) {
   if (requiresDatabaseLayer(conn)) {
     const databases = visibleDatabasesForConnection(conn);
     const activeDbName = getActiveDatabaseName(conn.id);
-    const databaseNodes = (databases.length ? databases : ['未发现数据库']).map((databaseName) => ({
+    const databaseNodes = (databases.length ? databases : ['鏈彂鐜版暟鎹簱']).map((databaseName) => ({
       key: buildDatabaseNodeKey(conn.id, databaseName),
       title: databaseName,
       nodeType: 'database',
       vectorizeStatus: getDatabaseVectorizeStatus(conn.id, databaseName),
-      selectable: databaseName !== '未发现数据库',
+      selectable: databaseName !== '鏈彂鐜版暟鎹簱',
       children: buildCategoryChildren(conn.id, databaseName),
     }));
     return {
@@ -2318,12 +2302,12 @@ function buildConnectionNode(conn: ConnectionVO) {
 
 function buildCategoryChildren(connectionId: number, databaseName: string) {
   const categoryNodes = [
-    { suffix: 'tables', title: '表', nodeType: 'tables' },
-    { suffix: 'views', title: '视图', nodeType: 'views' },
-    { suffix: 'functions', title: '函数', nodeType: 'functions' },
-    { suffix: 'events', title: '事件', nodeType: 'events' },
-    { suffix: 'queries', title: '查询', nodeType: 'queries' },
-    { suffix: 'backups', title: '备份', nodeType: 'backups' },
+    { suffix: 'tables', title: '琛?, nodeType: 'tables' },
+    { suffix: 'views', title: '瑙嗗浘', nodeType: 'views' },
+    { suffix: 'functions', title: '鍑芥暟', nodeType: 'functions' },
+    { suffix: 'events', title: '浜嬩欢', nodeType: 'events' },
+    { suffix: 'queries', title: '鏌ヨ', nodeType: 'queries' },
+    { suffix: 'backups', title: '澶囦唤', nodeType: 'backups' },
   ];
   return categoryNodes.map((category) => ({
     key: buildCategoryNodeKey(connectionId, databaseName, category.suffix),
@@ -2433,7 +2417,7 @@ function vectorizeStatusCacheKey(connectionId: number, databaseName: string) {
 }
 
 function getDatabaseVectorizeStatus(connectionId: number, databaseName: string) {
-  if (!databaseName || databaseName === '未发现数据库') {
+  if (!databaseName || databaseName === '鏈彂鐜版暟鎹簱') {
     return 'NOT_VECTORIZED';
   }
   const key = vectorizeStatusCacheKey(connectionId, databaseName);
@@ -2441,7 +2425,7 @@ function getDatabaseVectorizeStatus(connectionId: number, databaseName: string) 
 }
 
 function getDatabaseVectorizeStatusRecord(connectionId: number, databaseName: string) {
-  if (!databaseName || databaseName === '未发现数据库') {
+  if (!databaseName || databaseName === '鏈彂鐜版暟鎹簱') {
     return null;
   }
   const key = vectorizeStatusCacheKey(connectionId, databaseName);
@@ -2454,18 +2438,18 @@ function isDatabaseVectorizing(connectionId: number, databaseName: string) {
 
 function databaseStatusLabel(status: string) {
   if (status === 'PENDING') {
-    return '排队中';
+    return '鎺掗槦涓?;
   }
   if (status === 'RUNNING') {
-    return '向量化中';
+    return '鍚戦噺鍖栦腑';
   }
   if (status === 'SUCCESS') {
-    return '已向量化';
+    return '宸插悜閲忓寲';
   }
   if (status === 'FAILED') {
-    return '失败';
+    return '澶辫触';
   }
-  return '未向量化';
+  return '鏈悜閲忓寲';
 }
 
 function databaseStatusClass(status: string) {
@@ -2542,7 +2526,7 @@ function openEditModal(targetConnectionId?: number) {
   ensureConnection();
   const current = connections.value.find((item) => item.id === workflow.connectionId);
   if (!current) {
-    message.warning('请先选择连接');
+    message.warning('璇峰厛閫夋嫨杩炴帴');
     return;
   }
   fillConnectionForm(current);
@@ -2560,7 +2544,7 @@ function openAiQueryTab(initialPrompt = '') {
   const models = aiModelOptions.value.map((item) => String(item.value)).filter((item) => !!item);
   const tab: QueryWorkspaceTab = {
     key: `query-${now}-${Math.round(Math.random() * 1000)}`,
-    title: '新的查询',
+    title: '鏂扮殑鏌ヨ',
     connectionId: workflow.connectionId,
     databaseName,
     sessionId: `session-${now}`,
@@ -2661,12 +2645,12 @@ async function openErTableSelectModal(tab?: ErWorkspaceTab) {
   closeContextMenu();
   const connectionId = tab?.connectionId || workflow.connectionId;
   if (!connectionId) {
-    message.error('请先选择连接');
+    message.error('璇峰厛閫夋嫨杩炴帴');
     return;
   }
   const databaseName = (tab?.databaseName || getActiveDatabaseName(connectionId)).trim();
-  if (!databaseName || databaseName === '未发现数据库') {
-    message.error('请先选择当前数据库');
+  if (!databaseName || databaseName === '鏈彂鐜版暟鎹簱') {
+    message.error('璇峰厛閫夋嫨褰撳墠鏁版嵁搴?);
     return;
   }
 
@@ -2706,7 +2690,7 @@ async function refreshErGraphForTab(tab: ErWorkspaceTab, includeAiInference?: bo
     tab.errorMessage = '';
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    tab.errorMessage = msg || '加载ER图失败';
+    tab.errorMessage = msg || '鍔犺浇ER鍥惧け璐?;
     message.error(tab.errorMessage);
   } finally {
     tab.loading = false;
@@ -2716,16 +2700,16 @@ async function refreshErGraphForTab(tab: ErWorkspaceTab, includeAiInference?: bo
 
 async function confirmErTableSelection() {
   if (!erSelectConnectionId.value || !erSelectDatabaseName.value) {
-    message.error('缺少连接或数据库信息');
+    message.error('缂哄皯杩炴帴鎴栨暟鎹簱淇℃伅');
     return;
   }
   const selected = Array.from(new Set(erSelectTableValues.value.map((item) => (item || '').trim()).filter((item) => !!item)));
   if (!selected.length) {
-    message.error('请至少选择一张表');
+    message.error('璇疯嚦灏戦€夋嫨涓€寮犺〃');
     return;
   }
   if (selected.length > 30) {
-    message.error('最多选择 30 张表');
+    message.error('鏈€澶氶€夋嫨 30 寮犺〃');
     return;
   }
 
@@ -2740,7 +2724,7 @@ async function confirmErTableSelection() {
       const now = Date.now();
       tab = {
         key: `er-${now}-${Math.round(Math.random() * 1000)}`,
-        title: `ER · ${erSelectDatabaseName.value}`,
+        title: `ER 路 ${erSelectDatabaseName.value}`,
         connectionId: erSelectConnectionId.value,
         databaseName: erSelectDatabaseName.value,
         selectedTableNames: [...selected],
@@ -2761,7 +2745,7 @@ async function confirmErTableSelection() {
       if (!models.includes(tab.selectedAiModel)) {
         tab.selectedAiModel = models[0] ?? '';
       }
-      tab.title = `ER · ${erSelectDatabaseName.value}`;
+      tab.title = `ER 路 ${erSelectDatabaseName.value}`;
       touchErTab(tab);
     }
     activeWorkbenchTab.value = tab.key;
@@ -2818,7 +2802,7 @@ function persistUiThemePreference() {
   try {
     window.localStorage.setItem(uiThemeStorageKey, uiTheme.value);
   } catch {
-    // 忽略本地存储异常，避免阻塞主流程。
+    // 蹇界暐鏈湴瀛樺偍寮傚父锛岄伩鍏嶉樆濉炰富娴佺▼銆?
   }
 }
 
@@ -2852,9 +2836,9 @@ function normalizeTitleSource(text: string) {
 function buildSessionDefaultTitle(text: string) {
   const normalized = normalizeTitleSource(text);
   if (!normalized) {
-    return '未命名会话';
+    return '鏈懡鍚嶄細璇?;
   }
-  const splitIndex = normalized.search(/[。！？\n]/);
+  const splitIndex = normalized.search(/[銆傦紒锛??锛?\n]/);
   const firstSentence = (splitIndex >= 0 ? normalized.slice(0, splitIndex) : normalized).trim() || normalized;
   return firstSentence.length > 20 ? `${firstSentence.slice(0, 20)}...` : firstSentence;
 }
@@ -2868,9 +2852,9 @@ function firstPromptForTitle(tab: QueryWorkspaceTab) {
 }
 
 function buildNewQueryPlaceholderTitle(tab: QueryWorkspaceTab) {
-  const connectionName = (queryTabConnectionNameById(tab.connectionId) || '').trim() || '未命名连接';
-  const databaseName = (tab.databaseName || getActiveDatabaseName(tab.connectionId) || '').trim() || '未指定库';
-  return `${connectionName} / ${databaseName} · 新的查询`;
+  const connectionName = (queryTabConnectionNameById(tab.connectionId) || '').trim() || '鏈懡鍚嶈繛鎺?;
+  const databaseName = (tab.databaseName || getActiveDatabaseName(tab.connectionId) || '').trim() || '鏈寚瀹氬簱';
+  return `${connectionName} / ${databaseName} 路 鏂扮殑鏌ヨ`;
 }
 
 function applySessionTitle(tab: QueryWorkspaceTab) {
@@ -2940,7 +2924,7 @@ function persistSessionTitleOverrides() {
   try {
     window.localStorage.setItem(sessionTitleOverridesStorageKey, JSON.stringify(sessionTitleOverrides.value));
   } catch {
-    // 忽略本地存储异常，避免阻塞主流程。
+    // 蹇界暐鏈湴瀛樺偍寮傚父锛岄伩鍏嶉樆濉炰富娴佺▼銆?
   }
 }
 
@@ -2956,11 +2940,11 @@ async function removeHistorySession(item: QueryHistorySessionVO) {
   }
   const confirmed = await new Promise<boolean>((resolve) => {
     Modal.confirm({
-      title: '删除会话历史',
-      content: `确定删除会话“${historyItemDisplayTitle(item)}”的全部历史记录吗？`,
-      okText: '删除',
+      title: '鍒犻櫎浼氳瘽鍘嗗彶',
+      content: `纭畾鍒犻櫎浼氳瘽鈥?{historyItemDisplayTitle(item)}鈥濈殑鍏ㄩ儴鍘嗗彶璁板綍鍚楋紵`,
+      okText: '鍒犻櫎',
       okButtonProps: { danger: true },
-      cancelText: '取消',
+      cancelText: '鍙栨秷',
       onOk: () => resolve(true),
       onCancel: () => resolve(false),
     });
@@ -2988,7 +2972,7 @@ async function removeHistorySession(item: QueryHistorySessionVO) {
     historySessionItems.value = historySessionItems.value.filter((entry) => historyItemKey(entry) !== targetKey);
     queryTabs.value = queryTabs.value.filter((tab) => !(tab.connectionId === item.connectionId && tab.sessionId === item.sessionId));
     ensureActiveWorkbenchTab();
-    message.success('会话已删除');
+    message.success('浼氳瘽宸插垹闄?);
     if (!historySessionItems.value.length) {
       historySessionPageNo.value = 1;
       historySessionHasMore.value = true;
@@ -3078,7 +3062,7 @@ function buildHistoryTabFromRows(connectionId: number, sessionId: string, rows: 
   const models = aiModelOptions.value.map((item) => String(item.value)).filter((item) => !!item);
   const tab: QueryWorkspaceTab = {
     key: `query-history-${connectionId}-${encodeURIComponent(sessionId)}`,
-    title: '未命名会话',
+    title: '鏈懡鍚嶄細璇?,
     connectionId,
     databaseName: (last?.databaseName || '').trim() || getActiveDatabaseName(connectionId),
     sessionId,
@@ -3210,7 +3194,7 @@ async function openHistorySession(item: QueryHistorySessionVO) {
     });
     const rows = await getApi<QueryHistoryVO[]>(`/api/editor/history/session/detail?${params.toString()}`);
     if (!rows.length) {
-      message.info('该会话暂无可展示历史');
+      message.info('璇ヤ細璇濇殏鏃犲彲灞曠ず鍘嗗彶');
       return;
     }
     const customTitle = (sessionTitleOverrides.value[sessionTitleOverrideKey(item)] ?? '').trim();
@@ -3267,41 +3251,41 @@ function modelLabelById(modelId: string) {
 
 function lastPromptText(tab: QueryWorkspaceTab) {
   const latestPrompt = [...tab.chatMessages].reverse().find((item) => item.role === 'user');
-  return latestPrompt?.content || '暂无自然语言对话';
+  return latestPrompt?.content || '鏆傛棤鑷劧璇█瀵硅瘽';
 }
 
 function assistantActionLabel(actionType: QueryChatMessage['actionType']) {
   if (actionType === 'auto_generate') {
-    return 'Auto · 生成 SQL';
+    return 'Auto 路 鐢熸垚 SQL';
   }
   if (actionType === 'auto_explain') {
-    return 'Auto · 解释 SQL';
+    return 'Auto 路 瑙ｉ噴 SQL';
   }
   if (actionType === 'auto_analyze') {
-    return 'Auto · 分析 SQL';
+    return 'Auto 路 鍒嗘瀽 SQL';
   }
   if (actionType === 'auto_chart_auto_plan') {
-    return 'Auto · 图表方案';
+    return 'Auto 路 鍥捐〃鏂规';
   }
   if (actionType === 'explain') {
-    return '解释 SQL';
+    return '瑙ｉ噴 SQL';
   }
   if (actionType === 'analyze') {
-    return '分析 SQL';
+    return '鍒嗘瀽 SQL';
   }
   if (actionType === 'repair') {
-    return '修复 SQL';
+    return '淇 SQL';
   }
   if (actionType === 'chart_auto_plan') {
-    return '图表方案';
+    return '鍥捐〃鏂规';
   }
   if (actionType === 'chart_manual_render') {
-    return '手动制图';
+    return '鎵嬪姩鍒跺浘';
   }
   if (actionType === 'chart_auto_render') {
-    return '自动制图';
+    return '鑷姩鍒跺浘';
   }
-  return '生成 SQL';
+  return '鐢熸垚 SQL';
 }
 
 function normalizeHistoryActionType(actionType?: string): QueryActionType {
@@ -3433,7 +3417,7 @@ function appendSqlToEditor(tab: QueryWorkspaceTab, sqlText: string) {
 function appendSelectedSqlToPrompt(tab: QueryWorkspaceTab) {
   const value = tab.selectedSqlText.trim();
   if (!value) {
-    message.info('请先在右侧 SQL 编辑器中选择一段 SQL');
+    message.info('璇峰厛鍦ㄥ彸渚?SQL 缂栬緫鍣ㄤ腑閫夋嫨涓€娈?SQL');
     return;
   }
   tab.prompt = tab.prompt.trim() ? `${tab.prompt.trim()}\n${value}` : value;
@@ -3460,7 +3444,7 @@ async function analyzeMessageSqlInChat(tab: QueryWorkspaceTab, sqlText: string) 
 async function runAiTextActionWithSelectedSql(tab: QueryWorkspaceTab, actionType: 'explain' | 'analyze') {
   const selectedSqlText = tab.selectedSqlText.trim();
   if (!selectedSqlText) {
-    message.info('请先选择一段 SQL');
+    message.info('璇峰厛閫夋嫨涓€娈?SQL');
     return;
   }
   hideSqlSelectionPopover();
@@ -3473,11 +3457,11 @@ async function runAiTextActionWithSql(tab: QueryWorkspaceTab, actionType: 'expla
   }
   const normalizedSqlText = sqlText.trim();
   if (!normalizedSqlText) {
-    message.info('当前消息不包含 SQL');
+    message.info('褰撳墠娑堟伅涓嶅寘鍚?SQL');
     return;
   }
 
-  const promptText = actionType === 'explain' ? '请解释这段 SQL 的含义' : '请分析这段 SQL 的合理性';
+  const promptText = actionType === 'explain' ? '璇疯В閲婅繖娈?SQL 鐨勫惈涔夈€? : '璇峰垎鏋愯繖娈?SQL 鐨勫悎鐞嗘€с€?;
   const userMessage = appendUserChatMessage(tab, `${promptText}\n\n${normalizedSqlText}`, actionType);
   tab.aiGenerating = true;
 
@@ -3490,7 +3474,7 @@ async function runAiTextActionWithSql(tab: QueryWorkspaceTab, actionType: 'expla
       databaseName: tab.databaseName || undefined,
       modelName: tab.selectedAiModel || undefined,
     });
-    const content = result.content || '未返回内容';
+    const content = result.content || '鏈繑鍥炲唴瀹?;
     appendAssistantTextMessage(tab, content, actionType);
     await saveConversationHistoryOnce(tab, userMessage, `${promptText}\n\n${normalizedSqlText}`, normalizedSqlText, {
       actionType,
@@ -3500,11 +3484,11 @@ async function runAiTextActionWithSql(tab: QueryWorkspaceTab, actionType: 'expla
     if (result.reasoning) {
       message.info(result.reasoning);
     }
-    message.success(actionType === 'explain' ? 'SQL 含义解释已生成' : 'SQL 合理性分析已生成');
+    message.success(actionType === 'explain' ? 'SQL 鍚箟瑙ｉ噴宸茬敓鎴? : 'SQL 鍚堢悊鎬у垎鏋愬凡鐢熸垚');
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     if (isAiRequestAbortedMessage(msg)) {
-      message.info('已终止对话执行');
+      message.info('宸茬粓姝㈠璇濇墽琛?);
       return;
     }
     message.error(msg);
@@ -3606,7 +3590,7 @@ async function refreshAllVectorizeStatuses(targetConnectionIds?: number[]) {
     try {
       await refreshVectorizeStatusForConnection(connectionId);
     } catch {
-      // 关键操作：状态轮询失败不阻断主流程，等待下一次轮询重试。
+      // 鍏抽敭鎿嶄綔锛氱姸鎬佽疆璇㈠け璐ヤ笉闃绘柇涓绘祦绋嬶紝绛夊緟涓嬩竴娆¤疆璇㈤噸璇曘€?
     }
   }));
 }
@@ -3757,7 +3741,7 @@ async function saveConnection() {
     if (editing) {
       payload.id = editingConnectionId.value ?? undefined;
       if (!payload.id) {
-        throw new Error('缺少待编辑连接 ID');
+        throw new Error('缂哄皯寰呯紪杈戣繛鎺?ID');
       }
     }
     const saved = await postApi<ConnectionVO>(endpoint, payload);
@@ -3765,7 +3749,7 @@ async function saveConnection() {
     resetConnectionModalState();
     workflow.connectionId = saved.id;
     selectedTreeKeys.value = [`conn-${saved.id}`];
-    message.success(editing ? '连接已更新' : '连接已创建');
+    message.success(editing ? '杩炴帴宸叉洿鏂? : '杩炴帴宸插垱寤?);
     await loadConnections();
   });
 }
@@ -3809,7 +3793,7 @@ async function previewConnectionDatabases() {
     );
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    connectionPreviewError.value = msg || '获取数据库失败';
+    connectionPreviewError.value = msg || '鑾峰彇鏁版嵁搴撳け璐?;
   } finally {
     connectionPreviewLoading.value = false;
   }
@@ -3826,7 +3810,7 @@ async function testConnection(id: number) {
 async function removeConnection(id: number) {
   await runSafely(async () => {
     await postApi<boolean>('/api/connection/remove', { id });
-    message.success('连接已删除');
+    message.success('杩炴帴宸插垹闄?);
     if (workflow.connectionId === id) {
       workflow.connectionId = 0;
       schemaOverview.value = null;
@@ -3851,7 +3835,7 @@ async function syncSchema(targetConnectionId?: number) {
       '/api/schema/sync',
       { connectionId: workflow.connectionId, databaseName },
     );
-    message.success(`${result.message}，表 ${result.tableCount}，字段 ${result.columnCount}`);
+    message.success(`${result.message}锛岃〃 ${result.tableCount}锛屽瓧娈?${result.columnCount}`);
     currentObjectType.value = 'tables';
     await loadOverview();
   });
@@ -3881,7 +3865,7 @@ async function loadOverview() {
       [objectCacheKey(workflow.connectionId, databaseName, 'tables')]: tableNames,
     };
     expandConnectionNode(workflow.connectionId);
-    if (databaseName && databaseName !== '未发现数据库' && isDatabaseNodeExpanded(workflow.connectionId, databaseName)) {
+    if (databaseName && databaseName !== '鏈彂鐜版暟鎹簱' && isDatabaseNodeExpanded(workflow.connectionId, databaseName)) {
       void fetchTableStatsForDatabase(workflow.connectionId, databaseName);
     }
   });
@@ -3941,7 +3925,7 @@ function collectExpandedDatabaseTargets(keys: string[]) {
     }
     const connectionId = Number(match[1]);
     const databaseName = decodeURIComponent(match[2] || '').trim();
-    if (!connectionId || !databaseName || databaseName === '未发现数据库') {
+    if (!connectionId || !databaseName || databaseName === '鏈彂鐜版暟鎹簱') {
       return;
     }
     map.set(`${connectionId}|${databaseName}`, { connectionId, databaseName });
@@ -3954,7 +3938,7 @@ async function fetchTableStatsForDatabase(
   databaseName: string,
   options?: { force?: boolean; polling?: boolean },
 ) {
-  if (!connectionId || !databaseName || databaseName === '未发现数据库') {
+  if (!connectionId || !databaseName || databaseName === '鏈彂鐜版暟鎹簱') {
     return;
   }
   if (!isDatabaseNodeExpanded(connectionId, databaseName)) {
@@ -4052,7 +4036,7 @@ function resolveQueryDatabaseName(tab: QueryWorkspaceTab | null) {
 }
 
 async function ensureTableNamesLoaded(connectionId: number, databaseName: string) {
-  if (!connectionId || !databaseName || databaseName === '未发现数据库') {
+  if (!connectionId || !databaseName || databaseName === '鏈彂鐜版暟鎹簱') {
     return [];
   }
   const cacheKey = tableCacheKey(connectionId, databaseName);
@@ -4101,7 +4085,7 @@ function tableNameSuggestions(
       kind: monaco.languages.CompletionItemKind.Struct,
       insertText: name,
       range,
-      detail: `表 · ${databaseName}`,
+      detail: `琛?路 ${databaseName}`,
       sortText: `${startsWithPrefix ? '0' : '1'}_${name}`,
     };
   });
@@ -4126,7 +4110,7 @@ function sqlKeywordSuggestions(
       kind: monaco.languages.CompletionItemKind.Keyword,
       insertText: item,
       range,
-      detail: 'SQL keyword',
+      detail: 'SQL 鍏抽敭瀛?,
       sortText: `${startsWithPrefix ? '0' : '1'}_keyword_${item}`,
     };
   });
@@ -4153,7 +4137,7 @@ function shouldAutoTriggerSuggest(tab: QueryWorkspaceTab, prefix: string) {
     return true;
   }
   const databaseName = resolveQueryDatabaseName(tab);
-  if (!databaseName || databaseName === '未发现数据库') {
+  if (!databaseName || databaseName === '鏈彂鐜版暟鎹簱') {
     return false;
   }
   const cacheKey = tableCacheKey(tab.connectionId, databaseName);
@@ -4190,7 +4174,7 @@ function registerSqlCompletionProvider(monaco: typeof MonacoApi) {
       };
       const keywordSuggestions = sqlKeywordSuggestions(monaco, range, wordPrefix);
       const databaseName = resolveQueryDatabaseName(tab);
-      if (!databaseName || databaseName === '未发现数据库') {
+      if (!databaseName || databaseName === '鏈彂鐜版暟鎹簱') {
         return keywordSuggestions.length ? { suggestions: keywordSuggestions } : undefined;
       }
       const tableNames = await ensureTableNamesLoaded(tab.connectionId, databaseName);
@@ -4334,7 +4318,7 @@ async function warmupTableSuggestions(tab: QueryWorkspaceTab | null) {
     return;
   }
   const databaseName = resolveQueryDatabaseName(tab);
-  if (!databaseName || databaseName === '未发现数据库') {
+  if (!databaseName || databaseName === '鏈彂鐜版暟鎹簱') {
     return;
   }
   await ensureTableNamesLoaded(tab.connectionId, databaseName);
@@ -4404,7 +4388,7 @@ async function loadTreeChildrenByKey(nodeKey: string) {
   if (databaseMatch && !nodeKey.includes('-category-') && !nodeKey.includes('-obj-')) {
     const connectionId = Number(databaseMatch[1]);
     const databaseName = decodeURIComponent(databaseMatch[2] || '').trim();
-    if (!connectionId || !databaseName || databaseName === '未发现数据库') {
+    if (!connectionId || !databaseName || databaseName === '鏈彂鐜版暟鎹簱') {
       return;
     }
     await ensureTableNamesLoaded(connectionId, databaseName);
@@ -4418,7 +4402,7 @@ async function loadTreeChildrenByKey(nodeKey: string) {
   const connectionId = Number(categoryMatch[1]);
   const databaseName = decodeURIComponent(categoryMatch[2] || '').trim();
   const category = toObjectType(categoryMatch[3] || '');
-  if (!connectionId || !databaseName || databaseName === '未发现数据库') {
+  if (!connectionId || !databaseName || databaseName === '鏈彂鐜版暟鎹簱') {
     return;
   }
   if (category === 'tables') {
@@ -4439,7 +4423,7 @@ async function handleTreeSelect(keys: (string | number)[]) {
   try {
     await loadTreeChildrenByKey(value);
   } catch {
-    // 点击节点时若预加载失败，继续走原有选择逻辑，由后续请求兜底。
+    // 鐐瑰嚮鑺傜偣鏃惰嫢棰勫姞杞藉け璐ワ紝缁х画璧板師鏈夐€夋嫨閫昏緫锛岀敱鍚庣画璇锋眰鍏滃簳銆?
   }
 
   const connectionMatch = value.match(/^conn-(\d+)$/);
@@ -4521,7 +4505,7 @@ async function handleTreeExpand(keys: (string | number)[]) {
     try {
       await loadTreeChildrenByKey(nodeKey);
     } catch {
-      // 展开时的懒加载失败不阻塞其余节点展开。
+      // 灞曞紑鏃剁殑鎳掑姞杞藉け璐ヤ笉闃诲鍏朵綑鑺傜偣灞曞紑銆?
     }
   }));
   scheduleTableStatsForExpandedDatabases(expandedTreeKeys.value);
@@ -4587,7 +4571,7 @@ async function handleTreeRightClick(event: { event: MouseEvent; node: { key?: st
   }
   const connectionId = Number(databaseMatch[1]);
   const databaseName = decodeURIComponent(databaseMatch[2]);
-  if (databaseName === '未发现数据库') {
+  if (databaseName === '鏈彂鐜版暟鎹簱') {
     return;
   }
   workflow.connectionId = connectionId;
@@ -4598,7 +4582,7 @@ async function handleTreeRightClick(event: { event: MouseEvent; node: { key?: st
   try {
     await refreshVectorizeStatusForConnection(connectionId);
   } catch {
-    // 关键操作：右键菜单唤起时尝试刷新状态，失败则沿用本地缓存状态。
+    // 鍏抽敭鎿嶄綔锛氬彸閿彍鍗曞敜璧锋椂灏濊瘯鍒锋柊鐘舵€侊紝澶辫触鍒欐部鐢ㄦ湰鍦扮紦瀛樼姸鎬併€?
   }
   selectedTreeKeys.value = [keyValue];
   contextMenu.visible = true;
@@ -4635,16 +4619,12 @@ async function triggerContextAction(
     if (targetType !== 'object' || !objectName || (objectType !== 'tables' && objectType !== 'views')) {
       return;
     }
-    const rowVectorizeRecord = getDatabaseVectorizeStatusRecord(id, databaseName || '');
     openQueryTabByObject({
       objectName,
       objectType,
       rowEstimate: 0,
       tableSize: '-',
       description: '',
-      vectorizeStatus: rowVectorizeRecord?.status || 'NOT_VECTORIZED',
-      vectorizeMessage: rowVectorizeRecord?.message,
-      vectorizeUpdatedAt: rowVectorizeRecord?.updatedAt,
     }, true);
     return;
   }
@@ -4660,7 +4640,7 @@ async function triggerContextAction(
       return;
     }
     if (isDatabaseVectorizing(id, databaseName)) {
-      message.info('该数据库正在向量化，请等待当前任务完成');
+      message.info('璇ユ暟鎹簱姝ｅ湪鍚戦噺鍖栵紝璇风瓑寰呭綋鍓嶄换鍔″畬鎴?);
       return;
     }
     await enqueueDatabaseRevectorize(id, databaseName);
@@ -4704,7 +4684,7 @@ async function openVectorizeOverview(connectionId: number, databaseName: string)
       `/api/rag/vectorize/overview?connectionId=${connectionId}&databaseName=${encodeURIComponent(databaseName)}`,
     );
     if ((vectorizeOverviewData.value.totalVectorCount ?? 0) <= 0) {
-      message.info('该数据库暂无向量化数据');
+      message.info('璇ユ暟鎹簱鏆傛棤鍚戦噺鍖栨暟鎹?);
       vectorizeOverviewModalOpen.value = false;
     }
   } catch (error) {
@@ -4736,10 +4716,10 @@ async function enqueueDatabaseRevectorize(connectionId: number, databaseName: st
     }
     await refreshVectorizeStatusForConnection(connectionId);
     if (result.enqueued) {
-      message.success(`${result.message}（队列数: ${result.queueSize}）`);
+      message.success(`${result.message}锛堥槦鍒楁暟: ${result.queueSize}锛塦);
       return;
     }
-    message.info(`${result.message}（队列数: ${result.queueSize}）`);
+    message.info(`${result.message}锛堥槦鍒楁暟: ${result.queueSize}锛塦);
   });
 }
 
@@ -4756,12 +4736,12 @@ async function vectorizeSingleTable(connectionId: number, databaseName: string, 
       [key]: {
         databaseName,
         status: 'SUCCESS',
-        message: result.message || `表 ${tableName} 向量化完成`,
+        message: result.message || `琛?${tableName} 鍚戦噺鍖栧畬鎴恅,
         updatedAt: result.updatedAt ?? Date.now(),
       },
     };
     await refreshVectorizeStatusForConnection(connectionId);
-    message.success(result.message || `表 ${tableName} 向量化完成`);
+    message.success(result.message || `琛?${tableName} 鍚戦噺鍖栧畬鎴恅);
   });
 }
 
@@ -4824,7 +4804,7 @@ function onObjectRow(record: ObjectRow) {
 
 async function selectObject(connectionId: number, databaseName: string, objectType: ObjectRow['objectType'], objectName: string) {
   selectedObjectName.value = objectName;
-  workflow.prompt = `查询 ${objectName} 最近数据`;
+  workflow.prompt = `鏌ヨ ${objectName} 鏈€杩戞暟鎹甡;
   if (objectType === 'tables' || objectType === 'views') {
     workflow.sqlText = `SELECT * FROM ${objectName} LIMIT 100`;
   }
@@ -4893,7 +4873,7 @@ function openQueryTabByObject(record: ObjectRow, autoExecute = false) {
     return;
   }
   const sql = `SELECT * FROM ${record.objectName} LIMIT 100`;
-  const prompt = `查询 ${record.objectName} 最近数据`;
+  const prompt = `鏌ヨ ${record.objectName} 鏈€杩戞暟鎹甡;
   workflow.sqlText = sql;
   workflow.prompt = prompt;
   const tab = openAiQueryTab(prompt);
@@ -4925,7 +4905,7 @@ function getDesktopBridge(): DesktopBridge | null {
 async function pickRagEmbeddingModelDir() {
   const bridge = getDesktopBridge();
   if (!bridge || typeof bridge.pickDirectory !== 'function') {
-    message.warning('Directory picker is unavailable in this runtime. Please run in desktop app.');
+    message.warning('褰撳墠杩愯鐜涓嶆敮鎸佺洰褰曢€夋嫨鍣紝璇烽€氳繃妗岄潰绔繍琛屻€?);
     return;
   }
   if (pickingRagModelDir.value) {
@@ -4934,7 +4914,7 @@ async function pickRagEmbeddingModelDir() {
   pickingRagModelDir.value = true;
   try {
     const selectedPath = await bridge.pickDirectory({
-      title: 'Select embedding model directory',
+      title: '閫夋嫨鍚戦噺鍖栨ā鍨嬬洰褰?,
       defaultPath: ragConfigForm.ragEmbeddingModelDir || ragConfigForm.ragEmbeddingModelPath || undefined,
     });
     if (!selectedPath) {
@@ -4949,7 +4929,7 @@ async function pickRagEmbeddingModelDir() {
 async function pickRagEmbeddingModelPath() {
   const bridge = getDesktopBridge();
   if (!bridge) {
-    message.warning('File picker is unavailable in this runtime. Please run in desktop app.');
+    message.warning('褰撳墠杩愯鐜涓嶆敮鎸佹枃浠堕€夋嫨鍣紝璇烽€氳繃妗岄潰绔繍琛屻€?);
     return;
   }
   if (pickingRagModelPath.value) {
@@ -4958,7 +4938,7 @@ async function pickRagEmbeddingModelPath() {
   pickingRagModelPath.value = true;
   try {
     const selectedPath = await bridge.pickFile({
-      title: '选择向量化 ONNX 模型文件',
+      title: '閫夋嫨鍚戦噺鍖?ONNX 妯″瀷鏂囦欢',
       defaultPath: ragConfigForm.ragEmbeddingModelPath || ragConfigForm.ragEmbeddingModelDir || undefined,
       filters: [{ name: 'ONNX Model', extensions: ['onnx'] }],
     });
@@ -4974,7 +4954,7 @@ async function pickRagEmbeddingModelPath() {
 async function pickRagEmbeddingModelDataPath() {
   const bridge = getDesktopBridge();
   if (!bridge) {
-    message.warning('File picker is unavailable in this runtime. Please run in desktop app.');
+    message.warning('褰撳墠杩愯鐜涓嶆敮鎸佹枃浠堕€夋嫨鍣紝璇烽€氳繃妗岄潰绔繍琛屻€?);
     return;
   }
   if (pickingRagModelDataPath.value) {
@@ -4983,7 +4963,7 @@ async function pickRagEmbeddingModelDataPath() {
   pickingRagModelDataPath.value = true;
   try {
     const selectedPath = await bridge.pickFile({
-      title: '选择 ONNX 数据文件',
+      title: '閫夋嫨 ONNX 鏁版嵁鏂囦欢',
       defaultPath: ragConfigForm.ragEmbeddingModelDataPath
         || ragConfigForm.ragEmbeddingModelPath
         || ragConfigForm.ragEmbeddingModelDir
@@ -5013,7 +4993,7 @@ async function saveAiConfig() {
   await runSafely(async () => {
     const modelOptions = normalizeModelOptions(aiConfigForm.modelOptions);
     if (!modelOptions.length) {
-      throw new Error('Please configure at least one model.');
+      throw new Error('璇疯嚦灏戦厤缃竴涓ā鍨?);
     }
     aiConfigForm.modelOptions = modelOptions;
     aiConfigForm.providerType = modelOptions[0].providerType;
@@ -5027,7 +5007,7 @@ async function saveAiConfig() {
     fillAiConfigForm(savedAi);
     fillRagConfigForm(savedRag);
     aiConfigModalOpen.value = false;
-    message.success('AI and RAG configuration saved.');
+    message.success('AI 涓?RAG 閰嶇疆宸蹭繚瀛?);
   });
 }
 
@@ -5131,7 +5111,7 @@ async function saveConversationHistory(
       success: options?.success ?? true,
     });
   } catch {
-    // 关键操作：会话历史持久化失败不阻塞主流程。
+    // 鍏抽敭鎿嶄綔锛氫細璇濆巻鍙叉寔涔呭寲澶辫触涓嶉樆濉炰富娴佺▼銆?
   }
 }
 
@@ -5152,7 +5132,7 @@ async function saveConversationHistoryOnce(
 function timeoutRetryErrorMessage(rawMessage: string) {
   const normalized = rawMessage.trim();
   if (!normalized) {
-    return '请求超时，请点击重试';
+    return '璇锋眰瓒呮椂锛岃鐐瑰嚮閲嶈瘯';
   }
   return normalized;
 }
@@ -5161,7 +5141,7 @@ function isTimeoutErrorMessage(rawMessage: string) {
   const normalized = rawMessage.trim().toLowerCase();
   return normalized.includes('timeout')
     || normalized.includes('timed out')
-    || normalized.includes('超时')
+    || normalized.includes('瓒呮椂')
     || normalized.includes('http 504')
     || normalized.includes('http 408');
 }
@@ -5257,7 +5237,7 @@ async function postAiApiWithTimeout<T>(
     if (isAbortError(error)) {
       const reason = aiRequestAbortReasonMap.get(tab.key);
       if (reason === 'timeout') {
-        throw new Error(`请求超时（${Math.floor(timeoutMs / 1000)}s）`);
+        throw new Error(`璇锋眰瓒呮椂锛?${Math.floor(timeoutMs / 1000)}s锛塦);
       }
       throw new Error(AI_REQUEST_ABORTED);
     }
@@ -5294,16 +5274,16 @@ async function generateSqlForTab(
   const rawPrompt = retryOptions?.promptText ?? tab.prompt.trim();
   const actionSqlSnippet = retryOptions?.actionSqlSnippet ?? (actionType === 'generate' ? '' : resolveSqlForAction(tab));
   if (actionType === 'generate' && !rawPrompt.trim()) {
-    message.info('Please enter a natural language request first.');
+    message.info('璇峰厛杈撳叆鑷劧璇█闇€姹?);
     return;
   }
   if (actionType !== 'generate' && !rawPrompt.trim() && !actionSqlSnippet) {
-    message.info('请先输入说明，或在右侧编辑器中选择 SQL');
+    message.info('璇峰厛杈撳叆璇存槑锛屾垨鍦ㄥ彸渚х紪杈戝櫒涓€夋嫨 SQL');
     return;
   }
   const promptText = rawPrompt.trim() || (actionType === 'explain'
-    ? 'Please explain this SQL.'
-    : 'Please analyze whether this SQL is reasonable.');
+    ? '璇疯В閲婅繖娈?SQL 鐨勫惈涔夈€?
+    : '璇峰垎鏋愯繖娈?SQL 鐨勫悎鐞嗘€с€?);
   const userMessage = retryOptions?.userMessage ?? appendUserChatMessage(tab, promptText, actionType);
   if (!retryOptions) {
     tab.prompt = '';
@@ -5332,10 +5312,10 @@ async function generateSqlForTab(
       if (looksLikeSqlText(generatedText)) {
         appendAssistantSqlMessage(tab, generatedText, actionType);
         await saveConversationHistoryOnce(tab, userMessage, promptText, generatedText);
-        message.success('SQL generated.');
+        message.success('SQL 宸茬敓鎴?);
       } else {
-        appendAssistantTextMessage(tab, generatedText || '未返回可执行 SQL', actionType);
-        message.warning('未生成可执行 SQL，已返回说明内容');
+        appendAssistantTextMessage(tab, generatedText || '鏈繑鍥炲彲鎵ц SQL', actionType);
+        message.warning('鏈敓鎴愬彲鎵ц SQL锛屽凡杩斿洖璇存槑鍐呭');
       }
       if (generated.reasoning) {
         message.info(generated.reasoning);
@@ -5352,7 +5332,7 @@ async function generateSqlForTab(
       databaseName: tab.databaseName || undefined,
       modelName: tab.selectedAiModel || undefined,
     });
-    const content = result.content || 'No content returned.';
+    const content = result.content || '鏈繑鍥炲唴瀹?;
     appendAssistantTextMessage(tab, content, actionType);
     await saveConversationHistoryOnce(tab, userMessage, promptText, actionSqlSnippet || '', {
       actionType,
@@ -5362,13 +5342,13 @@ async function generateSqlForTab(
     if (result.reasoning) {
       message.info(result.reasoning);
     }
-    message.success(actionType === 'explain' ? 'SQL explanation generated.' : 'SQL analysis generated.');
+    message.success(actionType === 'explain' ? 'SQL 鍚箟瑙ｉ噴宸茬敓鎴? : 'SQL 鍚堢悊鎬у垎鏋愬凡鐢熸垚');
     clearUserRetryState(userMessage);
   } catch (error) {
     const msg = getErrorMessage(error);
     if (isAiRequestAbortedMessage(msg)) {
       clearUserRetryState(userMessage);
-      message.info('Conversation was stopped.');
+      message.info('宸茬粓姝㈠璇濇墽琛?);
       return;
     }
     if (isTimeoutErrorMessage(msg)) {
@@ -5403,7 +5383,7 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
   }
   const rawPrompt = retryOptions?.promptText ?? tab.prompt.trim();
   if (!rawPrompt) {
-    message.info('Please enter a natural language request first.');
+    message.info('璇峰厛杈撳叆鑷劧璇█闇€姹?);
     return;
   }
   const sqlSnippet = retryOptions?.actionSqlSnippet ?? resolveSqlForAction(tab);
@@ -5439,14 +5419,14 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
         if (tab.autoExecute) {
           const executed = await executeSqlForTab(tab, sqlText, { silentSuccess: true });
           if (!executed) {
-            message.warning('SQL generated, but auto execution failed.');
+            message.warning('SQL 宸茬敓鎴愶紝浣嗚嚜鍔ㄦ墽琛屽け璐?);
           } else if (tab.executeResult?.success) {
             assistantMessage.executionPreview = buildExecutionPreview(tab.executeResult);
             touchQueryTab(tab);
           }
         }
       } else {
-        const contentText = sqlText || '未返回可执行 SQL';
+        const contentText = sqlText || '鏈繑鍥炲彲鎵ц SQL';
         appendAssistantTextMessage(tab, contentText, actionType);
         await saveConversationHistoryOnce(tab, userMessage, rawPrompt, sqlText || '', {
           actionType,
@@ -5459,10 +5439,10 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
       const config = result.chartConfig ? cloneChartConfig(result.chartConfig) : null;
       const summary = (result.configSummary || '').trim() || chartSummaryText(config);
       if (!sqlText) {
-        appendAssistantTextMessage(tab, summary || 'No chart plan returned.', actionType);
+        appendAssistantTextMessage(tab, summary || '鏈繑鍥炲浘琛ㄦ柟妗?, actionType);
         await saveConversationHistoryOnce(tab, userMessage, rawPrompt, '', {
           actionType,
-          assistantContent: summary || 'No chart plan returned.',
+          assistantContent: summary || '鏈繑鍥炲浘琛ㄦ柟妗?,
           chartConfig: config,
           databaseName: tab.databaseName,
         });
@@ -5486,11 +5466,11 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
           silentSuccess: true,
         });
         if (!generatedChart) {
-          message.warning('Chart plan generated, but auto execution failed. Please click Generate Chart manually.');
+          message.warning('鍥捐〃鏂规宸茬敓鎴愶紝鑷姩鎵ц澶辫触锛岃鎵嬪姩鐐瑰嚮鈥滅敓鎴愬浘琛ㄢ€?);
         }
       }
     } else if (result.intentType === 'EXPLAIN_SQL' || result.intentType === 'ANALYZE_SQL') {
-      const content = (result.content || '').trim() || 'No content returned.';
+      const content = (result.content || '').trim() || '鏈繑鍥炲唴瀹?;
       appendAssistantTextMessage(tab, content, actionType);
       await saveConversationHistoryOnce(tab, userMessage, rawPrompt, sqlSnippet || '', {
         actionType,
@@ -5498,18 +5478,18 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
         databaseName: tab.databaseName,
       });
     } else {
-      throw new Error('未识别的 Auto 意图类型');
+      throw new Error('鏈瘑鍒殑 Auto 鎰忓浘绫诲瀷');
     }
 
     if (result.fallbackUsed) {
-      message.warning('Auto mode fell back. Please check returned content.');
+      message.warning('Auto 妯″紡宸茶Е鍙戦檷绾э紝璇锋鏌ヨ繑鍥炲唴瀹?);
     }
     clearUserRetryState(userMessage);
   } catch (error) {
     const msg = getErrorMessage(error);
     if (isAiRequestAbortedMessage(msg)) {
       clearUserRetryState(userMessage);
-      message.info('Conversation was stopped.');
+      message.info('宸茬粓姝㈠璇濇墽琛?);
       return;
     }
     if (isTimeoutErrorMessage(msg)) {
@@ -5556,42 +5536,42 @@ async function retryUserMessage(tab: QueryWorkspaceTab, userMessage: QueryChatMe
 
 function buildChartPrompt(promptText: string) {
   return [
-    'Please generate a chart plan.',
-    'Requirements:',
-    '1) Return executable SQL and structured chart config.',
-    '2) 配置需包含图表类型、字段映射、排序建议；',
-    '3) Use only the current database context.',
-    `用户需求：${promptText}`,
+    '璇风敓鎴愬浘琛ㄦ柟妗堛€?,
+    '瑕佹眰锛?,
+    '1) 杩斿洖鍙墽琛?SQL 鍜岀粨鏋勫寲鍥捐〃閰嶇疆锛?,
+    '2) 閰嶇疆闇€鍖呭惈鍥捐〃绫诲瀷銆佸瓧娈垫槧灏勩€佹帓搴忓缓璁紱',
+    '3) 浠呭熀浜庡綋鍓嶆暟鎹簱涓婁笅鏂囥€?,
+    `鐢ㄦ埛闇€姹傦細${promptText}`,
   ].join('\n');
 }
 
 function chartTypeLabel(chartType?: string) {
   const normalized = (chartType || '').toUpperCase();
   if (normalized === 'BAR') {
-    return 'Bar';
+    return '鏌辩姸鍥?;
   }
   if (normalized === 'PIE') {
-    return '饼图';
+    return '楗煎浘';
   }
   if (normalized === 'SCATTER') {
-    return 'Scatter';
+    return '鏁ｇ偣鍥?;
   }
   if (normalized === 'TREND') {
-    return 'Trend';
+    return '瓒嬪娍鍥?;
   }
-  return 'Line';
+  return '鎶樼嚎鍥?;
 }
 
 function chartSummaryText(config?: ChartConfigVO | null) {
   if (!config) {
-    return 'No usable chart config returned. Please configure manually.';
+    return '鏈繑鍥炲彲鐢ㄥ浘琛ㄩ厤缃紝璇锋墜鍔ㄩ厤缃€?;
   }
   const type = chartTypeLabel(config.chartType);
   if ((config.chartType || '').toUpperCase() === 'PIE') {
-    return `${type} · Category: ${config.categoryField || '-'} · Value: ${config.valueField || '-'}`;
+    return `${type} 路 鍒嗙被: ${config.categoryField || '-'} 路 鏁板€? ${config.valueField || '-'}`;
   }
   const y = (config.yFields || []).join(', ') || '-';
-  return `${type} · X: ${config.xField || '-'} · Y: ${y}`;
+  return `${type} 路 X: ${config.xField || '-'} 路 Y: ${y}`;
 }
 
 function isChartConfigRenderable(config: ChartConfigVO | null | undefined, rows: Array<Record<string, string | null>>) {
@@ -5665,7 +5645,7 @@ async function exportChartPngDataUrl(pixelRatio = 2) {
 
 function isChartCacheRetryableError(rawMessage: string) {
   const normalized = rawMessage.trim().toLowerCase();
-  return normalized.includes('超过大小限制')
+  return normalized.includes('瓒呰繃澶у皬闄愬埗')
     || normalized.includes('too large')
     || normalized.includes('http 413');
 }
@@ -5673,9 +5653,9 @@ function isChartCacheRetryableError(rawMessage: string) {
 function normalizeChartCacheErrorMessage(rawMessage: string) {
   const normalized = rawMessage.trim();
   if (!normalized || /^http \d+$/i.test(normalized)) {
-    return 'Chart generated, but image cache failed. Available for this session only.';
+    return '鍥捐〃宸茬敓鎴愶紝浣嗗浘鐗囩紦瀛樺け璐ワ紝浠呮湰娆″彲瑙?;
   }
-  return `图表已生成，但图片缓存失败：${normalized}`;
+  return `鍥捐〃宸茬敓鎴愶紝浣嗗浘鐗囩紦瀛樺け璐ワ細${normalized}`;
 }
 
 function isLikelyLocalFilePath(rawPath: string) {
@@ -5777,7 +5757,7 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
   }
   const rawPrompt = retryOptions?.promptText ?? tab.prompt.trim();
   if (!rawPrompt) {
-    message.info('Please enter chart requirements first.');
+    message.info('璇峰厛杈撳叆鍥捐〃闇€姹?);
     return;
   }
   const finalPrompt = retryOptions?.finalPrompt ?? buildChartPrompt(rawPrompt);
@@ -5803,8 +5783,8 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
     const config = generated.chartConfig ? cloneChartConfig(generated.chartConfig) : null;
     const summary = (generated.configSummary || '').trim() || chartSummaryText(config);
     if (!sqlText) {
-      appendAssistantTextMessage(tab, summary || 'No chart plan returned.', 'chart_auto_plan');
-      message.warning('未生成可执行 SQL');
+      appendAssistantTextMessage(tab, summary || '鏈繑鍥炲浘琛ㄦ柟妗?, 'chart_auto_plan');
+      message.warning('鏈敓鎴愬彲鎵ц SQL');
       return;
     }
     const plannedMessage = appendAssistantSqlMessage(
@@ -5829,16 +5809,16 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
       silentSuccess: true,
     });
     if (!generatedChart) {
-      message.warning('Chart plan generated, but auto execution failed. Please click Generate Chart manually.');
+      message.warning('鍥捐〃鏂规宸茬敓鎴愶紝鑷姩鎵ц澶辫触锛岃鎵嬪姩鐐瑰嚮鈥滅敓鎴愬浘琛ㄢ€?);
       return;
     }
-    message.success('AI 图表方案已执行并生成图表');
+    message.success('AI 鍥捐〃鏂规宸叉墽琛屽苟鐢熸垚鍥捐〃');
     clearUserRetryState(userMessage);
   } catch (error) {
     const msg = getErrorMessage(error);
     if (isAiRequestAbortedMessage(msg)) {
       clearUserRetryState(userMessage);
-      message.info('Conversation was stopped.');
+      message.info('宸茬粓姝㈠璇濇墽琛?);
       return;
     }
     if (isTimeoutErrorMessage(msg)) {
@@ -5866,7 +5846,7 @@ async function generateChartFromMessage(
 ) {
   const sqlText = (item.sqlText || '').trim();
   if (!sqlText) {
-    message.warning('Current message does not contain SQL. Unable to generate chart.');
+    message.warning('褰撳墠娑堟伅涓嶅寘鍚?SQL锛屾棤娉曠敓鎴愬浘琛?);
     return;
   }
   const success = await executeSqlForTab(tab, sqlText, { silentSuccess: true });
@@ -5882,7 +5862,7 @@ async function generateChartFromMessage(
   if (!isChartConfigRenderable(config, rows)) {
     setupManualChartConfigByResult(tab);
     config = cloneChartConfig(tab.manualChartConfig);
-    message.warning('AI chart config does not match result fields. Switched to manual default config.');
+    message.warning('AI 閰嶇疆涓庣粨鏋滃瓧娈典笉鍖归厤锛屽凡鍒囨崲涓烘墜鍔ㄩ粯璁ら厤缃?);
   } else {
     tab.manualChartConfig = cloneChartConfig(config);
   }
@@ -5894,7 +5874,7 @@ async function generateChartFromMessage(
   const cached = await cacheChartImageWithRetry(tab, `chart-auto-${Date.now()}`);
   const imageDataUrl = cached.imageDataUrl;
   if (!imageDataUrl) {
-    message.warning('图表渲染完成，但图片导出失败');
+    message.warning('鍥捐〃娓叉煋瀹屾垚锛屼絾鍥剧墖瀵煎嚭澶辫触');
     return false;
   }
   tab.chartImageDataUrl = imageDataUrl;
@@ -5910,14 +5890,14 @@ async function generateChartFromMessage(
       tab,
       sqlText,
       'chart_auto_render',
-      'Chart generated.',
+      '鍥捐〃宸茬敓鎴?,
       config,
       chartSummaryText(config),
       cacheKey,
     );
     renderMessage.chartImageDataUrl = imageDataUrl;
   }
-  await saveConversationHistory(tab, '生成图表', sqlText, {
+  await saveConversationHistory(tab, '鐢熸垚鍥捐〃', sqlText, {
     actionType: 'chart_auto_render',
     assistantContent: chartSummaryText(config),
     chartConfig: config,
@@ -5925,20 +5905,20 @@ async function generateChartFromMessage(
     databaseName: tab.databaseName,
   });
   if (!options?.silentSuccess) {
-    message.success('Chart generated.');
+    message.success('鍥捐〃宸茬敓鎴?);
   }
   return true;
 }
 
 async function generateManualChartForTab(tab: QueryWorkspaceTab) {
   if (!tab.executeResult?.rows?.length) {
-    message.info('当前没有可用于制图的查询结果');
+    message.info('褰撳墠娌℃湁鍙敤浜庡埗鍥剧殑鏌ヨ缁撴灉');
     return;
   }
   const config = cloneChartConfig(tab.manualChartConfig);
   const rows = activeChartRows.value;
   if (!isChartConfigRenderable(config, rows)) {
-    message.warning('图表字段配置不完整，请先选择有效字段');
+    message.warning('鍥捐〃瀛楁閰嶇疆涓嶅畬鏁达紝璇峰厛閫夋嫨鏈夋晥瀛楁');
     return;
   }
   tab.activeChartConfig = config;
@@ -5949,7 +5929,7 @@ async function generateManualChartForTab(tab: QueryWorkspaceTab) {
   const cached = await cacheChartImageWithRetry(tab, `chart-manual-${Date.now()}`);
   const imageDataUrl = cached.imageDataUrl;
   if (!imageDataUrl) {
-    message.warning('图表渲染完成，但图片导出失败');
+    message.warning('鍥捐〃娓叉煋瀹屾垚锛屼絾鍥剧墖瀵煎嚭澶辫触');
     return;
   }
   tab.chartImageDataUrl = imageDataUrl;
@@ -5957,7 +5937,7 @@ async function generateManualChartForTab(tab: QueryWorkspaceTab) {
   if (cached.cacheErrorMessage) {
     message.warning(normalizeChartCacheErrorMessage(cached.cacheErrorMessage));
   }
-  message.success('Manual chart generated.');
+  message.success('鎵嬪姩鍥捐〃宸茬敓鎴?);
 }
 
 async function downloadActiveChart(tab: QueryWorkspaceTab) {
@@ -5966,7 +5946,7 @@ async function downloadActiveChart(tab: QueryWorkspaceTab) {
     dataUrl = await exportChartPngDataUrl();
   }
   if (!dataUrl) {
-    message.info('暂无可下载的图表图片');
+    message.info('鏆傛棤鍙笅杞界殑鍥捐〃鍥剧墖');
     return;
   }
   downloadImage(dataUrl, `chart-${Date.now()}.png`);
@@ -5979,12 +5959,12 @@ async function downloadMessageChart(item: QueryChatMessage) {
       dataUrl = await loadChartImageDataUrl(item.chartImageCacheKey);
       item.chartImageDataUrl = dataUrl;
     } catch {
-      message.error('Cached chart not found. Re-run SQL and generate again.');
+      message.error('缂撳瓨鍥捐〃涓嶅瓨鍦紝璇烽噸璺?SQL 鍚庨噸鏂扮敓鎴?);
       return;
     }
   }
   if (!dataUrl) {
-    message.info('当前消息暂无图表图片');
+    message.info('褰撳墠娑堟伅鏆傛棤鍥捐〃鍥剧墖');
     return;
   }
   downloadImage(dataUrl, `chart-${Date.now()}.png`);
@@ -5999,7 +5979,7 @@ async function hydrateHistoryChartImages(tab: QueryWorkspaceTab) {
     try {
       item.chartImageDataUrl = await loadChartImageDataUrl(item.chartImageCacheKey);
     } catch {
-      // 历史图缺失不阻断会话加载。
+      // 鍘嗗彶鍥剧己澶变笉闃绘柇浼氳瘽鍔犺浇銆?
     }
   }
 }
@@ -6012,7 +5992,7 @@ async function explainSqlForTab(tab: QueryWorkspaceTab, sqlOverride?: string) {
   await runSafely(async () => {
     const sqlText = resolveSqlForAction(tab, sqlOverride);
     if (!sqlText) {
-      throw new Error('请先输入或选择 SQL');
+      throw new Error('璇峰厛杈撳叆鎴栭€夋嫨 SQL');
     }
     tab.explainResult = await postApi<ExplainVO>('/api/sql/explain', {
       connectionId: tab.connectionId,
@@ -6021,7 +6001,7 @@ async function explainSqlForTab(tab: QueryWorkspaceTab, sqlOverride?: string) {
     });
     tab.executeResult = null;
     touchQueryTab(tab);
-    message.success('EXPLAIN 完成');
+    message.success('EXPLAIN 瀹屾垚');
   });
 }
 
@@ -6053,23 +6033,23 @@ async function ensureRiskConfirmedBeforeExecute(tab: QueryWorkspaceTab, sqlText:
   const confirmLevelClass = `risk-level-${normalizedRiskLevel.toLowerCase()}`;
   const riskItemsText = (result.riskItems ?? [])
     .map((item, index) => `${index + 1}. [${item.level}] ${item.description}`)
-    .join('\n') || 'No risk details.';
+    .join('\n') || '鏃犻闄╂槑缁?;
   if (signal?.aborted) {
     throw new Error(SQL_EXECUTION_ABORTED);
   }
   const confirmed = await new Promise<boolean>((resolve) => {
     Modal.confirm({
-      title: `${connectionEnvLabel(tab.connectionId)} 环境 SQL 风险确认`,
+      title: `${connectionEnvLabel(tab.connectionId)} 鐜 SQL 椋庨櫓纭`,
       content: h('div', { class: ['risk-confirm-content', confirmLevelClass] }, [
         h('div', { class: 'risk-confirm-level-row' }, [
-          h('span', '风险级别'),
+          h('span', '椋庨櫓绾у埆'),
           h('span', { class: 'risk-confirm-level-badge' }, normalizedRiskLevel),
         ]),
-        h('div', `确认策略: ${result.confirmReason || '-'}`),
+        h('div', `纭绛栫暐: ${result.confirmReason || '-'}`),
         h('pre', { class: 'risk-confirm-pre' }, riskItemsText),
       ]),
-      okText: '确认执行',
-      cancelText: '取消',
+      okText: '纭鎵ц',
+      cancelText: '鍙栨秷',
       onOk: () => resolve(true),
       onCancel: () => resolve(false),
     });
@@ -6078,7 +6058,7 @@ async function ensureRiskConfirmedBeforeExecute(tab: QueryWorkspaceTab, sqlText:
     throw new Error(RISK_EXECUTION_CANCELLED);
   }
   if (!riskAckToken) {
-    throw new Error('风险确认令牌缺失，请重新执行');
+    throw new Error('椋庨櫓纭浠ょ墝缂哄け锛岃閲嶆柊鎵ц');
   }
   return riskAckToken;
 }
@@ -6093,7 +6073,7 @@ async function executeSqlForTab(
   }
   const sqlText = resolveSqlForAction(tab, sqlOverride);
   if (!sqlText) {
-    message.error('请先输入或选择 SQL');
+    message.error('璇峰厛杈撳叆鎴栭€夋嫨 SQL');
     return false;
   }
   tab.sqlExecuting = true;
@@ -6108,12 +6088,12 @@ async function executeSqlForTab(
     } catch (error) {
       const manualAborted = sqlExecutionAbortReasonMap.get(tab.key) === 'manual' || isAbortError(error);
       if (manualAborted) {
-        message.info('Execution was stopped.');
+        message.info('宸茬粓姝㈡墽琛?);
         return false;
       }
       const errMsg = error instanceof Error ? error.message : String(error);
       if (errMsg === RISK_EXECUTION_CANCELLED) {
-        message.info('Execution cancelled.');
+        message.info('宸插彇娑堟墽琛?);
         return false;
       }
       message.error(errMsg);
@@ -6143,7 +6123,7 @@ async function executeSqlForTab(
       tab.chartImageCacheKey = '';
       setupManualChartConfigByResult(tab);
       if (!options?.silentSuccess) {
-        message.success(`执行成功，耗时 ${result.executionMs}ms`);
+        message.success(`鎵ц鎴愬姛锛岃€楁椂 ${result.executionMs}ms`);
       }
       return true;
     } catch (error) {
@@ -6153,7 +6133,7 @@ async function executeSqlForTab(
         tab.lastExecuteFailed = false;
         tab.lastExecuteErrorMessage = '';
         tab.lastFailedSqlText = '';
-        message.info('Execution was stopped.');
+        message.info('宸茬粓姝㈡墽琛?);
         return false;
       }
       const errMsg = error instanceof Error ? error.message : String(error);
@@ -6177,13 +6157,13 @@ async function executeSqlForTab(
 
 async function repairSqlForTab(tab: QueryWorkspaceTab) {
   if (!tab.lastExecuteFailed) {
-    message.info('最近一次 SQL 执行未失败，无需修复');
+    message.info('鏈€杩戜竴娆?SQL 鎵ц鏈け璐ワ紝鏃犻渶淇');
     return;
   }
   const failedSql = tab.lastFailedSqlText.trim();
   const errorMessage = tab.lastExecuteErrorMessage.trim();
   if (!failedSql || !errorMessage) {
-    message.error('缺少失败 SQL 或错误信息，无法执行修复');
+    message.error('缂哄皯澶辫触 SQL 鎴栭敊璇俊鎭紝鏃犳硶鎵ц淇');
     return;
   }
   if (tab.aiGenerating) {
@@ -6191,7 +6171,7 @@ async function repairSqlForTab(tab: QueryWorkspaceTab) {
   }
   tab.aiGenerating = true;
   try {
-    const promptText = `请修复以下 SQL 执行错误。\n错误信息：${errorMessage}\n\nSQL:\n${failedSql}`;
+    const promptText = `璇蜂慨澶嶄互涓?SQL 鎵ц閿欒銆俓n閿欒淇℃伅锛?{errorMessage}\n\nSQL:\n${failedSql}`;
     const userMessage = appendUserChatMessage(tab, promptText, 'repair');
     const repaired = await postApi<AiRepairVO>('/api/ai/query/repair', {
       connectionId: tab.connectionId,
@@ -6202,7 +6182,7 @@ async function repairSqlForTab(tab: QueryWorkspaceTab) {
       modelName: tab.selectedAiModel || undefined,
     });
     const repairedSql = (repaired.repairedSql || failedSql || '').trim();
-    const assistantContent = (repaired.errorExplanation || repaired.repairNote || '已尝试修复 SQL').trim();
+    const assistantContent = (repaired.errorExplanation || repaired.repairNote || '宸插皾璇曚慨澶?SQL').trim();
     appendAssistantSqlMessage(
       tab,
       repairedSql,
@@ -6218,7 +6198,7 @@ async function repairSqlForTab(tab: QueryWorkspaceTab) {
     tab.lastExecuteErrorMessage = '';
     tab.lastFailedSqlText = '';
     touchQueryTab(tab);
-    message.success(repaired.repairNote || 'Repair suggestion generated.');
+    message.success(repaired.repairNote || '淇寤鸿宸茬敓鎴?);
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
     message.error(errMsg);
@@ -6235,7 +6215,7 @@ async function exportCsvForTab(tab: QueryWorkspaceTab) {
       format: 'CSV',
       fileName: `aidb_${Date.now()}`,
     });
-    message.success(`已导出 ${result.filePath}`);
+    message.success(`宸插鍑? ${result.filePath}`);
   });
 }
 
@@ -6259,7 +6239,7 @@ function normalizeRiskLevel(level?: string): 'LOW' | 'MEDIUM' | 'HIGH' {
 
 function ensureConnection() {
   if (!workflow.connectionId) {
-    throw new Error('请先选择连接');
+    throw new Error('璇峰厛閫夋嫨杩炴帴');
   }
 }
 
@@ -6551,22 +6531,22 @@ function toObjectType(value: string): 'tables' | 'views' | 'functions' | 'events
 
 function objectTypeLabel(value: string) {
   if (value === 'tables') {
-    return 'Table';
+    return '琛?;
   }
   if (value === 'views') {
-    return '视图';
+    return '瑙嗗浘';
   }
   if (value === 'functions') {
-    return '函数';
+    return '鍑芥暟';
   }
   if (value === 'events') {
-    return '事件';
+    return '浜嬩欢';
   }
   if (value === 'queries') {
-    return '查询';
+    return '鏌ヨ';
   }
   if (value === 'backups') {
-    return '备份';
+    return '澶囦唤';
   }
   return value;
 }
@@ -6582,12 +6562,12 @@ function normalizeEnv(value?: string) {
 function envTagText(value?: string) {
   const env = normalizeEnv(value);
   if (env === 'PROD') {
-    return '生产';
+    return '鐢熶骇';
   }
   if (env === 'TEST') {
-    return '测试';
+    return '娴嬭瘯';
   }
-  return 'Dev';
+  return '寮€鍙?;
 }
 
 function envTagClass(value?: string) {
@@ -6802,7 +6782,7 @@ async function copyTextContent(text: string, successText: string) {
 }
 
 async function copyCreateTableSql() {
-  await copyTextContent(createTableSqlText.value, '建表语句已复制');
+  await copyTextContent(createTableSqlText.value, '寤鸿〃璇彞宸插鍒?);
 }
 
 function dbIconUrl(dbType: string) {
@@ -6897,7 +6877,7 @@ function removeModelOption(index: number) {
 
 function defaultConnectionForm(): ConnectionCreateReq {
   return {
-    name: '本地 SQLite',
+    name: '鏈湴 SQLite',
     dbType: 'SQLITE',
     host: '',
     port: 0,
@@ -7027,5 +7007,4 @@ function resetConnectionModalState() {
   connectionPreviewError.value = '';
 }
 </script>
-
 

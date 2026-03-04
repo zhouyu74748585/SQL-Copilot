@@ -17,6 +17,10 @@ import com.sqlcopilot.studio.dto.ai.ChartConfigVO;
 import com.sqlcopilot.studio.dto.sql.QueryRowVO;
 import com.sqlcopilot.studio.dto.schema.ContextBuildReq;
 import com.sqlcopilot.studio.dto.schema.ContextBuildVO;
+import com.sqlcopilot.studio.dto.schema.ErAiInferenceReq;
+import com.sqlcopilot.studio.dto.schema.ErAiInferenceResultVO;
+import com.sqlcopilot.studio.dto.schema.ErRelationVO;
+import com.sqlcopilot.studio.dto.schema.ErTableNodeVO;
 import com.sqlcopilot.studio.dto.schema.SchemaOverviewVO;
 import com.sqlcopilot.studio.dto.schema.TableDetailVO;
 import com.sqlcopilot.studio.entity.ConnectionEntity;
@@ -45,10 +49,12 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -136,6 +142,28 @@ public class AiServiceImpl implements AiService {
             - errorExplanation：使用中文简要说明 SQL 为什么失败，以及做了哪些修改
             - repairedSql：可执行的修复后 SQL
         3) 不要输出 Markdown、代码块或任何额外文本。
+        """;
+    private static final String ER_RELATION_INFER_SYSTEM_PROMPT = """
+        You are a database relationship inference assistant.
+        Based on selected table metadata and known foreign key relations, infer possible additional relationships.
+        Output strict JSON only, no markdown and no extra text.
+        JSON format:
+        {
+          "relations": [
+            {
+              "sourceTable": "orders",
+              "sourceColumn": "customer_id",
+              "targetTable": "customers",
+              "targetColumn": "id",
+              "confidence": 0.82,
+              "reason": "column naming and semantic match"
+            }
+          ]
+        }
+        Rules:
+        1) Only infer relations between selected tables.
+        2) Keep confidence between 0 and 1.
+        3) Do not return exact duplicate pairs from provided foreign keys.
         """;
     private static final Logger log = LoggerFactory.getLogger(AiServiceImpl.class);
 
@@ -494,6 +522,63 @@ public class AiServiceImpl implements AiService {
     }
 
     @Override
+    public ErAiInferenceResultVO inferErRelations(ErAiInferenceReq req) {
+        ErAiInferenceResultVO vo = new ErAiInferenceResultVO();
+        vo.setSuccess(Boolean.FALSE);
+        vo.setMessage("AI inference failed");
+        vo.setRelations(List.of());
+        if (req == null || req.getConnectionId() == null) {
+            vo.setMessage("connectionId is required");
+            return vo;
+        }
+        List<ErTableNodeVO> tables = req.getTables() == null ? List.of() : req.getTables();
+        if (tables.isEmpty()) {
+            vo.setMessage("selected tables are empty");
+            return vo;
+        }
+
+        try {
+            AiGenerateSqlReq providerReq = new AiGenerateSqlReq();
+            providerReq.setConnectionId(req.getConnectionId());
+            providerReq.setSessionId("er-infer-" + System.currentTimeMillis());
+            providerReq.setDatabaseName(req.getDatabaseName());
+            providerReq.setModelName(req.getModelName());
+            providerReq.setPrompt("Infer possible relationships between selected tables and output strict JSON.");
+
+            String contextText = buildErInferenceContext(req);
+            List<String> relatedTables = tables.stream()
+                .map(ErTableNodeVO::getTableName)
+                .map(this::safe)
+                .filter(item -> !item.isBlank())
+                .toList();
+            GenerationContext generationContext = new GenerationContext(contextText, relatedTables);
+            TextProviderResult providerResult = generateTextByConfiguredProvider(
+                providerReq,
+                generationContext,
+                ER_RELATION_INFER_SYSTEM_PROMPT,
+                "ER relationship inference"
+            );
+
+            List<ErRelationVO> parsed = parseErRelationResponse(providerResult.content());
+            List<ErRelationVO> filtered = filterErRelations(
+                parsed,
+                tables,
+                req.getForeignKeyRelations(),
+                req.getConfidenceThreshold()
+            );
+            vo.setSuccess(Boolean.TRUE);
+            vo.setMessage("ok");
+            vo.setRelations(filtered);
+            return vo;
+        } catch (Exception ex) {
+            vo.setSuccess(Boolean.FALSE);
+            vo.setMessage("AI inference failed: " + safe(ex.getMessage()));
+            vo.setRelations(List.of());
+            return vo;
+        }
+    }
+
+    @Override
     public AiRepairVO repairSql(AiRepairReq req) {
         long startAt = System.currentTimeMillis();
         StepTimer timer = new StepTimer();
@@ -595,6 +680,210 @@ public class AiServiceImpl implements AiService {
             );
             return vo;
         }
+    }
+
+    private String buildErInferenceContext(ErAiInferenceReq req) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("Selected tables and columns:\n");
+        List<ErTableNodeVO> tables = req.getTables() == null ? List.of() : req.getTables();
+        for (ErTableNodeVO table : tables) {
+            String tableName = safe(table.getTableName());
+            if (tableName.isBlank()) {
+                continue;
+            }
+            builder.append("- ").append(tableName);
+            String comment = safe(table.getTableComment());
+            if (!comment.isBlank()) {
+                builder.append(" // ").append(comment);
+            }
+            builder.append('\n');
+            if (table.getColumns() == null || table.getColumns().isEmpty()) {
+                builder.append("  - (no columns)\n");
+                continue;
+            }
+            table.getColumns().forEach(column -> {
+                String columnName = safe(column.getColumnName());
+                if (columnName.isBlank()) {
+                    return;
+                }
+                builder.append("  - ").append(columnName)
+                    .append(" ").append(safe(column.getDataType()));
+                if (Boolean.TRUE.equals(column.getPrimaryKey())) {
+                    builder.append(" [PK]");
+                }
+                if (Boolean.TRUE.equals(column.getIndexed())) {
+                    builder.append(" [IDX]");
+                }
+                builder.append('\n');
+            });
+        }
+        builder.append("\nKnown foreign keys:\n");
+        List<ErRelationVO> fkRelations = req.getForeignKeyRelations() == null ? List.of() : req.getForeignKeyRelations();
+        if (fkRelations.isEmpty()) {
+            builder.append("- (none)\n");
+        } else {
+            fkRelations.forEach(item -> builder
+                .append("- ")
+                .append(safe(item.getSourceTable())).append('.').append(safe(item.getSourceColumn()))
+                .append(" -> ")
+                .append(safe(item.getTargetTable())).append('.').append(safe(item.getTargetColumn()))
+                .append('\n'));
+        }
+        return builder.toString();
+    }
+
+    private List<ErRelationVO> parseErRelationResponse(String rawOutput) {
+        List<ErRelationVO> fallback = List.of();
+        String normalized = safe(rawOutput);
+        if (normalized.isBlank()) {
+            return fallback;
+        }
+        List<String> candidates = new ArrayList<>();
+        candidates.add(normalized);
+        Matcher fenceMatcher = Pattern.compile("(?is)```(?:json)?\\s*(\\{.*?\\}|\\[.*?\\])\\s*```").matcher(normalized);
+        if (fenceMatcher.find()) {
+            candidates.add(fenceMatcher.group(1));
+        }
+        int jsonStart = normalized.indexOf('{');
+        int jsonEnd = normalized.lastIndexOf('}');
+        if (jsonStart >= 0 && jsonEnd > jsonStart) {
+            candidates.add(normalized.substring(jsonStart, jsonEnd + 1));
+        }
+        int arrStart = normalized.indexOf('[');
+        int arrEnd = normalized.lastIndexOf(']');
+        if (arrStart >= 0 && arrEnd > arrStart) {
+            candidates.add(normalized.substring(arrStart, arrEnd + 1));
+        }
+
+        for (String candidate : candidates) {
+            try {
+                JsonNode root = objectMapper.readTree(candidate);
+                JsonNode relationNode;
+                if (root.isArray()) {
+                    relationNode = root;
+                } else {
+                    relationNode = root.path("relations");
+                }
+                if (!relationNode.isArray()) {
+                    continue;
+                }
+                List<ErRelationVO> parsed = new ArrayList<>();
+                for (JsonNode item : relationNode) {
+                    if (item == null || !item.isObject()) {
+                        continue;
+                    }
+                    ErRelationVO relation = new ErRelationVO();
+                    relation.setSourceTable(safe(item.path("sourceTable").asText("")));
+                    relation.setSourceColumn(safe(item.path("sourceColumn").asText("")));
+                    relation.setTargetTable(safe(item.path("targetTable").asText("")));
+                    relation.setTargetColumn(safe(item.path("targetColumn").asText("")));
+                    relation.setRelationType("AI_INFERRED");
+                    relation.setConfidence(parseConfidence(item.path("confidence")));
+                    relation.setReason(safe(item.path("reason").asText("")));
+                    parsed.add(relation);
+                }
+                return parsed;
+            } catch (Exception ignored) {
+                // ignore malformed candidate
+            }
+        }
+        return fallback;
+    }
+
+    private List<ErRelationVO> filterErRelations(List<ErRelationVO> rawRelations,
+                                                 List<ErTableNodeVO> selectedTables,
+                                                 List<ErRelationVO> foreignKeyRelations,
+                                                 Double confidenceThreshold) {
+        double threshold = normalizeConfidenceThreshold(confidenceThreshold);
+        Map<String, String> selectedTableNameMap = new LinkedHashMap<>();
+        selectedTables.forEach(item -> {
+            String canonical = safe(item.getTableName());
+            String tableName = normalizeIdentifier(canonical);
+            if (!tableName.isBlank() && !canonical.isBlank()) {
+                selectedTableNameMap.putIfAbsent(tableName, canonical);
+            }
+        });
+        Set<String> selectedTableSet = selectedTableNameMap.keySet();
+        Set<String> foreignKeySet = new HashSet<>();
+        List<ErRelationVO> fkList = foreignKeyRelations == null ? List.of() : foreignKeyRelations;
+        fkList.forEach(item -> foreignKeySet.add(buildErRelationKey(item)));
+
+        Map<String, ErRelationVO> dedup = new LinkedHashMap<>();
+        List<ErRelationVO> source = rawRelations == null ? List.of() : rawRelations;
+        for (ErRelationVO item : source) {
+            if (item == null) {
+                continue;
+            }
+            String sourceTable = normalizeIdentifier(item.getSourceTable());
+            String targetTable = normalizeIdentifier(item.getTargetTable());
+            String sourceColumn = safe(item.getSourceColumn());
+            String targetColumn = safe(item.getTargetColumn());
+            if (sourceTable.isBlank() || targetTable.isBlank() || sourceColumn.isBlank() || targetColumn.isBlank()) {
+                continue;
+            }
+            if (!selectedTableSet.contains(sourceTable) || !selectedTableSet.contains(targetTable)) {
+                continue;
+            }
+            double confidence = item.getConfidence() == null ? 0D : item.getConfidence();
+            if (!Double.isFinite(confidence) || confidence < threshold) {
+                continue;
+            }
+            ErRelationVO relation = new ErRelationVO();
+            relation.setSourceTable(selectedTableNameMap.getOrDefault(sourceTable, safe(item.getSourceTable())));
+            relation.setSourceColumn(sourceColumn);
+            relation.setTargetTable(selectedTableNameMap.getOrDefault(targetTable, safe(item.getTargetTable())));
+            relation.setTargetColumn(targetColumn);
+            relation.setRelationType("AI_INFERRED");
+            relation.setConfidence(Math.max(0D, Math.min(1D, confidence)));
+            relation.setReason(safe(item.getReason()));
+            if (relation.getReason().isBlank()) {
+                relation.setReason("ai inferred relation");
+            }
+            String key = buildErRelationKey(relation);
+            if (foreignKeySet.contains(key)) {
+                continue;
+            }
+            dedup.putIfAbsent(key, relation);
+        }
+        List<ErRelationVO> relations = new ArrayList<>(dedup.values());
+        relations.sort(Comparator
+            .comparing(ErRelationVO::getSourceTable, String.CASE_INSENSITIVE_ORDER)
+            .thenComparing(ErRelationVO::getTargetTable, String.CASE_INSENSITIVE_ORDER)
+            .thenComparing(ErRelationVO::getSourceColumn, String.CASE_INSENSITIVE_ORDER)
+            .thenComparing(ErRelationVO::getTargetColumn, String.CASE_INSENSITIVE_ORDER));
+        return relations;
+    }
+
+    private String buildErRelationKey(ErRelationVO relation) {
+        return normalizeIdentifier(relation.getSourceTable()) + "|"
+            + normalizeIdentifier(relation.getSourceColumn()) + "|"
+            + normalizeIdentifier(relation.getTargetTable()) + "|"
+            + normalizeIdentifier(relation.getTargetColumn());
+    }
+
+    private double parseConfidence(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return 0D;
+        }
+        if (node.isNumber()) {
+            return node.asDouble(0D);
+        }
+        String value = safe(node.asText(""));
+        if (value.isBlank()) {
+            return 0D;
+        }
+        try {
+            return Double.parseDouble(value);
+        } catch (NumberFormatException ignore) {
+            return 0D;
+        }
+    }
+
+    private double normalizeConfidenceThreshold(Double threshold) {
+        if (threshold == null || !Double.isFinite(threshold)) {
+            return 0.6D;
+        }
+        return Math.max(0D, Math.min(1D, threshold));
     }
 
     private AiGenerateSqlReq buildRepairGenerateReq(AiRepairReq req, String sqlText, String errorMessage) {

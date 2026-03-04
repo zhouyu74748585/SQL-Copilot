@@ -3,6 +3,7 @@ package com.sqlcopilot.studio.controller;
 import com.sqlcopilot.studio.dto.common.ApiResponse;
 import com.sqlcopilot.studio.dto.rag.RagDatabaseVectorizeStatusVO;
 import com.sqlcopilot.studio.dto.schema.*;
+import com.sqlcopilot.studio.service.ErDiagramService;
 import com.sqlcopilot.studio.service.RagVectorizeQueueService;
 import com.sqlcopilot.studio.service.SchemaService;
 import jakarta.validation.Valid;
@@ -24,11 +25,14 @@ public class SchemaController {
     private static final Logger log = LoggerFactory.getLogger(SchemaController.class);
 
     private final SchemaService schemaService;
+    private final ErDiagramService erDiagramService;
     private final RagVectorizeQueueService ragVectorizeQueueService;
 
     public SchemaController(SchemaService schemaService,
+                            ErDiagramService erDiagramService,
                             RagVectorizeQueueService ragVectorizeQueueService) {
         this.schemaService = schemaService;
+        this.erDiagramService = erDiagramService;
         this.ragVectorizeQueueService = ragVectorizeQueueService;
     }
 
@@ -93,6 +97,11 @@ public class SchemaController {
     @PostMapping("/context/build")
     public ApiResponse<ContextBuildVO> buildContext(@Valid @RequestBody ContextBuildReq req) {
         return ApiResponse.success(schemaService.buildContext(req));
+    }
+
+    @PostMapping("/er/graph")
+    public ApiResponse<ErGraphVO> erGraph(@Valid @RequestBody ErGraphReq req) {
+        return ApiResponse.success(erDiagramService.buildErGraph(req));
     }
 
     private void tryEnqueueVectorizeTask(Long connectionId, String databaseName) {
