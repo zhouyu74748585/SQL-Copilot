@@ -75,6 +75,8 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
     private OrtSession ortSession;
     private HuggingFaceTokenizer tokenizer;
     private String runtimeProvider = PROVIDER_UNKNOWN;
+    private Boolean cudaRuntimeReady;
+    private List<Path> windowsCudaRuntimeDirs;
 
     public OnnxBgeM3EmbeddingServiceImpl(RagConfigService ragConfigService,
                                          @Value("${rag.embedding.model-dir:./models/bge-m3}") String defaultModelDir,
@@ -553,6 +555,11 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
         }
         try {
             if (PROVIDER_CUDA.equals(provider)) {
+                if (shouldSkipCudaProvider()) {
+                    return false;
+                }
+                List<Path> runtimeDirs = resolveWindowsCudaRuntimeDirs();
+                tryPreloadCudaRuntimeLibraries(runtimeDirs);
                 options.addCUDA(cudaDeviceId);
                 return true;
             }
@@ -570,9 +577,242 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
             }
             return false;
         } catch (Exception | LinkageError ex) {
-            log.warn("Enable ONNX provider failed: provider={}, reason={}", provider, ex.getMessage());
+            String reason = ex.getMessage();
+            if (PROVIDER_AUTO.equals(configuredExecutionProvider)) {
+                log.info("Skip unavailable ONNX provider in AUTO mode: provider={}, reason={}", provider, reason);
+                if (PROVIDER_CUDA.equals(provider) && reason != null && reason.contains("LoadLibrary failed with error 126")) {
+                    log.info("CUDA provider dependency missing. Keep CPU mode, or install CUDA/cuDNN and build with `-Ponnxruntime-gpu`.");
+                }
+            } else {
+                log.warn("Enable ONNX provider failed: provider={}, reason={}", provider, reason);
+            }
             return false;
         }
+    }
+
+    private boolean shouldSkipCudaProvider() {
+        if (!PROVIDER_AUTO.equals(configuredExecutionProvider)) {
+            return false;
+        }
+        if (!isWindows()) {
+            return false;
+        }
+        return !isCudaRuntimeReady();
+    }
+
+    private boolean isCudaRuntimeReady() {
+        if (cudaRuntimeReady != null) {
+            return cudaRuntimeReady;
+        }
+        List<Path> pathDirs = resolveWindowsPathDirectories();
+        List<Path> runtimeDirs = resolveWindowsCudaRuntimeDirs();
+        boolean nvcuda = hasDllInDirectories("nvcuda", pathDirs)
+            || Files.exists(Path.of("C:\\Windows\\System32\\nvcuda.dll"));
+        boolean cudart = hasDllInDirectories("cudart64_", pathDirs);
+        boolean cublas = hasDllInDirectories("cublas64_", pathDirs);
+        boolean cublasLt = hasDllInDirectories("cublasLt64_", pathDirs);
+        boolean cudnn = hasDllInDirectories("cudnn64_", pathDirs);
+        // AUTO mode requires PATH-visible CUDA/cuDNN to avoid native loader crashes.
+        if (!(nvcuda && cudart && cublas && cublasLt && cudnn)) {
+            cudaRuntimeReady = false;
+            List<Path> samplePathDirs = pathDirs.size() <= 8
+                ? pathDirs
+                : pathDirs.subList(0, 8);
+            log.info(
+                "Skip CUDA provider in AUTO mode: missing CUDA/cuDNN runtime DLLs on PATH, nvcuda={}, cudart={}, cublas={}, cublasLt={}, cudnn={}, pathDirs(sample)={}",
+                nvcuda,
+                cudart,
+                cublas,
+                cublasLt,
+                cudnn,
+                samplePathDirs
+            );
+            return false;
+        }
+        boolean preloaded = tryPreloadCudaRuntimeLibraries(runtimeDirs);
+        boolean ready = preloaded;
+        cudaRuntimeReady = ready;
+        if (!ready) {
+            List<Path> sampleDirs = runtimeDirs.size() <= 8
+                ? runtimeDirs
+                : runtimeDirs.subList(0, 8);
+            log.info(
+                "Skip CUDA provider in AUTO mode: CUDA runtime check failed, nvcuda={}, cudart={}, cublas={}, cublasLt={}, cudnn={}, preloaded={}, searchedDirs(sample)={}",
+                nvcuda,
+                cudart,
+                cublas,
+                cublasLt,
+                cudnn,
+                preloaded,
+                sampleDirs
+            );
+        }
+        return ready;
+    }
+
+    private List<Path> resolveWindowsPathDirectories() {
+        if (!isWindows()) {
+            return List.of();
+        }
+        LinkedHashSet<Path> dirs = new LinkedHashSet<>();
+        collectPathDirectories(dirs, System.getenv("PATH"));
+        return List.copyOf(dirs);
+    }
+
+    private List<Path> resolveWindowsCudaRuntimeDirs() {
+        if (windowsCudaRuntimeDirs != null) {
+            return windowsCudaRuntimeDirs;
+        }
+        if (!isWindows()) {
+            windowsCudaRuntimeDirs = List.of();
+            return windowsCudaRuntimeDirs;
+        }
+        LinkedHashSet<Path> dirs = new LinkedHashSet<>();
+        collectPathDirectories(dirs, System.getenv("PATH"));
+        collectEnvRuntimeDirectories(dirs);
+        collectKnownCudnnDirectories(dirs);
+        windowsCudaRuntimeDirs = List.copyOf(dirs);
+        return windowsCudaRuntimeDirs;
+    }
+
+    private void collectPathDirectories(Set<Path> target, String pathValue) {
+        if (isBlank(pathValue)) {
+            return;
+        }
+        String[] pathEntries = pathValue.split(";");
+        for (String entry : pathEntries) {
+            Path pathDir = parseDirectoryEntry(entry);
+            if (pathDir == null) {
+                continue;
+            }
+            target.add(pathDir);
+        }
+    }
+
+    private void collectEnvRuntimeDirectories(Set<Path> target) {
+        Map<String, String> env = System.getenv();
+        for (Map.Entry<String, String> entry : env.entrySet()) {
+            String key = Objects.toString(entry.getKey(), "").toUpperCase(Locale.ROOT);
+            if (!(key.startsWith("CUDA_PATH") || key.startsWith("CUDNN_PATH"))) {
+                continue;
+            }
+            Path baseDir = parseDirectoryEntry(entry.getValue());
+            if (baseDir == null) {
+                continue;
+            }
+            target.add(baseDir);
+            target.add(baseDir.resolve("bin").normalize().toAbsolutePath());
+            target.add(baseDir.resolve("bin").resolve("x64").normalize().toAbsolutePath());
+        }
+    }
+
+    private void collectKnownCudnnDirectories(Set<Path> target) {
+        Path root = Path.of("C:\\Program Files\\NVIDIA\\CUDNN");
+        if (!Files.isDirectory(root)) {
+            return;
+        }
+        try (var stream = Files.walk(root, 6)) {
+            stream.filter(Files::isRegularFile)
+                .filter(path -> path.getFileName() != null)
+                .filter(path -> path.getFileName().toString().toLowerCase(Locale.ROOT).startsWith("cudnn64_"))
+                .map(Path::getParent)
+                .filter(Objects::nonNull)
+                .map(path -> path.normalize().toAbsolutePath())
+                .forEach(target::add);
+        } catch (Exception ex) {
+            log.debug("Scan known cuDNN directories failed: {}", ex.getMessage());
+        }
+    }
+
+    private boolean hasDllInDirectories(String filePrefix, List<Path> dirs) {
+        return findDllInDirectories(filePrefix, dirs) != null;
+    }
+
+    private Path findDllInDirectories(String filePrefix, List<Path> dirs) {
+        String normalizedPrefix = Objects.toString(filePrefix, "").toLowerCase(Locale.ROOT);
+        if (dirs == null || dirs.isEmpty()) {
+            return null;
+        }
+        for (Path pathDir : dirs) {
+            if (pathDir == null || !Files.isDirectory(pathDir)) {
+                continue;
+            }
+            try (var stream = Files.list(pathDir)) {
+                Optional<Path> matched = stream
+                    .filter(Files::isRegularFile)
+                    .filter(path -> path.getFileName() != null)
+                    .filter(path -> {
+                        String fileName = path.getFileName().toString().toLowerCase(Locale.ROOT);
+                        return fileName.startsWith(normalizedPrefix) && fileName.endsWith(".dll");
+                    })
+                    .findFirst();
+                if (matched.isPresent()) {
+                    return matched.get().toAbsolutePath().normalize();
+                }
+            } catch (Exception ignore) {
+                // ignore invalid or inaccessible directory
+            }
+        }
+        return null;
+    }
+
+    private boolean tryPreloadCudaRuntimeLibraries(List<Path> dirs) {
+        if (!isWindows()) {
+            return true;
+        }
+        List<String> requiredPrefixes = List.of("cudart64_", "cublas64_", "cublasLt64_", "cudnn64_");
+        for (String prefix : requiredPrefixes) {
+            Path dllPath = findDllInDirectories(prefix, dirs);
+            if (dllPath == null) {
+                return false;
+            }
+            if (!tryLoadWindowsLibrary(dllPath)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean tryLoadWindowsLibrary(Path dllPath) {
+        try {
+            System.load(dllPath.toString());
+            return true;
+        } catch (UnsatisfiedLinkError ex) {
+            String message = Objects.toString(ex.getMessage(), "");
+            if (message.contains("already loaded")) {
+                return true;
+            }
+            log.info("Preload CUDA runtime DLL failed: dll={}, reason={}", dllPath, message);
+            return false;
+        }
+    }
+
+    private Path parseDirectoryEntry(String value) {
+        String normalized = Objects.toString(value, "").trim();
+        if (normalized.isEmpty()) {
+            return null;
+        }
+        if (normalized.startsWith("\"") && normalized.endsWith("\"") && normalized.length() > 1) {
+            normalized = normalized.substring(1, normalized.length() - 1).trim();
+        }
+        if (normalized.isEmpty()) {
+            return null;
+        }
+        Path pathDir;
+        try {
+            pathDir = Path.of(normalized);
+        } catch (Exception ex) {
+            return null;
+        }
+        if (!Files.isDirectory(pathDir)) {
+            return null;
+        }
+        return pathDir.normalize().toAbsolutePath();
+    }
+
+    private boolean isWindows() {
+        String osName = Objects.toString(System.getProperty("os.name"), "").toLowerCase(Locale.ROOT);
+        return osName.contains("win");
     }
 
     private Set<String> resolveAvailableProviders() {

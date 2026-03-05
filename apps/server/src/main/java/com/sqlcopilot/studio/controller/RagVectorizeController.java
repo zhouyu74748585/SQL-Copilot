@@ -3,11 +3,13 @@ package com.sqlcopilot.studio.controller;
 import com.sqlcopilot.studio.dto.common.ApiResponse;
 import com.sqlcopilot.studio.dto.rag.*;
 import com.sqlcopilot.studio.service.RagVectorizeQueueService;
+import com.sqlcopilot.studio.service.rag.RagEmbeddingService;
 import jakarta.validation.Valid;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/rag/vectorize")
@@ -15,9 +17,12 @@ import java.util.List;
 public class RagVectorizeController {
 
     private final RagVectorizeQueueService ragVectorizeQueueService;
+    private final RagEmbeddingService ragEmbeddingService;
 
-    public RagVectorizeController(RagVectorizeQueueService ragVectorizeQueueService) {
+    public RagVectorizeController(RagVectorizeQueueService ragVectorizeQueueService,
+                                  RagEmbeddingService ragEmbeddingService) {
         this.ragVectorizeQueueService = ragVectorizeQueueService;
+        this.ragEmbeddingService = ragEmbeddingService;
     }
 
     @PostMapping("/enqueue")
@@ -50,5 +55,10 @@ public class RagVectorizeController {
     @GetMapping("/overview")
     public ApiResponse<RagVectorizeOverviewVO> overview(@Valid RagVectorizeOverviewQueryReq req) {
         return ApiResponse.success(ragVectorizeQueueService.getOverview(req.getConnectionId(), req.getDatabaseName()));
+    }
+
+    @GetMapping("/runtime-provider")
+    public ApiResponse<Map<String, String>> runtimeProvider() {
+        return ApiResponse.success(Map.of("provider", ragEmbeddingService.getRuntimeProvider()));
     }
 }
