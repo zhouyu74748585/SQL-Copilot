@@ -43,6 +43,8 @@ public class AiServiceImpl implements AiService {
     private static final Pattern CTE_NAME_PATTERN = Pattern.compile("(?is)(?:^|,|\\s)([a-zA-Z_][a-zA-Z0-9_]*)\\s+as\\s*\\(");
     private static final Pattern COMMAND_TOKEN_PATTERN = Pattern.compile("\"([^\"]*)\"|'([^']*)'|(\\S+)");
     private static final Pattern SQL_KEYWORD_PATTERN = Pattern.compile("(?is)\\b(select|with|update|delete|insert)\\b");
+    private static final Pattern ANSI_ESCAPE_PATTERN = Pattern.compile("\\u001B\\[[;\\d]*[ -/]*[@-~]");
+    private static final Pattern TOKEN_USAGE_VALUE_PATTERN = Pattern.compile("^[0-9][0-9,]*$");
     private static final int RELATED_TABLE_META_LIMIT = 8;
     private static final int RELATED_INDEX_COLUMN_LIMIT = 12;
     private static final Set<String> CODEX_SUBCOMMANDS = Set.of(
@@ -54,6 +56,8 @@ public class AiServiceImpl implements AiService {
     private static final int ANALYZE_EXPLAIN_PLAN_ROW_LIMIT = 200;
     private static final int ANALYZE_EXPLAIN_PLAN_TEXT_LIMIT = 6000;
     private static final double AUTO_INTENT_MIN_CONFIDENCE = 0.70D;
+    private static final String AUTO_INTENT_CLARIFY_CONTENT =
+        "未能准确识别你的需求，请将需求描述得更清晰（例如：生成SQL/解释SQL/分析SQL/生成图表，也可以补充关键表、字段与筛选条件）。";
     private static final String OPENAI_SYSTEM_PROMPT = "你是数据库 SQL 专家。基于提供的 RAG 上下文生成 SQL。仅返回可执行 SQL，不要输出解释。";
     private static final String INTENT_CLASSIFY_SYSTEM_PROMPT = """
         你是数据库助手的意图识别器。请根据用户输入识别唯一意图，并输出严格 JSON，不要输出任何额外文本。
@@ -119,26 +123,26 @@ public class AiServiceImpl implements AiService {
         3) 不要输出 Markdown、代码块或任何额外文本。
         """;
     private static final String ER_RELATION_INFER_SYSTEM_PROMPT = """
-        You are a database relationship inference assistant.
-        Based on selected table metadata and known foreign key relations, infer possible additional relationships.
-        Output strict JSON only, no markdown and no extra text.
-        JSON format:
+        你是一个数据库关系推断助手。
+        基于已选择的表元数据以及已知的外键关系，推断可能存在的额外表关系。
+        输出必须是严格的 JSON 格式，不要输出 markdown，也不要输出任何额外文本。
+        JSON 格式如下：
         {
-          "relations": [
-            {
-              "sourceTable": "orders",
-              "sourceColumn": "customer_id",
-              "targetTable": "customers",
-              "targetColumn": "id",
-              "confidence": 0.82,
-              "reason": "column naming and semantic match"
-            }
-          ]
+            "relations": [
+                {
+                    "sourceTable": "orders",
+                    "sourceColumn": "customer_id",
+                    "targetTable": "customers",
+                    "targetColumn": "id",
+                    "confidence": 0.82,
+                    "reason": "列命名和语义匹配"
+                }
+            ]
         }
-        Rules:
-        1) Only infer relations between selected tables.
-        2) Keep confidence between 0 and 1.
-        3) Do not return exact duplicate pairs from provided foreign keys.
+        规则：
+        1）只推断 已选择表之间 的关系。
+        2）confidence 的取值范围必须在 0 到 1 之间。
+        3）不要返回与已提供外键 完全重复的关系对。
         """;
     private static final Logger log = LoggerFactory.getLogger(AiServiceImpl.class);
 
@@ -280,8 +284,44 @@ public class AiServiceImpl implements AiService {
             safe(req.getPrompt()).length()
         );
 
-        IntentResult intentResult = identifyIntent(req);
-        timer.mark("identify_intent");
+        IntentResult intentResult;
+        try {
+            intentResult = identifyIntent(req);
+            timer.mark("identify_intent");
+        } catch (BusinessException ex) {
+            timer.mark("identify_intent_failed");
+            AiAutoQueryVO clarifyVo = buildIntentClarifyResponse(ex);
+            log.warn(
+                "[AI-AUTO-INTENT-FALLBACK] connectionId={}, sessionId={}, databaseName={}, modelName={}, message={}",
+                req.getConnectionId(),
+                safe(req.getSessionId()),
+                safe(req.getDatabaseName()),
+                safe(req.getModelName()),
+                safe(ex.getMessage())
+            );
+            log.info(
+                "[AI-AUTO-RESP] connectionId={}, sessionId={}, databaseName={}, modelName={}, intentType={}, intentConfidence={}, fallbackUsed={}, elapsedMs={}",
+                req.getConnectionId(),
+                safe(req.getSessionId()),
+                safe(req.getDatabaseName()),
+                safe(req.getModelName()),
+                clarifyVo.getIntentType(),
+                clarifyVo.getIntentConfidence(),
+                Boolean.TRUE.equals(clarifyVo.getFallbackUsed()),
+                System.currentTimeMillis() - startAt
+            );
+            log.info(
+                "[AI-AUTO-TIMING] connectionId={}, sessionId={}, databaseName={}, modelName={}, intentType={}, steps={}, totalMs={}",
+                req.getConnectionId(),
+                safe(req.getSessionId()),
+                safe(req.getDatabaseName()),
+                safe(req.getModelName()),
+                "IDENTIFY_INTENT_FAILED",
+                timer.stepsSummary(),
+                timer.totalElapsedMs()
+            );
+            return clarifyVo;
+        }
         IntentType intentType = intentResult.intentType();
         boolean hasSqlSnippet = hasSqlSnippetInPrompt(req.getPrompt());
         timer.mark("detect_sql_snippet");
@@ -518,7 +558,7 @@ public class AiServiceImpl implements AiService {
             providerReq.setSessionId("er-infer-" + System.currentTimeMillis());
             providerReq.setDatabaseName(req.getDatabaseName());
             providerReq.setModelName(req.getModelName());
-            providerReq.setPrompt("Infer possible relationships between selected tables and output strict JSON.");
+            providerReq.setPrompt("推断已选表之间可能存在的关系，并输出严格的 JSON。");
 
             String contextText = buildErInferenceContext(req);
             List<String> relatedTables = tables.stream()
@@ -1151,6 +1191,19 @@ public class AiServiceImpl implements AiService {
         return left + "；" + right;
     }
 
+    /**
+     * 关键操作：意图识别失败时返回可直接展示的提示文本，避免前端走异常分支。
+     */
+    private AiAutoQueryVO buildIntentClarifyResponse(BusinessException ex) {
+        AiAutoQueryVO vo = new AiAutoQueryVO();
+        vo.setIntentType(IntentType.GENERATE_SQL.name());
+        vo.setIntentLabel(IntentType.GENERATE_SQL.label());
+        vo.setIntentConfidence(0D);
+        vo.setFallbackUsed(true);
+        vo.setReasoning(AUTO_INTENT_CLARIFY_CONTENT);
+        return vo;
+    }
+
     private AiTextResponseVO generateTextResponse(AiGenerateSqlReq req,
                                                   String logScene,
                                                   String systemPrompt,
@@ -1739,7 +1792,9 @@ public class AiServiceImpl implements AiService {
                 throw new BusinessException(500, "本地 CLI 执行超时");
             }
             int exitCode = process.exitValue();
-            String output = new String(outputBytes, StandardCharsets.UTF_8);
+            String rawOutput = new String(outputBytes, StandardCharsets.UTF_8);
+            boolean codexCli = isCodexExecutable(cliInvocation.commandLine().get(0));
+            String output = extractTextFromCliOutput(rawOutput, codexCli, false);
             log.info(
                 "[AI-CLI-RESULT] providerName={}, providerId={}, connectionId={}, sessionId={}, exitCode={}, outputLength={}",
                 safe(option.getName()),
@@ -1799,18 +1854,22 @@ public class AiServiceImpl implements AiService {
                 throw new BusinessException(500, "本地 CLI 执行超时");
             }
             int exitCode = process.exitValue();
-            String output = new String(outputBytes, StandardCharsets.UTF_8).trim();
+            String rawOutput = new String(outputBytes, StandardCharsets.UTF_8);
+            boolean expectJsonOutput = expectsJsonOutput(systemPrompt);
+            boolean codexCli = isCodexExecutable(cliInvocation.commandLine().get(0));
+            String output = extractTextFromCliOutput(rawOutput, codexCli, expectJsonOutput);
             if (output.isBlank()) {
                 throw new BusinessException(500, "本地 CLI 输出为空");
             }
             log.info(
-                "[AI-CLI-TEXT-RESULT] providerName={}, providerId={}, connectionId={}, sessionId={}, taskLabel={}, exitCode={}, outputLength={}",
+                "[AI-CLI-TEXT-RESULT] providerName={}, providerId={}, connectionId={}, sessionId={}, taskLabel={}, exitCode={}, rawOutputLength={}, outputLength={}",
                 safe(option.getName()),
                 safe(option.getId()),
                 req.getConnectionId(),
                 safe(req.getSessionId()),
                 safe(taskLabel),
                 exitCode,
+                rawOutput.length(),
                 output.length()
             );
             return new TextProviderResult(output, "已通过本地 CLI(" + safe(option.getName()) + ")完成" + taskLabel + "（提示词由后端构建）");
@@ -1818,6 +1877,175 @@ public class AiServiceImpl implements AiService {
             throw ex;
         } catch (Exception ex) {
             throw new BusinessException(500, "本地 CLI 调用失败: " + ex.getMessage());
+        }
+    }
+
+    private String extractTextFromCliOutput(String rawOutput, boolean codexCli, boolean expectJsonOutput) {
+        String normalized = normalizeCliRawOutput(rawOutput);
+        if (normalized.isBlank()) {
+            return "";
+        }
+        if (!codexCli) {
+            return normalized;
+        }
+        String codexMessage = extractCodexMessage(normalized);
+        if (!codexMessage.isBlank()) {
+            if (expectJsonOutput) {
+                String jsonPayload = extractLastJsonPayload(codexMessage);
+                if (!jsonPayload.isBlank()) {
+                    return jsonPayload;
+                }
+            }
+            return codexMessage;
+        }
+        return normalized;
+    }
+
+    private String normalizeCliRawOutput(String rawOutput) {
+        String output = Objects.toString(rawOutput, "").replace("\r\n", "\n").replace('\r', '\n');
+        output = ANSI_ESCAPE_PATTERN.matcher(output).replaceAll("");
+        return output.trim();
+    }
+
+    private boolean expectsJsonOutput(String systemPrompt) {
+        return safe(systemPrompt).toLowerCase(Locale.ROOT).contains("json");
+    }
+
+    private String extractCodexMessage(String output) {
+        List<String> lines = new ArrayList<>(Arrays.asList(safe(output).split("\n", -1)));
+        if (lines.isEmpty()) {
+            return "";
+        }
+
+        int codexLineIndex = lastLineIndexIgnoreCase(lines, "codex");
+        if (codexLineIndex >= 0 && codexLineIndex + 1 < lines.size()) {
+            lines = new ArrayList<>(lines.subList(codexLineIndex + 1, lines.size()));
+        }
+
+        int tokensLineIndex = lastLineIndexIgnoreCase(lines, "tokens used");
+        if (tokensLineIndex >= 0) {
+            String contentAfterTokens = extractContentAfterTokenUsage(lines, tokensLineIndex);
+            if (!contentAfterTokens.isBlank()) {
+                return contentAfterTokens;
+            }
+            String contentBeforeTokens = String.join("\n", lines.subList(0, tokensLineIndex)).trim();
+            if (!contentBeforeTokens.isBlank()) {
+                return contentBeforeTokens;
+            }
+        }
+        return String.join("\n", lines).trim();
+    }
+
+    private int lastLineIndexIgnoreCase(List<String> lines, String expected) {
+        String target = safe(expected);
+        for (int i = lines.size() - 1; i >= 0; i--) {
+            if (target.equalsIgnoreCase(safe(lines.get(i)))) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private String extractContentAfterTokenUsage(List<String> lines, int tokensLineIndex) {
+        int index = tokensLineIndex + 1;
+        while (index < lines.size() && safe(lines.get(index)).isBlank()) {
+            index++;
+        }
+        while (index < lines.size() && TOKEN_USAGE_VALUE_PATTERN.matcher(safe(lines.get(index))).matches()) {
+            index++;
+        }
+        while (index < lines.size() && safe(lines.get(index)).isBlank()) {
+            index++;
+        }
+        if (index >= lines.size()) {
+            return "";
+        }
+        return String.join("\n", lines.subList(index, lines.size())).trim();
+    }
+
+    private String extractLastJsonPayload(String output) {
+        String text = safe(output);
+        if (text.isBlank()) {
+            return "";
+        }
+        String lastPayload = "";
+        ArrayDeque<Character> stack = new ArrayDeque<>();
+        int startIndex = -1;
+        boolean inString = false;
+        boolean escaped = false;
+
+        for (int i = 0; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            if (startIndex < 0) {
+                if (ch == '{' || ch == '[') {
+                    startIndex = i;
+                    stack.clear();
+                    stack.push(ch == '{' ? '}' : ']');
+                    inString = false;
+                    escaped = false;
+                }
+                continue;
+            }
+
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                    continue;
+                }
+                if (ch == '\\') {
+                    escaped = true;
+                    continue;
+                }
+                if (ch == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+
+            if (ch == '"') {
+                inString = true;
+                continue;
+            }
+            if (ch == '{') {
+                stack.push('}');
+                continue;
+            }
+            if (ch == '[') {
+                stack.push(']');
+                continue;
+            }
+            if (ch == '}' || ch == ']') {
+                if (stack.isEmpty() || stack.peek() != ch) {
+                    stack.clear();
+                    startIndex = -1;
+                    inString = false;
+                    escaped = false;
+                    continue;
+                }
+                stack.pop();
+                if (stack.isEmpty()) {
+                    String candidate = text.substring(startIndex, i + 1).trim();
+                    if (isJsonPayload(candidate)) {
+                        lastPayload = candidate;
+                    }
+                    startIndex = -1;
+                    inString = false;
+                    escaped = false;
+                }
+            }
+        }
+        return lastPayload;
+    }
+
+    private boolean isJsonPayload(String candidate) {
+        if (safe(candidate).isBlank()) {
+            return false;
+        }
+        try {
+            JsonNode jsonNode = objectMapper.readTree(candidate);
+            return jsonNode != null && (jsonNode.isObject() || jsonNode.isArray());
+        } catch (Exception ignored) {
+            return false;
         }
     }
 

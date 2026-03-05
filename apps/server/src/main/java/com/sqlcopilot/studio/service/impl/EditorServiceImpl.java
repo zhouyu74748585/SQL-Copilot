@@ -96,7 +96,7 @@ public class EditorServiceImpl implements EditorService {
         entity.setConnectionId(req.getConnectionId());
         entity.setSessionId(req.getSessionId());
         entity.setPromptText(req.getPromptText());
-        entity.setSqlText(req.getSqlText());
+        entity.setSqlText(safe(req.getSqlText()));
         entity.setHistoryType(resolveHistoryType(req.getHistoryType()));
         entity.setActionType(safe(req.getActionType()));
         entity.setAssistantContent(safe(req.getAssistantContent()));

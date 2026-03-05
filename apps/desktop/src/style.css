@@ -1017,6 +1017,18 @@ body {
   gap: 10px;
 }
 
+.er-select-model-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.er-select-model-label {
+  min-width: 40px;
+  font-size: 12px;
+  color: var(--text-sub);
+}
+
 .er-select-meta {
   display: flex;
   flex-wrap: wrap;

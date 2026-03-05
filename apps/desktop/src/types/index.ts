@@ -1,15 +1,15 @@
 import type {
-  AiAutoQueryVO,
-  AiGenerateChartVO,
-  AiIntentType,
-  ChartCacheReadVO,
-  ChartCacheSaveVO,
-  ChartConfigVO,
-  ChartType,
-  QueryRowVO,
-  RiskEvaluateVO,
-  SortDirection,
-  SqlExecuteVO,
+    AiAutoQueryVO,
+    AiGenerateChartVO,
+    AiIntentType,
+    ChartCacheReadVO,
+    ChartCacheSaveVO,
+    ChartConfigVO,
+    ChartType,
+    QueryRowVO,
+    RiskEvaluateVO,
+    SortDirection,
+    SqlExecuteVO,
 } from '@sqlcopilot/shared-contracts';
 
 export type {
@@ -128,6 +128,8 @@ export interface ErGraphReq {
   includeAiInference?: boolean;
   aiConfidenceThreshold?: number;
 }
+
+export type ErLayoutMode = 'GRID' | 'CIRCLE' | 'HIERARCHICAL';
 
 export interface ErColumnNodeVO {
   columnName: string;

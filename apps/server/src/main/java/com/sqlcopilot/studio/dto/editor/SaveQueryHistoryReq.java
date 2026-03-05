@@ -19,8 +19,7 @@ public class SaveQueryHistoryReq {
     /** 用户输入提示词。 */
     private String promptText;
 
-    /** SQL 文本。 */
-    @NotBlank
+    /** SQL 文本（可为空字符串，表示本条仅记录助手文本内容）。 */
     private String sqlText;
 
     /** 历史类型：CHAT/EXECUTE。 */

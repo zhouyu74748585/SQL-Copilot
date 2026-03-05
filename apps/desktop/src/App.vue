@@ -218,8 +218,13 @@
           <div class="pane-title">对象浏览</div>
           <div class="center-toolbar">
             <div v-if="currentObjectType === 'tables'" class="center-toolbar-left">
-              <a-tooltip title="智能ER图">
-                <a-button size="small" type="primary" @click="openErTableSelectModal()">
+              <a-tooltip :title="browserErEntryTooltip">
+                <a-button
+                  size="small"
+                  type="primary"
+                  :disabled="!canOpenBrowserErFeature"
+                  @click="openErTableSelectModal()"
+                >
                   <template #icon><apartment-outlined /></template>
                   智能ER图
                 </a-button>
@@ -394,10 +399,20 @@
                 @change="touchErTab(activeErTab)"
               />
             </a-space>
+            <a-space size="small">
+              <span class="er-toolbar-label">布局</span>
+              <a-select
+                v-model:value="activeErTab.layoutMode"
+                size="small"
+                style="width: 132px"
+                :options="erLayoutModeOptions"
+                @change="touchErTab(activeErTab)"
+              />
+            </a-space>
           </div>
           <div class="er-canvas-wrap">
             <a-spin :spinning="activeErTab.loading">
-              <ErDiagramPanel :graph="activeErTab.graph" />
+              <ErDiagramPanel :graph="activeErTab.graph" :layout-mode="activeErTab.layoutMode" />
             </a-spin>
           </div>
         </section>
@@ -427,37 +442,17 @@
             </div>
             <div
               v-if="activeErTab.graph?.aiInference?.requested && !activeErTab.graph?.aiInference?.success"
-              class="er-ai-warning"
+              class="er-warning-tip"
             >
               {{ activeErTab.graph?.aiInference?.message || 'AI推断失败，仅显示外键关系' }}
             </div>
 
-            <div class="er-side-section">
-              <div class="er-side-title">表清单</div>
-              <div class="er-table-chip-wrap">
+            <div class="er-side-block">
+              <strong>表清单</strong>
+              <div class="er-table-tags">
                 <a-tag v-for="tableName in activeErTab.selectedTableNames" :key="tableName" color="blue">
                   {{ tableName }}
                 </a-tag>
-              </div>
-            </div>
-
-            <div class="er-side-section">
-              <div class="er-side-title">AI关系（虚线）</div>
-              <div v-if="!(activeErTab.graph?.aiRelations?.length)" class="er-empty-tip">暂无AI关系</div>
-              <div v-else class="er-relation-list">
-                <div
-                  v-for="relation in activeErTab.graph?.aiRelations || []"
-                  :key="`${relation.sourceTable}.${relation.sourceColumn}->${relation.targetTable}.${relation.targetColumn}`"
-                  class="er-relation-item"
-                >
-                  <div class="er-relation-main">
-                    {{ relation.sourceTable }}.{{ relation.sourceColumn }} -> {{ relation.targetTable }}.{{ relation.targetColumn }}
-                  </div>
-                  <div class="er-relation-sub">
-                    置信度 {{ Math.round((relation.confidence || 0) * 100) }}%
-                    <span v-if="relation.reason"> · {{ relation.reason }}</span>
-                  </div>
-                </div>
               </div>
             </div>
           </div>
@@ -491,7 +486,7 @@
         <section v-if="activeQueryTab" class="pane pane-center query-chat-pane">
           <div class="pane-title">{{ activeQueryTab.title }} · 对话</div>
 
-          <div class="query-chat-scroll">
+          <div ref="queryChatScrollRef" class="query-chat-scroll">
             <div v-if="!activeQueryTab.chatMessages.length" class="query-chat-empty">
               输入自然语言后发送消息；可使用 Auto 自动识别意图，或关闭 Auto 后手动选择“生成 SQL”“解释 SQL”“分析 SQL”“生成图表”。
             </div>
@@ -499,6 +494,7 @@
               v-for="item in activeQueryTab.chatMessages"
               :key="item.id"
               class="query-chat-message"
+              :ref="(el) => bindQueryChatMessageRef(item.id, el)"
               :class="{ 'is-user': item.role === 'user', 'is-assistant': item.role === 'assistant' }"
             >
               <template v-if="item.role === 'user'">
@@ -1202,6 +1198,17 @@
           <span>数据库：{{ erSelectDatabaseName || '-' }}</span>
           <span>已选：{{ erSelectTableValues.length }} / 30</span>
         </div>
+        <div class="er-select-model-row">
+          <span class="er-select-model-label">模型</span>
+          <a-select
+            v-model:value="erSelectModelName"
+            size="small"
+            style="min-width: 230px; width: 100%"
+            :options="aiModelOptions"
+            placeholder="请选择模型"
+            :disabled="!aiModelOptions.length"
+          />
+        </div>
         <a-input
           v-model:value="erSelectTableKeyword"
           size="small"
@@ -1358,46 +1365,45 @@
 <script setup lang="ts">
 import {
   ApartmentOutlined,
-  AreaChartOutlined,
   AppstoreOutlined,
-  ExperimentOutlined,
+  AreaChartOutlined,
+  ArrowLeftOutlined,
+  BulbFilled,
+  BulbOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
   CloseCircleOutlined,
   CloseOutlined,
+  CodeOutlined,
   CopyOutlined,
+  DatabaseOutlined,
   DeleteOutlined,
   DownloadOutlined,
-  BulbFilled,
-  BulbOutlined,
-  CodeOutlined,
-  DatabaseOutlined,
   EditOutlined,
+  ExperimentOutlined,
   EyeOutlined,
   FolderOpenOutlined,
   HddOutlined,
   HistoryOutlined,
   LinkOutlined,
   LoadingOutlined,
-  LineChartOutlined,
   MessageOutlined,
   MinusCircleOutlined,
-  ArrowLeftOutlined,
   PlayCircleOutlined,
   PlusOutlined,
-  TableOutlined,
   ReadOutlined,
   ReloadOutlined,
   SearchOutlined,
   SendOutlined,
   SettingOutlined,
   StopOutlined,
+  TableOutlined,
   ToolOutlined,
   UnorderedListOutlined,
 } from '@ant-design/icons-vue';
 import {Editor as MonacoEditor} from '@guolao/vue-monaco-editor';
-import type {IDisposable} from 'monaco-editor';
 import type * as MonacoApi from 'monaco-editor';
+import type {IDisposable} from 'monaco-editor';
 import type {ConnectionVO} from '@sqlcopilot/shared-contracts';
 import {message, Modal, theme as antdTheme} from 'ant-design-vue';
 import {computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue';
@@ -1410,32 +1416,33 @@ import postgresqlIcon from './assets/db/postgresql.svg';
 import sqliteIcon from './assets/db/sqlite.svg';
 import sqlserverIcon from './assets/db/sqlserver.svg';
 import type {
+  AiAutoQueryVO,
   AiConfigSaveReq,
   AiConfigVO,
-  AiAutoQueryVO,
   AiGenerateChartVO,
+  AiGenerateSqlVO,
+  AiIntentType,
+  AiModelOption,
+  AiRepairVO,
+  AiTextResponseVO,
   ChartCacheReadVO,
   ChartCacheSaveReq,
   ChartCacheSaveVO,
   ChartConfigVO,
   ChartType,
-  AiIntentType,
-  AiGenerateSqlVO,
-  AiRepairVO,
-  AiModelOption,
-  AiTextResponseVO,
+  ConnectionCreateReq,
   ConnectionDatabasePreviewReq,
   ConnectionDatabasePreviewVO,
-  ConnectionCreateReq,
   ErGraphReq,
   ErGraphVO,
+  ErLayoutMode,
   ExplainVO,
   QueryHistorySessionPageVO,
   QueryHistorySessionVO,
   QueryHistoryVO,
-  RagDatabaseVectorizeStatusVO,
   RagConfigSaveReq,
   RagConfigVO,
+  RagDatabaseVectorizeStatusVO,
   RagVectorizeEnqueueVO,
   RagVectorizeInterruptVO,
   RagVectorizeOverviewVO,
@@ -1444,8 +1451,8 @@ import type {
   SchemaDatabaseVO,
   SchemaOverviewVO,
   SchemaTableStatsVO,
-  SqlExecuteVO,
   SortDirection,
+  SqlExecuteVO,
   TableDetailVO,
 } from './types';
 
@@ -1569,6 +1576,7 @@ interface ErWorkspaceTab {
   databaseName: string;
   selectedTableNames: string[];
   selectedAiModel: string;
+  layoutMode: ErLayoutMode;
   aiConfidenceThreshold: number;
   includeAiInference: boolean;
   loading: boolean;
@@ -1630,6 +1638,7 @@ const erSelectTargetTabKey = ref('');
 const erSelectTableKeyword = ref('');
 const erSelectTableOptions = ref<string[]>([]);
 const erSelectTableValues = ref<string[]>([]);
+const erSelectModelName = ref('');
 const historyReloading = ref(false);
 const historyLoadingMore = ref(false);
 const historySessionLoadingKey = ref('');
@@ -1646,6 +1655,8 @@ const sessionTitleOverrides = ref<Record<string, string>>({});
 const tableDetail = ref<TableDetailVO | null>(null);
 const tableDetailLoading = ref(false);
 const sqlEditorContainerRef = ref<HTMLElement | null>(null);
+const queryChatScrollRef = ref<HTMLElement | null>(null);
+const queryChatMessageElementMap = new Map<string, HTMLElement>();
 const queryChartPanelRef = ref<InstanceType<typeof QueryChartPanel> | null>(null);
 const sqlSelectionPopover = reactive({
   visible: false,
@@ -1827,6 +1838,24 @@ const canInterruptContextVectorize = computed(() =>
   && !!contextMenu.databaseName
   && isDatabaseVectorizing(contextMenu.connectionId, contextMenu.databaseName),
 );
+
+const canOpenBrowserErFeature = computed(() => {
+  const connectionId = workflow.connectionId;
+  if (!connectionId) {
+    return false;
+  }
+  const databaseName = getActiveDatabaseName(connectionId);
+  return !resolveErUnavailableReason(connectionId, databaseName);
+});
+
+const browserErEntryTooltip = computed(() => {
+  const connectionId = workflow.connectionId;
+  if (!connectionId) {
+    return '请先选择连接';
+  }
+  const databaseName = getActiveDatabaseName(connectionId);
+  return resolveErUnavailableReason(connectionId, databaseName) || '智能ER图';
+});
 
 const connectionSelectOptions = computed(() =>
   connections.value.map((item) => ({ label: `${item.name} (${item.env})`, value: item.id })),
@@ -2127,6 +2156,12 @@ const chartSortDirectionOptions = [
   { label: '降序', value: 'DESC' as SortDirection },
 ];
 
+const erLayoutModeOptions = [
+  { label: '网格布局', value: 'GRID' as ErLayoutMode },
+  { label: '环形布局', value: 'CIRCLE' as ErLayoutMode },
+  { label: '分层布局', value: 'HIERARCHICAL' as ErLayoutMode },
+];
+
 const activeChartRows = computed(() => activeResultRows.value.map((row) => {
   const normalized: Record<string, string | null> = {};
   Object.keys(row).forEach((key) => {
@@ -2392,6 +2427,32 @@ function getDatabaseVectorizeStatusRecord(connectionId: number, databaseName: st
   const key = vectorizeStatusCacheKey(connectionId, databaseName);
   return databaseVectorizeStatusMap.value[key] ?? null;
 }
+
+function canUseErFeature(connectionId: number, databaseName: string) {
+  return getDatabaseVectorizeStatus(connectionId, databaseName) === 'SUCCESS';
+}
+
+function resolveErUnavailableReason(connectionId: number, databaseName: string) {
+  if (!connectionId) {
+    return '请先选择连接';
+  }
+  const normalizedDatabaseName = (databaseName || '').trim();
+  if (!normalizedDatabaseName || normalizedDatabaseName === '未发现数据库') {
+    return '请先选择当前数据库';
+  }
+  if (canUseErFeature(connectionId, normalizedDatabaseName)) {
+    return '';
+  }
+  const status = getDatabaseVectorizeStatus(connectionId, normalizedDatabaseName);
+  if (status === 'PENDING' || status === 'RUNNING') {
+    return `当前库 ${normalizedDatabaseName} 正在向量化，暂不可使用智能ER图`;
+  }
+  if (status === 'FAILED') {
+    return `当前库 ${normalizedDatabaseName} 向量化失败，请先重新向量化后再使用智能ER图`;
+  }
+  return `当前库 ${normalizedDatabaseName} 未向量化，智能ER图不可用，请先执行“重新向量化”`;
+}
+
 function isDatabaseVectorizing(connectionId: number, databaseName: string) {
   const status = getDatabaseVectorizeStatus(connectionId, databaseName);
   return status === 'PENDING' || status === 'RUNNING';
@@ -2614,12 +2675,25 @@ async function openErTableSelectModal(tab?: ErWorkspaceTab) {
     message.error('请先选择当前数据库');
     return;
   }
+  const erUnavailableReason = resolveErUnavailableReason(connectionId, databaseName);
+  if (erUnavailableReason) {
+    message.warning(erUnavailableReason);
+    return;
+  }
+  const models = aiModelOptions.value.map((item) => String(item.value)).filter((item) => !!item);
+  if (!models.length) {
+    message.error('请先在 AI 配置中至少新增一个模型');
+    return;
+  }
+  const fallbackModel = models.includes(selectedAiModel.value) ? selectedAiModel.value : models[0];
+  const targetModel = tab && models.includes(tab.selectedAiModel) ? tab.selectedAiModel : fallbackModel;
 
   erSelectConnectionId.value = connectionId;
   erSelectDatabaseName.value = databaseName;
   erSelectTargetTabKey.value = tab?.key || '';
   erSelectTableKeyword.value = '';
   erSelectTableValues.value = tab ? [...tab.selectedTableNames] : [];
+  erSelectModelName.value = targetModel;
   erTableSelectModalOpen.value = true;
 
   await runSafely(async () => {
@@ -2631,6 +2705,13 @@ async function openErTableSelectModal(tab?: ErWorkspaceTab) {
 
 async function refreshErGraphForTab(tab: ErWorkspaceTab, includeAiInference?: boolean) {
   if (!tab.connectionId || !tab.databaseName || !tab.selectedTableNames.length) {
+    return;
+  }
+  const erUnavailableReason = resolveErUnavailableReason(tab.connectionId, tab.databaseName);
+  if (erUnavailableReason) {
+    tab.errorMessage = erUnavailableReason;
+    touchErTab(tab);
+    message.warning(erUnavailableReason);
     return;
   }
   tab.loading = true;
@@ -2664,6 +2745,11 @@ async function confirmErTableSelection() {
     message.error('缺少连接或数据库信息');
     return;
   }
+  const erUnavailableReason = resolveErUnavailableReason(erSelectConnectionId.value, erSelectDatabaseName.value);
+  if (erUnavailableReason) {
+    message.warning(erUnavailableReason);
+    return;
+  }
   const selected = Array.from(new Set(erSelectTableValues.value.map((item) => (item || '').trim()).filter((item) => !!item)));
   if (!selected.length) {
     message.error('请至少选择一张表');
@@ -2674,9 +2760,24 @@ async function confirmErTableSelection() {
     return;
   }
 
+  const models = aiModelOptions.value.map((item) => String(item.value)).filter((item) => !!item);
+  if (!models.length) {
+    message.error('请先在 AI 配置中至少新增一个模型');
+    return;
+  }
+  const selectedModel = erSelectModelName.value.trim();
+  if (!selectedModel) {
+    message.error('请选择用于 ER 关系推断的模型');
+    return;
+  }
+  if (!models.includes(selectedModel)) {
+    message.error('所选模型已不可用，请重新选择');
+    erSelectModelName.value = models[0] ?? '';
+    return;
+  }
+
   erTableSelectSubmitting.value = true;
   try {
-    const models = aiModelOptions.value.map((item) => String(item.value)).filter((item) => !!item);
     const targetTab = erSelectTargetTabKey.value
       ? erTabs.value.find((item) => item.key === erSelectTargetTabKey.value) ?? null
       : null;
@@ -2689,7 +2790,8 @@ async function confirmErTableSelection() {
         connectionId: erSelectConnectionId.value,
         databaseName: erSelectDatabaseName.value,
         selectedTableNames: [...selected],
-        selectedAiModel: models[0] ?? '',
+        selectedAiModel: selectedModel,
+        layoutMode: 'GRID',
         aiConfidenceThreshold: 0.6,
         includeAiInference: true,
         loading: false,
@@ -2703,8 +2805,9 @@ async function confirmErTableSelection() {
       tab.connectionId = erSelectConnectionId.value;
       tab.databaseName = erSelectDatabaseName.value;
       tab.selectedTableNames = [...selected];
-      if (!models.includes(tab.selectedAiModel)) {
-        tab.selectedAiModel = models[0] ?? '';
+      tab.selectedAiModel = selectedModel;
+      if (!tab.layoutMode) {
+        tab.layoutMode = 'GRID';
       }
       tab.title = `ER · ${erSelectDatabaseName.value}`;
       touchErTab(tab);
@@ -2979,12 +3082,34 @@ function cancelHistoryTitleEdit() {
   editingHistoryTitle.value = '';
 }
 
+function normalizeHistoryAssistantPayload(sqlTextRaw: string, assistantContentRaw: string) {
+  const sqlText = sqlTextRaw.trim();
+  const assistantContent = assistantContentRaw.trim();
+  if (sqlText && assistantContent && sqlText === assistantContent) {
+    if (looksLikeSqlText(sqlText)) {
+      return {
+        sqlText,
+        assistantContent: '',
+      };
+    }
+    return {
+      sqlText: '',
+      assistantContent,
+    };
+  }
+  return {
+    sqlText,
+    assistantContent,
+  };
+}
+
 function buildHistoryChatMessages(connectionId: number, sessionId: string, rows: QueryHistoryVO[]) {
   const ordered = [...rows].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
   const messages: QueryChatMessage[] = [];
   ordered.forEach((item, index) => {
     const promptText = (item.promptText ?? '').trim();
-    const sqlText = (item.sqlText ?? '').trim();
+    const normalizedPayload = normalizeHistoryAssistantPayload(item.sqlText ?? '', item.assistantContent ?? '');
+    const sqlText = normalizedPayload.sqlText;
     const actionType = normalizeHistoryActionType(item.actionType);
     const ts = item.createdAt ?? Date.now() + index;
     if (promptText) {
@@ -2996,7 +3121,7 @@ function buildHistoryChatMessages(connectionId: number, sessionId: string, rows:
         createdAt: ts,
       });
     }
-    const assistantContent = (item.assistantContent ?? '').trim();
+    const assistantContent = normalizedPayload.assistantContent;
     const hasAssistantPayload = !!assistantContent || !!sqlText || !!item.chartConfig || !!item.chartImageCacheKey;
     if (hasAssistantPayload) {
       messages.push({
@@ -3028,7 +3153,7 @@ function buildHistoryTabFromRows(connectionId: number, sessionId: string, rows: 
     databaseName: (last?.databaseName || '').trim() || getActiveDatabaseName(connectionId),
     sessionId,
     prompt: '',
-    sqlText: (last?.sqlText ?? '').trim(),
+    sqlText: '',
     riskAckToken: '',
     riskInfo: null,
     executeResult: null,
@@ -3164,7 +3289,7 @@ async function openHistorySession(item: QueryHistorySessionVO) {
     if (tab) {
       const loaded = buildHistoryTabFromRows(item.connectionId, item.sessionId, rows);
       tab.chatMessages = loaded.chatMessages;
-      tab.sqlText = loaded.sqlText;
+      tab.sqlText = '';
       tab.selectedSqlText = '';
       tab.executeResult = null;
       tab.explainResult = null;
@@ -3307,6 +3432,33 @@ function touchQueryTab(tab: QueryWorkspaceTab) {
   tab.updatedAt = Date.now();
 }
 
+function bindQueryChatMessageRef(messageId: string, element: unknown) {
+  if (element instanceof HTMLElement) {
+    queryChatMessageElementMap.set(messageId, element);
+    return;
+  }
+  queryChatMessageElementMap.delete(messageId);
+}
+
+function scrollToQueryChatMessage(tab: QueryWorkspaceTab, messageId: string) {
+  const tabKey = tab.key;
+  void nextTick().then(() => {
+    if (!activeQueryTab.value || activeQueryTab.value.key !== tabKey) {
+      return;
+    }
+    const container = queryChatScrollRef.value;
+    if (!container) {
+      return;
+    }
+    const target = queryChatMessageElementMap.get(messageId);
+    if (!target) {
+      container.scrollTop = container.scrollHeight;
+      return;
+    }
+    target.scrollIntoView({ block: 'end' });
+  });
+}
+
 function appendUserChatMessage(tab: QueryWorkspaceTab, promptText: string, actionType: QueryChatMessage['actionType']) {
   const now = Date.now();
   const messageItem: QueryChatMessage = {
@@ -3322,6 +3474,7 @@ function appendUserChatMessage(tab: QueryWorkspaceTab, promptText: string, actio
   tab.chatMessages.push(messageItem);
   applySessionTitle(tab);
   touchQueryTab(tab);
+  scrollToQueryChatMessage(tab, messageItem.id);
   return messageItem;
 }
 
@@ -3348,19 +3501,22 @@ function appendAssistantSqlMessage(
   };
   tab.chatMessages.push(messageItem);
   touchQueryTab(tab);
+  scrollToQueryChatMessage(tab, messageItem.id);
   return messageItem;
 }
 
 function appendAssistantTextMessage(tab: QueryWorkspaceTab, content: string, actionType: QueryChatMessage['actionType']) {
   const now = Date.now();
-  tab.chatMessages.push({
+  const messageItem: QueryChatMessage = {
     id: `chat-assistant-${now}-${Math.random().toString(16).slice(2, 8)}`,
     role: 'assistant',
     content: content.trim(),
     actionType,
     createdAt: now,
-  });
+  };
+  tab.chatMessages.push(messageItem);
   touchQueryTab(tab);
+  scrollToQueryChatMessage(tab, messageItem.id);
 }
 
 function appendSqlToEditor(tab: QueryWorkspaceTab, sqlText: string) {
@@ -5340,7 +5496,7 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
       } else {
         const contentText = sqlText || '未返回可执行 SQL';
         appendAssistantTextMessage(tab, contentText, actionType);
-        await saveConversationHistoryOnce(tab, userMessage, rawPrompt, sqlText || '', {
+        await saveConversationHistoryOnce(tab, userMessage, rawPrompt, '', {
           actionType,
           assistantContent: contentText,
           databaseName: tab.databaseName,
@@ -6298,6 +6454,8 @@ onBeforeUnmount(() => {
   sqlCompletionProviderDisposable?.dispose();
   sqlCompletionProviderDisposable = null;
   activeSqlEditorInstance = null;
+  queryChatMessageElementMap.clear();
+  queryChatScrollRef.value = null;
   hideSqlSelectionPopover();
   if (sqlAutoSuggestTimer !== null) {
     window.clearTimeout(sqlAutoSuggestTimer);
@@ -6407,6 +6565,7 @@ watch(
     const models = aiModelOptions.value.map((item) => String(item.value)).filter((item) => !!item);
     if (!models.length) {
       selectedAiModel.value = '';
+      erSelectModelName.value = '';
       queryTabs.value.forEach((tab) => {
         tab.selectedAiModel = '';
       });
@@ -6417,6 +6576,9 @@ watch(
     }
     if (!models.includes(selectedAiModel.value)) {
       selectedAiModel.value = models[0];
+    }
+    if (!models.includes(erSelectModelName.value)) {
+      erSelectModelName.value = models[0];
     }
     queryTabs.value.forEach((tab) => {
       if (!models.includes(tab.selectedAiModel)) {
