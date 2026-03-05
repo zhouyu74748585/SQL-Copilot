@@ -121,6 +121,78 @@
             </div>
           </template>
         </a-dropdown>
+        <a-dropdown placement="bottomLeft" :trigger="['click']">
+          <button class="tool-item top-action-btn" :disabled="!canOpenErSnapshot" title="ER图快照" @click="handleErSnapshotMenuClick">
+            <apartment-outlined />
+            <span>ER图</span>
+          </button>
+          <template #overlay>
+            <div class="history-menu-panel er-snapshot-menu-panel">
+              <div class="history-menu-title">
+                <span>ER 图快照 · {{ queryTabConnectionNameById(erSnapshotConnectionId) || '-' }}</span>
+                <span v-if="erSnapshotReloading" class="history-menu-loading">刷新中...</span>
+              </div>
+              <div class="history-menu-toolbar">
+                <a-input
+                  v-model:value="erSnapshotKeywordInput"
+                  size="small"
+                  allow-clear
+                  placeholder="按名称或数据库搜索"
+                  @pressEnter="applyErSnapshotKeywordSearch"
+                />
+                <a-button size="small" class="history-search-btn" @click="applyErSnapshotKeywordSearch">搜索</a-button>
+              </div>
+              <div class="history-menu-list" @scroll="handleErSnapshotMenuScroll">
+                <div v-if="!erSnapshotItems.length" class="history-menu-empty">暂无 ER 图快照</div>
+                <button
+                  v-for="item in erSnapshotItems"
+                  :key="erSnapshotItemKey(item)"
+                  class="history-menu-item"
+                  :class="{ 'is-active': isErSnapshotItemActive(item), 'is-loading': erSnapshotLoadingId === item.id || erSnapshotActionLoadingId === item.id }"
+                  @click="openErSnapshot(item)"
+                >
+                  <div class="history-menu-item-head">
+                    <a-input
+                      v-if="editingErSnapshotId === item.id"
+                      v-model:value="editingErSnapshotTitle"
+                      size="small"
+                      class="history-menu-title-input"
+                      maxlength="80"
+                      @click.stop
+                      @pressEnter="commitErSnapshotTitleEdit(item)"
+                      @blur="commitErSnapshotTitleEdit(item)"
+                      @keydown.esc.stop.prevent="cancelErSnapshotTitleEdit"
+                    />
+                    <span v-else class="history-menu-item-title">{{ item.snapshotName || '未命名快照' }}</span>
+                    <div class="history-menu-item-head-actions">
+                      <span>{{ formatTime(item.updatedAt) }}</span>
+                      <a-button size="small" type="link" class="history-menu-rename-btn" title="改名" @click.stop="startErSnapshotTitleEdit(item)">
+                        <template #icon><edit-outlined /></template>
+                      </a-button>
+                      <a-button
+                        size="small"
+                        type="link"
+                        danger
+                        class="history-menu-delete-btn"
+                        title="删除快照"
+                        :disabled="erSnapshotLoadingId === item.id || erSnapshotActionLoadingId === item.id"
+                        @click.stop="removeErSnapshot(item)"
+                      >
+                        <template #icon><delete-outlined /></template>
+                      </a-button>
+                    </div>
+                  </div>
+                  <div class="history-menu-item-meta">
+                    数据库: {{ item.databaseName || '-' }} | 表: {{ item.tableCount ?? 0 }}
+                  </div>
+                  <div class="history-menu-item-desc">模型: {{ modelLabelById(item.modelName || '') }}</div>
+                </button>
+                <div v-if="erSnapshotLoadingMore" class="history-menu-load-tip">加载中...</div>
+                <div v-else-if="erSnapshotItems.length && !erSnapshotHasMore" class="history-menu-load-tip">没有更多快照</div>
+              </div>
+            </div>
+          </template>
+        </a-dropdown>
         <button class="tool-item top-action-btn" @click="openAiConfigModal" title="AI 配置">
           <setting-outlined />
           <span>配置</span>
@@ -379,27 +451,37 @@
           <div class="pane-title">智能ER图 · {{ activeErTab.title }}</div>
           <div class="er-toolbar">
             <a-space size="small">
-              <a-button size="small" @click="openErTableSelectModal(activeErTab)">重新选表</a-button>
+              <a-button size="small" @click="openErTableSelectModal(activeErTab)">
+                <template #icon><appstore-outlined /></template>
+                重选
+              </a-button>
               <a-button
                 size="small"
                 type="primary"
                 :loading="activeErTab.loading"
                 @click="refreshErGraphForTab(activeErTab, true)"
               >
-                刷新AI关系
+                <template #icon><reload-outlined /></template>
+                刷新
+              </a-button>
+              <a-button size="small" @click="openErSnapshotSaveModal(activeErTab)">
+                <template #icon><hdd-outlined /></template>
+                保存
+              </a-button>
+              <a-button size="small" @click="downloadActiveErDiagram(activeErTab)">
+                <template #icon><download-outlined /></template>
+                导出
               </a-button>
             </a-space>
             <a-space size="small">
               <span class="er-toolbar-label">模型</span>
               <a-select
-                v-model:value="activeErTab.selectedAiModel"
-                size="small"
-                style="min-width: 190px"
-                :options="aiModelOptions"
-                @change="touchErTab(activeErTab)"
+                  v-model:value="activeErTab.selectedAiModel"
+                  size="small"
+                  style="min-width: 190px"
+                  :options="aiModelOptions"
+                  @change="touchErTab(activeErTab)"
               />
-            </a-space>
-            <a-space size="small">
               <span class="er-toolbar-label">布局</span>
               <a-select
                 v-model:value="activeErTab.layoutMode"
@@ -412,10 +494,16 @@
           </div>
           <div class="er-canvas-wrap">
             <a-spin :spinning="activeErTab.loading">
-              <ErDiagramPanel :graph="activeErTab.graph" :layout-mode="activeErTab.layoutMode" />
+              <ErDiagramPanel
+                ref="erDiagramPanelRef"
+                :graph="activeErDisplayGraph"
+                :layout-mode="activeErTab.layoutMode"
+                :show-comments="activeErTab.showCardComments"
+              />
             </a-spin>
           </div>
         </section>
+        <div class="pane-splitter er-pane-splitter" @mousedown="startResizeErPane" />
 
         <aside class="pane pane-right er-side-pane">
           <div class="pane-title">ER 图信息</div>
@@ -438,7 +526,7 @@
             </div>
             <div class="er-kpi-row">
               <span>AI关系</span>
-              <strong>{{ activeErTab.graph?.aiRelations?.length ?? 0 }}</strong>
+              <strong>{{ activeErAiRelations.length }} / {{ activeErAiRelationTotal }}</strong>
             </div>
             <div
               v-if="activeErTab.graph?.aiInference?.requested && !activeErTab.graph?.aiInference?.success"
@@ -448,11 +536,91 @@
             </div>
 
             <div class="er-side-block">
-              <strong>表清单</strong>
+              <div class="er-side-block-head">
+                <strong>表清单</strong>
+                <div class="er-table-comment-toggle">
+                  <span>显示注释</span>
+                  <a-switch
+                    v-model:checked="activeErTab.showCardComments"
+                    size="small"
+                    @change="touchErTab(activeErTab)"
+                  />
+                </div>
+              </div>
               <div class="er-table-tags">
                 <a-tag v-for="tableName in activeErTab.selectedTableNames" :key="tableName" color="blue">
                   {{ tableName }}
                 </a-tag>
+              </div>
+            </div>
+
+            <div class="er-side-block er-side-block-relations">
+              <strong>关联关系</strong>
+              <div class="er-rel-threshold">
+                <span>AI 关系阈值</span>
+                <span class="er-rel-threshold-value">{{ formatErRelationConfidence(activeErTab.aiConfidenceThreshold) }}</span>
+              </div>
+              <a-slider
+                v-model:value="activeErTab.aiConfidenceThreshold"
+                :min="0"
+                :max="1"
+                :step="0.01"
+                @change="touchErTab(activeErTab)"
+              />
+              <div class="er-rel-groups">
+                <div class="er-rel-group">
+                  <div class="er-rel-group-head">
+                    <span>外键识别</span>
+                    <a-tag color="blue">{{ activeErForeignKeyRelations.length }}</a-tag>
+                  </div>
+                  <div v-if="activeErForeignKeyRelations.length" class="er-rel-list">
+                    <div
+                      v-for="(relation, index) in activeErForeignKeyRelations"
+                      :key="`fk-${relation.sourceTable}-${relation.sourceColumn}-${relation.targetTable}-${relation.targetColumn}-${index}`"
+                      class="er-rel-item er-rel-item-fk"
+                    >
+                      <div class="er-rel-main">{{ formatErRelationExpression(relation) }}</div>
+                      <div class="er-rel-meta">来源：外键元数据</div>
+                    </div>
+                  </div>
+                  <div v-else class="er-empty-tip">未识别到外键关系</div>
+                </div>
+
+                <div class="er-rel-group">
+                  <div class="er-rel-group-head">
+                    <span>AI 推断</span>
+                    <a-tag color="gold">{{ activeErAiRelations.length }}</a-tag>
+                  </div>
+                  <div v-if="activeErAiRelations.length" class="er-rel-list">
+                    <div
+                      v-for="(relation, index) in activeErAiRelations"
+                      :key="`ai-${relation.sourceTable}-${relation.sourceColumn}-${relation.targetTable}-${relation.targetColumn}-${index}`"
+                      class="er-rel-item er-rel-item-ai"
+                    >
+                      <div class="er-rel-main-row">
+                        <div class="er-rel-main">{{ formatErRelationExpression(relation) }}</div>
+                        <a-button
+                          size="small"
+                          type="text"
+                          danger
+                          class="er-rel-delete-btn"
+                          title="删除该关系"
+                          @click.stop="removeErAiRelation(activeErTab, relation)"
+                        >
+                          <template #icon><delete-outlined /></template>
+                        </a-button>
+                      </div>
+                      <div class="er-rel-meta">
+                        <span>方向：{{ erRelationDirectionLabel(relation.relationDirection) }}</span>
+                        <span>置信度：{{ formatErRelationConfidence(relation.confidence) }}</span>
+                      </div>
+                      <div class="er-rel-reason" :title="relation.reason || '模型未返回理由'">
+                        {{ relation.reason || '模型未返回理由' }}
+                      </div>
+                    </div>
+                  </div>
+                  <div v-else class="er-empty-tip">当前阈值下暂无 AI 推断关系</div>
+                </div>
               </div>
             </div>
           </div>
@@ -1235,6 +1403,28 @@
       </div>
     </a-modal>
 
+    <a-modal
+      v-model:open="erSnapshotSaveModalOpen"
+      title="保存 ER 图快照"
+      width="480px"
+      ok-text="保存"
+      cancel-text="取消"
+      :confirm-loading="erSnapshotSaveSubmitting"
+      @ok="confirmSaveErSnapshot"
+    >
+      <a-form layout="vertical">
+        <a-form-item label="快照名称">
+          <a-input
+            v-model:value="erSnapshotSaveName"
+            maxlength="80"
+            show-count
+            placeholder="请输入快照名称"
+            @pressEnter="confirmSaveErSnapshot"
+          />
+        </a-form-item>
+      </a-form>
+    </a-modal>
+
     <div
       v-if="contextMenu.visible"
       class="context-menu-mask"
@@ -1434,8 +1624,15 @@ import type {
   ConnectionDatabasePreviewReq,
   ConnectionDatabasePreviewVO,
   ErGraphReq,
+  ErGraphSnapshotPageVO,
+  ErGraphSnapshotRemoveReq,
+  ErGraphSnapshotRenameReq,
+  ErGraphSnapshotSaveReq,
+  ErGraphSnapshotSummaryVO,
+  ErGraphSnapshotVO,
   ErGraphVO,
   ErLayoutMode,
+  ErRelationVO,
   ExplainVO,
   QueryHistorySessionPageVO,
   QueryHistorySessionVO,
@@ -1572,11 +1769,13 @@ interface QueryWorkspaceTab {
 interface ErWorkspaceTab {
   key: string;
   title: string;
+  snapshotId?: number;
   connectionId: number;
   databaseName: string;
   selectedTableNames: string[];
   selectedAiModel: string;
   layoutMode: ErLayoutMode;
+  showCardComments: boolean;
   aiConfidenceThreshold: number;
   includeAiInference: boolean;
   loading: boolean;
@@ -1649,6 +1848,23 @@ const historySessionPageNo = ref(1);
 const historySessionPageSize = 20;
 const historySessionHasMore = ref(true);
 const historySessionConnectionId = ref(0);
+const erSnapshotReloading = ref(false);
+const erSnapshotLoadingMore = ref(false);
+const erSnapshotLoadingId = ref<number | null>(null);
+const erSnapshotActionLoadingId = ref<number | null>(null);
+const erSnapshotKeywordInput = ref('');
+const erSnapshotKeyword = ref('');
+const erSnapshotItems = ref<ErGraphSnapshotSummaryVO[]>([]);
+const erSnapshotPageNo = ref(1);
+const erSnapshotPageSize = 20;
+const erSnapshotHasMore = ref(true);
+const erSnapshotConnectionId = ref(0);
+const erSnapshotSaveModalOpen = ref(false);
+const erSnapshotSaveSubmitting = ref(false);
+const erSnapshotSaveName = ref('');
+const erSnapshotSaveTabKey = ref('');
+const editingErSnapshotId = ref<number | null>(null);
+const editingErSnapshotTitle = ref('');
 const editingHistoryTabKey = ref('');
 const editingHistoryTitle = ref('');
 const sessionTitleOverrides = ref<Record<string, string>>({});
@@ -1658,6 +1874,7 @@ const sqlEditorContainerRef = ref<HTMLElement | null>(null);
 const queryChatScrollRef = ref<HTMLElement | null>(null);
 const queryChatMessageElementMap = new Map<string, HTMLElement>();
 const queryChartPanelRef = ref<InstanceType<typeof QueryChartPanel> | null>(null);
+const erDiagramPanelRef = ref<InstanceType<typeof ErDiagramPanel> | null>(null);
 const sqlSelectionPopover = reactive({
   visible: false,
   left: 0,
@@ -1669,6 +1886,12 @@ const browserPaneResizeState = reactive({
   resizing: false,
   startX: 0,
   startWidth: 390,
+});
+const erRightPaneWidth = ref(400);
+const erPaneResizeState = reactive({
+  resizing: false,
+  startX: 0,
+  startWidth: 400,
 });
 
 const contextMenu = reactive({
@@ -1774,7 +1997,44 @@ const activeErTab = computed(() =>
   erTabs.value.find((item) => item.key === activeWorkbenchTab.value) ?? null,
 );
 
+const activeErConfidenceThreshold = computed(() => {
+  const threshold = Number(activeErTab.value?.aiConfidenceThreshold ?? 0.6);
+  if (!Number.isFinite(threshold)) {
+    return 0.6;
+  }
+  return Math.max(0, Math.min(1, threshold));
+});
+
+const activeErAiRelationTotal = computed(() =>
+  activeErTab.value?.graph?.aiRelations?.length ?? 0,
+);
+
+const activeErDisplayGraph = computed<ErGraphVO | null>(() => {
+  const graph = activeErTab.value?.graph;
+  if (!graph) {
+    return null;
+  }
+  return {
+    ...graph,
+    aiRelations: (graph.aiRelations ?? [])
+      .filter((relation) => normalizeErRelationConfidence(relation.confidence) >= activeErConfidenceThreshold.value),
+  };
+});
+
+const activeErForeignKeyRelations = computed(() =>
+  activeErDisplayGraph.value?.foreignKeyRelations ?? [],
+);
+
+const activeErAiRelations = computed(() =>
+  [...(activeErDisplayGraph.value?.aiRelations ?? [])]
+    .sort((a, b) => normalizeErRelationConfidence(b.confidence) - normalizeErRelationConfidence(a.confidence)),
+);
+
 const canOpenHistory = computed(() => {
+  return connections.value.length > 0;
+});
+
+const canOpenErSnapshot = computed(() => {
   return connections.value.length > 0;
 });
 
@@ -1803,6 +2063,19 @@ const antdThemeConfig = computed(() => ({
 }));
 
 const currentHistoryConnectionId = computed(() => {
+  if (activeQueryTab.value?.connectionId) {
+    return activeQueryTab.value.connectionId;
+  }
+  if (workflow.connectionId) {
+    return workflow.connectionId;
+  }
+  return connections.value[0]?.id ?? 0;
+});
+
+const currentErSnapshotConnectionId = computed(() => {
+  if (activeErTab.value?.connectionId) {
+    return activeErTab.value.connectionId;
+  }
   if (activeQueryTab.value?.connectionId) {
     return activeQueryTab.value.connectionId;
   }
@@ -2101,7 +2374,7 @@ const workbenchStyle = computed(() => {
   }
   if (activeErTab.value) {
     return {
-      gridTemplateColumns: '270px minmax(640px, 1.24fr) minmax(340px, 0.76fr)',
+      gridTemplateColumns: `270px minmax(560px, 1fr) 8px ${erRightPaneWidth.value}px`,
     };
   }
   return {
@@ -2634,6 +2907,93 @@ function touchErTab(tab: ErWorkspaceTab) {
   tab.updatedAt = Date.now();
 }
 
+function normalizeErRelationDirection(rawDirection?: string) {
+  const direction = (rawDirection || '').trim().toUpperCase().replace(/-/g, '_').replace(/\s+/g, '_');
+  if (!direction) {
+    return 'SOURCE_TO_TARGET';
+  }
+  if (direction === 'TARGET_TO_SOURCE' || direction === 'INBOUND' || direction === 'REVERSE' || direction === '<-') {
+    return 'TARGET_TO_SOURCE';
+  }
+  if (direction === 'BIDIRECTIONAL' || direction === 'BOTH' || direction === 'TWO_WAY' || direction === '<->') {
+    return 'BIDIRECTIONAL';
+  }
+  return 'SOURCE_TO_TARGET';
+}
+
+function erRelationArrow(directionRaw?: string) {
+  const direction = normalizeErRelationDirection(directionRaw);
+  if (direction === 'TARGET_TO_SOURCE') {
+    return '<-';
+  }
+  if (direction === 'BIDIRECTIONAL') {
+    return '<->';
+  }
+  return '->';
+}
+
+function erRelationDirectionLabel(directionRaw?: string) {
+  const direction = normalizeErRelationDirection(directionRaw);
+  if (direction === 'TARGET_TO_SOURCE') {
+    return '目标指向源';
+  }
+  if (direction === 'BIDIRECTIONAL') {
+    return '双向';
+  }
+  return '源指向目标';
+}
+
+function formatErRelationExpression(relation: ErRelationVO) {
+  const source = `${relation.sourceTable}.${relation.sourceColumn}`;
+  const target = `${relation.targetTable}.${relation.targetColumn}`;
+  return `${source} ${erRelationArrow(relation.relationDirection)} ${target}`;
+}
+
+function formatErRelationConfidence(value?: number) {
+  const confidence = normalizeErRelationConfidence(value);
+  return `${Math.round(confidence * 100)}%`;
+}
+
+function normalizeErRelationConfidence(value?: number) {
+  const confidence = Number(value ?? 0);
+  if (!Number.isFinite(confidence)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(1, confidence));
+}
+
+function removeErAiRelation(tab: ErWorkspaceTab, relation: ErRelationVO) {
+  if (!tab.graph?.aiRelations?.length) {
+    return;
+  }
+  const sourceList = tab.graph.aiRelations;
+  let removeIndex = sourceList.findIndex((item) => item === relation);
+  if (removeIndex < 0) {
+    const direction = normalizeErRelationDirection(relation.relationDirection);
+    const confidence = normalizeErRelationConfidence(relation.confidence);
+    const reason = (relation.reason || '').trim();
+    removeIndex = sourceList.findIndex((item) => (
+      item.sourceTable === relation.sourceTable
+      && item.sourceColumn === relation.sourceColumn
+      && item.targetTable === relation.targetTable
+      && item.targetColumn === relation.targetColumn
+      && normalizeErRelationDirection(item.relationDirection) === direction
+      && normalizeErRelationConfidence(item.confidence) === confidence
+      && (item.reason || '').trim() === reason
+    ));
+  }
+  if (removeIndex < 0) {
+    return;
+  }
+  const nextAiRelations = [...sourceList];
+  nextAiRelations.splice(removeIndex, 1);
+  tab.graph = {
+    ...tab.graph,
+    aiRelations: nextAiRelations,
+  };
+  touchErTab(tab);
+}
+
 function closeErTab(tabKey: string) {
   const index = erTabs.value.findIndex((item) => item.key === tabKey);
   if (index < 0) {
@@ -2787,11 +3147,13 @@ async function confirmErTableSelection() {
       tab = {
         key: `er-${now}-${Math.round(Math.random() * 1000)}`,
         title: `ER · ${erSelectDatabaseName.value}`,
+        snapshotId: undefined,
         connectionId: erSelectConnectionId.value,
         databaseName: erSelectDatabaseName.value,
         selectedTableNames: [...selected],
         selectedAiModel: selectedModel,
         layoutMode: 'GRID',
+        showCardComments: false,
         aiConfidenceThreshold: 0.6,
         includeAiInference: true,
         loading: false,
@@ -2802,6 +3164,7 @@ async function confirmErTableSelection() {
       };
       erTabs.value = [...erTabs.value, tab];
     } else {
+      tab.snapshotId = undefined;
       tab.connectionId = erSelectConnectionId.value;
       tab.databaseName = erSelectDatabaseName.value;
       tab.selectedTableNames = [...selected];
@@ -2809,14 +3172,407 @@ async function confirmErTableSelection() {
       if (!tab.layoutMode) {
         tab.layoutMode = 'GRID';
       }
+      if (tab.showCardComments == null) {
+        tab.showCardComments = false;
+      }
       tab.title = `ER · ${erSelectDatabaseName.value}`;
       touchErTab(tab);
     }
     activeWorkbenchTab.value = tab.key;
-    await refreshErGraphForTab(tab, true);
     erTableSelectModalOpen.value = false;
+    await nextTick();
+    void refreshErGraphForTab(tab, true);
   } finally {
     erTableSelectSubmitting.value = false;
+  }
+}
+
+function erSnapshotItemKey(item: ErGraphSnapshotSummaryVO) {
+  return `${item.connectionId}-${item.id}`;
+}
+
+function isErSnapshotItemActive(item: ErGraphSnapshotSummaryVO) {
+  const tab = activeErTab.value;
+  if (!tab) {
+    return false;
+  }
+  return tab.snapshotId === item.id;
+}
+
+function findErSnapshotSummaryById(snapshotId: number) {
+  return erSnapshotItems.value.find((item) => item.id === snapshotId) ?? null;
+}
+
+function updateErSnapshotTabsTitle(snapshotId: number) {
+  const summary = findErSnapshotSummaryById(snapshotId);
+  erTabs.value.forEach((tab) => {
+    if (tab.snapshotId !== snapshotId) {
+      return;
+    }
+    const snapshotName = (summary?.snapshotName || '').trim();
+    const databaseName = (summary?.databaseName || tab.databaseName || '').trim();
+    tab.title = snapshotName ? `ER · ${snapshotName}` : (databaseName ? `ER · ${databaseName}` : 'ER · 快照');
+    touchErTab(tab);
+  });
+}
+
+function startErSnapshotTitleEdit(item: ErGraphSnapshotSummaryVO) {
+  if (erSnapshotActionLoadingId.value === item.id || erSnapshotLoadingId.value === item.id) {
+    return;
+  }
+  editingErSnapshotId.value = item.id;
+  editingErSnapshotTitle.value = (item.snapshotName || '').trim();
+}
+
+function cancelErSnapshotTitleEdit() {
+  editingErSnapshotId.value = null;
+  editingErSnapshotTitle.value = '';
+}
+
+async function commitErSnapshotTitleEdit(item: ErGraphSnapshotSummaryVO) {
+  if (editingErSnapshotId.value !== item.id) {
+    return;
+  }
+  const renamed = editingErSnapshotTitle.value.trim();
+  if (!renamed) {
+    message.error('快照名称不能为空');
+    return;
+  }
+  if (renamed === (item.snapshotName || '').trim()) {
+    cancelErSnapshotTitleEdit();
+    return;
+  }
+  if (erSnapshotActionLoadingId.value === item.id) {
+    return;
+  }
+  erSnapshotActionLoadingId.value = item.id;
+  try {
+    const payload: ErGraphSnapshotRenameReq = {
+      connectionId: item.connectionId,
+      snapshotId: item.id,
+      snapshotName: renamed,
+    };
+    await postApi<boolean>('/api/editor/er/snapshot/rename', payload);
+    const now = Date.now();
+    erSnapshotItems.value = erSnapshotItems.value.map((entry) => (entry.id === item.id
+      ? {...entry, snapshotName: renamed, updatedAt: now}
+      : entry));
+    updateErSnapshotTabsTitle(item.id);
+    cancelErSnapshotTitleEdit();
+    message.success('快照名称已更新');
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    message.error(msg || '快照改名失败');
+  } finally {
+    erSnapshotActionLoadingId.value = null;
+  }
+}
+
+async function removeErSnapshot(item: ErGraphSnapshotSummaryVO) {
+  if (erSnapshotActionLoadingId.value === item.id || erSnapshotLoadingId.value === item.id) {
+    return;
+  }
+  const snapshotName = (item.snapshotName || '').trim() || '未命名快照';
+  const confirmed = await new Promise<boolean>((resolve) => {
+    Modal.confirm({
+      title: '删除 ER 图快照',
+      content: `确定删除快照“${snapshotName}”吗？删除后不可恢复。`,
+      okText: '删除',
+      okButtonProps: {danger: true},
+      cancelText: '取消',
+      onOk: () => resolve(true),
+      onCancel: () => resolve(false),
+    });
+  });
+  if (!confirmed) {
+    return;
+  }
+
+  erSnapshotActionLoadingId.value = item.id;
+  try {
+    const payload: ErGraphSnapshotRemoveReq = {
+      connectionId: item.connectionId,
+      snapshotId: item.id,
+    };
+    await postApi<boolean>('/api/editor/er/snapshot/remove', payload);
+    if (editingErSnapshotId.value === item.id) {
+      cancelErSnapshotTitleEdit();
+    }
+    erSnapshotItems.value = erSnapshotItems.value.filter((entry) => entry.id !== item.id);
+    erTabs.value = erTabs.value.filter((tab) => tab.snapshotId !== item.id);
+    ensureActiveWorkbenchTab();
+    message.success('快照已删除');
+    if (!erSnapshotItems.value.length) {
+      erSnapshotPageNo.value = 1;
+      erSnapshotHasMore.value = true;
+      await loadErSnapshotPage(true);
+    }
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    message.error(msg || '删除快照失败');
+  } finally {
+    erSnapshotActionLoadingId.value = null;
+  }
+}
+
+function buildErSnapshotTabTitle(snapshot: ErGraphSnapshotVO) {
+  const snapshotName = (snapshot.snapshotName || '').trim();
+  const databaseName = (snapshot.databaseName || '').trim();
+  if (snapshotName) {
+    return `ER · ${snapshotName}`;
+  }
+  if (databaseName) {
+    return `ER · ${databaseName}`;
+  }
+  return 'ER · 快照';
+}
+
+function findErTabBySnapshotId(snapshotId: number) {
+  return erTabs.value.find((item) => item.snapshotId === snapshotId) ?? null;
+}
+
+async function loadErSnapshotPage(reset: boolean) {
+  if (!erSnapshotConnectionId.value) {
+    return;
+  }
+  if (reset) {
+    if (erSnapshotReloading.value) {
+      return;
+    }
+    erSnapshotReloading.value = true;
+  } else {
+    if (erSnapshotLoadingMore.value || erSnapshotReloading.value || !erSnapshotHasMore.value) {
+      return;
+    }
+    erSnapshotLoadingMore.value = true;
+  }
+  try {
+    const requestPageNo = reset ? 1 : erSnapshotPageNo.value;
+    const params = new URLSearchParams({
+      connectionId: `${erSnapshotConnectionId.value}`,
+      pageNo: `${requestPageNo}`,
+      pageSize: `${erSnapshotPageSize}`,
+    });
+    if (erSnapshotKeyword.value) {
+      params.set('keyword', erSnapshotKeyword.value);
+    }
+    const page = await getApi<ErGraphSnapshotPageVO>(`/api/editor/er/snapshot/page?${params.toString()}`);
+    const pageItems = page.items ?? [];
+    if (reset) {
+      erSnapshotItems.value = pageItems;
+    } else if (pageItems.length) {
+      const merged = [...erSnapshotItems.value];
+      const indexMap = new Map<number, number>();
+      merged.forEach((entry, idx) => {
+        indexMap.set(entry.id, idx);
+      });
+      pageItems.forEach((entry) => {
+        const existed = indexMap.get(entry.id);
+        if (existed === undefined) {
+          indexMap.set(entry.id, merged.length);
+          merged.push(entry);
+        } else {
+          merged[existed] = entry;
+        }
+      });
+      erSnapshotItems.value = merged;
+    }
+    erSnapshotPageNo.value = (page.pageNo ?? requestPageNo) + 1;
+    erSnapshotHasMore.value = !!page.hasMore;
+  } finally {
+    if (reset) {
+      erSnapshotReloading.value = false;
+    } else {
+      erSnapshotLoadingMore.value = false;
+    }
+  }
+}
+
+function applyErSnapshotKeywordSearch() {
+  erSnapshotKeyword.value = erSnapshotKeywordInput.value.trim();
+  erSnapshotPageNo.value = 1;
+  erSnapshotHasMore.value = true;
+  erSnapshotItems.value = [];
+  cancelErSnapshotTitleEdit();
+  void runSafely(async () => {
+    await loadErSnapshotPage(true);
+  });
+}
+
+function handleErSnapshotMenuScroll(event: Event) {
+  if (erSnapshotLoadingMore.value || erSnapshotReloading.value || !erSnapshotHasMore.value) {
+    return;
+  }
+  const target = event.target as HTMLElement | null;
+  if (!target) {
+    return;
+  }
+  if (target.scrollTop + target.clientHeight < target.scrollHeight - 36) {
+    return;
+  }
+  void runSafely(async () => {
+    await loadErSnapshotPage(false);
+  });
+}
+
+function handleErSnapshotMenuClick() {
+  if (!canOpenErSnapshot.value) {
+    return;
+  }
+  const connectionId = currentErSnapshotConnectionId.value;
+  if (!connectionId) {
+    return;
+  }
+  if (erSnapshotConnectionId.value !== connectionId) {
+    erSnapshotKeywordInput.value = '';
+    erSnapshotKeyword.value = '';
+    erSnapshotPageNo.value = 1;
+    erSnapshotHasMore.value = true;
+    erSnapshotItems.value = [];
+    cancelErSnapshotTitleEdit();
+  }
+  erSnapshotConnectionId.value = connectionId;
+  void runSafely(async () => {
+    await loadErSnapshotPage(true);
+  });
+}
+
+async function openErSnapshot(item: ErGraphSnapshotSummaryVO) {
+  if (editingErSnapshotId.value === item.id || erSnapshotActionLoadingId.value === item.id) {
+    return;
+  }
+  if (!item.id || erSnapshotLoadingId.value === item.id) {
+    return;
+  }
+  erSnapshotLoadingId.value = item.id;
+  try {
+    const detail = await getApi<ErGraphSnapshotVO>(`/api/editor/er/snapshot/detail?id=${item.id}`);
+    if (!detail.graph) {
+      throw new Error('该快照缺少 ER 图数据，无法回显');
+    }
+    const models = aiModelOptions.value.map((entry) => String(entry.value)).filter((entry) => !!entry);
+    const selectedModel = (detail.modelName || '').trim();
+    const modelName = selectedModel && models.includes(selectedModel)
+      ? selectedModel
+      : (models[0] ?? '');
+    const layoutMode = detail.layoutMode === 'CIRCLE' || detail.layoutMode === 'HIERARCHICAL'
+      ? detail.layoutMode
+      : 'GRID';
+    const aiConfidenceThreshold = Number(detail.aiConfidenceThreshold);
+    const normalizedTables = Array.from(
+      new Set((detail.selectedTableNames ?? []).map((entry) => (entry || '').trim()).filter((entry) => !!entry)),
+    );
+    const now = Date.now();
+    let tab = findErTabBySnapshotId(detail.id);
+    if (!tab) {
+      tab = {
+        key: `er-snapshot-${detail.id}`,
+        title: buildErSnapshotTabTitle(detail),
+        snapshotId: detail.id,
+        connectionId: detail.connectionId,
+        databaseName: detail.databaseName || '',
+        selectedTableNames: normalizedTables,
+        selectedAiModel: modelName,
+        layoutMode: layoutMode as ErLayoutMode,
+        showCardComments: false,
+        aiConfidenceThreshold: Number.isFinite(aiConfidenceThreshold) ? aiConfidenceThreshold : 0.6,
+        includeAiInference: detail.includeAiInference !== false,
+        loading: false,
+        graph: detail.graph,
+        errorMessage: '',
+        createdAt: detail.createdAt ?? now,
+        updatedAt: detail.updatedAt ?? now,
+      };
+      erTabs.value = [...erTabs.value, tab];
+    } else {
+      tab.title = buildErSnapshotTabTitle(detail);
+      tab.snapshotId = detail.id;
+      tab.connectionId = detail.connectionId;
+      tab.databaseName = detail.databaseName || '';
+      tab.selectedTableNames = normalizedTables;
+      tab.selectedAiModel = modelName;
+      tab.layoutMode = layoutMode as ErLayoutMode;
+      tab.showCardComments = tab.showCardComments === true;
+      tab.aiConfidenceThreshold = Number.isFinite(aiConfidenceThreshold) ? aiConfidenceThreshold : 0.6;
+      tab.includeAiInference = detail.includeAiInference !== false;
+      tab.graph = detail.graph;
+      tab.loading = false;
+      tab.errorMessage = '';
+      tab.updatedAt = now;
+    }
+    activeWorkbenchTab.value = tab.key;
+    await prepareConnectionTreeData(tab.connectionId);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    message.error(msg || '恢复 ER 图快照失败');
+  } finally {
+    erSnapshotLoadingId.value = null;
+  }
+}
+
+function openErSnapshotSaveModal(tab?: ErWorkspaceTab | null) {
+  const targetTab = tab ?? activeErTab.value;
+  if (!targetTab) {
+    message.warning('请先打开 ER 图标签');
+    return;
+  }
+  if (!targetTab.graph) {
+    message.warning('当前 ER 图暂无可保存内容');
+    return;
+  }
+  erSnapshotSaveTabKey.value = targetTab.key;
+  const baseName = targetTab.title.replace(/^ER\s*·\s*/, '').trim();
+  erSnapshotSaveName.value = baseName || `${targetTab.databaseName || 'ER图'}快照`;
+  erSnapshotSaveModalOpen.value = true;
+}
+
+async function confirmSaveErSnapshot() {
+  if (erSnapshotSaveSubmitting.value) {
+    return;
+  }
+  const tab = erTabs.value.find((item) => item.key === erSnapshotSaveTabKey.value) ?? activeErTab.value;
+  if (!tab) {
+    message.error('未找到待保存的 ER 图标签');
+    return;
+  }
+  const snapshotName = erSnapshotSaveName.value.trim();
+  if (!snapshotName) {
+    message.error('请输入快照名称');
+    return;
+  }
+  if (!tab.graph) {
+    message.error('当前 ER 图暂无可保存内容');
+    return;
+  }
+  if (!tab.connectionId || !tab.databaseName.trim()) {
+    message.error('当前 ER 图缺少连接或数据库信息，无法保存');
+    return;
+  }
+  const payload: ErGraphSnapshotSaveReq = {
+    snapshotId: tab.snapshotId,
+    connectionId: tab.connectionId,
+    databaseName: tab.databaseName,
+    snapshotName,
+    selectedTableNames: [...tab.selectedTableNames],
+    modelName: tab.selectedAiModel || undefined,
+    layoutMode: tab.layoutMode,
+    aiConfidenceThreshold: tab.aiConfidenceThreshold,
+    includeAiInference: tab.includeAiInference,
+    graph: tab.graph,
+  };
+  erSnapshotSaveSubmitting.value = true;
+  try {
+    await postApi<boolean>('/api/editor/er/snapshot/save', payload);
+    erSnapshotSaveModalOpen.value = false;
+    message.success('ER 图快照已保存');
+    if (erSnapshotConnectionId.value === tab.connectionId) {
+      await loadErSnapshotPage(true);
+    }
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    message.error(msg || '保存 ER 图快照失败');
+  } finally {
+    erSnapshotSaveSubmitting.value = false;
   }
 }
 
@@ -3788,6 +4544,15 @@ async function loadConnections() {
       historySessionHasMore.value = true;
       historyKeywordInput.value = '';
       historyKeyword.value = '';
+      erSnapshotConnectionId.value = 0;
+      erSnapshotItems.value = [];
+      erSnapshotPageNo.value = 1;
+      erSnapshotHasMore.value = true;
+      erSnapshotKeywordInput.value = '';
+      erSnapshotKeyword.value = '';
+      cancelErSnapshotTitleEdit();
+      erSnapshotLoadingId.value = null;
+      erSnapshotActionLoadingId.value = null;
       return;
     }
     await refreshAllVectorizeStatuses(list.map((item) => item.id));
@@ -3801,6 +4566,17 @@ async function loadConnections() {
       historySessionHasMore.value = true;
       historyKeywordInput.value = '';
       historyKeyword.value = '';
+    }
+    if (erSnapshotConnectionId.value && !list.some((item) => item.id === erSnapshotConnectionId.value)) {
+      erSnapshotConnectionId.value = 0;
+      erSnapshotItems.value = [];
+      erSnapshotPageNo.value = 1;
+      erSnapshotHasMore.value = true;
+      erSnapshotKeywordInput.value = '';
+      erSnapshotKeyword.value = '';
+      cancelErSnapshotTitleEdit();
+      erSnapshotLoadingId.value = null;
+      erSnapshotActionLoadingId.value = null;
     }
     currentObjectType.value = 'tables';
     selectedObjectName.value = '';
@@ -3935,6 +4711,17 @@ async function removeConnection(id: number) {
     }
     queryTabs.value = queryTabs.value.filter((item) => item.connectionId !== id);
     erTabs.value = erTabs.value.filter((item) => item.connectionId !== id);
+    if (erSnapshotConnectionId.value === id) {
+      erSnapshotConnectionId.value = 0;
+      erSnapshotItems.value = [];
+      erSnapshotPageNo.value = 1;
+      erSnapshotHasMore.value = true;
+      erSnapshotKeywordInput.value = '';
+      erSnapshotKeyword.value = '';
+      cancelErSnapshotTitleEdit();
+      erSnapshotLoadingId.value = null;
+      erSnapshotActionLoadingId.value = null;
+    }
     ensureActiveWorkbenchTab();
     await loadConnections();
   });
@@ -4989,6 +5776,36 @@ function stopResizeBrowserPane() {
   window.removeEventListener('mouseup', stopResizeBrowserPane);
 }
 
+function startResizeErPane(event: MouseEvent) {
+  if (!activeErTab.value) {
+    return;
+  }
+  event.preventDefault();
+  erPaneResizeState.resizing = true;
+  erPaneResizeState.startX = event.clientX;
+  erPaneResizeState.startWidth = erRightPaneWidth.value;
+  window.addEventListener('mousemove', handleResizeErPane);
+  window.addEventListener('mouseup', stopResizeErPane);
+}
+
+function handleResizeErPane(event: MouseEvent) {
+  if (!erPaneResizeState.resizing) {
+    return;
+  }
+  const delta = erPaneResizeState.startX - event.clientX;
+  const next = erPaneResizeState.startWidth + delta;
+  erRightPaneWidth.value = Math.min(860, Math.max(320, next));
+}
+
+function stopResizeErPane() {
+  if (!erPaneResizeState.resizing) {
+    return;
+  }
+  erPaneResizeState.resizing = false;
+  window.removeEventListener('mousemove', handleResizeErPane);
+  window.removeEventListener('mouseup', stopResizeErPane);
+}
+
 function openQueryTabByObject(record: ObjectRow, autoExecute = false) {
   if (record.objectType !== 'tables' && record.objectType !== 'views') {
     return;
@@ -5698,6 +6515,7 @@ function chatExecutionColumns(preview: QueryExecutionPreview) {
 }
 
 const chartExportPixelRatioCandidates = [2, 1.5, 1];
+const erDiagramExportPixelRatioCandidates = [2, 1.5, 1];
 
 async function exportChartPngDataUrl(pixelRatio = 2) {
   for (let attempt = 0; attempt < 6; attempt += 1) {
@@ -5709,6 +6527,23 @@ async function exportChartPngDataUrl(pixelRatio = 2) {
     }
   }
   return '';
+}
+
+async function exportErDiagramPngDataUrl(pixelRatio = 2) {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    await nextTick();
+    await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 40 : 90));
+    const dataUrl = (await erDiagramPanelRef.value?.exportPngDataUrl?.({ pixelRatio })) || '';
+    if (dataUrl) {
+      return dataUrl;
+    }
+  }
+  return '';
+}
+
+function normalizeDownloadFileNamePart(text: string) {
+  const normalized = text.trim().replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, '_');
+  return normalized || 'er';
 }
 
 function isChartCacheRetryableError(rawMessage: string) {
@@ -6036,6 +6871,26 @@ async function downloadMessageChart(item: QueryChatMessage) {
     return;
   }
   downloadImage(dataUrl, `chart-${Date.now()}.png`);
+}
+
+async function downloadActiveErDiagram(tab: ErWorkspaceTab) {
+  if (!tab.graph || tab.loading) {
+    message.info('当前 ER 图尚未准备好，无法导出');
+    return;
+  }
+  let dataUrl = '';
+  for (const pixelRatio of erDiagramExportPixelRatioCandidates) {
+    dataUrl = await exportErDiagramPngDataUrl(pixelRatio);
+    if (dataUrl) {
+      break;
+    }
+  }
+  if (!dataUrl) {
+    message.error('ER 图导出失败，请稍后重试');
+    return;
+  }
+  const fileNamePart = normalizeDownloadFileNamePart(tab.databaseName || tab.title || 'er');
+  downloadImage(dataUrl, `er-${fileNamePart}-${Date.now()}.png`);
 }
 
 async function hydrateHistoryChartImages(tab: QueryWorkspaceTab) {
@@ -6441,6 +7296,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', handleWindowResize);
   window.removeEventListener('mousemove', handleResizeBrowserPane);
   window.removeEventListener('mouseup', stopResizeBrowserPane);
+  window.removeEventListener('mousemove', handleResizeErPane);
+  window.removeEventListener('mouseup', stopResizeErPane);
   sqlEditorTypeDisposable?.dispose();
   sqlEditorTypeDisposable = null;
   sqlEditorSelectionDisposable?.dispose();

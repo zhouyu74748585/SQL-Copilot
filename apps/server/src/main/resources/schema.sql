@@ -43,6 +43,24 @@ CREATE TABLE IF NOT EXISTS query_history (
     created_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS er_graph_snapshot (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    connection_id INTEGER NOT NULL,
+    database_name TEXT NOT NULL,
+    snapshot_name TEXT NOT NULL,
+    selected_tables_json TEXT NOT NULL,
+    model_name TEXT,
+    layout_mode TEXT,
+    ai_confidence_threshold REAL,
+    include_ai_inference INTEGER NOT NULL DEFAULT 1,
+    graph_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_er_graph_snapshot_conn_updated
+ON er_graph_snapshot(connection_id, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     connection_id INTEGER NOT NULL,

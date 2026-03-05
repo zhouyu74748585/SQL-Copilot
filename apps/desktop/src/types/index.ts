@@ -134,6 +134,7 @@ export type ErLayoutMode = 'GRID' | 'CIRCLE' | 'HIERARCHICAL';
 export interface ErColumnNodeVO {
   columnName: string;
   dataType?: string;
+  columnComment?: string;
   primaryKey?: boolean;
   indexed?: boolean;
   nullable?: boolean;
@@ -151,6 +152,7 @@ export interface ErRelationVO {
   targetTable: string;
   targetColumn: string;
   relationType: 'FK' | 'AI_INFERRED' | string;
+  relationDirection?: 'SOURCE_TO_TARGET' | 'TARGET_TO_SOURCE' | 'BIDIRECTIONAL' | string;
   confidence?: number;
   reason?: string;
 }
@@ -236,6 +238,64 @@ export interface QueryHistorySessionPageVO {
   total: number;
   hasMore: boolean;
   items: QueryHistorySessionVO[];
+}
+
+export interface ErGraphSnapshotSaveReq {
+  snapshotId?: number;
+  connectionId: number;
+  databaseName: string;
+  snapshotName: string;
+  selectedTableNames: string[];
+  modelName?: string;
+  layoutMode?: ErLayoutMode;
+  aiConfidenceThreshold?: number;
+  includeAiInference?: boolean;
+  graph: ErGraphVO;
+}
+
+export interface ErGraphSnapshotRenameReq {
+  connectionId: number;
+  snapshotId: number;
+  snapshotName: string;
+}
+
+export interface ErGraphSnapshotRemoveReq {
+  connectionId: number;
+  snapshotId: number;
+}
+
+export interface ErGraphSnapshotSummaryVO {
+  id: number;
+  connectionId: number;
+  databaseName: string;
+  snapshotName: string;
+  tableCount?: number;
+  modelName?: string;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface ErGraphSnapshotPageVO {
+  pageNo: number;
+  pageSize: number;
+  total: number;
+  hasMore: boolean;
+  items: ErGraphSnapshotSummaryVO[];
+}
+
+export interface ErGraphSnapshotVO {
+  id: number;
+  connectionId: number;
+  databaseName: string;
+  snapshotName: string;
+  selectedTableNames: string[];
+  modelName?: string;
+  layoutMode?: ErLayoutMode;
+  aiConfidenceThreshold?: number;
+  includeAiInference?: boolean;
+  graph: ErGraphVO;
+  createdAt?: number;
+  updatedAt?: number;
 }
 
 export interface AiConfigVO {

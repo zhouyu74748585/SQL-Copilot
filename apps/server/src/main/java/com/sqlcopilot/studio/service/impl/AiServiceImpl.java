@@ -134,6 +134,7 @@ public class AiServiceImpl implements AiService {
                     "sourceColumn": "customer_id",
                     "targetTable": "customers",
                     "targetColumn": "id",
+                    "relationDirection": "SOURCE_TO_TARGET",
                     "confidence": 0.82,
                     "reason": "列命名和语义匹配"
                 }
@@ -143,6 +144,8 @@ public class AiServiceImpl implements AiService {
         1）只推断 已选择表之间 的关系。
         2）confidence 的取值范围必须在 0 到 1 之间。
         3）不要返回与已提供外键 完全重复的关系对。
+        4）relationDirection 取值必须是 SOURCE_TO_TARGET / TARGET_TO_SOURCE / BIDIRECTIONAL 之一。
+        5）如果两张表存在多条不同起始字段的关系，需要分别返回多条记录，不要合并成一条。
         """;
     private static final Logger log = LoggerFactory.getLogger(AiServiceImpl.class);
 
@@ -793,6 +796,9 @@ public class AiServiceImpl implements AiService {
                     relation.setTargetTable(safe(item.path("targetTable").asText("")));
                     relation.setTargetColumn(safe(item.path("targetColumn").asText("")));
                     relation.setRelationType("AI_INFERRED");
+                    relation.setRelationDirection(normalizeErRelationDirection(
+                        safe(item.path("relationDirection").asText(item.path("direction").asText("")))
+                    ));
                     relation.setConfidence(parseConfidence(item.path("confidence")));
                     relation.setReason(safe(item.path("reason").asText("")));
                     parsed.add(relation);
@@ -819,9 +825,9 @@ public class AiServiceImpl implements AiService {
             }
         });
         Set<String> selectedTableSet = selectedTableNameMap.keySet();
-        Set<String> foreignKeySet = new HashSet<>();
+        Set<String> foreignKeyStartSet = new HashSet<>();
         List<ErRelationVO> fkList = foreignKeyRelations == null ? List.of() : foreignKeyRelations;
-        fkList.forEach(item -> foreignKeySet.add(buildErRelationKey(item)));
+        fkList.forEach(item -> foreignKeyStartSet.add(buildErRelationStartKey(item)));
 
         Map<String, ErRelationVO> dedup = new LinkedHashMap<>();
         List<ErRelationVO> source = rawRelations == null ? List.of() : rawRelations;
@@ -849,16 +855,20 @@ public class AiServiceImpl implements AiService {
             relation.setTargetTable(selectedTableNameMap.getOrDefault(targetTable, safe(item.getTargetTable())));
             relation.setTargetColumn(targetColumn);
             relation.setRelationType("AI_INFERRED");
+            relation.setRelationDirection(normalizeErRelationDirection(item.getRelationDirection()));
             relation.setConfidence(Math.max(0D, Math.min(1D, confidence)));
             relation.setReason(safe(item.getReason()));
             if (relation.getReason().isBlank()) {
                 relation.setReason("ai inferred relation");
             }
-            String key = buildErRelationKey(relation);
-            if (foreignKeySet.contains(key)) {
+            String key = buildErRelationStartKey(relation);
+            if (foreignKeyStartSet.contains(key)) {
                 continue;
             }
-            dedup.putIfAbsent(key, relation);
+            ErRelationVO existing = dedup.get(key);
+            if (shouldReplaceErRelation(existing, relation)) {
+                dedup.put(key, relation);
+            }
         }
         List<ErRelationVO> relations = new ArrayList<>(dedup.values());
         relations.sort(Comparator
@@ -869,11 +879,27 @@ public class AiServiceImpl implements AiService {
         return relations;
     }
 
-    private String buildErRelationKey(ErRelationVO relation) {
+    private String buildErRelationStartKey(ErRelationVO relation) {
         return normalizeIdentifier(relation.getSourceTable()) + "|"
             + normalizeIdentifier(relation.getSourceColumn()) + "|"
-            + normalizeIdentifier(relation.getTargetTable()) + "|"
-            + normalizeIdentifier(relation.getTargetColumn());
+            + normalizeIdentifier(relation.getTargetTable());
+    }
+
+    private boolean shouldReplaceErRelation(ErRelationVO existing, ErRelationVO candidate) {
+        if (existing == null) {
+            return true;
+        }
+        double existingConfidence = existing.getConfidence() == null ? 0D : existing.getConfidence();
+        double candidateConfidence = candidate.getConfidence() == null ? 0D : candidate.getConfidence();
+        if (candidateConfidence > existingConfidence) {
+            return true;
+        }
+        if (candidateConfidence < existingConfidence) {
+            return false;
+        }
+        String existingReason = safe(existing.getReason());
+        String candidateReason = safe(candidate.getReason());
+        return !candidateReason.isBlank() && existingReason.isBlank();
     }
 
     private double parseConfidence(JsonNode node) {
@@ -892,6 +918,23 @@ public class AiServiceImpl implements AiService {
         } catch (NumberFormatException ignore) {
             return 0D;
         }
+    }
+
+    private String normalizeErRelationDirection(String rawDirection) {
+        String direction = safe(rawDirection).toUpperCase(Locale.ROOT).replace('-', '_').replace(' ', '_');
+        if (direction.isBlank()) {
+            return "SOURCE_TO_TARGET";
+        }
+        if ("TARGET_TO_SOURCE".equals(direction) || "INBOUND".equals(direction) || "REVERSE".equals(direction) || "<-".equals(direction)) {
+            return "TARGET_TO_SOURCE";
+        }
+        if ("BIDIRECTIONAL".equals(direction) || "BOTH".equals(direction) || "TWO_WAY".equals(direction) || "<->".equals(direction)) {
+            return "BIDIRECTIONAL";
+        }
+        if ("SOURCE_TO_TARGET".equals(direction) || "OUTBOUND".equals(direction) || "FORWARD".equals(direction) || "->".equals(direction)) {
+            return "SOURCE_TO_TARGET";
+        }
+        return "SOURCE_TO_TARGET";
     }
 
     private double normalizeConfidenceThreshold(Double threshold) {

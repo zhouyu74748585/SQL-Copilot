@@ -153,6 +153,7 @@ public class ErDiagramServiceImpl implements ErDiagramService {
                 ErColumnNodeVO item = new ErColumnNodeVO();
                 item.setColumnName(safe(column.getColumnName()));
                 item.setDataType(safe(column.getDataType()));
+                item.setColumnComment(safe(column.getColumnComment()));
                 item.setPrimaryKey(Boolean.TRUE.equals(column.getPrimaryKey()));
                 item.setIndexed(Boolean.TRUE.equals(column.getIndexed()));
                 item.setNullable(Boolean.TRUE.equals(column.getNullable()));
@@ -202,6 +203,7 @@ public class ErDiagramServiceImpl implements ErDiagramService {
                         relation.setTargetTable(canonicalTableMap.getOrDefault(targetLower, targetTable));
                         relation.setTargetColumn(targetColumn);
                         relation.setRelationType("FK");
+                        relation.setRelationDirection("SOURCE_TO_TARGET");
                         relation.setConfidence(1.0D);
                         relation.setReason("database foreign key metadata");
                         dedup.put(relationKey(relation), relation);
@@ -303,4 +305,3 @@ public class ErDiagramServiceImpl implements ErDiagramService {
         return Objects.toString(value, "").trim();
     }
 }
-

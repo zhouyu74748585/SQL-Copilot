@@ -39,9 +39,40 @@ public class EditorController {
         return ApiResponse.success(editorService.listHistoryBySession(connectionId, sessionId, limit));
     }
 
+    @GetMapping("/er/snapshot/page")
+    public ApiResponse<ErGraphSnapshotPageVO> erSnapshotPage(@RequestParam("connectionId") Long connectionId,
+                                                             @RequestParam(value = "pageNo", required = false) Integer pageNo,
+                                                             @RequestParam(value = "pageSize", required = false) Integer pageSize,
+                                                             @RequestParam(value = "keyword", required = false) String keyword) {
+        return ApiResponse.success(editorService.pageErGraphSnapshots(connectionId, pageNo, pageSize, keyword));
+    }
+
+    @GetMapping("/er/snapshot/detail")
+    public ApiResponse<ErGraphSnapshotVO> erSnapshotDetail(@RequestParam("id") Long id) {
+        return ApiResponse.success(editorService.getErGraphSnapshotDetail(id));
+    }
+
+    @PostMapping("/er/snapshot/rename")
+    public ApiResponse<Boolean> renameErSnapshot(@Valid @RequestBody RenameErGraphSnapshotReq req) {
+        editorService.renameErGraphSnapshot(req);
+        return ApiResponse.success(Boolean.TRUE);
+    }
+
+    @PostMapping("/er/snapshot/remove")
+    public ApiResponse<Boolean> removeErSnapshot(@Valid @RequestBody DeleteErGraphSnapshotReq req) {
+        editorService.removeErGraphSnapshot(req);
+        return ApiResponse.success(Boolean.TRUE);
+    }
+
     @PostMapping("/history/save")
     public ApiResponse<Boolean> saveHistory(@Valid @RequestBody SaveQueryHistoryReq req) {
         editorService.saveHistory(req);
+        return ApiResponse.success(Boolean.TRUE);
+    }
+
+    @PostMapping("/er/snapshot/save")
+    public ApiResponse<Boolean> saveErSnapshot(@Valid @RequestBody ErGraphSnapshotSaveReq req) {
+        editorService.saveErGraphSnapshot(req);
         return ApiResponse.success(Boolean.TRUE);
     }
 

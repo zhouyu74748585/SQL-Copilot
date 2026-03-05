@@ -3,9 +3,12 @@ package com.sqlcopilot.studio.service.impl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sqlcopilot.studio.dto.ai.ChartConfigVO;
 import com.sqlcopilot.studio.dto.editor.*;
+import com.sqlcopilot.studio.dto.schema.ErGraphVO;
 import com.sqlcopilot.studio.dto.sql.QueryCellVO;
 import com.sqlcopilot.studio.dto.sql.QueryRowVO;
+import com.sqlcopilot.studio.entity.ErGraphSnapshotEntity;
 import com.sqlcopilot.studio.entity.QueryHistoryEntity;
+import com.sqlcopilot.studio.mapper.ErGraphSnapshotMapper;
 import com.sqlcopilot.studio.mapper.QueryHistoryMapper;
 import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.EditorService;
@@ -31,13 +34,16 @@ public class EditorServiceImpl implements EditorService {
     private static final long MAX_CHART_IMAGE_BYTES = 8L * 1024L * 1024L;
 
     private final QueryHistoryMapper queryHistoryMapper;
+    private final ErGraphSnapshotMapper erGraphSnapshotMapper;
     private final ConnectionService connectionService;
     private final ObjectMapper objectMapper;
 
     public EditorServiceImpl(QueryHistoryMapper queryHistoryMapper,
+                             ErGraphSnapshotMapper erGraphSnapshotMapper,
                              ConnectionService connectionService,
                              ObjectMapper objectMapper) {
         this.queryHistoryMapper = queryHistoryMapper;
+        this.erGraphSnapshotMapper = erGraphSnapshotMapper;
         this.connectionService = connectionService;
         this.objectMapper = objectMapper;
     }
@@ -81,6 +87,75 @@ public class EditorServiceImpl implements EditorService {
     }
 
     @Override
+    public ErGraphSnapshotPageVO pageErGraphSnapshots(Long connectionId, Integer pageNo, Integer pageSize, String keyword) {
+        if (connectionId == null) {
+            throw new BusinessException(400, "connectionId 不能为空");
+        }
+        int actualPageNo = (pageNo == null || pageNo <= 0) ? 1 : pageNo;
+        int actualPageSize = (pageSize == null || pageSize <= 0) ? 20 : Math.min(pageSize, 100);
+        int offset = (actualPageNo - 1) * actualPageSize;
+        String normalizedKeyword = Objects.toString(keyword, "").trim();
+
+        long total = Objects.requireNonNullElse(erGraphSnapshotMapper.countByConnection(connectionId, normalizedKeyword), 0L);
+        List<ErGraphSnapshotSummaryVO> items = erGraphSnapshotMapper.pageByConnection(connectionId, normalizedKeyword, actualPageSize, offset)
+            .stream()
+            .map(this::toSnapshotSummaryVO)
+            .toList();
+
+        ErGraphSnapshotPageVO vo = new ErGraphSnapshotPageVO();
+        vo.setPageNo(actualPageNo);
+        vo.setPageSize(actualPageSize);
+        vo.setTotal(total);
+        vo.setHasMore((long) offset + items.size() < total);
+        vo.setItems(items);
+        return vo;
+    }
+
+    @Override
+    public ErGraphSnapshotVO getErGraphSnapshotDetail(Long snapshotId) {
+        if (snapshotId == null) {
+            throw new BusinessException(400, "快照 ID 不能为空");
+        }
+        ErGraphSnapshotEntity entity = erGraphSnapshotMapper.getById(snapshotId);
+        if (entity == null) {
+            throw new BusinessException(404, "ER 图快照不存在");
+        }
+        ErGraphSnapshotVO vo = toSnapshotDetailVO(entity);
+        if (vo.getGraph() == null) {
+            throw new BusinessException(500, "ER 图快照数据损坏");
+        }
+        return vo;
+    }
+
+    @Override
+    public void renameErGraphSnapshot(RenameErGraphSnapshotReq req) {
+        String snapshotName = safe(req.getSnapshotName());
+        if (snapshotName.isBlank()) {
+            throw new BusinessException(400, "快照名称不能为空");
+        }
+        String normalizedName = snapshotName.length() > 80 ? snapshotName.substring(0, 80) : snapshotName;
+        // 关键操作：按连接 + 快照双条件更新，避免跨连接误改名。
+        int affected = erGraphSnapshotMapper.updateSnapshotName(
+            req.getConnectionId(),
+            req.getSnapshotId(),
+            normalizedName,
+            System.currentTimeMillis()
+        );
+        if (affected <= 0) {
+            throw new BusinessException(404, "ER 图快照不存在或已删除");
+        }
+    }
+
+    @Override
+    public void removeErGraphSnapshot(DeleteErGraphSnapshotReq req) {
+        // 关键操作：按连接 + 快照双条件删除，确保仅删除当前连接下的目标快照。
+        int affected = erGraphSnapshotMapper.deleteById(req.getConnectionId(), req.getSnapshotId());
+        if (affected <= 0) {
+            throw new BusinessException(404, "ER 图快照不存在或已删除");
+        }
+    }
+
+    @Override
     public void removeHistorySession(DeleteHistorySessionReq req) {
         String normalizedSessionId = Objects.toString(req.getSessionId(), "").trim();
         if (normalizedSessionId.isBlank()) {
@@ -107,6 +182,50 @@ public class EditorServiceImpl implements EditorService {
         entity.setSuccessFlag(Boolean.TRUE.equals(req.getSuccess()) ? 1 : 0);
         entity.setCreatedAt(System.currentTimeMillis());
         queryHistoryMapper.insert(entity);
+    }
+
+    @Override
+    public void saveErGraphSnapshot(ErGraphSnapshotSaveReq req) {
+        String snapshotName = safe(req.getSnapshotName());
+        if (snapshotName.isBlank()) {
+            throw new BusinessException(400, "快照名称不能为空");
+        }
+        String databaseName = safe(req.getDatabaseName());
+        if (databaseName.isBlank()) {
+            throw new BusinessException(400, "数据库名称不能为空");
+        }
+        List<String> selectedTableNames = normalizeSelectedTableNames(req.getSelectedTableNames());
+        if (selectedTableNames.isEmpty()) {
+            throw new BusinessException(400, "至少需要一张已选表");
+        }
+        if (req.getGraph() == null) {
+            throw new BusinessException(400, "ER 图结果不能为空");
+        }
+
+        ErGraphSnapshotEntity entity = new ErGraphSnapshotEntity();
+        entity.setConnectionId(req.getConnectionId());
+        entity.setDatabaseName(databaseName);
+        entity.setSnapshotName(snapshotName.length() > 80 ? snapshotName.substring(0, 80) : snapshotName);
+        entity.setSelectedTablesJson(writeJson(selectedTableNames));
+        entity.setModelName(safe(req.getModelName()));
+        entity.setLayoutMode(safe(req.getLayoutMode()));
+        entity.setAiConfidenceThreshold(normalizeSnapshotThreshold(req.getAiConfidenceThreshold()));
+        entity.setIncludeAiInference(Boolean.FALSE.equals(req.getIncludeAiInference()) ? 0 : 1);
+        entity.setGraphJson(writeJson(req.getGraph()));
+        long now = System.currentTimeMillis();
+        entity.setUpdatedAt(now);
+        Long snapshotId = req.getSnapshotId();
+        // 关键操作：传入快照主键时执行原记录更新，避免重复新增快照。
+        if (snapshotId != null && snapshotId > 0) {
+            entity.setId(snapshotId);
+            int updated = erGraphSnapshotMapper.updateSnapshotContent(entity);
+            if (updated <= 0) {
+                throw new BusinessException(404, "ER 图快照不存在或无权限更新");
+            }
+            return;
+        }
+        entity.setCreatedAt(now);
+        erGraphSnapshotMapper.insert(entity);
     }
 
     @Override
@@ -325,6 +444,90 @@ public class EditorServiceImpl implements EditorService {
         } catch (Exception ex) {
             return null;
         }
+    }
+
+    private ErGraphSnapshotSummaryVO toSnapshotSummaryVO(ErGraphSnapshotEntity entity) {
+        ErGraphSnapshotSummaryVO vo = new ErGraphSnapshotSummaryVO();
+        vo.setId(entity.getId());
+        vo.setConnectionId(entity.getConnectionId());
+        vo.setDatabaseName(safe(entity.getDatabaseName()));
+        vo.setSnapshotName(safe(entity.getSnapshotName()));
+        vo.setTableCount(parseSelectedTables(entity.getSelectedTablesJson()).size());
+        vo.setModelName(safe(entity.getModelName()));
+        vo.setCreatedAt(entity.getCreatedAt());
+        vo.setUpdatedAt(entity.getUpdatedAt());
+        return vo;
+    }
+
+    private ErGraphSnapshotVO toSnapshotDetailVO(ErGraphSnapshotEntity entity) {
+        ErGraphSnapshotVO vo = new ErGraphSnapshotVO();
+        vo.setId(entity.getId());
+        vo.setConnectionId(entity.getConnectionId());
+        vo.setDatabaseName(safe(entity.getDatabaseName()));
+        vo.setSnapshotName(safe(entity.getSnapshotName()));
+        vo.setSelectedTableNames(parseSelectedTables(entity.getSelectedTablesJson()));
+        vo.setModelName(safe(entity.getModelName()));
+        vo.setLayoutMode(safe(entity.getLayoutMode()));
+        vo.setAiConfidenceThreshold(entity.getAiConfidenceThreshold());
+        vo.setIncludeAiInference(entity.getIncludeAiInference() != null && entity.getIncludeAiInference() == 1);
+        vo.setGraph(parseSnapshotGraph(entity.getGraphJson()));
+        vo.setCreatedAt(entity.getCreatedAt());
+        vo.setUpdatedAt(entity.getUpdatedAt());
+        return vo;
+    }
+
+    private List<String> normalizeSelectedTableNames(List<String> tableNames) {
+        if (tableNames == null || tableNames.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<String> dedup = new LinkedHashSet<>();
+        for (String item : tableNames) {
+            String normalized = safe(item);
+            if (!normalized.isBlank()) {
+                dedup.add(normalized);
+            }
+        }
+        return new ArrayList<>(dedup);
+    }
+
+    private List<String> parseSelectedTables(String selectedTablesJson) {
+        String jsonText = safe(selectedTablesJson);
+        if (jsonText.isBlank()) {
+            return List.of();
+        }
+        try {
+            String[] values = objectMapper.readValue(jsonText, String[].class);
+            return normalizeSelectedTableNames(Arrays.asList(values));
+        } catch (Exception ex) {
+            return List.of();
+        }
+    }
+
+    private ErGraphVO parseSnapshotGraph(String graphJson) {
+        String normalized = safe(graphJson);
+        if (normalized.isBlank()) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(normalized, ErGraphVO.class);
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private String writeJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception ex) {
+            throw new BusinessException(500, "ER 图快照序列化失败: " + ex.getMessage());
+        }
+    }
+
+    private Double normalizeSnapshotThreshold(Double threshold) {
+        if (threshold == null || !Double.isFinite(threshold)) {
+            return 0.6D;
+        }
+        return Math.max(0D, Math.min(1D, threshold));
     }
 
     private String resolveHistoryType(String historyType) {
