@@ -155,6 +155,9 @@ export interface ErRelationVO {
   relationDirection?: 'SOURCE_TO_TARGET' | 'TARGET_TO_SOURCE' | 'BIDIRECTIONAL' | string;
   confidence?: number;
   reason?: string;
+  routeManual?: boolean;
+  routeLaneX?: number;
+  routeVersion?: number;
 }
 
 export interface ErAiInferenceStatusVO {

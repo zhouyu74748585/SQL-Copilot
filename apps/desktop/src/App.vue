@@ -499,6 +499,7 @@
                 :graph="activeErDisplayGraph"
                 :layout-mode="activeErTab.layoutMode"
                 :show-comments="activeErTab.showCardComments"
+                @relation-route-change="handleErRelationRouteChange(activeErTab, $event)"
               />
             </a-spin>
           </div>
@@ -576,11 +577,20 @@
                   <div v-if="activeErForeignKeyRelations.length" class="er-rel-list">
                     <div
                       v-for="(relation, index) in activeErForeignKeyRelations"
-                      :key="`fk-${relation.sourceTable}-${relation.sourceColumn}-${relation.targetTable}-${relation.targetColumn}-${index}`"
+                      :key="`fk-${erRelationKey(relation)}-${index}`"
                       class="er-rel-item er-rel-item-fk"
                     >
-                      <div class="er-rel-main">{{ formatErRelationExpression(relation) }}</div>
-                      <div class="er-rel-meta">来源：外键元数据</div>
+                      <div class="er-rel-main er-rel-main-structured">
+                        <a-tag color="blue" class="er-rel-table-tag">{{ relation.sourceTable }}</a-tag>
+                        <span class="er-rel-field-chip er-rel-field-source">{{ relation.sourceColumn }}</span>
+                        <span class="er-rel-arrow">{{ erRelationArrow(relation.relationDirection) }}</span>
+                        <a-tag color="blue" class="er-rel-table-tag">{{ relation.targetTable }}</a-tag>
+                        <span class="er-rel-field-chip er-rel-field-target">{{ relation.targetColumn }}</span>
+                      </div>
+                      <div class="er-rel-meta">
+                        <span>方向：{{ erRelationDirectionLabel(relation.relationDirection) }}</span>
+                        <span>来源：外键元数据</span>
+                      </div>
                     </div>
                   </div>
                   <div v-else class="er-empty-tip">未识别到外键关系</div>
@@ -594,11 +604,17 @@
                   <div v-if="activeErAiRelations.length" class="er-rel-list">
                     <div
                       v-for="(relation, index) in activeErAiRelations"
-                      :key="`ai-${relation.sourceTable}-${relation.sourceColumn}-${relation.targetTable}-${relation.targetColumn}-${index}`"
+                      :key="`ai-${erRelationKey(relation)}-${index}`"
                       class="er-rel-item er-rel-item-ai"
                     >
                       <div class="er-rel-main-row">
-                        <div class="er-rel-main">{{ formatErRelationExpression(relation) }}</div>
+                        <div class="er-rel-main er-rel-main-structured">
+                          <a-tag color="blue" class="er-rel-table-tag">{{ relation.sourceTable }}</a-tag>
+                          <span class="er-rel-field-chip er-rel-field-source">{{ relation.sourceColumn }}</span>
+                          <span class="er-rel-arrow">{{ erRelationArrow(relation.relationDirection) }}</span>
+                          <a-tag color="blue" class="er-rel-table-tag">{{ relation.targetTable }}</a-tag>
+                          <span class="er-rel-field-chip er-rel-field-target">{{ relation.targetColumn }}</span>
+                        </div>
                         <a-button
                           size="small"
                           type="text"
@@ -614,8 +630,15 @@
                         <span>方向：{{ erRelationDirectionLabel(relation.relationDirection) }}</span>
                         <span>置信度：{{ formatErRelationConfidence(relation.confidence) }}</span>
                       </div>
-                      <div class="er-rel-reason" :title="relation.reason || '模型未返回理由'">
-                        {{ relation.reason || '模型未返回理由' }}
+                      <div class="er-rel-reason-wrap">
+                        <a-popover trigger="hover" placement="leftTop">
+                          <template #content>
+                            <div class="er-rel-reason-popover">{{ relation.reason || '模型未返回理由' }}</div>
+                          </template>
+                          <div class="er-rel-reason">
+                            {{ erRelationReasonPreview(relation.reason) }}
+                          </div>
+                        </a-popover>
                       </div>
                     </div>
                   </div>
@@ -1785,6 +1808,12 @@ interface ErWorkspaceTab {
   updatedAt: number;
 }
 
+interface ErRelationRouteChangePayload {
+  relationKey: string;
+  routeManual: boolean;
+  routeLaneX: number;
+}
+
 const browserTabKey = 'browser';
 const uiThemeStorageKey = 'sqlcopilot.ui-theme.v1';
 const {defaultAlgorithm, darkAlgorithm} = antdTheme;
@@ -2921,6 +2950,21 @@ function normalizeErRelationDirection(rawDirection?: string) {
   return 'SOURCE_TO_TARGET';
 }
 
+function normalizeErRelationType(rawType?: string) {
+  return (rawType || '').trim().toUpperCase() || 'FK';
+}
+
+function erRelationKey(relation: ErRelationVO) {
+  return [
+    normalizeErRelationType(relation.relationType),
+    (relation.sourceTable || '').trim().toLowerCase(),
+    (relation.sourceColumn || '').trim().toLowerCase(),
+    (relation.targetTable || '').trim().toLowerCase(),
+    (relation.targetColumn || '').trim().toLowerCase(),
+    normalizeErRelationDirection(relation.relationDirection),
+  ].join('|');
+}
+
 function erRelationArrow(directionRaw?: string) {
   const direction = normalizeErRelationDirection(directionRaw);
   if (direction === 'TARGET_TO_SOURCE') {
@@ -2943,12 +2987,6 @@ function erRelationDirectionLabel(directionRaw?: string) {
   return '源指向目标';
 }
 
-function formatErRelationExpression(relation: ErRelationVO) {
-  const source = `${relation.sourceTable}.${relation.sourceColumn}`;
-  const target = `${relation.targetTable}.${relation.targetColumn}`;
-  return `${source} ${erRelationArrow(relation.relationDirection)} ${target}`;
-}
-
 function formatErRelationConfidence(value?: number) {
   const confidence = normalizeErRelationConfidence(value);
   return `${Math.round(confidence * 100)}%`;
@@ -2960,6 +2998,55 @@ function normalizeErRelationConfidence(value?: number) {
     return 0;
   }
   return Math.max(0, Math.min(1, confidence));
+}
+
+function erRelationReasonPreview(reason?: string) {
+  const text = (reason || '').trim();
+  if (!text) {
+    return '模型未返回理由';
+  }
+  return text.length > 36 ? `${text.slice(0, 36)}...` : text;
+}
+
+function handleErRelationRouteChange(tab: ErWorkspaceTab, payload: ErRelationRouteChangePayload) {
+  if (!tab?.graph?.tables?.length) {
+    return;
+  }
+  const relationKey = (payload.relationKey || '').trim();
+  const routeLaneX = Number(payload.routeLaneX);
+  if (!relationKey || !Number.isFinite(routeLaneX)) {
+    return;
+  }
+  const patchList = (sourceList: ErRelationVO[]) => {
+    let changed = false;
+    const nextList = sourceList.map((item) => {
+      if (erRelationKey(item) !== relationKey) {
+        return item;
+      }
+      changed = true;
+      const nextRouteVersionRaw = Number(item.routeVersion ?? 0);
+      const nextRouteVersion = Number.isFinite(nextRouteVersionRaw) ? nextRouteVersionRaw + 1 : 1;
+      return {
+        ...item,
+        routeManual: payload.routeManual === true,
+        routeLaneX,
+        routeVersion: nextRouteVersion,
+      };
+    });
+    return {changed, nextList};
+  };
+
+  const fkPatched = patchList(tab.graph.foreignKeyRelations || []);
+  const aiPatched = patchList(tab.graph.aiRelations || []);
+  if (!fkPatched.changed && !aiPatched.changed) {
+    return;
+  }
+  tab.graph = {
+    ...tab.graph,
+    foreignKeyRelations: fkPatched.nextList,
+    aiRelations: aiPatched.nextList,
+  };
+  touchErTab(tab);
 }
 
 function removeErAiRelation(tab: ErWorkspaceTab, relation: ErRelationVO) {

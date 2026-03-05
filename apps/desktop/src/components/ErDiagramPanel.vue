@@ -10,6 +10,12 @@ import type {ErColumnNodeVO, ErGraphVO, ErLayoutMode, ErRelationVO, ErTableNodeV
 import * as echarts from 'echarts';
 import {nextTick, onBeforeUnmount, onMounted, ref, watch} from 'vue';
 
+interface RelationRouteChangePayload {
+  relationKey: string;
+  routeManual: boolean;
+  routeLaneX: number;
+}
+
 const props = withDefaults(defineProps<{
   graph: ErGraphVO | null;
   layoutMode?: ErLayoutMode;
@@ -19,33 +25,64 @@ const props = withDefaults(defineProps<{
   showComments: false,
 });
 
+const emit = defineEmits<{
+  (e: 'relation-route-change', payload: RelationRouteChangePayload): void;
+}>();
+
 const chartRef = ref<HTMLElement | null>(null);
 let chartInstance: echarts.ECharts | null = null;
 let resizeObserver: ResizeObserver | null = null;
 const optionReady = ref(false);
 const emptyText = ref('No ER graph data');
+
 const nodePositionOverrides = new Map<string, NodePosition>();
+const relationRouteOverrideMap = new Map<string, number>();
+
+let graphClickHandler: ((params: any) => void) | null = null;
+let graphMouseMoveHandler: ((params: any) => void) | null = null;
+let graphGlobalOutHandler: (() => void) | null = null;
+let graphNodeDragMoveHandler: ((params: any) => void) | null = null;
 let graphNodeDragEndHandler: ((params: any) => void) | null = null;
 let graphNodeMouseUpHandler: ((params: any) => void) | null = null;
+let zrClickHandler: ((params: any) => void) | null = null;
+
 let dragMouseUpFallbackTimer: number | null = null;
-let lastDragCommitAt = 0;
+let renderRequestToken: number | null = null;
 let lastLayoutModeKey = '';
 let lastTableSignature = '';
 
-const NODE_WIDTH = 248;
-const NODE_HEADER_HEIGHT = 46;
-const NODE_MIN_BODY_ROWS = 1;
-const NODE_MAX_COLUMNS = 12;
-const NODE_ROW_HEIGHT = 16;
-const NODE_COMMENT_PREVIEW_MAX = 14;
-const NODE_HORIZONTAL_GAP = 14;
-const NODE_VERTICAL_GAP = 16;
-const NODE_BODY_TOP_PADDING = 8;
-const NODE_BODY_BOTTOM_PADDING = 8;
-const ORTHOGONAL_LANE_GAP = 22;
+let isNodeDragging = false;
+let draggingTableKey = '';
+let isRouteHandleDragging = false;
+let activeRelationKey = '';
+let editingRelationKey = '';
+let hoveredRelationKey = '';
 
 type NodePosition = { x: number; y: number };
 type RelationDirection = 'SOURCE_TO_TARGET' | 'TARGET_TO_SOURCE' | 'BIDIRECTIONAL';
+
+type RelationGeometry = {
+  relation: ErRelationVO;
+  relationKey: string;
+  sourceX: number;
+  sourceY: number;
+  targetX: number;
+  targetY: number;
+  laneX: number;
+  direction: RelationDirection;
+};
+
+const NODE_WIDTH = 224;
+const NODE_HEADER_HEIGHT = 44;
+const NODE_MIN_BODY_ROWS = 1;
+const NODE_MAX_COLUMNS = 12;
+const NODE_ROW_HEIGHT = 15;
+const NODE_COMMENT_PREVIEW_MAX = 14;
+const NODE_HORIZONTAL_GAP = 14;
+const NODE_VERTICAL_GAP = 16;
+const NODE_BODY_TOP_PADDING = 7;
+const NODE_BODY_BOTTOM_PADDING = 7;
+const ORTHOGONAL_LANE_GAP = 22;
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -59,172 +96,8 @@ function normalizeIdentifier(text: string | null | undefined) {
   return safeText(text).toLowerCase();
 }
 
-function saveNodePositionOverride(tableName: string, x: number, y: number) {
-  if (!tableName || !Number.isFinite(x) || !Number.isFinite(y)) {
-    return;
-  }
-  nodePositionOverrides.set(normalizeIdentifier(tableName), {x, y});
-}
-
-function resolveNodePositionFromChart(tableName: string): NodePosition | null {
-  if (!chartInstance || !tableName) {
-    return null;
-  }
-  const tableKey = normalizeIdentifier(tableName);
-  try {
-    const ecModel = (chartInstance as any).getModel?.();
-    const seriesModel = ecModel?.getSeriesByIndex?.(0);
-    const seriesData = seriesModel?.getData?.();
-    if (seriesData) {
-      let matchedIndex = -1;
-      if (typeof seriesData.indexOfName === 'function') {
-        matchedIndex = Number(seriesData.indexOfName(tableName));
-      }
-      if (!Number.isInteger(matchedIndex) || matchedIndex < 0) {
-        const count = typeof seriesData.count === 'function' ? Number(seriesData.count()) : 0;
-        for (let i = 0; i < count; i += 1) {
-          const name = normalizeIdentifier(seriesData.getName?.(i));
-          if (name === tableKey) {
-            matchedIndex = i;
-            break;
-          }
-        }
-      }
-      if (matchedIndex >= 0 && Number.isInteger(matchedIndex)) {
-        const layout = seriesData.getItemLayout?.(matchedIndex);
-        if (Array.isArray(layout) && layout.length >= 2) {
-          const x = Number(layout[0]);
-          const y = Number(layout[1]);
-          if (Number.isFinite(x) && Number.isFinite(y)) {
-            return {x, y};
-          }
-        }
-        const x = Number((layout as any)?.x);
-        const y = Number((layout as any)?.y);
-        if (Number.isFinite(x) && Number.isFinite(y)) {
-          return {x, y};
-        }
-      }
-    }
-  } catch {
-    // 忽略布局读取异常，回退到 option 数据读取。
-  }
-  const option = chartInstance.getOption() as any;
-  const seriesList = Array.isArray(option?.series) ? option.series : [option?.series];
-  for (const series of seriesList) {
-    const data = Array.isArray(series?.data) ? series.data : [];
-    const matched = data.find((item: any) => {
-      const idKey = normalizeIdentifier(item?.id ?? item?.name);
-      const tableNameKey = normalizeIdentifier(item?.table?.tableName);
-      return idKey === tableKey || tableNameKey === tableKey;
-    });
-    if (!matched) {
-      continue;
-    }
-    const x = Number(matched.x);
-    const y = Number(matched.y);
-    if (Number.isFinite(x) && Number.isFinite(y)) {
-      return {x, y};
-    }
-  }
-  return null;
-}
-
-function resolveDraggedTableName(params: any) {
-  const tableNameByMeta = safeText(params?.data?.table?.tableName);
-  if (tableNameByMeta) {
-    return tableNameByMeta;
-  }
-  const tableNameById = safeText(params?.data?.id ?? params?.data?.name);
-  if (tableNameById) {
-    return tableNameById;
-  }
-  return safeText(params?.name);
-}
-
-function persistDraggedNodePosition(tableName: string, fallbackX: number, fallbackY: number) {
-  const commit = () => {
-    const chartPosition = resolveNodePositionFromChart(tableName);
-    let x = Number(chartPosition?.x);
-    let y = Number(chartPosition?.y);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) {
-      x = Number(fallbackX);
-      y = Number(fallbackY);
-    }
-    if (!Number.isFinite(x) || !Number.isFinite(y)) {
-      return;
-    }
-    saveNodePositionOverride(tableName, x, y);
-    renderGraph();
-  };
-  if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
-    window.requestAnimationFrame(() => {
-      commit();
-    });
-    return;
-  }
-  setTimeout(() => {
-    commit();
-  }, 16);
-}
-
-function pruneNodePositionOverrides(graph: ErGraphVO | null) {
-  if (!graph?.tables?.length) {
-    nodePositionOverrides.clear();
-    return;
-  }
-  const currentKeys = new Set(graph.tables.map((item) => normalizeIdentifier(item.tableName)));
-  Array.from(nodePositionOverrides.keys()).forEach((key) => {
-    if (!currentKeys.has(key)) {
-      nodePositionOverrides.delete(key);
-    }
-  });
-}
-
-function buildTableSignature(graph: ErGraphVO | null) {
-  if (!graph?.tables?.length) {
-    return '';
-  }
-  return graph.tables
-    .map((item) => normalizeIdentifier(item.tableName))
-    .filter((item) => !!item)
-    .sort((a, b) => a.localeCompare(b))
-    .join('|');
-}
-
-function resetNodePositionStateIfNeeded(graph: ErGraphVO | null, layoutMode: ErLayoutMode) {
-  const nextLayoutModeKey = normalizeLayoutMode(layoutMode);
-  const nextTableSignature = buildTableSignature(graph);
-  if (nextLayoutModeKey === lastLayoutModeKey && nextTableSignature === lastTableSignature) {
-    return;
-  }
-  nodePositionOverrides.clear();
-  lastLayoutModeKey = nextLayoutModeKey;
-  lastTableSignature = nextTableSignature;
-}
-
-function escapeHtml(text: string) {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function truncateText(text: string, max: number) {
-  const source = safeText(text);
-  if (!source) {
-    return '';
-  }
-  return source.length > max ? `${source.slice(0, max)}...` : source;
-}
-
-function normalizeLayoutMode(mode?: ErLayoutMode): ErLayoutMode {
-  if (mode === 'CIRCLE' || mode === 'HIERARCHICAL') {
-    return mode;
-  }
-  return 'GRID';
+function normalizeRelationType(rawType?: string) {
+  return safeText(rawType).toUpperCase() || 'FK';
 }
 
 function normalizeRelationDirection(rawDirection?: string): RelationDirection {
@@ -271,64 +144,39 @@ function relationEdgeSymbol(direction: RelationDirection): [string, string] {
   return ['none', 'arrow'];
 }
 
-function buildColumnMarks(column: ErColumnNodeVO) {
-  const marks = [
-    column.primaryKey ? 'PK' : '',
-    column.indexed ? 'IDX' : '',
-  ].filter((item) => !!item);
-  return marks.length ? `[${marks.join(',')}]` : '';
+function buildRelationKey(relation: ErRelationVO) {
+  return [
+    normalizeRelationType(relation.relationType),
+    normalizeIdentifier(relation.sourceTable),
+    normalizeIdentifier(relation.sourceColumn),
+    normalizeIdentifier(relation.targetTable),
+    normalizeIdentifier(relation.targetColumn),
+    normalizeRelationDirection(relation.relationDirection),
+  ].join('|');
 }
 
-function buildColumnDisplayName(column: ErColumnNodeVO) {
-  const columnName = safeText(column.columnName);
-  const marks = buildColumnMarks(column);
-  if (!marks) {
-    return columnName;
+function normalizeLayoutMode(mode?: ErLayoutMode): ErLayoutMode {
+  if (mode === 'CIRCLE' || mode === 'HIERARCHICAL') {
+    return mode;
   }
-  return `${columnName} ${marks}`;
+  return 'GRID';
 }
 
-function buildColumnPreviewComment(column: ErColumnNodeVO, showComments: boolean) {
-  if (!showComments) {
+function escapeHtml(text: string) {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function truncateText(text: string, max: number) {
+  const source = safeText(text);
+  if (!source) {
     return '';
   }
-  const comment = truncateText(column.columnComment || '', NODE_COMMENT_PREVIEW_MAX);
-  if (!comment) {
-    return '';
-  }
-  return ` // ${comment}`;
-}
-
-function buildColumnLine(column: ErColumnNodeVO, showComments: boolean) {
-  const name = truncateText(buildColumnDisplayName(column), 24);
-  const dataType = truncateText(safeText(column.dataType) || '-', 18);
-  const comment = buildColumnPreviewComment(column, showComments);
-  return truncateText(`${name}: ${dataType}${comment}`, 52);
-}
-
-function buildNodeLabel(table: ErTableNodeVO, showComments: boolean) {
-  const tableName = truncateText(table.tableName || '', 30);
-  const tableComment = showComments ? (truncateText(table.tableComment || '', 22) || ' ') : ' ';
-  const columns = table.columns || [];
-  const rows = columns.slice(0, NODE_MAX_COLUMNS).map((column) => `{col|${buildColumnLine(column, showComments)}}`);
-  if (!rows.length) {
-    rows.push('{empty|暂无字段}');
-  }
-  if (columns.length > NODE_MAX_COLUMNS) {
-    rows.push(`{ellipsis|${columns.length - NODE_MAX_COLUMNS} more columns...}`);
-  }
-  return `{title|${tableName}}\n{subtitle|${tableComment}}\n${rows.join('\n')}`;
-}
-
-function edgeLabel(relation: ErRelationVO) {
-  if ((relation.relationType || '').toUpperCase() !== 'AI_INFERRED') {
-    return '';
-  }
-  const confidence = Number(relation.confidence ?? 0);
-  if (!Number.isFinite(confidence)) {
-    return '';
-  }
-  return `${Math.round(Math.max(0, Math.min(1, confidence)) * 100)}%`;
+  return source.length > max ? `${source.slice(0, max)}...` : source;
 }
 
 function normalizeConfidence(rawConfidence?: number) {
@@ -341,18 +189,91 @@ function normalizeConfidence(rawConfidence?: number) {
 
 function buildAiEdgeColor(confidence?: number) {
   const t = normalizeConfidence(confidence);
-  const low = {r: 235, g: 221, b: 187};
-  const high = {r: 122, g: 86, b: 16};
+  const low = {r: 204, g: 214, b: 231};
+  const high = {r: 27, g: 56, b: 122};
   const r = Math.round(low.r + (high.r - low.r) * t);
   const g = Math.round(low.g + (high.g - low.g) * t);
   const b = Math.round(low.b + (high.b - low.b) * t);
   return `rgb(${r}, ${g}, ${b})`;
 }
 
+function buildColumnMarks(column: ErColumnNodeVO) {
+  const marks = [
+    column.primaryKey ? 'PK' : '',
+    column.indexed ? 'IDX' : '',
+  ].filter((item) => !!item);
+  return marks.length ? `[${marks.join(',')}]` : '';
+}
+
+function buildColumnDisplayName(column: ErColumnNodeVO) {
+  const columnName = safeText(column.columnName);
+  const marks = buildColumnMarks(column);
+  return marks ? `${columnName} ${marks}` : columnName;
+}
+
+function buildColumnPreviewComment(column: ErColumnNodeVO, showComments: boolean) {
+  if (!showComments) {
+    return '';
+  }
+  const comment = truncateText(column.columnComment || '', NODE_COMMENT_PREVIEW_MAX);
+  return comment ? ` // ${comment}` : '';
+}
+
+function buildColumnLine(column: ErColumnNodeVO, showComments: boolean) {
+  const name = truncateText(buildColumnDisplayName(column), 22);
+  const dataType = truncateText(safeText(column.dataType) || '-', 16);
+  const comment = buildColumnPreviewComment(column, showComments);
+  return truncateText(`${name}: ${dataType}${comment}`, 50);
+}
+
 function nodeHeight(table: ErTableNodeVO) {
   const rowCount = Math.max(NODE_MIN_BODY_ROWS, Math.min(NODE_MAX_COLUMNS, table.columns?.length || 0));
   const moreRow = (table.columns?.length || 0) > NODE_MAX_COLUMNS ? 1 : 0;
   return NODE_HEADER_HEIGHT + NODE_BODY_TOP_PADDING + (rowCount + moreRow) * NODE_ROW_HEIGHT + NODE_BODY_BOTTOM_PADDING;
+}
+
+function buildNodeLabel(table: ErTableNodeVO, showComments: boolean) {
+  const tableName = truncateText(table.tableName || '', 28);
+  const tableComment = showComments ? (truncateText(table.tableComment || '', 20) || ' ') : ' ';
+  const columns = table.columns || [];
+  const rows = columns.slice(0, NODE_MAX_COLUMNS).map((column) => `{col|${buildColumnLine(column, showComments)}}`);
+  if (!rows.length) {
+    rows.push('{empty|暂无字段}');
+  }
+  if (columns.length > NODE_MAX_COLUMNS) {
+    rows.push(`{ellipsis|${columns.length - NODE_MAX_COLUMNS} more columns...}`);
+  }
+  return `{title|${tableName}}\n{subtitle|${tableComment}}\n${rows.join('\n')}`;
+}
+
+function edgeLabel(relation: ErRelationVO) {
+  if (normalizeRelationType(relation.relationType) !== 'AI_INFERRED') {
+    return '';
+  }
+  const confidence = normalizeConfidence(relation.confidence);
+  return `${Math.round(confidence * 100)}%`;
+}
+
+function buildNodeTooltip(table: ErTableNodeVO, showComments: boolean) {
+  const tableName = escapeHtml(safeText(table.tableName) || '-');
+  const tableComment = showComments ? escapeHtml(safeText(table.tableComment)) : '';
+  const columns = table.columns || [];
+  const columnLines = columns.slice(0, 40).map((column) => {
+    const columnName = escapeHtml(safeText(column.columnName) || '-');
+    const dataType = escapeHtml(safeText(column.dataType) || '-');
+    const marks = buildColumnMarks(column);
+    const markText = marks ? ` <span style="color:#0f62c6;">${escapeHtml(marks)}</span>` : '';
+    const comment = showComments ? safeText(column.columnComment) : '';
+    const commentText = comment ? ` <span style="color:#51617a;">// ${escapeHtml(comment)}</span>` : '';
+    return `${columnName}: ${dataType}${markText}${commentText}`;
+  }).join('<br/>');
+  const more = columns.length > 40 ? '<div style="margin-top:4px;color:#556780;">...</div>' : '';
+  return [
+    `<div style="font-weight:700;color:#0b2f5a;">${tableName}</div>`,
+    tableComment ? `<div style="color:#4b617f;margin-top:2px;">${tableComment}</div>` : '',
+    `<div style="margin-top:6px;line-height:1.5;color:#1f3554;">${columnLines || '暂无字段'}</div>`,
+    more,
+  ].filter((item) => !!item).join('');
 }
 
 function buildTableColumnIndex(table: ErTableNodeVO) {
@@ -374,9 +295,7 @@ function resolveRelationAnchorOffsetY(table: ErTableNodeVO, columnName: string, 
   const key = normalizeIdentifier(columnName);
   const rawIndex = key ? (columnIndexMap.get(key) ?? 0) : 0;
   const hasEllipsis = (table.columns?.length || 0) > NODE_MAX_COLUMNS;
-  const rowIndex = rawIndex < NODE_MAX_COLUMNS
-    ? rawIndex
-    : (hasEllipsis ? NODE_MAX_COLUMNS : (NODE_MAX_COLUMNS - 1));
+  const rowIndex = rawIndex < NODE_MAX_COLUMNS ? rawIndex : (hasEllipsis ? NODE_MAX_COLUMNS : (NODE_MAX_COLUMNS - 1));
   return NODE_HEADER_HEIGHT + NODE_BODY_TOP_PADDING + rowIndex * NODE_ROW_HEIGHT + NODE_ROW_HEIGHT / 2;
 }
 
@@ -397,14 +316,14 @@ function buildGridPositions(tables: ErTableNodeVO[], canvasWidth: number): Recor
   for (let row = 0; row * columnCount < tables.length; row += 1) {
     const rowStart = row * columnCount;
     const rowTables = tables.slice(rowStart, rowStart + columnCount);
-    const rowCount = rowTables.length;
     const rowMaxHeight = Math.max(...rowTables.map((table) => nodeHeight(table)));
-    const rowWidth = rowCount * NODE_WIDTH + (rowCount - 1) * NODE_HORIZONTAL_GAP;
+    const rowWidth = rowTables.length * NODE_WIDTH + (rowTables.length - 1) * NODE_HORIZONTAL_GAP;
     const startX = Math.max(paddingLeft, (canvasWidth - rowWidth) / 2);
     rowTables.forEach((table, col) => {
-      const x = startX + col * (NODE_WIDTH + NODE_HORIZONTAL_GAP) + NODE_WIDTH / 2;
-      const y = currentY + rowMaxHeight / 2;
-      positions[table.tableName] = {x, y};
+      positions[table.tableName] = {
+        x: startX + col * (NODE_WIDTH + NODE_HORIZONTAL_GAP) + NODE_WIDTH / 2,
+        y: currentY + rowMaxHeight / 2,
+      };
     });
     currentY += rowMaxHeight + NODE_VERTICAL_GAP;
   }
@@ -420,10 +339,7 @@ function buildCirclePositions(tables: ErTableNodeVO[], canvasWidth: number, canv
     return positions;
   }
   const maxNodeHeight = Math.max(...tables.map((table) => nodeHeight(table)));
-  const radius = Math.max(
-    96,
-    Math.min(canvasWidth, canvasHeight) / 2 - Math.max(NODE_WIDTH, maxNodeHeight) / 2 - 12,
-  );
+  const radius = Math.max(96, Math.min(canvasWidth, canvasHeight) / 2 - Math.max(NODE_WIDTH, maxNodeHeight) / 2 - 12);
   tables.forEach((table, index) => {
     const angle = (-Math.PI / 2) + (Math.PI * 2 * index) / tables.length;
     positions[table.tableName] = {
@@ -457,11 +373,9 @@ function buildHierarchyLevels(tables: ErTableNodeVO[], relations: ErRelationVO[]
     indegree.set(target, (indegree.get(target) || 0) + 1);
   });
 
-  const queue: string[] = tableNames.filter((name) => (indegree.get(name) || 0) === 0);
+  const queue = tableNames.filter((name) => (indegree.get(name) || 0) === 0);
   const levels = new Map<string, number>();
-  queue.forEach((name) => {
-    levels.set(name, 0);
-  });
+  queue.forEach((name) => levels.set(name, 0));
 
   let cursor = 0;
   while (cursor < queue.length) {
@@ -502,6 +416,7 @@ function buildHierarchicalPositions(
     }
     levelMap.get(level)?.push(table.tableName);
   });
+
   const sortedLevels = Array.from(levelMap.keys()).sort((a, b) => a - b);
   const left = 24;
   const right = canvasWidth - 24;
@@ -539,43 +454,214 @@ function buildNodePositions(
   return buildGridPositions(tables, canvasWidth);
 }
 
-function buildNodeTooltip(table: ErTableNodeVO, showComments: boolean) {
-  const tableName = escapeHtml(safeText(table.tableName) || '-');
-  const tableComment = showComments ? escapeHtml(safeText(table.tableComment)) : '';
-  const columns = table.columns || [];
-  const columnLines = columns.slice(0, 40).map((column) => {
-    const columnName = escapeHtml(safeText(column.columnName) || '-');
-    const dataType = escapeHtml(safeText(column.dataType) || '-');
-    const marks = buildColumnMarks(column);
-    const markText = marks ? ` <span style="color:#1d4ed8;">${escapeHtml(marks)}</span>` : '';
-    const comment = showComments ? safeText(column.columnComment) : '';
-    const commentText = comment ? ` <span style="color:#667892;">// ${escapeHtml(comment)}</span>` : '';
-    return `${columnName}: ${dataType}${markText}${commentText}`;
-  }).join('<br/>');
-  const more = columns.length > 40 ? '<div style="margin-top:4px;color:#6b7f99;">...</div>' : '';
-  return [
-    `<div style="font-weight:700;color:#17375d;">${tableName}</div>`,
-    tableComment ? `<div style="color:#5f7594;margin-top:2px;">${tableComment}</div>` : '',
-    `<div style="margin-top:6px;line-height:1.5;color:#314a67;">${columnLines || '暂无字段'}</div>`,
-    more,
-  ].filter((item) => !!item).join('');
+function pruneNodePositionOverrides(graph: ErGraphVO | null) {
+  if (!graph?.tables?.length) {
+    nodePositionOverrides.clear();
+    return;
+  }
+  const currentKeys = new Set(graph.tables.map((item) => normalizeIdentifier(item.tableName)));
+  Array.from(nodePositionOverrides.keys()).forEach((key) => {
+    if (!currentKeys.has(key)) {
+      nodePositionOverrides.delete(key);
+    }
+  });
+}
+
+function buildTableSignature(graph: ErGraphVO | null) {
+  if (!graph?.tables?.length) {
+    return '';
+  }
+  return graph.tables
+    .map((item) => normalizeIdentifier(item.tableName))
+    .filter((item) => !!item)
+    .sort((a, b) => a.localeCompare(b))
+    .join('|');
+}
+
+function resetNodePositionStateIfNeeded(graph: ErGraphVO | null, layoutMode: ErLayoutMode) {
+  const nextLayoutModeKey = normalizeLayoutMode(layoutMode);
+  const nextTableSignature = buildTableSignature(graph);
+  if (nextLayoutModeKey === lastLayoutModeKey && nextTableSignature === lastTableSignature) {
+    return;
+  }
+  nodePositionOverrides.clear();
+  relationRouteOverrideMap.clear();
+  activeRelationKey = '';
+  editingRelationKey = '';
+  hoveredRelationKey = '';
+  lastLayoutModeKey = nextLayoutModeKey;
+  lastTableSignature = nextTableSignature;
+}
+
+function getGraphAllRelations(graph: ErGraphVO | null) {
+  if (!graph) {
+    return [] as ErRelationVO[];
+  }
+  return [...(graph.foreignKeyRelations || []), ...(graph.aiRelations || [])];
+}
+
+function syncRouteOverridesFromGraph(relations: ErRelationVO[]) {
+  const validKeys = new Set<string>();
+  relations.forEach((relation) => {
+    const relationKey = buildRelationKey(relation);
+    validKeys.add(relationKey);
+    const hasLocalOverride = relationRouteOverrideMap.has(relationKey);
+    const routeLaneX = Number(relation.routeLaneX);
+    if (!hasLocalOverride && relation.routeManual === true && Number.isFinite(routeLaneX)) {
+      relationRouteOverrideMap.set(relationKey, routeLaneX);
+    }
+  });
+  Array.from(relationRouteOverrideMap.keys()).forEach((key) => {
+    if (!validKeys.has(key)) {
+      relationRouteOverrideMap.delete(key);
+    }
+  });
+  if (activeRelationKey && !validKeys.has(activeRelationKey)) {
+    activeRelationKey = '';
+  }
+  if (editingRelationKey && !validKeys.has(editingRelationKey)) {
+    editingRelationKey = '';
+  }
+  if (hoveredRelationKey && !validKeys.has(hoveredRelationKey)) {
+    hoveredRelationKey = '';
+  }
+}
+
+function resolveRelationLaneX(relation: ErRelationVO, relationKey: string, autoLaneX: number) {
+  const localLaneX = Number(relationRouteOverrideMap.get(relationKey));
+  if (Number.isFinite(localLaneX)) {
+    return localLaneX;
+  }
+  const routeLaneX = Number(relation.routeLaneX);
+  if (relation.routeManual === true && Number.isFinite(routeLaneX)) {
+    return routeLaneX;
+  }
+  return autoLaneX;
+}
+
+function saveNodePositionOverride(tableName: string, x: number, y: number) {
+  if (!tableName || !Number.isFinite(x) || !Number.isFinite(y)) {
+    return;
+  }
+  nodePositionOverrides.set(normalizeIdentifier(tableName), {x, y});
+}
+
+function resolveNodePositionFromChart(nodeIdOrName: string): NodePosition | null {
+  if (!chartInstance || !nodeIdOrName) {
+    return null;
+  }
+  const key = normalizeIdentifier(nodeIdOrName);
+  try {
+    const ecModel = (chartInstance as any).getModel?.();
+    const seriesModel = ecModel?.getSeriesByIndex?.(0);
+    const seriesData = seriesModel?.getData?.();
+    if (seriesData) {
+      let matchedIndex = -1;
+      if (typeof seriesData.indexOfName === 'function') {
+        matchedIndex = Number(seriesData.indexOfName(nodeIdOrName));
+      }
+      if (!Number.isInteger(matchedIndex) || matchedIndex < 0) {
+        const count = typeof seriesData.count === 'function' ? Number(seriesData.count()) : 0;
+        for (let i = 0; i < count; i += 1) {
+          const name = normalizeIdentifier(seriesData.getName?.(i));
+          const id = normalizeIdentifier(seriesData.getId?.(i));
+          if (name === key || id === key) {
+            matchedIndex = i;
+            break;
+          }
+        }
+      }
+      if (matchedIndex >= 0 && Number.isInteger(matchedIndex)) {
+        const layout = seriesData.getItemLayout?.(matchedIndex);
+        if (Array.isArray(layout) && layout.length >= 2) {
+          const x = Number(layout[0]);
+          const y = Number(layout[1]);
+          if (Number.isFinite(x) && Number.isFinite(y)) {
+            return {x, y};
+          }
+        }
+        const x = Number((layout as any)?.x);
+        const y = Number((layout as any)?.y);
+        if (Number.isFinite(x) && Number.isFinite(y)) {
+          return {x, y};
+        }
+      }
+    }
+  } catch {
+    // 忽略读取异常，回退 option 查询。
+  }
+
+  const option = chartInstance.getOption() as any;
+  const seriesList = Array.isArray(option?.series) ? option.series : [option?.series];
+  for (const series of seriesList) {
+    const data = Array.isArray(series?.data) ? series.data : [];
+    const matched = data.find((item: any) => {
+      const idKey = normalizeIdentifier(item?.id ?? item?.name);
+      return idKey === key;
+    });
+    if (!matched) {
+      continue;
+    }
+    const x = Number(matched.x);
+    const y = Number(matched.y);
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+      return {x, y};
+    }
+  }
+  return null;
+}
+
+function resolveDraggedTableName(params: any) {
+  const tableNameByMeta = safeText(params?.data?.table?.tableName);
+  if (tableNameByMeta) {
+    return tableNameByMeta;
+  }
+  const tableNameById = safeText(params?.data?.id ?? params?.data?.name);
+  if (tableNameById) {
+    return tableNameById;
+  }
+  return safeText(params?.name);
+}
+
+function scheduleRenderGraph() {
+  if (renderRequestToken != null) {
+    return;
+  }
+  const scheduler = typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
+    ? window.requestAnimationFrame.bind(window)
+    : ((cb: FrameRequestCallback) => window.setTimeout(() => cb(performance.now()), 16));
+  renderRequestToken = scheduler(() => {
+    renderRequestToken = null;
+    renderGraph();
+  }) as unknown as number;
+}
+
+function relationExpression(relation: ErRelationVO, direction: RelationDirection) {
+  const arrow = relationArrowText(direction);
+  return `${relation.sourceTable}.${relation.sourceColumn} ${arrow} ${relation.targetTable}.${relation.targetColumn}`;
 }
 
 function buildGraphOption(graph: ErGraphVO | null, layoutMode: ErLayoutMode): echarts.EChartsOption | null {
   if (!graph || !graph.tables?.length) {
     emptyText.value = 'No ER graph data';
     nodePositionOverrides.clear();
+    relationRouteOverrideMap.clear();
+    activeRelationKey = '';
+    editingRelationKey = '';
+    hoveredRelationKey = '';
     lastLayoutModeKey = '';
     lastTableSignature = '';
     return null;
   }
+
   resetNodePositionStateIfNeeded(graph, layoutMode);
   pruneNodePositionOverrides(graph);
-  const fkRelations = graph.foreignKeyRelations || [];
-  const aiRelations = graph.aiRelations || [];
+
   const tableNameSet = new Set(graph.tables.map((table) => table.tableName));
-  const allRelations = [...fkRelations, ...aiRelations]
+  const allRelations = getGraphAllRelations(graph)
     .filter((relation) => tableNameSet.has(relation.sourceTable) && tableNameSet.has(relation.targetTable));
+  syncRouteOverridesFromGraph(allRelations);
+
   const canvasSize = resolveCanvasSize();
   const nodePositions = buildNodePositions(graph.tables, allRelations, layoutMode, canvasSize.width, canvasSize.height);
 
@@ -597,7 +683,7 @@ function buildGraphOption(graph: ErGraphVO | null, layoutMode: ErLayoutMode): ec
       nodePositionOverrides.set(tableKey, position);
     }
     const symbolHeight = nodeHeight(table);
-    tableRenderMeta.set(normalizeIdentifier(table.tableName), {
+    tableRenderMeta.set(tableKey, {
       table,
       center: position,
       height: symbolHeight,
@@ -614,57 +700,69 @@ function buildGraphOption(graph: ErGraphVO | null, layoutMode: ErLayoutMode): ec
       x: position.x,
       y: position.y,
       itemStyle: {
-        color: '#f1f3f5',
-        borderColor: '#3f86c2',
-        borderWidth: 1.3,
+        color: '#f8fbff',
+        borderColor: '#0a4a87',
+        borderWidth: 1.4,
         borderRadius: 10,
-        shadowBlur: 0,
+        shadowColor: 'rgba(7, 39, 76, 0.18)',
+        shadowBlur: 8,
+      },
+      emphasis: {
+        itemStyle: {
+          borderColor: '#0f62c6',
+          borderWidth: 1.8,
+          shadowColor: 'rgba(9, 54, 112, 0.28)',
+          shadowBlur: 14,
+        },
       },
       label: {
         show: true,
         formatter: () => buildNodeLabel(table, props.showComments),
         rich: {
           title: {
-            width: NODE_WIDTH - 16,
+            width: NODE_WIDTH - 14,
             color: '#ffffff',
             fontSize: 12,
             fontWeight: 700,
             lineHeight: 24,
             align: 'center' as const,
-            backgroundColor: '#3f86c2',
-            padding: [0, 8, 0, 8],
+            backgroundColor: '#0a4a87',
+            padding: [0, 7, 0, 7],
             borderRadius: [8, 8, 0, 0],
           },
           subtitle: {
-            width: NODE_WIDTH - 16,
-            color: '#cfe4f6',
+            width: NODE_WIDTH - 14,
+            color: '#b7d3f5',
             fontSize: 10,
             align: 'center' as const,
-            lineHeight: 20,
-            backgroundColor: '#3f86c2',
-            padding: [0, 8, 0, 8],
+            lineHeight: 18,
+            backgroundColor: '#0a3f72',
+            padding: [0, 7, 0, 7],
           },
           col: {
-            width: NODE_WIDTH - 16,
-            color: '#1e2e42',
+            width: NODE_WIDTH - 14,
+            color: '#1a2f4f',
             fontSize: 10,
             align: 'left' as const,
             lineHeight: NODE_ROW_HEIGHT,
-            padding: [0, 8, 0, 8],
+            padding: [0, 7, 0, 7],
+            backgroundColor: '#f8fbff',
           },
           empty: {
-            width: NODE_WIDTH - 16,
-            color: '#607693',
+            width: NODE_WIDTH - 14,
+            color: '#536885',
             fontSize: 10,
             lineHeight: NODE_ROW_HEIGHT,
-            padding: [0, 8, 0, 8],
+            padding: [0, 7, 0, 7],
+            backgroundColor: '#f8fbff',
           },
           ellipsis: {
-            width: NODE_WIDTH - 16,
-            color: '#607693',
+            width: NODE_WIDTH - 14,
+            color: '#536885',
             fontSize: 10,
             lineHeight: NODE_ROW_HEIGHT,
-            padding: [0, 8, 0, 8],
+            padding: [0, 7, 0, 7],
+            backgroundColor: '#f1f6fd',
           },
         },
       },
@@ -673,81 +771,55 @@ function buildGraphOption(graph: ErGraphVO | null, layoutMode: ErLayoutMode): ec
   });
 
   const anchorNodes: Array<Record<string, unknown>> = [];
-
   const links: Array<Record<string, unknown>> = [];
+  const relationGeometries: RelationGeometry[] = [];
 
   allRelations.forEach((relation, relationIndex) => {
-    const isAi = (relation.relationType || '').toUpperCase() === 'AI_INFERRED';
-    const reason = safeText(relation.reason);
-    const direction = normalizeRelationDirection(relation.relationDirection);
-    const arrowText = relationArrowText(direction);
-    const aiConfidence = normalizeConfidence(relation.confidence);
-    const aiLineColor = buildAiEdgeColor(aiConfidence);
-    const aiEmphasisColor = buildAiEdgeColor(Math.min(1, aiConfidence + 0.16));
     const sourceMeta = tableRenderMeta.get(normalizeIdentifier(relation.sourceTable));
     const targetMeta = tableRenderMeta.get(normalizeIdentifier(relation.targetTable));
-    const sourceAnchorId = `anchor-source-${relationIndex}`;
-    const targetAnchorId = `anchor-target-${relationIndex}`;
-    const createSegmentLink = (
-      sourceId: string,
-      targetId: string,
-      symbol: [string, string],
-      showLabel: boolean,
-    ) => ({
-      source: sourceId,
-      target: targetId,
-      value: 1,
-      name: `${relation.sourceColumn || ''} ${arrowText} ${relation.targetColumn || ''}`,
-      symbol,
-      symbolSize: [7, 11],
-      label: {
-        show: showLabel && isAi,
-        position: 'middle' as const,
-        formatter: edgeLabel(relation),
-        color: isAi ? '#845f14' : '#2f5fcc',
-        fontSize: 10,
-        backgroundColor: isAi ? 'rgba(255, 246, 223, 0.94)' : 'transparent',
-        borderColor: isAi ? '#d3ad59' : 'transparent',
-        borderWidth: isAi ? 1 : 0,
-        borderRadius: isAi ? 4 : 0,
-        padding: isAi ? [2, 4, 2, 4] : [0, 0, 0, 0],
-      },
-      lineStyle: {
-        type: isAi ? ('dashed' as const) : ('solid' as const),
-        width: isAi ? 1.6 : 2,
-        color: isAi ? aiLineColor : '#3b82f6',
-        curveness: 0,
-      },
-      emphasis: {
-        lineStyle: {
-          width: isAi ? 2.2 : 2.6,
-          color: isAi ? aiEmphasisColor : '#2f6fe1',
-        },
-      },
-      relation: {
-        ...relation,
-        reason,
-        relationDirection: direction,
-      },
+    if (!sourceMeta || !targetMeta) {
+      return;
+    }
+    const relationKey = buildRelationKey(relation);
+    const direction = normalizeRelationDirection(relation.relationDirection);
+
+    const sourceTargetCenterDeltaX = Math.abs(sourceMeta.center.x - targetMeta.center.x);
+    const useSameSideAnchor = sourceTargetCenterDeltaX < NODE_WIDTH * 0.72;
+    const sameSideAnchorOnRight = sourceMeta.center.x <= canvasSize.width / 2;
+    const sourceOnRight = useSameSideAnchor ? sameSideAnchorOnRight : (targetMeta.center.x >= sourceMeta.center.x);
+    const targetOnRight = useSameSideAnchor ? sameSideAnchorOnRight : (sourceMeta.center.x > targetMeta.center.x);
+
+    const sourceY = sourceMeta.center.y - sourceMeta.height / 2
+      + resolveRelationAnchorOffsetY(sourceMeta.table, relation.sourceColumn || '', sourceMeta.columnIndexMap);
+    const targetY = targetMeta.center.y - targetMeta.height / 2
+      + resolveRelationAnchorOffsetY(targetMeta.table, relation.targetColumn || '', targetMeta.columnIndexMap);
+
+    const sourceX = sourceMeta.center.x + (sourceOnRight ? NODE_WIDTH / 2 : -NODE_WIDTH / 2);
+    const targetX = targetMeta.center.x + (targetOnRight ? NODE_WIDTH / 2 : -NODE_WIDTH / 2);
+
+    const autoLaneX = sourceOnRight === targetOnRight
+      ? (sourceOnRight ? Math.max(sourceX, targetX) + ORTHOGONAL_LANE_GAP : Math.min(sourceX, targetX) - ORTHOGONAL_LANE_GAP)
+      : ((sourceX + targetX) / 2);
+    const laneX = resolveRelationLaneX(relation, relationKey, autoLaneX);
+
+    relationGeometries.push({
+      relation,
+      relationKey,
+      sourceX,
+      sourceY,
+      targetX,
+      targetY,
+      laneX,
+      direction,
     });
 
-    if (sourceMeta && targetMeta) {
-      const sourceTargetCenterDeltaX = Math.abs(sourceMeta.center.x - targetMeta.center.x);
-      const useSameSideAnchor = sourceTargetCenterDeltaX < NODE_WIDTH * 0.72;
-      const sameSideAnchorOnRight = sourceMeta.center.x <= canvasSize.width / 2;
-      const sourceOnRight = useSameSideAnchor
-        ? sameSideAnchorOnRight
-        : (targetMeta.center.x >= sourceMeta.center.x);
-      const targetOnRight = useSameSideAnchor
-        ? sameSideAnchorOnRight
-        : (sourceMeta.center.x > targetMeta.center.x);
-      const sourceY = sourceMeta.center.y - sourceMeta.height / 2
-        + resolveRelationAnchorOffsetY(sourceMeta.table, relation.sourceColumn || '', sourceMeta.columnIndexMap);
-      const targetY = targetMeta.center.y - targetMeta.height / 2
-        + resolveRelationAnchorOffsetY(targetMeta.table, relation.targetColumn || '', targetMeta.columnIndexMap);
-      const sourceX = sourceMeta.center.x + (sourceOnRight ? NODE_WIDTH / 2 : -NODE_WIDTH / 2);
-      const targetX = targetMeta.center.x + (targetOnRight ? NODE_WIDTH / 2 : -NODE_WIDTH / 2);
-      anchorNodes.push({
+    const sourceAnchorId = `anchor-source-${relationIndex}`;
+    const targetAnchorId = `anchor-target-${relationIndex}`;
+    const bendStartAnchorId = `anchor-bend-start-${relationIndex}`;
+    const bendEndAnchorId = `anchor-bend-end-${relationIndex}`;
+
+    anchorNodes.push(
+      {
         id: sourceAnchorId,
         name: sourceAnchorId,
         symbol: 'circle',
@@ -755,14 +827,12 @@ function buildGraphOption(graph: ErGraphVO | null, layoutMode: ErLayoutMode): ec
         draggable: false,
         x: sourceX,
         y: sourceY,
-        itemStyle: {
-          color: 'rgba(0,0,0,0)',
-          borderColor: 'rgba(0,0,0,0)',
-        },
+        itemStyle: {color: 'rgba(0,0,0,0)', borderColor: 'rgba(0,0,0,0)'},
         label: {show: false},
         tooltip: {show: false},
-      });
-      anchorNodes.push({
+        anchorType: 'REL_ANCHOR',
+      },
+      {
         id: targetAnchorId,
         name: targetAnchorId,
         symbol: 'circle',
@@ -770,33 +840,12 @@ function buildGraphOption(graph: ErGraphVO | null, layoutMode: ErLayoutMode): ec
         draggable: false,
         x: targetX,
         y: targetY,
-        itemStyle: {
-          color: 'rgba(0,0,0,0)',
-          borderColor: 'rgba(0,0,0,0)',
-        },
+        itemStyle: {color: 'rgba(0,0,0,0)', borderColor: 'rgba(0,0,0,0)'},
         label: {show: false},
         tooltip: {show: false},
-      });
-      const deltaY = Math.abs(sourceY - targetY);
-      const straightSymbol = relationEdgeSymbol(direction);
-      if (deltaY <= 0.5) {
-        links.push(
-          createSegmentLink(sourceAnchorId, targetAnchorId, straightSymbol, true),
-        );
-        return;
-      }
-
-      const bendStartAnchorId = `anchor-bend-start-${relationIndex}`;
-      const bendEndAnchorId = `anchor-bend-end-${relationIndex}`;
-      let laneX: number;
-      if (sourceOnRight === targetOnRight) {
-        laneX = sourceOnRight
-          ? Math.max(sourceX, targetX) + ORTHOGONAL_LANE_GAP
-          : Math.min(sourceX, targetX) - ORTHOGONAL_LANE_GAP;
-      } else {
-        laneX = (sourceX + targetX) / 2;
-      }
-      anchorNodes.push({
+        anchorType: 'REL_ANCHOR',
+      },
+      {
         id: bendStartAnchorId,
         name: bendStartAnchorId,
         symbol: 'circle',
@@ -804,14 +853,12 @@ function buildGraphOption(graph: ErGraphVO | null, layoutMode: ErLayoutMode): ec
         draggable: false,
         x: laneX,
         y: sourceY,
-        itemStyle: {
-          color: 'rgba(0,0,0,0)',
-          borderColor: 'rgba(0,0,0,0)',
-        },
+        itemStyle: {color: 'rgba(0,0,0,0)', borderColor: 'rgba(0,0,0,0)'},
         label: {show: false},
         tooltip: {show: false},
-      });
-      anchorNodes.push({
+        anchorType: 'REL_ANCHOR',
+      },
+      {
         id: bendEndAnchorId,
         name: bendEndAnchorId,
         symbol: 'circle',
@@ -819,41 +866,129 @@ function buildGraphOption(graph: ErGraphVO | null, layoutMode: ErLayoutMode): ec
         draggable: false,
         x: laneX,
         y: targetY,
-        itemStyle: {
-          color: 'rgba(0,0,0,0)',
-          borderColor: 'rgba(0,0,0,0)',
-        },
+        itemStyle: {color: 'rgba(0,0,0,0)', borderColor: 'rgba(0,0,0,0)'},
         label: {show: false},
         tooltip: {show: false},
-      });
-      const firstSegmentSymbol: [string, string] = direction === 'TARGET_TO_SOURCE' || direction === 'BIDIRECTIONAL'
-        ? ['arrow', 'none']
-        : ['none', 'none'];
-      const secondSegmentSymbol: [string, string] = direction === 'SOURCE_TO_TARGET' || direction === 'BIDIRECTIONAL'
-        ? ['none', 'arrow']
-        : ['none', 'none'];
-      links.push(
-        createSegmentLink(sourceAnchorId, bendStartAnchorId, firstSegmentSymbol, false),
-        createSegmentLink(bendStartAnchorId, bendEndAnchorId, ['none', 'none'], true),
-        createSegmentLink(bendEndAnchorId, targetAnchorId, secondSegmentSymbol, false),
-      );
-      return;
-    }
+        anchorType: 'REL_ANCHOR',
+      },
+    );
+
+    const isAi = normalizeRelationType(relation.relationType) === 'AI_INFERRED';
+    const aiConfidence = normalizeConfidence(relation.confidence);
+    const baseColor = isAi ? buildAiEdgeColor(aiConfidence) : '#2164d4';
+    const hoverColor = isAi ? buildAiEdgeColor(Math.min(1, aiConfidence + 0.2)) : '#124eb6';
+    const confidenceLabel = edgeLabel(relation);
+
+    const createSegmentLink = (
+      sourceId: string,
+      targetId: string,
+      symbol: [string, string],
+      showLabel: boolean,
+      edgePart: string,
+    ) => {
+      const relationHovered = relationKey === hoveredRelationKey;
+      return ({
+      source: sourceId,
+      target: targetId,
+      name: `${relation.sourceColumn || ''} ${relationArrowText(direction)} ${relation.targetColumn || ''}`,
+      symbol,
+      symbolSize: relationHovered ? [10, 14] : [8, 12],
+      relation,
+      relationKey,
+      relationDirection: direction,
+      edgePart,
+      lineStyle: {
+        type: isAi ? ('dashed' as const) : ('solid' as const),
+        width: relationHovered ? (isAi ? 3.2 : 3.4) : (isAi ? 1.9 : 2.1),
+        color: relationHovered ? hoverColor : baseColor,
+        shadowColor: relationHovered
+          ? (isAi ? 'rgba(25, 67, 125, 0.36)' : 'rgba(15, 73, 163, 0.36)')
+          : 'transparent',
+        shadowBlur: relationHovered ? 12 : 0,
+        opacity: relationHovered ? 1 : 0.96,
+        curveness: 0,
+      },
+      label: {
+        show: showLabel && isAi,
+        position: 'middle' as const,
+        formatter: confidenceLabel,
+        color: '#09396d',
+        fontSize: 10,
+        fontWeight: 700,
+        backgroundColor: 'rgba(241, 247, 255, 0.92)',
+        borderColor: '#8db5ea',
+        borderWidth: 1,
+        borderRadius: 4,
+        padding: [2, 4, 2, 4],
+      },
+      emphasis: {
+        lineStyle: {
+          width: isAi ? 3.2 : 3.4,
+          color: hoverColor,
+          shadowColor: isAi ? 'rgba(25, 67, 125, 0.36)' : 'rgba(15, 73, 163, 0.36)',
+          shadowBlur: 12,
+          opacity: 1,
+        },
+      },
+    });
+    };
+
+    const firstSegmentSymbol: [string, string] = direction === 'TARGET_TO_SOURCE' || direction === 'BIDIRECTIONAL'
+      ? ['arrow', 'none']
+      : ['none', 'none'];
+    const secondSegmentSymbol: [string, string] = direction === 'SOURCE_TO_TARGET' || direction === 'BIDIRECTIONAL'
+      ? ['none', 'arrow']
+      : ['none', 'none'];
 
     links.push(
-      createSegmentLink(
-        relation.sourceTable,
-        relation.targetTable,
-        relationEdgeSymbol(direction),
-        true,
-      ),
+      createSegmentLink(sourceAnchorId, bendStartAnchorId, firstSegmentSymbol, false, 'source'),
+      createSegmentLink(bendStartAnchorId, bendEndAnchorId, ['none', 'none'], true, 'middle'),
+      createSegmentLink(bendEndAnchorId, targetAnchorId, secondSegmentSymbol, false, 'target'),
     );
+  });
+
+  relationGeometries.forEach((item, index) => {
+    if (item.relationKey !== activeRelationKey && item.relationKey !== editingRelationKey) {
+      return;
+    }
+    const handleId = `route-handle-${index}`;
+    const handleY = (item.sourceY + item.targetY) / 2;
+    anchorNodes.push({
+      id: handleId,
+      name: handleId,
+      symbol: 'diamond',
+      symbolSize: 14,
+      draggable: true,
+      x: item.laneX,
+      y: handleY,
+      itemStyle: {
+        color: '#ffe2a8',
+        borderColor: '#8a5d00',
+        borderWidth: 1.4,
+        shadowColor: 'rgba(138, 93, 0, 0.35)',
+        shadowBlur: 8,
+      },
+      emphasis: {
+        itemStyle: {
+          color: '#ffd37a',
+          borderColor: '#6e4500',
+          borderWidth: 1.8,
+          shadowColor: 'rgba(110, 69, 0, 0.42)',
+          shadowBlur: 12,
+        },
+      },
+      label: {show: false},
+      tooltip: {show: false},
+      controlType: 'RELATION_HANDLE',
+      relationKey: item.relationKey,
+    });
   });
 
   return {
     animation: false,
     tooltip: {
       trigger: 'item',
+      triggerOn: 'mousemove',
       confine: true,
       formatter: (params: any) => {
         if (params?.dataType === 'edge') {
@@ -862,20 +997,24 @@ function buildGraphOption(graph: ErGraphVO | null, layoutMode: ErLayoutMode): ec
             return params?.name || '';
           }
           const direction = normalizeRelationDirection(relation.relationDirection);
-          const arrowText = relationArrowText(direction);
-          const expression = `${relation.sourceTable}.${relation.sourceColumn} ${arrowText} ${relation.targetTable}.${relation.targetColumn}`;
+          const expression = relationExpression(relation, direction);
           const confidenceText = edgeLabel(relation) || '-';
           const reason = safeText(relation.reason);
           return [
-            `<strong>${escapeHtml(expression)}</strong>`,
-            `方向：${relationDirectionText(direction)}`,
-            `类型：${(relation.relationType || '').toUpperCase() === 'AI_INFERRED' ? 'AI 推断' : '外键'}`,
-            (relation.relationType || '').toUpperCase() === 'AI_INFERRED' ? `置信度：${confidenceText}` : '',
-            (relation.relationType || '').toUpperCase() === 'AI_INFERRED' ? `理由：${escapeHtml(reason || '模型未返回理由')}` : '',
-          ].filter((item) => !!item).join('<br/>');
+            `<div style="font-weight:700;color:#0a3f72;">${escapeHtml(expression)}</div>`,
+            `<div style="margin-top:4px;color:#37577d;">方向：${relationDirectionText(direction)}</div>`,
+            `<div style="color:#37577d;">类型：${normalizeRelationType(relation.relationType) === 'AI_INFERRED' ? 'AI 推断' : '外键'}</div>`,
+            normalizeRelationType(relation.relationType) === 'AI_INFERRED' ? `<div style="color:#37577d;">置信度：${confidenceText}</div>` : '',
+            normalizeRelationType(relation.relationType) === 'AI_INFERRED'
+              ? `<div style="color:#5f4a1c;max-width:380px;">理由：${escapeHtml(reason || '模型未返回理由')}</div>`
+              : '',
+          ].filter((item) => !!item).join('');
+        }
+        if (params?.data?.controlType === 'RELATION_HANDLE' || params?.data?.anchorType === 'REL_ANCHOR') {
+          return '';
         }
         const table = params?.data?.table as ErTableNodeVO | undefined;
-        if (!table?.tableName) {
+        if (!table?.tableName || isNodeDragging) {
           return '';
         }
         return buildNodeTooltip(table, props.showComments);
@@ -898,45 +1037,176 @@ function buildGraphOption(graph: ErGraphVO | null, layoutMode: ErLayoutMode): ec
   };
 }
 
+function commitTablePosition(tableName: string) {
+  const position = resolveNodePositionFromChart(tableName);
+  if (!position) {
+    return;
+  }
+  saveNodePositionOverride(tableName, position.x, position.y);
+}
+
+function commitRouteHandlePosition(handleId: string, relationKey: string) {
+  const position = resolveNodePositionFromChart(handleId);
+  if (!position || !Number.isFinite(position.x)) {
+    return;
+  }
+  relationRouteOverrideMap.set(relationKey, position.x);
+  emit('relation-route-change', {
+    relationKey,
+    routeManual: true,
+    routeLaneX: position.x,
+  });
+}
+
 function ensureChart() {
   if (!chartRef.value) {
     return null;
   }
   if (!chartInstance) {
     chartInstance = echarts.init(chartRef.value);
+
+    graphClickHandler = (params: any) => {
+      if (params?.dataType !== 'edge') {
+        return;
+      }
+      const relationKey = safeText(params?.data?.relationKey);
+      if (!relationKey || relationKey === activeRelationKey) {
+        return;
+      }
+      activeRelationKey = relationKey;
+      editingRelationKey = '';
+      scheduleRenderGraph();
+    };
+
+    graphMouseMoveHandler = (params: any) => {
+      const relationKey = params?.dataType === 'edge' ? safeText(params?.data?.relationKey) : '';
+      if (relationKey === hoveredRelationKey) {
+        return;
+      }
+      hoveredRelationKey = relationKey;
+      scheduleRenderGraph();
+    };
+
+    graphGlobalOutHandler = () => {
+      if (!hoveredRelationKey) {
+        return;
+      }
+      hoveredRelationKey = '';
+      scheduleRenderGraph();
+    };
+
+    graphNodeDragMoveHandler = (params: any) => {
+      if (params?.dataType !== 'node') {
+        return;
+      }
+
+      if (params?.data?.controlType === 'RELATION_HANDLE') {
+        const relationKey = safeText(params?.data?.relationKey);
+        const handleId = safeText(params?.data?.id ?? params?.data?.name ?? params?.name);
+        if (!relationKey || !handleId) {
+          return;
+        }
+        isRouteHandleDragging = true;
+        editingRelationKey = relationKey;
+        activeRelationKey = relationKey;
+        chartInstance?.dispatchAction({type: 'hideTip'});
+        commitRouteHandlePosition(handleId, relationKey);
+        scheduleRenderGraph();
+        return;
+      }
+
+      const tableName = resolveDraggedTableName(params);
+      if (!tableName) {
+        return;
+      }
+      isNodeDragging = true;
+      draggingTableKey = normalizeIdentifier(tableName);
+      chartInstance?.dispatchAction({type: 'hideTip'});
+      commitTablePosition(tableName);
+      scheduleRenderGraph();
+    };
+
     graphNodeDragEndHandler = (params: any) => {
       if (params?.dataType !== 'node') {
         return;
       }
+
+      if (params?.data?.controlType === 'RELATION_HANDLE') {
+        const relationKey = safeText(params?.data?.relationKey);
+        const handleId = safeText(params?.data?.id ?? params?.data?.name ?? params?.name);
+        if (relationKey && handleId) {
+          commitRouteHandlePosition(handleId, relationKey);
+        }
+        isRouteHandleDragging = false;
+        editingRelationKey = '';
+        scheduleRenderGraph();
+        return;
+      }
+
       const tableName = resolveDraggedTableName(params);
       if (!tableName) {
         return;
       }
-      persistDraggedNodePosition(tableName, Number.NaN, Number.NaN);
-      lastDragCommitAt = Date.now();
+      commitTablePosition(tableName);
+      isNodeDragging = false;
+      draggingTableKey = '';
+      scheduleRenderGraph();
     };
+
     graphNodeMouseUpHandler = (params: any) => {
       if (params?.dataType !== 'node') {
         return;
       }
-      const tableName = resolveDraggedTableName(params);
-      if (!tableName) {
-        return;
-      }
-      const scheduledAt = Date.now();
       if (dragMouseUpFallbackTimer != null) {
         window.clearTimeout(dragMouseUpFallbackTimer);
       }
-      // 关键操作：dragend 未触发时由 mouseup 兜底重绘连线，并避免覆盖 dragend 的最终落点。
       dragMouseUpFallbackTimer = window.setTimeout(() => {
-        if (lastDragCommitAt > scheduledAt) {
+        if (params?.data?.controlType === 'RELATION_HANDLE') {
+          const relationKey = safeText(params?.data?.relationKey);
+          const handleId = safeText(params?.data?.id ?? params?.data?.name ?? params?.name);
+          if (relationKey && handleId) {
+            commitRouteHandlePosition(handleId, relationKey);
+            isRouteHandleDragging = false;
+            editingRelationKey = '';
+            scheduleRenderGraph();
+          }
           return;
         }
-        persistDraggedNodePosition(tableName, Number.NaN, Number.NaN);
-      }, 48);
+
+        const tableName = resolveDraggedTableName(params);
+        if (!tableName) {
+          return;
+        }
+        const tableKey = normalizeIdentifier(tableName);
+        if (!isNodeDragging && draggingTableKey !== tableKey) {
+          return;
+        }
+        commitTablePosition(tableName);
+        isNodeDragging = false;
+        draggingTableKey = '';
+        scheduleRenderGraph();
+      }, 44);
     };
+
+    zrClickHandler = (params: any) => {
+      if (params?.target) {
+        return;
+      }
+      if (!activeRelationKey) {
+        return;
+      }
+      activeRelationKey = '';
+      editingRelationKey = '';
+      scheduleRenderGraph();
+    };
+
+    chartInstance.on('click', graphClickHandler);
+    chartInstance.on('mousemove', graphMouseMoveHandler);
+    chartInstance.on('globalout', graphGlobalOutHandler);
+    chartInstance.on('drag', graphNodeDragMoveHandler);
     chartInstance.on('dragend', graphNodeDragEndHandler);
     chartInstance.on('mouseup', graphNodeMouseUpHandler);
+    chartInstance.getZr().on('click', zrClickHandler);
   }
   return chartInstance;
 }
@@ -952,7 +1222,12 @@ function renderGraph() {
   if (!chart) {
     return;
   }
-  chart.setOption(option, true);
+  chart.setOption(option, {
+    notMerge: true,
+    lazyUpdate: true,
+    replaceMerge: ['series'],
+    silent: false,
+  });
   chart.resize();
 }
 
@@ -1021,9 +1296,34 @@ onBeforeUnmount(() => {
     resizeObserver.unobserve(chartRef.value);
   }
   resizeObserver = null;
+
   if (dragMouseUpFallbackTimer != null) {
     window.clearTimeout(dragMouseUpFallbackTimer);
     dragMouseUpFallbackTimer = null;
+  }
+  if (renderRequestToken != null && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+    window.cancelAnimationFrame(renderRequestToken);
+    renderRequestToken = null;
+  }
+
+  isNodeDragging = false;
+  draggingTableKey = '';
+  isRouteHandleDragging = false;
+  activeRelationKey = '';
+  editingRelationKey = '';
+  hoveredRelationKey = '';
+
+  if (chartInstance && graphClickHandler) {
+    chartInstance.off('click', graphClickHandler);
+  }
+  if (chartInstance && graphMouseMoveHandler) {
+    chartInstance.off('mousemove', graphMouseMoveHandler);
+  }
+  if (chartInstance && graphGlobalOutHandler) {
+    chartInstance.off('globalout', graphGlobalOutHandler);
+  }
+  if (chartInstance && graphNodeDragMoveHandler) {
+    chartInstance.off('drag', graphNodeDragMoveHandler);
   }
   if (chartInstance && graphNodeDragEndHandler) {
     chartInstance.off('dragend', graphNodeDragEndHandler);
@@ -1031,9 +1331,20 @@ onBeforeUnmount(() => {
   if (chartInstance && graphNodeMouseUpHandler) {
     chartInstance.off('mouseup', graphNodeMouseUpHandler);
   }
+  if (chartInstance && zrClickHandler) {
+    chartInstance.getZr().off('click', zrClickHandler);
+  }
+
+  graphClickHandler = null;
+  graphMouseMoveHandler = null;
+  graphGlobalOutHandler = null;
+  graphNodeDragMoveHandler = null;
   graphNodeDragEndHandler = null;
   graphNodeMouseUpHandler = null;
+  zrClickHandler = null;
+
   nodePositionOverrides.clear();
+  relationRouteOverrideMap.clear();
   chartInstance?.dispose();
   chartInstance = null;
 });
@@ -1045,10 +1356,10 @@ onBeforeUnmount(() => {
   height: 100%;
   min-height: 360px;
   border-radius: 10px;
-  background-color: #f3f4f6;
+  background-color: #f3f5f8;
   background-image:
-    linear-gradient(#e2e5ea 1px, transparent 1px),
-    linear-gradient(90deg, #e2e5ea 1px, transparent 1px);
+    linear-gradient(#d9e1eb 1px, transparent 1px),
+    linear-gradient(90deg, #d9e1eb 1px, transparent 1px);
   background-size: 20px 20px;
   position: relative;
   overflow: hidden;

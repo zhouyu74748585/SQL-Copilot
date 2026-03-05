@@ -28,4 +28,13 @@ public class ErRelationVO {
 
     /** 推断理由。 */
     private String reason;
+
+    /** 是否启用手动路由（true 表示优先使用 routeLaneX）。 */
+    private Boolean routeManual;
+
+    /** 连线折线中轴 X 坐标（画布坐标）。 */
+    private Double routeLaneX;
+
+    /** 连线路由版本号（用于未来兼容扩展）。 */
+    private Integer routeVersion;
 }
