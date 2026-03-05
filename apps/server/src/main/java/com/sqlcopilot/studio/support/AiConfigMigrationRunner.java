@@ -26,7 +26,9 @@ public class AiConfigMigrationRunner implements ApplicationRunner {
              Statement statement = connection.createStatement()) {
             ensureAiProviderModelOptionsColumn(connection);
             ensureRagConfigTable(statement);
+            normalizeRagConfigTable(connection);
             ensureRagVectorizeStatusTable(statement);
+            ensureRagVectorizeStatusColumns(connection);
             migrateLegacyRagColumns(connection);
         } catch (SQLException ex) {
             throw new IllegalStateException("AI 配置表迁移失败", ex);
@@ -56,18 +58,52 @@ public class AiConfigMigrationRunner implements ApplicationRunner {
             CREATE TABLE IF NOT EXISTS rag_embedding_config (
                 id INTEGER PRIMARY KEY,
                 rag_embedding_model_dir TEXT,
-                rag_embedding_model_file_name TEXT,
-                rag_embedding_model_data_file_name TEXT,
-                rag_embedding_tokenizer_file_name TEXT,
-                rag_embedding_tokenizer_config_file_name TEXT,
-                rag_embedding_config_file_name TEXT,
-                rag_embedding_special_tokens_file_name TEXT,
-                rag_embedding_sentencepiece_file_name TEXT,
-                rag_embedding_model_path TEXT,
-                rag_embedding_model_data_path TEXT,
                 updated_at INTEGER NOT NULL
             )
             """);
+    }
+
+    /**
+     * 关键操作：将历史宽表结构收敛为仅模型目录字段，避免无效配置持续堆积。
+     */
+    private void normalizeRagConfigTable(Connection connection) throws SQLException {
+        if (!hasTable(connection, "rag_embedding_config")) {
+            return;
+        }
+        if (!hasColumn(connection, "rag_embedding_config", "rag_embedding_model_dir")) {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("ALTER TABLE rag_embedding_config ADD COLUMN rag_embedding_model_dir TEXT");
+            }
+        }
+        if (!hasColumn(connection, "rag_embedding_config", "updated_at")) {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("ALTER TABLE rag_embedding_config ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0");
+            }
+        }
+        if (!hasAnyLegacyRagConfigColumns(connection)) {
+            return;
+        }
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("""
+                CREATE TABLE IF NOT EXISTS rag_embedding_config_new (
+                    id INTEGER PRIMARY KEY,
+                    rag_embedding_model_dir TEXT,
+                    updated_at INTEGER NOT NULL
+                )
+                """);
+            statement.execute("""
+                INSERT OR REPLACE INTO rag_embedding_config_new(id, rag_embedding_model_dir, updated_at)
+                SELECT id,
+                       rag_embedding_model_dir,
+                       CASE
+                           WHEN updated_at IS NULL OR updated_at <= 0 THEN CAST(strftime('%s', 'now') AS INTEGER) * 1000
+                           ELSE updated_at
+                       END
+                FROM rag_embedding_config
+                """);
+            statement.execute("DROP TABLE rag_embedding_config");
+            statement.execute("ALTER TABLE rag_embedding_config_new RENAME TO rag_embedding_config");
+        }
     }
 
     /**
@@ -81,9 +117,28 @@ public class AiConfigMigrationRunner implements ApplicationRunner {
                 status TEXT NOT NULL,
                 message TEXT,
                 updated_at INTEGER NOT NULL,
+                last_full_vectorize_duration_ms INTEGER,
+                last_full_vectorize_provider TEXT,
                 PRIMARY KEY(connection_id, database_name)
             )
             """);
+    }
+
+    /**
+     * 关键操作：补齐整库全量向量化统计字段，兼容历史库平滑升级。
+     */
+    private void ensureRagVectorizeStatusColumns(Connection connection) throws SQLException {
+        if (!hasTable(connection, "rag_vectorize_status")) {
+            return;
+        }
+        try (Statement statement = connection.createStatement()) {
+            if (!hasColumn(connection, "rag_vectorize_status", "last_full_vectorize_duration_ms")) {
+                statement.execute("ALTER TABLE rag_vectorize_status ADD COLUMN last_full_vectorize_duration_ms INTEGER");
+            }
+            if (!hasColumn(connection, "rag_vectorize_status", "last_full_vectorize_provider")) {
+                statement.execute("ALTER TABLE rag_vectorize_status ADD COLUMN last_full_vectorize_provider TEXT");
+            }
+        }
     }
 
     private void migrateLegacyRagColumns(Connection connection) throws SQLException {
@@ -96,18 +151,7 @@ public class AiConfigMigrationRunner implements ApplicationRunner {
 
         List<String> legacyColumns = new ArrayList<>();
         legacyColumns.add("rag_embedding_model_dir");
-        legacyColumns.add("rag_embedding_model_file_name");
-        legacyColumns.add("rag_embedding_model_data_file_name");
-        legacyColumns.add("rag_embedding_tokenizer_file_name");
-        legacyColumns.add("rag_embedding_tokenizer_config_file_name");
-        legacyColumns.add("rag_embedding_config_file_name");
-        legacyColumns.add("rag_embedding_special_tokens_file_name");
-        legacyColumns.add("rag_embedding_sentencepiece_file_name");
-        legacyColumns.add("rag_embedding_model_path");
-        legacyColumns.add("rag_embedding_model_data_path");
-
-        String selectSql = "SELECT " + String.join(", ", legacyColumns)
-            + ", updated_at FROM ai_provider_config WHERE id = ?";
+        String selectSql = "SELECT " + String.join(", ", legacyColumns) + ", updated_at FROM ai_provider_config WHERE id = ?";
         try (PreparedStatement select = connection.prepareStatement(selectSql)) {
             select.setLong(1, SINGLETON_ID);
             try (ResultSet rs = select.executeQuery()) {
@@ -134,29 +178,30 @@ public class AiConfigMigrationRunner implements ApplicationRunner {
                     INSERT INTO rag_embedding_config(
                         id,
                         rag_embedding_model_dir,
-                        rag_embedding_model_file_name,
-                        rag_embedding_model_data_file_name,
-                        rag_embedding_tokenizer_file_name,
-                        rag_embedding_tokenizer_config_file_name,
-                        rag_embedding_config_file_name,
-                        rag_embedding_special_tokens_file_name,
-                        rag_embedding_sentencepiece_file_name,
-                        rag_embedding_model_path,
-                        rag_embedding_model_data_path,
                         updated_at
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES(?, ?, ?)
                     """;
                 try (PreparedStatement insert = connection.prepareStatement(insertSql)) {
                     insert.setLong(1, SINGLETON_ID);
-                    for (int i = 0; i < values.size(); i++) {
-                        insert.setString(i + 2, values.get(i));
-                    }
-                    insert.setLong(12, updatedAt);
+                    insert.setString(2, values.get(0));
+                    insert.setLong(3, updatedAt);
                     insert.executeUpdate();
                 }
             }
         }
+    }
+
+    private boolean hasAnyLegacyRagConfigColumns(Connection connection) throws SQLException {
+        return hasColumn(connection, "rag_embedding_config", "rag_embedding_model_file_name")
+            || hasColumn(connection, "rag_embedding_config", "rag_embedding_model_data_file_name")
+            || hasColumn(connection, "rag_embedding_config", "rag_embedding_tokenizer_file_name")
+            || hasColumn(connection, "rag_embedding_config", "rag_embedding_tokenizer_config_file_name")
+            || hasColumn(connection, "rag_embedding_config", "rag_embedding_config_file_name")
+            || hasColumn(connection, "rag_embedding_config", "rag_embedding_special_tokens_file_name")
+            || hasColumn(connection, "rag_embedding_config", "rag_embedding_sentencepiece_file_name")
+            || hasColumn(connection, "rag_embedding_config", "rag_embedding_model_path")
+            || hasColumn(connection, "rag_embedding_config", "rag_embedding_model_data_path");
     }
 
     private boolean hasAnyRagConfig(Connection connection) throws SQLException {

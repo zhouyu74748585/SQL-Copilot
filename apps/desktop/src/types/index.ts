@@ -270,29 +270,11 @@ export interface AiModelOption {
 
 export interface RagConfigVO {
   ragEmbeddingModelDir?: string;
-  ragEmbeddingModelFileName?: string;
-  ragEmbeddingModelDataFileName?: string;
-  ragEmbeddingTokenizerFileName?: string;
-  ragEmbeddingTokenizerConfigFileName?: string;
-  ragEmbeddingConfigFileName?: string;
-  ragEmbeddingSpecialTokensFileName?: string;
-  ragEmbeddingSentencepieceFileName?: string;
-  ragEmbeddingModelPath?: string;
-  ragEmbeddingModelDataPath?: string;
   updatedAt?: number;
 }
 
 export interface RagConfigSaveReq {
   ragEmbeddingModelDir?: string;
-  ragEmbeddingModelFileName?: string;
-  ragEmbeddingModelDataFileName?: string;
-  ragEmbeddingTokenizerFileName?: string;
-  ragEmbeddingTokenizerConfigFileName?: string;
-  ragEmbeddingConfigFileName?: string;
-  ragEmbeddingSpecialTokensFileName?: string;
-  ragEmbeddingSentencepieceFileName?: string;
-  ragEmbeddingModelPath?: string;
-  ragEmbeddingModelDataPath?: string;
 }
 
 export interface RagVectorizeEnqueueReq {
@@ -350,4 +332,6 @@ export interface RagVectorizeOverviewVO {
   sqlHistoryVectorCount: number;
   sqlFragmentVectorCount: number;
   vectorDimension?: number;
+  lastFullVectorizeDurationMs?: number;
+  lastFullVectorizeProvider?: string;
 }

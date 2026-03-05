@@ -464,6 +464,12 @@ body {
   justify-content: space-between;
 }
 
+.pane-title-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .pane-search {
   padding: 8px;
   border-bottom: 1px solid var(--line);

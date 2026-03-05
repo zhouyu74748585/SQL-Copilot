@@ -49,10 +49,6 @@
         </div>
       </div>
       <div class="top-chrome-actions">
-        <button class="tool-item top-action-btn" @click="openCreateModal" title="连接">
-          <link-outlined />
-          <span>连接</span>
-        </button>
         <a-dropdown placement="bottomLeft" :trigger="['click']">
           <button class="tool-item top-action-btn" :disabled="!canOpenHistory" title="会话历史" @click="handleHistoryMenuClick">
             <history-outlined />
@@ -151,11 +147,19 @@
       <aside class="pane pane-left">
         <div class="pane-title pane-title-with-action">
           <span>我的连接</span>
-          <a-button size="small" type="text" :loading="connectionRefreshing" @click="refreshConnections" title="刷新连接列表">
-            <template #icon>
-              <reload-outlined />
-            </template>
-          </a-button>
+          <div class="pane-title-actions">
+            <a-button size="small" type="text" @click="openCreateModal" title="新建连接">
+              <template #icon>
+                <link-outlined />
+              </template>
+              新建链接
+            </a-button>
+            <a-button size="small" type="text" :loading="connectionRefreshing" @click="refreshConnections" title="刷新连接列表">
+              <template #icon>
+                <reload-outlined />
+              </template>
+            </a-button>
+          </div>
         </div>
         <div class="pane-search">
           <a-input v-model:value="connectionKeyword" size="small" placeholder="搜索连接" allow-clear>
@@ -1173,76 +1177,11 @@
                 <a-input
                   :value="ragConfigForm.ragEmbeddingModelDir"
                   readonly
-                  placeholder="/path/to/bge-m3-onnx-o4 (directory first)"
+                  placeholder="/path/to/bge-m3-onnx-o4"
                 />
                 <a-button :loading="pickingRagModelDir" @click="pickRagEmbeddingModelDir">选择目录</a-button>
               </div>
             </a-form-item>
-            <a-row :gutter="12">
-              <a-col :span="12">
-                <a-form-item label="ONNX 文件名">
-                  <a-input v-model:value="ragConfigForm.ragEmbeddingModelFileName" placeholder="model_optimized.onnx" />
-                </a-form-item>
-              </a-col>
-              <a-col :span="12">
-                <a-form-item label="ONNX 数据文件名（可选）">
-                  <a-input v-model:value="ragConfigForm.ragEmbeddingModelDataFileName" placeholder="model_optimized.onnx.data" />
-                </a-form-item>
-              </a-col>
-            </a-row>
-            <a-form-item label="Tokenizer 文件名（必填）">
-              <a-input v-model:value="ragConfigForm.ragEmbeddingTokenizerFileName" placeholder="tokenizer.json" />
-            </a-form-item>
-            <a-row :gutter="12">
-              <a-col :span="12">
-                <a-form-item label="Tokenizer 配置文件">
-                  <a-input v-model:value="ragConfigForm.ragEmbeddingTokenizerConfigFileName" placeholder="tokenizer_config.json" />
-                </a-form-item>
-              </a-col>
-              <a-col :span="12">
-                <a-form-item label="模型配置文件">
-                  <a-input v-model:value="ragConfigForm.ragEmbeddingConfigFileName" placeholder="config.json" />
-                </a-form-item>
-              </a-col>
-            </a-row>
-            <a-row :gutter="12">
-              <a-col :span="12">
-                <a-form-item label="Special Tokens 文件">
-                  <a-input v-model:value="ragConfigForm.ragEmbeddingSpecialTokensFileName" placeholder="special_tokens_map.json" />
-                </a-form-item>
-              </a-col>
-              <a-col :span="12">
-                <a-form-item label="SentencePiece 文件">
-                  <a-input v-model:value="ragConfigForm.ragEmbeddingSentencepieceFileName" placeholder="sentencepiece.bpe.model" />
-                </a-form-item>
-              </a-col>
-            </a-row>
-            <a-row :gutter="12">
-              <a-col :span="12">
-                <a-form-item label="ONNX 文件绝对路径（目录为空时生效）">
-                  <div class="file-picker-row">
-                    <a-input
-                      :value="ragConfigForm.ragEmbeddingModelPath"
-                      readonly
-                      placeholder="/path/to/model_optimized.onnx"
-                    />
-                    <a-button :loading="pickingRagModelPath" @click="pickRagEmbeddingModelPath">选择文件</a-button>
-                  </div>
-                </a-form-item>
-              </a-col>
-              <a-col :span="12">
-                <a-form-item label="ONNX 数据绝对路径（可选）">
-                  <div class="file-picker-row">
-                    <a-input
-                      :value="ragConfigForm.ragEmbeddingModelDataPath"
-                      readonly
-                      placeholder="/path/to/model_optimized.onnx.data"
-                    />
-                    <a-button :loading="pickingRagModelDataPath" @click="pickRagEmbeddingModelDataPath">选择文件</a-button>
-                  </div>
-                </a-form-item>
-              </a-col>
-            </a-row>
           </a-tab-pane>
         </a-tabs>
       </a-form>
@@ -1350,7 +1289,7 @@
     <a-modal
       v-model:open="vectorizeOverviewModalOpen"
       title="向量化数据概览"
-      width="560px"
+      width="680px"
       :footer="null"
       @cancel="vectorizeOverviewModalOpen = false"
     >
@@ -1375,6 +1314,14 @@
             <div class="vectorize-overview-kpi-card">
               <span>最近更新</span>
               <strong>{{ formatTime(vectorizeOverviewData.updatedAt) }}</strong>
+            </div>
+            <div class="vectorize-overview-kpi-card">
+              <span>上次全量耗时</span>
+              <strong>{{ formatDurationMs(vectorizeOverviewData.lastFullVectorizeDurationMs) }}</strong>
+            </div>
+            <div class="vectorize-overview-kpi-card">
+              <span>上次执行引擎</span>
+              <strong>{{ formatVectorizeProvider(vectorizeOverviewData.lastFullVectorizeProvider) }}</strong>
             </div>
           </div>
 
@@ -1731,8 +1678,6 @@ const connectionPreviewError = ref('');
 const aiConfigForm = reactive<AiConfigSaveReq>(defaultAiConfigForm());
 const ragConfigForm = reactive<RagConfigSaveReq>(defaultRagConfigForm());
 const pickingRagModelDir = ref(false);
-const pickingRagModelPath = ref(false);
-const pickingRagModelDataPath = ref(false);
 
 const workflow = reactive({
   connectionId: 0,
@@ -4935,7 +4880,7 @@ async function pickRagEmbeddingModelDir() {
   try {
     const selectedPath = await bridge.pickDirectory({
       title: 'Select embedding model directory',
-      defaultPath: ragConfigForm.ragEmbeddingModelDir || ragConfigForm.ragEmbeddingModelPath || undefined,
+      defaultPath: ragConfigForm.ragEmbeddingModelDir || undefined,
     });
     if (!selectedPath) {
       return;
@@ -4943,59 +4888,6 @@ async function pickRagEmbeddingModelDir() {
     ragConfigForm.ragEmbeddingModelDir = selectedPath;
   } finally {
     pickingRagModelDir.value = false;
-  }
-}
-
-async function pickRagEmbeddingModelPath() {
-  const bridge = getDesktopBridge();
-  if (!bridge) {
-    message.warning('File picker is unavailable in this runtime. Please run in desktop app.');
-    return;
-  }
-  if (pickingRagModelPath.value) {
-    return;
-  }
-  pickingRagModelPath.value = true;
-  try {
-    const selectedPath = await bridge.pickFile({
-      title: '选择向量化 ONNX 模型文件',
-      defaultPath: ragConfigForm.ragEmbeddingModelPath || ragConfigForm.ragEmbeddingModelDir || undefined,
-      filters: [{ name: 'ONNX Model', extensions: ['onnx'] }],
-    });
-    if (!selectedPath) {
-      return;
-    }
-    ragConfigForm.ragEmbeddingModelPath = selectedPath;
-  } finally {
-    pickingRagModelPath.value = false;
-  }
-}
-
-async function pickRagEmbeddingModelDataPath() {
-  const bridge = getDesktopBridge();
-  if (!bridge) {
-    message.warning('File picker is unavailable in this runtime. Please run in desktop app.');
-    return;
-  }
-  if (pickingRagModelDataPath.value) {
-    return;
-  }
-  pickingRagModelDataPath.value = true;
-  try {
-    const selectedPath = await bridge.pickFile({
-      title: '选择 ONNX 数据文件',
-      defaultPath: ragConfigForm.ragEmbeddingModelDataPath
-        || ragConfigForm.ragEmbeddingModelPath
-        || ragConfigForm.ragEmbeddingModelDir
-        || undefined,
-      filters: [{ name: 'ONNX Data', extensions: ['data'] }],
-    });
-    if (!selectedPath) {
-      return;
-    }
-    ragConfigForm.ragEmbeddingModelDataPath = selectedPath;
-  } finally {
-    pickingRagModelDataPath.value = false;
   }
 }
 
@@ -6310,6 +6202,44 @@ function formatTime(ts?: number) {
   return `${y}-${m}-${d} ${hh}:${mm}:${ss}`;
 }
 
+function formatDurationMs(durationMs?: number) {
+  if (durationMs == null || durationMs < 0) {
+    return '-';
+  }
+  if (durationMs < 1000) {
+    return `${durationMs} ms`;
+  }
+  if (durationMs < 60_000) {
+    return `${(durationMs / 1000).toFixed(1)} s`;
+  }
+
+  const totalSeconds = Math.floor(durationMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`;
+  }
+  return `${minutes}m ${seconds}s`;
+}
+
+function formatVectorizeProvider(provider?: string) {
+  const normalized = (provider || '').trim().toUpperCase();
+  if (!normalized) {
+    return '-';
+  }
+  if (normalized === 'CORE_ML') {
+    return 'Core ML';
+  }
+  if (normalized === 'DIRECT_ML') {
+    return 'DirectML';
+  }
+  if (normalized === 'HASH_FALLBACK') {
+    return '哈希降级';
+  }
+  return normalized;
+}
+
 function handleChatComposerKeydown(event: KeyboardEvent, tab: QueryWorkspaceTab) {
   if (!tab.autoMode) {
     return;
@@ -6992,30 +6922,12 @@ function fillAiConfigForm(config: AiConfigVO) {
 function defaultRagConfigForm(): RagConfigSaveReq {
   return {
     ragEmbeddingModelDir: '',
-    ragEmbeddingModelFileName: 'model_optimized.onnx',
-    ragEmbeddingModelDataFileName: 'model_optimized.onnx.data',
-    ragEmbeddingTokenizerFileName: 'tokenizer.json',
-    ragEmbeddingTokenizerConfigFileName: 'tokenizer_config.json',
-    ragEmbeddingConfigFileName: 'config.json',
-    ragEmbeddingSpecialTokensFileName: 'special_tokens_map.json',
-    ragEmbeddingSentencepieceFileName: 'sentencepiece.bpe.model',
-    ragEmbeddingModelPath: './models/bge-m3/model.onnx',
-    ragEmbeddingModelDataPath: '',
   };
 }
 
 function fillRagConfigForm(config: RagConfigVO) {
   Object.assign(ragConfigForm, {
     ragEmbeddingModelDir: config.ragEmbeddingModelDir || '',
-    ragEmbeddingModelFileName: config.ragEmbeddingModelFileName || 'model_optimized.onnx',
-    ragEmbeddingModelDataFileName: config.ragEmbeddingModelDataFileName || 'model_optimized.onnx.data',
-    ragEmbeddingTokenizerFileName: config.ragEmbeddingTokenizerFileName || 'tokenizer.json',
-    ragEmbeddingTokenizerConfigFileName: config.ragEmbeddingTokenizerConfigFileName || 'tokenizer_config.json',
-    ragEmbeddingConfigFileName: config.ragEmbeddingConfigFileName || 'config.json',
-    ragEmbeddingSpecialTokensFileName: config.ragEmbeddingSpecialTokensFileName || 'special_tokens_map.json',
-    ragEmbeddingSentencepieceFileName: config.ragEmbeddingSentencepieceFileName || 'sentencepiece.bpe.model',
-    ragEmbeddingModelPath: config.ragEmbeddingModelPath || './models/bge-m3/model.onnx',
-    ragEmbeddingModelDataPath: config.ragEmbeddingModelDataPath || '',
   } satisfies RagConfigSaveReq);
 }
 
@@ -7027,5 +6939,3 @@ function resetConnectionModalState() {
   connectionPreviewError.value = '';
 }
 </script>
-
-

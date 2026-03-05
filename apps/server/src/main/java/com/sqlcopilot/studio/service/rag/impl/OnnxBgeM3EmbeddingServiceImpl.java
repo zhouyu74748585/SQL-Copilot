@@ -21,6 +21,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.*;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 @Service
 public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
@@ -32,6 +34,8 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
     private static final String PROVIDER_CUDA = "CUDA";
     private static final String PROVIDER_DIRECT_ML = "DIRECT_ML";
     private static final String PROVIDER_CORE_ML = "CORE_ML";
+    private static final String PROVIDER_HASH_FALLBACK = "HASH_FALLBACK";
+    private static final String PROVIDER_UNKNOWN = "UNKNOWN";
     private static final Set<String> SUPPORTED_PROVIDER_CONFIGS = Set.of(
         PROVIDER_AUTO,
         PROVIDER_CPU,
@@ -41,7 +45,6 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
     );
 
     private final RagConfigService ragConfigService;
-    private final String defaultModelDataPath;
     private final String defaultModelDir;
     private final String defaultModelFileName;
     private final String defaultModelDataFileName;
@@ -57,7 +60,9 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
     private final int directMlDeviceId;
     private final EnumSet<CoreMLFlags> coreMlFlags;
 
-    private final Object initLock = new Object();
+    private final ReentrantReadWriteLock runtimeLock = new ReentrantReadWriteLock();
+    private final Lock runtimeReadLock = runtimeLock.readLock();
+    private final Lock runtimeWriteLock = runtimeLock.writeLock();
     private final Object configCacheLock = new Object();
 
     private boolean initialized;
@@ -69,9 +74,9 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
     private OrtEnvironment ortEnvironment;
     private OrtSession ortSession;
     private HuggingFaceTokenizer tokenizer;
+    private String runtimeProvider = PROVIDER_UNKNOWN;
 
     public OnnxBgeM3EmbeddingServiceImpl(RagConfigService ragConfigService,
-                                         @Value("${rag.embedding.model-data-path:}") String defaultModelDataPath,
                                          @Value("${rag.embedding.model-dir:./models/bge-m3}") String defaultModelDir,
                                          @Value("${rag.embedding.model-file-name:model_optimized.onnx}") String defaultModelFileName,
                                          @Value("${rag.embedding.model-data-file-name:model_optimized.onnx.data}") String defaultModelDataFileName,
@@ -87,7 +92,6 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
                                          @Value("${rag.embedding.directml-device-id:0}") int directMlDeviceId,
                                          @Value("${rag.embedding.coreml-flags:}") String coreMlFlagsConfig) {
         this.ragConfigService = ragConfigService;
-        this.defaultModelDataPath = defaultModelDataPath;
         this.defaultModelDir = defaultModelDir;
         this.defaultModelFileName = defaultModelFileName;
         this.defaultModelDataFileName = defaultModelDataFileName;
@@ -114,6 +118,20 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
     }
 
     @Override
+    public String getRuntimeProvider() {
+        ensureInitialized();
+        runtimeReadLock.lock();
+        try {
+            if (fallbackOnly || tokenizer == null || ortEnvironment == null || ortSession == null) {
+                return PROVIDER_HASH_FALLBACK;
+            }
+            return normalizeProviderName(runtimeProvider);
+        } finally {
+            runtimeReadLock.unlock();
+        }
+    }
+
+    @Override
     public List<List<Float>> embedTexts(List<String> texts) {
         if (texts == null || texts.isEmpty()) {
             return List.of();
@@ -123,40 +141,48 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
             .toList();
         ensureInitialized();
 
-        if (fallbackOnly) {
-            List<List<Float>> fallbackVectors = new ArrayList<>(normalizedTexts.size());
-            for (String text : normalizedTexts) {
-                fallbackVectors.add(hashEmbedding(text, fallbackDimension));
-            }
-            return fallbackVectors;
-        }
-
+        runtimeReadLock.lock();
         try {
+            if (fallbackOnly || tokenizer == null || ortEnvironment == null || ortSession == null) {
+                if (!fallbackOnly) {
+                    fallbackOnly = true;
+                    runtimeProvider = PROVIDER_HASH_FALLBACK;
+                    log.warn("检测到 ONNX 运行时未完整初始化，切换至哈希向量降级。");
+                }
+                List<List<Float>> fallbackVectors = new ArrayList<>(normalizedTexts.size());
+                for (String text : normalizedTexts) {
+                    fallbackVectors.add(hashEmbedding(text, fallbackDimension));
+                }
+                return fallbackVectors;
+            }
+            HuggingFaceTokenizer localTokenizer = tokenizer;
+            OrtEnvironment localEnvironment = ortEnvironment;
+            OrtSession localSession = ortSession;
             int batchSize = normalizedTexts.size();
             long[][] inputIdsBatch = new long[batchSize][maxSeqLen];
             long[][] attentionBatch = new long[batchSize][maxSeqLen];
             long[][] tokenTypeBatch = new long[batchSize][maxSeqLen];
             for (int i = 0; i < batchSize; i++) {
-                Encoding encoding = tokenizer.encode(normalizedTexts.get(i));
+                Encoding encoding = localTokenizer.encode(normalizedTexts.get(i));
                 inputIdsBatch[i] = clipAndPad(encoding.getIds());
                 attentionBatch[i] = clipAndPad(encoding.getAttentionMask());
             }
 
-            try (OnnxTensor inputIdsTensor = OnnxTensor.createTensor(ortEnvironment,
+            try (OnnxTensor inputIdsTensor = OnnxTensor.createTensor(localEnvironment,
                 LongBuffer.wrap(flatten(inputIdsBatch)), new long[]{batchSize, maxSeqLen});
-                 OnnxTensor attentionTensor = OnnxTensor.createTensor(ortEnvironment,
+                 OnnxTensor attentionTensor = OnnxTensor.createTensor(localEnvironment,
                      LongBuffer.wrap(flatten(attentionBatch)), new long[]{batchSize, maxSeqLen});
-                 OnnxTensor tokenTypeTensor = OnnxTensor.createTensor(ortEnvironment,
+                 OnnxTensor tokenTypeTensor = OnnxTensor.createTensor(localEnvironment,
                      LongBuffer.wrap(flatten(tokenTypeBatch)), new long[]{batchSize, maxSeqLen})) {
 
                 Map<String, OnnxTensor> feed = new HashMap<>();
                 feed.put("input_ids", inputIdsTensor);
                 feed.put("attention_mask", attentionTensor);
-                if (acceptTokenTypeInput()) {
+                if (acceptTokenTypeInput(localSession)) {
                     feed.put("token_type_ids", tokenTypeTensor);
                 }
 
-                try (OrtSession.Result result = ortSession.run(feed)) {
+                try (OrtSession.Result result = localSession.run(feed)) {
                     Object output = result.get(0).getValue();
                     if (!(output instanceof float[][][] lastHiddenState)) {
                         throw new BusinessException(500, "BGE-M3 输出结构不符合预期");
@@ -173,14 +199,17 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
             }
         } catch (BusinessException ex) {
             throw ex;
-        } catch (Exception ex) {
+        } catch (Exception | LinkageError ex) {
             throw new BusinessException(500, "ONNX 向量化失败: " + ex.getMessage());
+        } finally {
+            runtimeReadLock.unlock();
         }
     }
 
     private void ensureInitialized() {
         EmbeddingFileConfig targetConfig = resolveEmbeddingFileConfig();
-        synchronized (initLock) {
+        runtimeWriteLock.lock();
+        try {
             if (initialized && targetConfig.equals(loadedConfig)) {
                 return;
             }
@@ -192,6 +221,7 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
             try {
                 if (!Files.exists(targetConfig.modelPath()) || !Files.exists(targetConfig.tokenizerPath())) {
                     fallbackOnly = true;
+                    runtimeProvider = PROVIDER_HASH_FALLBACK;
                     log.warn("未找到 ONNX 模型或 tokenizer，启用哈希向量降级。model={}, tokenizer={}",
                         targetConfig.modelPath(), targetConfig.tokenizerPath());
                     return;
@@ -200,130 +230,85 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
                 logOptionalFiles(targetConfig);
                 Path modelForSession = prepareModelPathForSession(targetConfig.modelPath(), targetConfig.modelDataPath());
                 ortEnvironment = OrtEnvironment.getEnvironment();
-                OrtSession.SessionOptions options = new OrtSession.SessionOptions();
-                options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.BASIC_OPT);
-                String selectedProvider = configureExecutionProvider(options);
-                ortSession = ortEnvironment.createSession(modelForSession.toAbsolutePath().toString(), options);
-                tokenizer = HuggingFaceTokenizer.newInstance(targetConfig.tokenizerPath());
+                SessionInitResult sessionInitResult = createSessionWithProviderFallback(ortEnvironment, modelForSession);
+                ortSession = sessionInitResult.session();
+                TokenizerLoadResult tokenizerLoadResult = loadTokenizer(targetConfig.tokenizerPath());
+                tokenizer = tokenizerLoadResult.tokenizer();
                 fallbackOnly = false;
+                runtimeProvider = sessionInitResult.selectedProvider();
 
                 log.info("ONNX 向量服务初始化完成，source={}, model={}, tokenizer={}",
                     targetConfig.sourceDescription(),
                     modelForSession.toAbsolutePath(),
-                    targetConfig.tokenizerPath().toAbsolutePath());
-                log.info("ONNX execution provider selected={}", selectedProvider);
-            } catch (Exception ex) {
+                    tokenizerLoadResult.sourcePath().toAbsolutePath());
+                log.info("ONNX execution provider selected={}", sessionInitResult.selectedProvider());
+            } catch (Exception | LinkageError ex) {
                 fallbackOnly = true;
+                runtimeProvider = PROVIDER_HASH_FALLBACK;
                 log.warn("初始化 ONNX 向量服务失败，启用哈希向量降级，原因={}", ex.getMessage());
             }
+        } finally {
+            runtimeWriteLock.unlock();
         }
     }
 
     /**
-     * 关键逻辑：优先使用前端配置的模型目录（支持 clone 仓库目录结构），否则回退到单文件路径配置。
+     * 关键逻辑：仅支持模型目录配置，目录为空时回退到应用默认目录。
      */
     private EmbeddingFileConfig resolveEmbeddingFileConfig() {
         RagConfigVO config = getCachedRagConfig();
-
         String configuredModelDir = safeTrim(config.getRagEmbeddingModelDir());
-        String configuredModelPath = safeTrim(config.getRagEmbeddingModelPath());
-        String modelFileName = nonBlankOrDefault(config.getRagEmbeddingModelFileName(), defaultModelFileName);
-        String modelDataFileName = nonBlankOrDefault(config.getRagEmbeddingModelDataFileName(), defaultModelDataFileName);
-        String tokenizerFileName = nonBlankOrDefault(config.getRagEmbeddingTokenizerFileName(), defaultTokenizerFileName);
-        String tokenizerConfigFileName = nonBlankOrDefault(
-            config.getRagEmbeddingTokenizerConfigFileName(),
-            defaultTokenizerConfigFileName
-        );
-        String configFileName = nonBlankOrDefault(config.getRagEmbeddingConfigFileName(), defaultConfigFileName);
-        String specialTokensFileName = nonBlankOrDefault(
-            config.getRagEmbeddingSpecialTokensFileName(),
-            defaultSpecialTokensFileName
-        );
-        String sentencepieceFileName = nonBlankOrDefault(
-            config.getRagEmbeddingSentencepieceFileName(),
+        Path modelDirPath;
+        String sourceDescription;
+        if (!isBlank(configuredModelDir)) {
+            modelDirPath = normalizeConfiguredModelDir(configuredModelDir);
+            sourceDescription = "model-dir=" + modelDirPath;
+        } else {
+            modelDirPath = Path.of(defaultModelDir).toAbsolutePath();
+            sourceDescription = "default-model-dir=" + modelDirPath;
+        }
+        Path modelPath = resolveModelFileByName(modelDirPath, defaultModelFileName);
+        Path tokenizerPath = resolveTokenizerPath(modelDirPath, defaultTokenizerFileName);
+        Path modelDataPath = resolveOptionalPathFromDir(modelDirPath, defaultModelDataFileName, defaultModelDataFileName);
+        OptionalFileStatus optionalFileStatus = resolveOptionalFileStatus(
+            modelDirPath,
+            defaultTokenizerConfigFileName,
+            defaultConfigFileName,
+            defaultSpecialTokensFileName,
             defaultSentencepieceFileName
         );
-
-        if (!isBlank(configuredModelDir)) {
-            Path modelDirPath = Path.of(configuredModelDir).toAbsolutePath();
-            Path modelPath = resolveModelFileByName(modelDirPath, modelFileName);
-            Path tokenizerPath = resolveTokenizerPath(modelDirPath, tokenizerFileName);
-            Path modelDataPath = resolveOptionalPathFromDir(modelDirPath, modelDataFileName, defaultModelDataFileName);
-            OptionalFileStatus optionalFileStatus = resolveOptionalFileStatus(
-                modelDirPath,
-                tokenizerConfigFileName,
-                configFileName,
-                specialTokensFileName,
-                sentencepieceFileName
-            );
-            return new EmbeddingFileConfig(
-                modelPath,
-                tokenizerPath,
-                modelDataPath,
-                optionalFileStatus.existingFiles(),
-                optionalFileStatus.missingFiles(),
-                "model-dir=" + modelDirPath
-            );
-        }
-
-        if (!isBlank(configuredModelPath)) {
-            Path modelPath = Path.of(configuredModelPath).toAbsolutePath();
-            Path modelBaseDir = modelPath.getParent() == null ? Path.of(".").toAbsolutePath() : modelPath.getParent().toAbsolutePath();
-            Path tokenizerPath = resolveTokenizerPath(modelBaseDir, tokenizerFileName);
-            OptionalFileStatus optionalFileStatus = resolveOptionalFileStatus(
-                modelBaseDir,
-                tokenizerConfigFileName,
-                configFileName,
-                specialTokensFileName,
-                sentencepieceFileName
-            );
-
-            String configuredDataPath = safeTrim(config.getRagEmbeddingModelDataPath());
-            Path modelDataPath = null;
-            if (!isBlank(configuredDataPath)) {
-                modelDataPath = Path.of(configuredDataPath).toAbsolutePath();
-            } else {
-                modelDataPath = resolveOptionalPathFromDir(modelBaseDir, modelDataFileName, defaultModelDataFileName);
-                if (modelDataPath == null && !isBlank(defaultModelDataPath)) {
-                    Path fallbackDataPath = Path.of(defaultModelDataPath).toAbsolutePath();
-                    if (Files.exists(fallbackDataPath)) {
-                        modelDataPath = fallbackDataPath;
-                    }
-                }
-            }
-            return new EmbeddingFileConfig(
-                modelPath,
-                tokenizerPath,
-                modelDataPath,
-                optionalFileStatus.existingFiles(),
-                optionalFileStatus.missingFiles(),
-                "model-path=" + modelPath
-            );
-        }
-
-        Path defaultModelDirPath = Path.of(defaultModelDir).toAbsolutePath();
-        Path defaultModelPath = resolveModelFileByName(defaultModelDirPath, defaultModelFileName);
-        Path defaultTokenizerPath = resolveTokenizerPath(defaultModelDirPath, tokenizerFileName);
-        Path defaultModelDataPathResolved = resolveOptionalPathFromDir(
-            defaultModelDirPath,
-            modelDataFileName,
-            defaultModelDataFileName
-        );
-        OptionalFileStatus optionalFileStatus = resolveOptionalFileStatus(
-            defaultModelDirPath,
-            tokenizerConfigFileName,
-            configFileName,
-            specialTokensFileName,
-            sentencepieceFileName
-        );
         return new EmbeddingFileConfig(
-            defaultModelPath,
-            defaultTokenizerPath,
-            defaultModelDataPathResolved,
+            modelPath,
+            tokenizerPath,
+            modelDataPath,
             optionalFileStatus.existingFiles(),
             optionalFileStatus.missingFiles(),
-            "default-model-dir=" + defaultModelDirPath
+            sourceDescription
         );
+    }
+
+    /**
+     * 关键容错：兼容历史误配（把 .onnx 文件路径写进目录字段），自动修正为父目录。
+     */
+    private Path normalizeConfiguredModelDir(String configuredModelDir) {
+        Path candidate = Path.of(configuredModelDir).toAbsolutePath().normalize();
+        if (Files.isRegularFile(candidate)) {
+            Path parent = candidate.getParent();
+            if (parent != null) {
+                log.warn("检测到模型目录配置指向文件，自动回退父目录。configured={}, normalized={}", candidate, parent);
+                return parent;
+            }
+            return candidate;
+        }
+        String fileName = Objects.toString(candidate.getFileName(), "").toLowerCase(Locale.ROOT);
+        if (fileName.endsWith(".onnx")) {
+            Path parent = candidate.getParent();
+            if (parent != null) {
+                log.warn("检测到模型目录配置疑似为 .onnx 文件路径，自动回退父目录。configured={}, normalized={}", candidate, parent);
+                return parent;
+            }
+        }
+        return candidate;
     }
 
     private RagConfigVO getCachedRagConfig() {
@@ -362,7 +347,42 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
             return defaultModel;
         }
 
+        Path discoveredSingleModel = resolveSingleOnnxModelFile(modelDirPath);
+        if (discoveredSingleModel != null) {
+            return discoveredSingleModel;
+        }
+
         return resolvePath(modelDirPath, configuredFileName);
+    }
+
+    /**
+     * 关键容错：目录里仅存在一个 onnx 文件时，自动使用该模型文件。
+     */
+    private Path resolveSingleOnnxModelFile(Path modelDirPath) {
+        if (!Files.isDirectory(modelDirPath)) {
+            return null;
+        }
+        try {
+            List<Path> onnxModels = new ArrayList<>();
+            try (var pathStream = Files.list(modelDirPath)) {
+                pathStream
+                    .filter(Files::isRegularFile)
+                    .map(Path::toAbsolutePath)
+                    .filter(path -> path.getFileName() != null)
+                    .filter(path -> path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".onnx"))
+                    .forEach(onnxModels::add);
+            }
+            if (onnxModels.size() == 1) {
+                Path model = onnxModels.get(0).normalize();
+                log.warn("默认模型文件未命中，检测到目录下唯一 onnx 文件并自动采用。dir={}, model={}",
+                    modelDirPath, model);
+                return model;
+            }
+            return null;
+        } catch (Exception ex) {
+            log.warn("自动探测 onnx 模型文件失败，dir={}, reason={}", modelDirPath, ex.getMessage());
+            return null;
+        }
     }
 
     private Path resolveTokenizerPath(Path baseDir, String tokenizerFileName) {
@@ -450,6 +470,30 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
         }
     }
 
+    private SessionInitResult createSessionWithProviderFallback(OrtEnvironment environment, Path modelPath) throws Exception {
+        String absoluteModelPath = modelPath.toAbsolutePath().toString();
+        try (OrtSession.SessionOptions preferredOptions = new OrtSession.SessionOptions()) {
+            preferredOptions.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.BASIC_OPT);
+            String selectedProvider = configureExecutionProvider(preferredOptions);
+            try {
+                OrtSession session = environment.createSession(absoluteModelPath, preferredOptions);
+                return new SessionInitResult(session, selectedProvider);
+            } catch (Exception | LinkageError ex) {
+                if (PROVIDER_CPU.equals(selectedProvider)) {
+                    throw ex;
+                }
+                log.warn("ONNX provider={} 初始化失败，回退 CPU 重试。reason={}", selectedProvider, ex.getMessage());
+            }
+        }
+
+        // 关键容错：GPU/NPU provider 失败时自动回退 CPU，避免直接进入哈希向量降级。
+        try (OrtSession.SessionOptions cpuOptions = new OrtSession.SessionOptions()) {
+            cpuOptions.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.BASIC_OPT);
+            OrtSession cpuSession = environment.createSession(absoluteModelPath, cpuOptions);
+            return new SessionInitResult(cpuSession, PROVIDER_CPU);
+        }
+    }
+
     private void logOptionalFiles(EmbeddingFileConfig config) {
         for (Map.Entry<String, Path> entry : config.optionalFiles().entrySet()) {
             log.info("检测到 RAG 附加配置文件，source={}, file={}, path={}",
@@ -525,7 +569,7 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
                 return true;
             }
             return false;
-        } catch (Exception ex) {
+        } catch (Exception | LinkageError ex) {
             log.warn("Enable ONNX provider failed: provider={}, reason={}", provider, ex.getMessage());
             return false;
         }
@@ -537,7 +581,7 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
             for (OrtProvider provider : OrtEnvironment.getAvailableProviders()) {
                 providers.add(normalizeProviderName(provider.name()));
             }
-        } catch (Exception ex) {
+        } catch (Exception | LinkageError ex) {
             log.warn("Read ONNX available providers failed: {}", ex.getMessage());
         }
         if (providers.isEmpty()) {
@@ -561,11 +605,49 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
         }
         tokenizer = null;
         ortEnvironment = null;
+        runtimeProvider = PROVIDER_UNKNOWN;
     }
 
-    private boolean acceptTokenTypeInput() {
+    private TokenizerLoadResult loadTokenizer(Path configuredTokenizerPath) {
+        Path tokenizerPath = configuredTokenizerPath.toAbsolutePath().normalize();
+        TokenizerLoadResult directLoaded = tryLoadTokenizer(tokenizerPath);
+        if (directLoaded != null) {
+            return directLoaded;
+        }
+
+        Path parent = tokenizerPath.getParent();
+        if (parent != null) {
+            Path fallbackTokenizerPath = parent.resolve(defaultTokenizerFileName).toAbsolutePath().normalize();
+            if (!fallbackTokenizerPath.equals(tokenizerPath) && Files.exists(fallbackTokenizerPath)) {
+                log.warn("Tokenizer 加载失败，回退到默认 tokenizer 文件。configured={}, fallback={}",
+                    tokenizerPath, fallbackTokenizerPath);
+                TokenizerLoadResult fallbackLoaded = tryLoadTokenizer(fallbackTokenizerPath);
+                if (fallbackLoaded != null) {
+                    return fallbackLoaded;
+                }
+            }
+        }
+
+        throw new BusinessException(500, "无法加载 tokenizer 文件: " + tokenizerPath);
+    }
+
+    private TokenizerLoadResult tryLoadTokenizer(Path tokenizerPath) {
         try {
-            return ortSession != null && ortSession.getInputInfo().containsKey("token_type_ids");
+            HuggingFaceTokenizer loadedTokenizer = HuggingFaceTokenizer.newInstance(tokenizerPath);
+            if (loadedTokenizer == null) {
+                log.warn("Tokenizer 实例为空，path={}", tokenizerPath);
+                return null;
+            }
+            return new TokenizerLoadResult(loadedTokenizer, tokenizerPath);
+        } catch (Exception ex) {
+            log.warn("加载 tokenizer 失败，path={}, reason={}", tokenizerPath, ex.getMessage());
+            return null;
+        }
+    }
+
+    private boolean acceptTokenTypeInput(OrtSession session) {
+        try {
+            return session != null && session.getInputInfo().containsKey("token_type_ids");
         } catch (Exception ex) {
             return false;
         }
@@ -741,5 +823,11 @@ public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
                                        Map<String, Path> optionalFiles,
                                        List<String> missingOptionalFiles,
                                        String sourceDescription) {
+    }
+
+    private record TokenizerLoadResult(HuggingFaceTokenizer tokenizer, Path sourcePath) {
+    }
+
+    private record SessionInitResult(OrtSession session, String selectedProvider) {
     }
 }

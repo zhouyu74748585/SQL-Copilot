@@ -35,4 +35,10 @@ public class RagVectorizeOverviewVO {
 
     /** 向量维度。 */
     private Integer vectorDimension;
+
+    /** 上次整库全量向量化耗时（毫秒）。 */
+    private Long lastFullVectorizeDurationMs;
+
+    /** 上次整库全量向量化执行引擎。 */
+    private String lastFullVectorizeProvider;
 }

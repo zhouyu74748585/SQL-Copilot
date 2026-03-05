@@ -4,7 +4,7 @@ server:
 spring:
   datasource:
     driver-class-name: org.sqlite.JDBC
-    url: jdbc:sqlite:./sql-copilot.db
+    url: jdbc:sqlite:/Users/zhouyu/IdeaProjects/SQL_Copilot/sql-copilot.db
   sql:
     init:
       mode: always
@@ -52,7 +52,7 @@ rag:
     execution-provider: AUTO
     cuda-device-id: 0
     directml-device-id: 0
-    coreml-flags: ""
+    coreml-flags: "ENABLE_ON_SUBGRAPH,ONLY_ENABLE_DEVICE_WITH_ANE"
     batch-size: 16
     parallelism: 2
   retrieval:

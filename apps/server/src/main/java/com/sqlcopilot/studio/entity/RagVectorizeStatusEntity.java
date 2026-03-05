@@ -20,4 +20,10 @@ public class RagVectorizeStatusEntity {
 
     /** 最近更新时间（毫秒时间戳）。 */
     private Long updatedAt;
+
+    /** 最近一次整库全量向量化耗时（毫秒）。 */
+    private Long lastFullVectorizeDurationMs;
+
+    /** 最近一次整库全量向量化执行引擎。 */
+    private String lastFullVectorizeProvider;
 }
