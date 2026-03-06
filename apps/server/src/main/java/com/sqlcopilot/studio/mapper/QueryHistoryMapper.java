@@ -75,7 +75,8 @@ public interface QueryHistoryMapper {
                 ), '未命名会话') AS title,
                 MIN(q.created_at) AS createdAt,
                 MAX(q.created_at) AS updatedAt,
-                COUNT(1) AS messageCount
+                COUNT(1) AS messageCount,
+                SUM(COALESCE(q.token_estimate, 0)) AS totalTokens
             FROM query_history q
             WHERE q.connection_id = #{connectionId}
               AND q.session_id IS NOT NULL
@@ -83,7 +84,7 @@ public interface QueryHistoryMapper {
               AND COALESCE(TRIM(q.history_type), 'CHAT') = 'CHAT'
             GROUP BY q.connection_id, q.session_id
         )
-        SELECT connectionId, sessionId, title, createdAt, updatedAt, messageCount
+        SELECT connectionId, sessionId, title, createdAt, updatedAt, messageCount, totalTokens
         FROM session_summary
         WHERE (#{keyword} IS NULL OR #{keyword} = '' OR title LIKE '%' || #{keyword} || '%')
         ORDER BY updatedAt DESC

@@ -32,4 +32,7 @@ public class AiAutoQueryVO {
 
     /** 图表配置说明（图表方案时返回）。 */
     private String configSummary;
+
+    /** 粗略总 token。 */
+    private Integer totalTokens;
 }

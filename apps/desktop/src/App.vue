@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <a-config-provider :theme="antdThemeConfig">
     <div
       class="studio-root"
@@ -111,7 +111,7 @@
                     </div>
                   </div>
                   <div class="history-menu-item-meta">
-                    会话ID: {{ item.sessionId }} | 记录: {{ item.messageCount ?? 0 }}
+                    会话ID: {{ item.sessionId }} | 记录: {{ item.messageCount ?? 0 }} | 累计Token: {{ item.totalTokens ?? 0 }}
                   </div>
                   <div class="history-menu-item-desc">创建: {{ formatTime(item.createdAt) }}</div>
                 </button>
@@ -4606,14 +4606,15 @@ async function runAiTextActionWithSql(tab: QueryWorkspaceTab, actionType: 'expla
       modelName: tab.selectedAiModel || undefined,
       memoryEnabled: tab.memoryEnabled,
     });
+    tab.lastTokenEstimate = Number(result.totalTokens || 0);
     const content = result.content || '未返回内容';
     appendAssistantTextMessage(tab, content, actionType, thinkingMessage);
     await saveConversationHistoryOnce(tab, userMessage, `${promptText}\n\n${normalizedSqlText}`, normalizedSqlText, {
       actionType,
       assistantContent: content,
       databaseName: tab.databaseName,
+      tokenEstimate: tab.lastTokenEstimate,
     });
-    tab.lastTokenEstimate = Number(result.totalTokens || 0);
     if (result.reasoning) {
       message.info(result.reasoning);
     }
@@ -6579,16 +6580,18 @@ async function generateSqlForTab(
         modelName: tab.selectedAiModel || undefined,
         memoryEnabled: tab.memoryEnabled,
       });
+      tab.lastTokenEstimate = Number(generated.totalTokens || 0);
       const generatedText = (generated.sqlText || '').trim();
       if (looksLikeSqlText(generatedText)) {
         appendAssistantSqlMessage(tab, generatedText, actionType, '', undefined, undefined, undefined, thinkingMessage);
-        await saveConversationHistoryOnce(tab, userMessage, promptText, generatedText);
+        await saveConversationHistoryOnce(tab, userMessage, promptText, generatedText, {
+          tokenEstimate: tab.lastTokenEstimate,
+        });
         message.success('SQL generated.');
       } else {
         appendAssistantTextMessage(tab, generatedText || '未返回可执行 SQL', actionType, thinkingMessage);
         message.warning('未生成可执行 SQL，已返回说明内容');
       }
-      tab.lastTokenEstimate = Number((generated as any).totalTokens || 0);
       if (generated.reasoning) {
         message.info(generated.reasoning);
       }
@@ -6605,14 +6608,15 @@ async function generateSqlForTab(
       modelName: tab.selectedAiModel || undefined,
       memoryEnabled: tab.memoryEnabled,
     });
+    tab.lastTokenEstimate = Number(result.totalTokens || 0);
     const content = result.content || 'No content returned.';
     appendAssistantTextMessage(tab, content, actionType, thinkingMessage);
     await saveConversationHistoryOnce(tab, userMessage, promptText, actionSqlSnippet || '', {
       actionType,
       assistantContent: content,
       databaseName: tab.databaseName,
+      tokenEstimate: tab.lastTokenEstimate,
     });
-    tab.lastTokenEstimate = Number(result.totalTokens || 0);
     if (result.reasoning) {
       message.info(result.reasoning);
     }
@@ -6685,6 +6689,10 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
       modelName: tab.selectedAiModel || undefined,
       memoryEnabled: tab.memoryEnabled,
     });
+    const latestTokenEstimate = result.totalTokens;
+    if (latestTokenEstimate != null) {
+      tab.lastTokenEstimate = Number(latestTokenEstimate || 0);
+    }
     const actionType = autoActionTypeByIntent(result.intentType);
     if (result.intentType === 'GENERATE_SQL') {
       const sqlText = (result.sqlText || '').trim();
@@ -6702,6 +6710,7 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
         await saveConversationHistoryOnce(tab, userMessage, rawPrompt, sqlText, {
           actionType,
           databaseName: tab.databaseName,
+          tokenEstimate: tab.lastTokenEstimate,
         });
         if (tab.autoExecute) {
           const executed = await executeSqlForTab(tab, sqlText, { silentSuccess: true });
@@ -6719,6 +6728,7 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
           actionType,
           assistantContent: contentText,
           databaseName: tab.databaseName,
+          tokenEstimate: tab.lastTokenEstimate,
         });
       }
     } else if (result.intentType === 'GENERATE_CHART') {
@@ -6732,6 +6742,7 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
           assistantContent: summary || 'No chart plan returned.',
           chartConfig: config,
           databaseName: tab.databaseName,
+          tokenEstimate: tab.lastTokenEstimate,
         });
       } else {
         const plannedMessage = appendAssistantSqlMessage(
@@ -6749,6 +6760,7 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
           assistantContent: summary,
           chartConfig: config,
           databaseName: tab.databaseName,
+          tokenEstimate: tab.lastTokenEstimate,
         });
         const generatedChart = await generateChartFromMessage(tab, plannedMessage, {
           appendRenderMessage: false,
@@ -6765,6 +6777,7 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
         actionType,
         assistantContent: content,
         databaseName: tab.databaseName,
+        tokenEstimate: tab.lastTokenEstimate,
       });
     } else {
       throw new Error('未识别的 Auto 意图类型');
@@ -7090,6 +7103,7 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
       modelName: tab.selectedAiModel || undefined,
       memoryEnabled: tab.memoryEnabled,
     });
+    tab.lastTokenEstimate = Number(generated.totalTokens || 0);
     const sqlText = (generated.sqlText || '').trim();
     const config = generated.chartConfig ? cloneChartConfig(generated.chartConfig) : null;
     const summary = (generated.configSummary || '').trim() || chartSummaryText(config);
@@ -7113,8 +7127,8 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
       assistantContent: summary,
       chartConfig: config,
       databaseName: tab.databaseName,
+      tokenEstimate: tab.lastTokenEstimate,
     });
-    tab.lastTokenEstimate = Number(generated.totalTokens || 0);
     if (generated.reasoning) {
       message.info(generated.reasoning);
     }

@@ -68,7 +68,7 @@
 - 前端类型检查：`npm run -w @sqlcopilot/desktop type-check` 通过。
 - 启动验证（clean）：
   - 后端：`mvn -f apps/server/pom.xml clean spring-boot:run` 启动成功，`http://127.0.0.1:18080/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
-  - 前端：执行 clean build 后 `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6044` 启动成功，`http://127.0.0.1:6044` 返回 HTTP 200。
+  - 前端：执行 clean build 后 `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 8888` 启动成功，`http://127.0.0.1:8888` 返回 HTTP 200。
 
 ---
 

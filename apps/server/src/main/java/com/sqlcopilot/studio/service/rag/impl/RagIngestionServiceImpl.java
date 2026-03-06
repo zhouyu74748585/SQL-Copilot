@@ -2,8 +2,6 @@ package com.sqlcopilot.studio.service.rag.impl;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sqlcopilot.studio.dto.ai.AiConfigVO;
 import com.sqlcopilot.studio.dto.ai.AiModelOptionVO;
 import com.sqlcopilot.studio.entity.ConnectionEntity;
@@ -12,6 +10,7 @@ import com.sqlcopilot.studio.entity.SchemaColumnCacheEntity;
 import com.sqlcopilot.studio.entity.SchemaTableCacheEntity;
 import com.sqlcopilot.studio.service.AiConfigService;
 import com.sqlcopilot.studio.service.ConnectionService;
+import com.sqlcopilot.studio.service.llm.OpenAiTextClient;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
 import com.sqlcopilot.studio.service.rag.RagEmbeddingService;
 import com.sqlcopilot.studio.service.rag.RagIngestionService;
@@ -24,10 +23,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
@@ -68,6 +63,7 @@ public class RagIngestionServiceImpl implements RagIngestionService {
     private final RagEmbeddingService ragEmbeddingService;
     private final ConnectionService connectionService;
     private final AiConfigService aiConfigService;
+    private final OpenAiTextClient openAiTextClient;
     private final ObjectMapper objectMapper;
 
     private final boolean ragEnabled;
@@ -79,14 +75,12 @@ public class RagIngestionServiceImpl implements RagIngestionService {
     private final ExecutorService embeddingBatchExecutor;
     private final ExecutorService sqlHistoryExecutor;
     private final RagCollectionNames collectionNames;
-    private final HttpClient httpClient = HttpClient.newBuilder()
-        .connectTimeout(Duration.ofSeconds(10))
-        .build();
 
     public RagIngestionServiceImpl(QdrantClientService qdrantClientService,
                                    RagEmbeddingService ragEmbeddingService,
                                    ConnectionService connectionService,
                                    AiConfigService aiConfigService,
+                                   OpenAiTextClient openAiTextClient,
                                    ObjectMapper objectMapper,
                                    @Value("${rag.enabled:true}") boolean ragEnabled,
                                    @Value("${rag.collection.schema-table:schema_table}") String schemaTableCollection,
@@ -104,6 +98,7 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         this.ragEmbeddingService = ragEmbeddingService;
         this.connectionService = connectionService;
         this.aiConfigService = aiConfigService;
+        this.openAiTextClient = openAiTextClient;
         this.objectMapper = objectMapper;
         this.ragEnabled = ragEnabled;
         this.sqlFragmentEnabled = sqlFragmentEnabled;
@@ -409,56 +404,35 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             if (openAiOption == null) {
                 return "";
             }
-            String model = safeText(openAiOption.getOpenaiModel());
-            if (model.isBlank()) {
-                model = "gpt-4.1-mini";
-            }
-            String baseUrl = safeText(openAiOption.getOpenaiBaseUrl());
-            if (baseUrl.isBlank()) {
-                baseUrl = "https://api.openai.com/v1";
-            }
-            String endpoint = stripTrailingSlash(baseUrl) + "/chat/completions";
-            ObjectNode payload = objectMapper.createObjectNode();
-            payload.put("model", model);
-            payload.put("temperature", 0.1D);
-            ArrayNode messages = payload.putArray("messages");
-            messages.addObject().put("role", "system").put("content", SQL_HISTORY_SEMANTIC_SYSTEM_PROMPT);
-            messages.addObject().put("role", "user").put("content", safeText(userPrompt));
-            HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(endpoint))
-                .timeout(Duration.ofSeconds(20))
-                .header("Authorization", "Bearer " + safeText(openAiOption.getOpenaiApiKey()))
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(payload), StandardCharsets.UTF_8))
-                .build();
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                return "";
-            }
-            JsonNode root = objectMapper.readTree(Objects.toString(response.body(), ""));
-            String content = safeText(root.path("choices").path(0).path("message").path("content").asText(""));
-            if (!content.isBlank()) {
-                return content;
-            }
-            JsonNode arrayContent = root.path("choices").path(0).path("message").path("content");
-            if (arrayContent.isArray()) {
-                StringBuilder builder = new StringBuilder();
-                for (JsonNode item : arrayContent) {
-                    String text = safeText(item.path("text").asText(""));
-                    if (!text.isBlank()) {
-                        if (builder.length() > 0) {
-                            builder.append('\n');
-                        }
-                        builder.append(text);
-                    }
-                }
-                return builder.toString().trim();
-            }
-            return "";
+            String model = resolveOpenAiModel(openAiOption.getOpenaiModel());
+            OpenAiTextClient.OpenAiTextResult result = openAiTextClient.requestText(
+                openAiOption.getOpenaiApiKey(),
+                openAiOption.getOpenaiBaseUrl(),
+                model,
+                SQL_HISTORY_SEMANTIC_SYSTEM_PROMPT,
+                safeText(userPrompt),
+                Duration.ofSeconds(20),
+                0.1D
+            );
+            return safeText(result.content());
         } catch (Exception ex) {
             log.warn("SQL 历史语义 LLM 调用失败，降级规则生成, reason={}", ex.getMessage());
             return "";
         }
+    }
+
+    private String resolveOpenAiModel(String raw) {
+        String value = safeText(raw);
+        if (value.isBlank()) {
+            return "gpt-4.1-mini";
+        }
+        for (String token : value.split("[,\\n\\r\\t]")) {
+            String model = token.trim();
+            if (!model.isBlank()) {
+                return model;
+            }
+        }
+        return "gpt-4.1-mini";
     }
 
     private SqlSemanticEnrichment parseSemanticEnrichment(String rawContent) {
@@ -597,14 +571,6 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             }
         }
         return columns;
-    }
-
-    private String stripTrailingSlash(String value) {
-        String normalized = safeText(value);
-        while (normalized.endsWith("/")) {
-            normalized = normalized.substring(0, normalized.length() - 1);
-        }
-        return normalized;
     }
 
     private void writePoints(String collectionName, List<QdrantPoint> points) {

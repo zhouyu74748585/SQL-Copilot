@@ -95,6 +95,7 @@ export interface AiAutoQueryVO {
   intentConfidence: number;
   reasoning: string;
   fallbackUsed: boolean;
+  totalTokens?: number;
   sqlText?: string;
   content?: string;
   chartConfig?: ChartConfigVO;

@@ -242,6 +242,7 @@ export interface QueryHistorySessionVO {
   createdAt?: number;
   updatedAt?: number;
   messageCount?: number;
+  totalTokens?: number;
 }
 
 export interface QueryHistorySessionPageVO {

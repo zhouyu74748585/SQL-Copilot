@@ -21,7 +21,7 @@
 - 前端构建：`cd apps/desktop && npm run build` 通过。
 - 后端 clean 打包：`cd apps/server && mvn clean package` 通过。
 - 后端启动验证：`mvn spring-boot:run -Dspring-boot.run.arguments=--server.port=18081` 启动成功（18080 被本机已有进程占用）。
-- 前端预览验证：`npm run preview -- --host 127.0.0.1 --port 6044` 可启动（端口占用时自动切到 6045）。
+- 前端预览验证：`npm run preview -- --host 127.0.0.1 --port 8888` 可启动（端口占用时自动切到 6045）。
 
 ## 追加记录（2026-03-06 12:41）- ER画布固定逻辑尺寸
 

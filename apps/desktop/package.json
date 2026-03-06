@@ -6,9 +6,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:renderer": "vite --host 127.0.0.1 --port 6044",
-    "dev:electron": "wait-on tcp:6044 && electron electron/main.cjs",
-    "debug:main": "wait-on tcp:6044 && cross-env ELECTRON_RENDERER_URL=http://127.0.0.1:6044 ELECTRON_DEBUG=1 electron --inspect=9229 electron/main.cjs",
+    "dev:renderer": "vite --host 127.0.0.1 --port 8888",
+    "dev:electron": "wait-on tcp:8888 && electron electron/main.cjs",
+    "debug:main": "wait-on tcp:8888 && cross-env ELECTRON_RENDERER_URL=http://127.0.0.1:8888 ELECTRON_DEBUG=1 electron --inspect=9229 electron/main.cjs",
     "debug": "concurrently -k \"npm run dev:renderer\" \"npm run debug:main\"",
     "build": "vite build",
     "download:qdrant": "node scripts/download-qdrant.mjs",
