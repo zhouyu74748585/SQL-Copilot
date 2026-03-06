@@ -19,4 +19,6 @@ public interface QdrantClientService {
                                          String databaseName);
 
     QdrantCollectionMetric queryCollectionMetric(String collectionName, Long connectionId, String databaseName);
+
+    void deletePointsByFilter(String collectionName, Long connectionId, String databaseName, String sessionId);
 }

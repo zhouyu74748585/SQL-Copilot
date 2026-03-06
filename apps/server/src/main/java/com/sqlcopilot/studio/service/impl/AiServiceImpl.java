@@ -8,11 +8,16 @@ import com.sqlcopilot.studio.dto.ai.*;
 import com.sqlcopilot.studio.dto.schema.*;
 import com.sqlcopilot.studio.dto.sql.QueryRowVO;
 import com.sqlcopilot.studio.entity.ConnectionEntity;
+import com.sqlcopilot.studio.entity.QueryHistoryEntity;
+import com.sqlcopilot.studio.mapper.QueryHistoryMapper;
 import com.sqlcopilot.studio.service.AiConfigService;
 import com.sqlcopilot.studio.service.AiService;
 import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.SchemaService;
+import com.sqlcopilot.studio.service.rag.QdrantClientService;
+import com.sqlcopilot.studio.service.rag.RagEmbeddingService;
 import com.sqlcopilot.studio.service.rag.RagRetrievalService;
+import com.sqlcopilot.studio.service.rag.model.RagCollectionNames;
 import com.sqlcopilot.studio.service.rag.model.RagPromptContext;
 import com.sqlcopilot.studio.util.BusinessException;
 import com.sqlcopilot.studio.util.ResultSetConverter;
@@ -46,6 +51,7 @@ public class AiServiceImpl implements AiService {
     private static final Pattern ANSI_ESCAPE_PATTERN = Pattern.compile("\\u001B\\[[;\\d]*[ -/]*[@-~]");
     private static final Pattern TOKEN_USAGE_VALUE_PATTERN = Pattern.compile("^[0-9][0-9,]*$");
     private static final int RELATED_TABLE_META_LIMIT = 8;
+    private static final int DEFAULT_MEMORY_WINDOW_SIZE = 12;
     private static final int RELATED_INDEX_COLUMN_LIMIT = 12;
     private static final Set<String> CODEX_SUBCOMMANDS = Set.of(
         "exec", "e", "review", "login", "logout", "mcp", "mcp-server",
@@ -153,6 +159,10 @@ public class AiServiceImpl implements AiService {
     private final AiConfigService aiConfigService;
     private final ConnectionService connectionService;
     private final RagRetrievalService ragRetrievalService;
+    private final RagEmbeddingService ragEmbeddingService;
+    private final QdrantClientService qdrantClientService;
+    private final QueryHistoryMapper queryHistoryMapper;
+    private final RagCollectionNames ragCollectionNames;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10))
@@ -162,11 +172,19 @@ public class AiServiceImpl implements AiService {
                          AiConfigService aiConfigService,
                          ConnectionService connectionService,
                          RagRetrievalService ragRetrievalService,
+                         RagEmbeddingService ragEmbeddingService,
+                         QdrantClientService qdrantClientService,
+                         QueryHistoryMapper queryHistoryMapper,
+                         @org.springframework.beans.factory.annotation.Value("${rag.collection.sql-history:sql_history}") String sqlHistoryCollection,
                          ObjectMapper objectMapper) {
         this.schemaService = schemaService;
         this.aiConfigService = aiConfigService;
         this.connectionService = connectionService;
         this.ragRetrievalService = ragRetrievalService;
+        this.ragEmbeddingService = ragEmbeddingService;
+        this.qdrantClientService = qdrantClientService;
+        this.queryHistoryMapper = queryHistoryMapper;
+        this.ragCollectionNames = new RagCollectionNames("schema_table", "schema_column", sqlHistoryCollection, "sql_fragment");
         this.objectMapper = objectMapper;
     }
 
@@ -248,6 +266,11 @@ public class AiServiceImpl implements AiService {
         vo.setSqlText(generatedSql);
         vo.setReasoning(reasoning);
         vo.setFallbackUsed(fallbackUsed);
+        int promptTokens = estimateTokens(req.getPrompt() + "\n" + generationContext.promptContext());
+        int completionTokens = estimateTokens(generatedSql + "\n" + reasoning);
+        vo.setPromptTokens(promptTokens);
+        vo.setCompletionTokens(completionTokens);
+        vo.setTotalTokens(promptTokens + completionTokens);
         timer.mark("assemble_response");
         log.info(
             "[AI-GENERATE-RESP] connectionId={}, sessionId={}, databaseName={}, modelName={}, ragHit={}, relatedTableCount={}, contextLength={}, sqlLength={}, fallbackUsed={}, elapsedMs={}",
@@ -503,6 +526,11 @@ public class AiServiceImpl implements AiService {
         vo.setConfigSummary(configSummary);
         vo.setReasoning(reasoning);
         vo.setFallbackUsed(fallbackUsed);
+        int promptTokens = estimateTokens(req.getPrompt() + "\n" + generationContext.promptContext());
+        int completionTokens = estimateTokens(sqlText + "\n" + reasoning + "\n" + configSummary);
+        vo.setPromptTokens(promptTokens);
+        vo.setCompletionTokens(completionTokens);
+        vo.setTotalTokens(promptTokens + completionTokens);
         timer.mark("assemble_response");
         log.info(
             "[AI-GENERATE-CHART-RESP] connectionId={}, sessionId={}, databaseName={}, modelName={}, ragHit={}, relatedTableCount={}, sqlLength={}, hasChartConfig={}, fallbackUsed={}, elapsedMs={}",
@@ -1312,6 +1340,11 @@ public class AiServiceImpl implements AiService {
         vo.setContent(safe(content));
         vo.setReasoning(safe(reasoning));
         vo.setFallbackUsed(fallbackUsed);
+        int promptTokens = estimateTokens(req.getPrompt() + "\n" + generationContext.promptContext());
+        int completionTokens = estimateTokens(content + "\n" + reasoning);
+        vo.setPromptTokens(promptTokens);
+        vo.setCompletionTokens(completionTokens);
+        vo.setTotalTokens(promptTokens + completionTokens);
         timer.mark("assemble_response");
         log.info(
             "[AI-{}-RESP] connectionId={}, sessionId={}, databaseName={}, modelName={}, ragHit={}, relatedTableCount={}, contextLength={}, contentLength={}, fallbackUsed={}, elapsedMs={}",
@@ -2580,20 +2613,62 @@ public class AiServiceImpl implements AiService {
     private GenerationContext buildGenerationContext(AiGenerateSqlReq req, RagPromptContext ragPromptContext) {
         List<String> relatedTables = new ArrayList<>(ragPromptContext.getRelatedTables());
         String ragContextText = safe(ragPromptContext.getPromptContext());
-        if (Boolean.TRUE.equals(ragPromptContext.getHit()) && !ragContextText.isBlank()) {
-            return new GenerationContext(ragContextText, relatedTables);
+
+        String schemaContextText = "";
+        if (!Boolean.TRUE.equals(ragPromptContext.getHit()) || ragContextText.isBlank()) {
+            ContextBuildReq contextReq = new ContextBuildReq();
+            contextReq.setConnectionId(req.getConnectionId());
+            contextReq.setDatabaseName(req.getDatabaseName());
+            contextReq.setQuestion(buildRetrievalInput(req.getPrompt()));
+            contextReq.setTokenBudget(1200);
+            ContextBuildVO schemaContext = schemaService.buildContext(contextReq);
+            if (schemaContext.getRelatedTables() != null && !schemaContext.getRelatedTables().isEmpty()) {
+                relatedTables.addAll(schemaContext.getRelatedTables());
+            }
+            schemaContextText = safe(schemaContext.getContext());
         }
 
-        ContextBuildReq contextReq = new ContextBuildReq();
-        contextReq.setConnectionId(req.getConnectionId());
-        contextReq.setDatabaseName(req.getDatabaseName());
-        contextReq.setQuestion(buildRetrievalInput(req.getPrompt()));
-        contextReq.setTokenBudget(1200);
-        ContextBuildVO schemaContext = schemaService.buildContext(contextReq);
-        if (schemaContext.getRelatedTables() != null && !schemaContext.getRelatedTables().isEmpty()) {
-            relatedTables.addAll(schemaContext.getRelatedTables());
+        AiConfigVO aiConfig = aiConfigService.getConfig();
+        boolean memoryEnabled = resolveMemoryEnabled(req, aiConfig);
+        int memoryWindowSize = resolveMemoryWindowSize(aiConfig);
+        if (!memoryEnabled) {
+            String fallbackContext = !ragContextText.isBlank() ? ragContextText : schemaContextText;
+            return new GenerationContext(fallbackContext, relatedTables);
         }
-        return new GenerationContext(safe(schemaContext.getContext()), relatedTables);
+
+        List<QueryHistoryEntity> sessionHistory = queryHistoryMapper.listBySession(
+            req.getConnectionId(),
+            safe(req.getSessionId()),
+            500
+        );
+        List<QueryHistoryEntity> chatHistory = sessionHistory.stream()
+            .filter(item -> "CHAT".equalsIgnoreCase(safe(item.getHistoryType())))
+            .toList();
+        List<QueryHistoryEntity> windowRecords = pickWindowRecords(chatHistory, memoryWindowSize);
+        String windowStructuredContext = buildStructuredContextJson(windowRecords);
+        String compressedContext = "";
+        if (chatHistory.size() > memoryWindowSize) {
+            compressedContext = buildCompressedSummary(chatHistory.subList(0, Math.max(0, chatHistory.size() - memoryWindowSize)));
+            upsertSessionSummaryVector(req, compressedContext, memoryWindowSize, chatHistory.size());
+        }
+        String vectorMemoryContext = querySessionMemoryFromVectorStore(req);
+
+        List<String> segments = new ArrayList<>();
+        if (!vectorMemoryContext.isBlank()) {
+            segments.add("Conversation Memory Recall:\n" + vectorMemoryContext);
+        }
+        if (!compressedContext.isBlank()) {
+            segments.add("Conversation Sliding Summary:\n" + compressedContext);
+        }
+        if (!windowStructuredContext.isBlank()) {
+            segments.add("Conversation Window Context(JSON):\n" + windowStructuredContext);
+        }
+        if (!ragContextText.isBlank()) {
+            segments.add(ragContextText);
+        } else if (!schemaContextText.isBlank()) {
+            segments.add(schemaContextText);
+        }
+        return new GenerationContext(String.join("\n\n", segments), relatedTables);
     }
 
     private String buildRetrievalInput(String prompt) {
@@ -2641,6 +2716,157 @@ public class AiServiceImpl implements AiService {
             normalized = normalized.substring(0, normalized.length() - 1);
         }
         return normalized;
+    }
+
+
+    private boolean resolveMemoryEnabled(AiGenerateSqlReq req, AiConfigVO config) {
+        if (req.getMemoryEnabled() != null) {
+            return Boolean.TRUE.equals(req.getMemoryEnabled());
+        }
+        return !Boolean.FALSE.equals(config.getConversationMemoryEnabled());
+    }
+
+    private int resolveMemoryWindowSize(AiConfigVO config) {
+        Integer size = config.getConversationMemoryWindowSize();
+        if (size == null) {
+            return DEFAULT_MEMORY_WINDOW_SIZE;
+        }
+        return Math.max(4, Math.min(size, 50));
+    }
+
+    private List<QueryHistoryEntity> pickWindowRecords(List<QueryHistoryEntity> rows, int windowSize) {
+        if (rows == null || rows.isEmpty()) {
+            return List.of();
+        }
+        int start = Math.max(0, rows.size() - windowSize);
+        return rows.subList(start, rows.size());
+    }
+
+    private String buildCompressedSummary(List<QueryHistoryEntity> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        for (QueryHistoryEntity item : rows) {
+            String prompt = safe(item.getPromptText());
+            String sql = safe(item.getSqlText());
+            String assistant = safe(item.getAssistantContent());
+            if (!prompt.isBlank()) {
+                builder.append("U: ").append(cutText(prompt, 80)).append("
+");
+            }
+            if (!sql.isBlank()) {
+                builder.append("SQL: ").append(cutText(sql, 120)).append("
+");
+            }
+            if (!assistant.isBlank()) {
+                builder.append("A: ").append(cutText(assistant, 120)).append("
+");
+            }
+        }
+        return cutText(builder.toString().trim(), 2000);
+    }
+
+    private String buildStructuredContextJson(List<QueryHistoryEntity> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return "[]";
+        }
+        ArrayNode arrayNode = objectMapper.createArrayNode();
+        for (QueryHistoryEntity item : rows) {
+            ObjectNode node = objectMapper.createObjectNode();
+            node.put("id", item.getId() == null ? 0L : item.getId());
+            node.put("historyType", safe(item.getHistoryType()));
+            node.put("actionType", safe(item.getActionType()));
+            node.put("prompt", cutText(safe(item.getPromptText()), 300));
+            node.put("sql", cutText(safe(item.getSqlText()), 500));
+            node.put("assistant", cutText(safe(item.getAssistantContent()), 400));
+            node.put("database", safe(item.getDatabaseName()));
+            node.put("createdAt", item.getCreatedAt() == null ? 0L : item.getCreatedAt());
+            arrayNode.add(node);
+        }
+        return arrayNode.toString();
+    }
+
+    private void upsertSessionSummaryVector(AiGenerateSqlReq req, String compressedContext, int windowSize, int totalMessages) {
+        String summary = safe(compressedContext);
+        if (summary.isBlank()) {
+            return;
+        }
+        try {
+            List<Float> vector = ragEmbeddingService.embedText(summary);
+            if (vector == null || vector.isEmpty()) {
+                return;
+            }
+            qdrantClientService.ensureCollection(ragCollectionNames.getSqlHistory(), vector.size());
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("connection_id", req.getConnectionId());
+            payload.put("database_name", safe(req.getDatabaseName()));
+            payload.put("session_id", safe(req.getSessionId()));
+            payload.put("entry_type", "session_summary");
+            payload.put("summary", summary);
+            payload.put("window_size", windowSize);
+            payload.put("total_messages", totalMessages);
+            payload.put("updated_at", System.currentTimeMillis());
+            qdrantClientService.upsertPoints(
+                ragCollectionNames.getSqlHistory(),
+                List.of(new com.sqlcopilot.studio.service.rag.model.QdrantPoint(
+                    "session-memory-" + req.getConnectionId() + "-" + safe(req.getSessionId()),
+                    vector,
+                    payload
+                ))
+            );
+        } catch (Exception ex) {
+            log.warn("[AI-MEMORY-UPSERT-FAILED] sessionId={}, reason={}", safe(req.getSessionId()), safe(ex.getMessage()));
+        }
+    }
+
+    private String querySessionMemoryFromVectorStore(AiGenerateSqlReq req) {
+        try {
+            List<Float> queryVector = ragEmbeddingService.embedText(buildRetrievalInput(req.getPrompt()));
+            if (queryVector == null || queryVector.isEmpty()) {
+                return "";
+            }
+            List<com.sqlcopilot.studio.service.rag.model.QdrantScoredPoint> points = qdrantClientService.searchPoints(
+                ragCollectionNames.getSqlHistory(),
+                queryVector,
+                3,
+                req.getConnectionId(),
+                req.getDatabaseName()
+            );
+            StringBuilder builder = new StringBuilder();
+            for (com.sqlcopilot.studio.service.rag.model.QdrantScoredPoint point : points) {
+                String sessionId = Objects.toString(point.getPayload().get("session_id"), "").trim();
+                String entryType = Objects.toString(point.getPayload().get("entry_type"), "").trim();
+                if (!safe(req.getSessionId()).equals(sessionId) || !"session_summary".equals(entryType)) {
+                    continue;
+                }
+                String summary = Objects.toString(point.getPayload().get("summary"), "").trim();
+                if (!summary.isBlank()) {
+                    builder.append("- ").append(cutText(summary, 500)).append("
+");
+                }
+            }
+            return builder.toString().trim();
+        } catch (Exception ex) {
+            log.warn("[AI-MEMORY-QUERY-FAILED] sessionId={}, reason={}", safe(req.getSessionId()), safe(ex.getMessage()));
+            return "";
+        }
+    }
+
+    private String cutText(String value, int maxLen) {
+        String text = safe(value);
+        if (text.length() <= maxLen) {
+            return text;
+        }
+        return text.substring(0, maxLen) + "...";
+    }
+
+    private int estimateTokens(String text) {
+        int length = safe(text).length();
+        if (length <= 0) {
+            return 0;
+        }
+        return Math.max(1, (int) Math.ceil(length / 4.0));
     }
 
     private String safe(String input) {

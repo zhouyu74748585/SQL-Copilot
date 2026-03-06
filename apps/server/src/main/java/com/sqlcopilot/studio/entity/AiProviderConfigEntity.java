@@ -12,5 +12,7 @@ public class AiProviderConfigEntity {
     private String cliCommand;
     private String cliWorkingDir;
     private String modelOptionsJson;
+    private Integer conversationMemoryEnabled;
+    private Integer conversationMemoryWindowSize;
     private Long updatedAt;
 }

@@ -180,12 +180,18 @@ export interface AiGenerateSqlVO {
   sqlText: string;
   reasoning: string;
   fallbackUsed: boolean;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
 }
 
 export interface AiTextResponseVO {
   content: string;
   reasoning: string;
   fallbackUsed: boolean;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
 }
 
 export interface AiRepairVO {
@@ -212,6 +218,9 @@ export interface QueryHistoryVO {
   databaseName?: string;
   chartConfig?: ChartConfigVO;
   chartImageCacheKey?: string;
+  structuredContextJson?: string;
+  tokenEstimate?: number;
+  memoryEnabled?: boolean;
   executionMs?: number;
   success?: boolean;
   createdAt?: number;
@@ -309,6 +318,8 @@ export interface AiConfigVO {
   cliCommand?: string;
   cliWorkingDir?: string;
   modelOptions?: AiModelOption[];
+  conversationMemoryEnabled?: boolean;
+  conversationMemoryWindowSize?: number;
   updatedAt?: number;
 }
 
@@ -320,6 +331,8 @@ export interface AiConfigSaveReq {
   cliCommand?: string;
   cliWorkingDir?: string;
   modelOptions?: AiModelOption[];
+  conversationMemoryEnabled?: boolean;
+  conversationMemoryWindowSize?: number;
 }
 
 export interface AiModelOption {

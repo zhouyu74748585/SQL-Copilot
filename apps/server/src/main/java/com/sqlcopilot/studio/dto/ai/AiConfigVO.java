@@ -29,6 +29,12 @@ public class AiConfigVO {
     /** 可选模型列表（API/CLI 均可配置）。 */
     private List<AiModelOptionVO> modelOptions;
 
+    /** 对话记忆开关。 */
+    private Boolean conversationMemoryEnabled;
+
+    /** 记忆滑动窗口大小。 */
+    private Integer conversationMemoryWindowSize;
+
     /** 最近更新时间戳（毫秒）。 */
     private Long updatedAt;
 }

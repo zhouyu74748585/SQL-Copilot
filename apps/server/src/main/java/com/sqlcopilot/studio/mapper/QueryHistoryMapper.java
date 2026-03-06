@@ -20,6 +20,9 @@ public interface QueryHistoryMapper {
             database_name,
             chart_config_json,
             chart_image_cache_key,
+            structured_context_json,
+            token_estimate,
+            memory_enabled,
             execution_ms,
             success_flag,
             created_at
@@ -35,6 +38,9 @@ public interface QueryHistoryMapper {
             #{databaseName},
             #{chartConfigJson},
             #{chartImageCacheKey},
+            #{structuredContextJson},
+            #{tokenEstimate},
+            #{memoryEnabled},
             #{executionMs},
             #{successFlag},
             #{createdAt}

@@ -12,6 +12,8 @@ public interface AiConfigMapper {
         SELECT id, provider_type, openai_base_url, openai_api_key, openai_model,
                cli_command, cli_working_dir,
                model_options_json,
+               conversation_memory_enabled,
+               conversation_memory_window_size,
                updated_at
         FROM ai_provider_config
         WHERE id = #{id}
@@ -23,12 +25,16 @@ public interface AiConfigMapper {
             id, provider_type, openai_base_url, openai_api_key, openai_model,
             cli_command, cli_working_dir,
             model_options_json,
+            conversation_memory_enabled,
+            conversation_memory_window_size,
             updated_at
         )
         VALUES(
             #{id}, #{providerType}, #{openaiBaseUrl}, #{openaiApiKey}, #{openaiModel},
             #{cliCommand}, #{cliWorkingDir},
             #{modelOptionsJson},
+            #{conversationMemoryEnabled},
+            #{conversationMemoryWindowSize},
             #{updatedAt}
         )
         """)
@@ -43,6 +49,8 @@ public interface AiConfigMapper {
             cli_command = #{cliCommand},
             cli_working_dir = #{cliWorkingDir},
             model_options_json = #{modelOptionsJson},
+            conversation_memory_enabled = #{conversationMemoryEnabled},
+            conversation_memory_window_size = #{conversationMemoryWindowSize},
             updated_at = #{updatedAt}
         WHERE id = #{id}
         """)

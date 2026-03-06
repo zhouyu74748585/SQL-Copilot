@@ -134,6 +134,25 @@ public class QdrantClientServiceImpl implements QdrantClientService {
         return parseSearchResults(response.body());
     }
 
+
+    @Override
+    public void deletePointsByFilter(String collectionName, Long connectionId, String databaseName, String sessionId) {
+        DeleteReq req = new DeleteReq(buildFilter(connectionId, databaseName, sessionId));
+        HttpResponse<String> response = send(buildRequest(
+            "POST",
+            "/collections/" + collectionName + "/points/delete?wait=true",
+            toJson(req)
+        ));
+        if (response.statusCode() == 404) {
+            return;
+        }
+        if (response.statusCode() != 200) {
+            throw new BusinessException(500,
+                "删除 Qdrant 向量失败: HTTP " + response.statusCode() + " - " + response.body());
+        }
+        validateQdrantResponse(response.body());
+    }
+
     @Override
     public QdrantCollectionMetric queryCollectionMetric(String collectionName, Long connectionId, String databaseName) {
         if (collectionName == null || collectionName.isBlank() || connectionId == null) {
@@ -283,11 +302,19 @@ public class QdrantClientServiceImpl implements QdrantClientService {
     }
 
     private FilterReq buildFilter(Long connectionId, String databaseName) {
+        return buildFilter(connectionId, databaseName, "");
+    }
+
+    private FilterReq buildFilter(Long connectionId, String databaseName, String sessionId) {
         List<FilterConditionReq> mustConditions = new ArrayList<>();
         mustConditions.add(new FilterConditionReq("connection_id", new MatchReq(connectionId)));
         String normalizedDatabaseName = Objects.toString(databaseName, "").trim();
         if (!normalizedDatabaseName.isBlank()) {
             mustConditions.add(new FilterConditionReq("database_name", new MatchReq(normalizedDatabaseName)));
+        }
+        String normalizedSessionId = Objects.toString(sessionId, "").trim();
+        if (!normalizedSessionId.isBlank()) {
+            mustConditions.add(new FilterConditionReq("session_id", new MatchReq(normalizedSessionId)));
         }
         return new FilterReq(mustConditions);
     }
