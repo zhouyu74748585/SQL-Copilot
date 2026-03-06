@@ -14,6 +14,7 @@ import com.sqlcopilot.studio.service.AiConfigService;
 import com.sqlcopilot.studio.service.AiService;
 import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.SchemaService;
+import com.sqlcopilot.studio.service.llm.OpenAiTextClient;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
 import com.sqlcopilot.studio.service.rag.RagEmbeddingService;
 import com.sqlcopilot.studio.service.rag.RagRetrievalService;
@@ -30,14 +31,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.io.File;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -48,8 +47,16 @@ public class AiServiceImpl implements AiService {
     private static final Pattern CTE_NAME_PATTERN = Pattern.compile("(?is)(?:^|,|\\s)([a-zA-Z_][a-zA-Z0-9_]*)\\s+as\\s*\\(");
     private static final Pattern COMMAND_TOKEN_PATTERN = Pattern.compile("\"([^\"]*)\"|'([^']*)'|(\\S+)");
     private static final Pattern SQL_KEYWORD_PATTERN = Pattern.compile("(?is)\\b(select|with|update|delete|insert)\\b");
+    private static final Pattern AGGREGATE_FUNCTION_PATTERN = Pattern.compile("(?i)\\b(count|sum|avg|min|max)\\s*\\(");
+    private static final Pattern GROUP_BY_PATTERN = Pattern.compile("(?i)\\bgroup\\s+by\\b");
+    private static final Pattern ORDER_BY_PATTERN = Pattern.compile("(?i)\\border\\s+by\\b");
+    private static final Pattern WHERE_PATTERN = Pattern.compile("(?i)\\bwhere\\b");
+    private static final Pattern JOIN_PATTERN = Pattern.compile("(?i)\\bjoin\\b");
     private static final Pattern ANSI_ESCAPE_PATTERN = Pattern.compile("\\u001B\\[[;\\d]*[ -/]*[@-~]");
     private static final Pattern TOKEN_USAGE_VALUE_PATTERN = Pattern.compile("^[0-9][0-9,]*$");
+    private static final Pattern TOKEN_USAGE_KV_PATTERN =
+        Pattern.compile("(?i)\\b(input|prompt|output|completion|total)\\b[^0-9]*([0-9][0-9,]*)");
+    private static final Pattern TOKEN_USAGE_NUMBER_PATTERN = Pattern.compile("([0-9][0-9,]*)");
     private static final int RELATED_TABLE_META_LIMIT = 8;
     private static final int DEFAULT_MEMORY_WINDOW_SIZE = 12;
     private static final int RELATED_INDEX_COLUMN_LIMIT = 12;
@@ -65,20 +72,61 @@ public class AiServiceImpl implements AiService {
     private static final String AUTO_INTENT_CLARIFY_CONTENT =
         "未能准确识别你的需求，请将需求描述得更清晰（例如：生成SQL/解释SQL/分析SQL/生成图表，也可以补充关键表、字段与筛选条件）。";
     private static final String OPENAI_SYSTEM_PROMPT = "你是数据库 SQL 专家。基于提供的 RAG 上下文生成 SQL。仅返回可执行 SQL，不要输出解释。";
-    private static final String INTENT_CLASSIFY_SYSTEM_PROMPT = """
-        你是数据库助手的意图识别器。请根据用户输入识别唯一意图，并输出严格 JSON，不要输出任何额外文本。
-        JSON 格式：
+
+    private static final String INTENT_CLASSIFY_LIGHT_SYSTEM_PROMPT = """
+        你是数据库助手的轻量意图预判器。输入是“用户输入 + 最近几轮对话摘要”。
+        请输出严格 JSON，不要输出任何额外文本：
+        {
+          "intentType": "GENERATE_SQL|EXPLAIN_SQL|ANALYZE_SQL|GENERATE_CHART",
+          "confidence": 0.00,
+          "reason": "中文简述",
+          "retrieval": {
+            "sessionTopK": 4,
+            "globalTopK": 6,
+            "query": "用于历史检索的短查询语句",
+            "focusTables": ["table_a","table_b"]
+          }
+        }
+        规则：
+        1) retrieval.sessionTopK 范围 1~8，globalTopK 范围 1~10；
+        2) query 必须是简短中文语义检索词，不要写 SQL；
+        3) focusTables 仅在明显出现表名时填写。
+        """;
+    private static final String INTENT_CLASSIFY_FINAL_SYSTEM_PROMPT = """
+        你是数据库助手的最终意图识别器。输入包含用户输入、最近几轮对话、历史检索结果。
+        请输出严格 JSON，不要输出任何额外文本：
         {
           "intentType": "GENERATE_SQL|EXPLAIN_SQL|ANALYZE_SQL|GENERATE_CHART",
           "confidence": 0.00,
           "reason": "中文简述判断依据"
         }
-        识别规则：
-        1) 用户要“画图/可视化/图表/趋势图/柱状图/饼图”等，intentType=GENERATE_CHART；
-        2) 用户要“解释 SQL 含义”，intentType=EXPLAIN_SQL；
-        3) 用户要“分析 SQL 合理性/性能风险”，intentType=ANALYZE_SQL；
-        4) 其他自然语言查询默认 intentType=GENERATE_SQL。
         """;
+    private static final String SQL_EXTRACT_SYSTEM_PROMPT = """
+        你是 SQL 抽取器。请从输入文本中识别 SQL 并输出严格 JSON，不要输出任何额外文本。
+        输出格式固定：
+        {
+          "has_sql": true,
+          "sql_list": ["SELECT ..."]
+        }
+        规则：
+        1) 如果没有 SQL，返回 {"has_sql":false,"sql_list":[]}；
+        2) sql_list 必须保留原文 SQL，不做改写、补全、修复、格式化；
+        3) 支持多条 SQL 时按出现顺序返回。
+        """;
+    private static final String CONTEXT_COMPRESS_SYSTEM_PROMPT = """
+        你是对话上下文压缩器。请基于输入内容生成压缩摘要，用于后续 SQL 问答。
+        要求：
+        1) 只输出最终摘要，不输出推理过程；
+        2) 保留业务意图、关键筛选、关键表字段、已确认结论与未解决问题；
+        3) 不要编造不存在的信息；
+        4) 输出纯文本，控制在 400 中文字以内。
+        """;
+    private static final int MEMORY_SUMMARY_LIMIT = 8;
+    private static final int GLOBAL_HISTORY_RECALL_LIMIT = 10;
+    private static final int SESSION_HISTORY_RECALL_LIMIT = 8;
+    private static final int SQL_UNDERSTAND_TABLE_LIMIT = 8;
+    private static final ThreadLocal<Map<String, String>> REQUEST_LLM_CACHE = ThreadLocal.withInitial(ConcurrentHashMap::new);
+    private static final ThreadLocal<Integer> REQUEST_LLM_CACHE_DEPTH = ThreadLocal.withInitial(() -> 0);
     private static final String GENERATE_CHART_SYSTEM_PROMPT = """
         你是数据库图表方案助手。请基于用户需求和数据库上下文，输出严格 JSON，不要输出任何额外文本。
         JSON 格式：
@@ -164,9 +212,7 @@ public class AiServiceImpl implements AiService {
     private final QueryHistoryMapper queryHistoryMapper;
     private final RagCollectionNames ragCollectionNames;
     private final ObjectMapper objectMapper;
-    private final HttpClient httpClient = HttpClient.newBuilder()
-        .connectTimeout(Duration.ofSeconds(10))
-        .build();
+    private final OpenAiTextClient openAiTextClient;
 
     public AiServiceImpl(SchemaService schemaService,
                          AiConfigService aiConfigService,
@@ -176,7 +222,8 @@ public class AiServiceImpl implements AiService {
                          QdrantClientService qdrantClientService,
                          QueryHistoryMapper queryHistoryMapper,
                          @org.springframework.beans.factory.annotation.Value("${rag.collection.sql-history:sql_history}") String sqlHistoryCollection,
-                         ObjectMapper objectMapper) {
+                         ObjectMapper objectMapper,
+                         OpenAiTextClient openAiTextClient) {
         this.schemaService = schemaService;
         this.aiConfigService = aiConfigService;
         this.connectionService = connectionService;
@@ -186,10 +233,13 @@ public class AiServiceImpl implements AiService {
         this.queryHistoryMapper = queryHistoryMapper;
         this.ragCollectionNames = new RagCollectionNames("schema_table", "schema_column", sqlHistoryCollection, "metric_term", "example_sql", "sql_fragment");
         this.objectMapper = objectMapper;
+        this.openAiTextClient = openAiTextClient;
     }
 
     @Override
     public AiAutoQueryVO autoQuery(AiGenerateSqlReq req) {
+        enterRequestLlmCache();
+        try {
         long startAt = System.currentTimeMillis();
         StepTimer timer = new StepTimer();
         log.info(
@@ -260,6 +310,7 @@ public class AiServiceImpl implements AiService {
             vo.setSqlText(generated.getSqlText());
             vo.setFallbackUsed(Boolean.TRUE.equals(generated.getFallbackUsed()));
             vo.setReasoning(joinReasoning(baseReasoning, generated.getReasoning()));
+            vo.setTotalTokens(generated.getTotalTokens());
         } else if (intentType == IntentType.EXPLAIN_SQL) {
             if (!hasSqlSnippet) {
                 throw new BusinessException(400, "自动识别为“解释 SQL”时，提示词中必须包含 SQL 片段");
@@ -269,6 +320,7 @@ public class AiServiceImpl implements AiService {
             vo.setContent(explained.getContent());
             vo.setFallbackUsed(Boolean.TRUE.equals(explained.getFallbackUsed()));
             vo.setReasoning(joinReasoning(baseReasoning, explained.getReasoning()));
+            vo.setTotalTokens(explained.getTotalTokens());
         } else if (intentType == IntentType.ANALYZE_SQL) {
             if (!hasSqlSnippet) {
                 throw new BusinessException(400, "自动识别为“分析 SQL”时，提示词中必须包含 SQL 片段");
@@ -278,6 +330,7 @@ public class AiServiceImpl implements AiService {
             vo.setContent(analyzed.getContent());
             vo.setFallbackUsed(Boolean.TRUE.equals(analyzed.getFallbackUsed()));
             vo.setReasoning(joinReasoning(baseReasoning, analyzed.getReasoning()));
+            vo.setTotalTokens(analyzed.getTotalTokens());
         } else {
             AiGenerateChartVO chart = generateChart(req);
             timer.mark("route_generate_chart");
@@ -286,6 +339,7 @@ public class AiServiceImpl implements AiService {
             vo.setConfigSummary(chart.getConfigSummary());
             vo.setFallbackUsed(Boolean.TRUE.equals(chart.getFallbackUsed()));
             vo.setReasoning(joinReasoning(baseReasoning, chart.getReasoning()));
+            vo.setTotalTokens(chart.getTotalTokens());
         }
 
         log.info(
@@ -310,10 +364,15 @@ public class AiServiceImpl implements AiService {
                 timer.totalElapsedMs()
         );
         return vo;
+        } finally {
+            exitRequestLlmCache();
+        }
     }
 
     @Override
     public AiGenerateSqlVO generateSql(AiGenerateSqlReq req) {
+        enterRequestLlmCache();
+        try {
         long startAt = System.currentTimeMillis();
         StepTimer timer = new StepTimer();
         log.info(
@@ -338,11 +397,13 @@ public class AiServiceImpl implements AiService {
 
         String reasoning;
         String generatedSql;
+        OpenAiTextClient.TokenUsage providerTokenUsage = null;
         boolean fallbackUsed = false;
         try {
             ProviderResult result = generateByConfiguredProvider(req, generationContext);
             generatedSql = safe(result.sqlText());
             reasoning = safe(result.reasoning());
+            providerTokenUsage = result.usage();
             timer.mark("provider_generate_sql");
         } catch (Exception ex) {
             generatedSql = fallbackOutputText("模型调用失败: " + safe(ex.getMessage()));
@@ -390,11 +451,14 @@ public class AiServiceImpl implements AiService {
         vo.setSqlText(generatedSql);
         vo.setReasoning(reasoning);
         vo.setFallbackUsed(fallbackUsed);
-        int promptTokens = estimateTokens(req.getPrompt() + "\n" + generationContext.promptContext());
-        int completionTokens = estimateTokens(generatedSql + "\n" + reasoning);
-        vo.setPromptTokens(promptTokens);
-        vo.setCompletionTokens(completionTokens);
-        vo.setTotalTokens(promptTokens + completionTokens);
+        TokenUsageStats tokenUsage = resolveTokenUsage(
+            providerTokenUsage,
+            req.getPrompt() + "\n" + generationContext.promptContext(),
+            generatedSql + "\n" + reasoning
+        );
+        vo.setPromptTokens(tokenUsage.promptTokens());
+        vo.setCompletionTokens(tokenUsage.completionTokens());
+        vo.setTotalTokens(tokenUsage.totalTokens());
         timer.mark("assemble_response");
         log.info(
             "[AI-GENERATE-RESP] connectionId={}, sessionId={}, databaseName={}, modelName={}, ragHit={}, relatedTableCount={}, contextLength={}, sqlLength={}, fallbackUsed={}, elapsedMs={}",
@@ -419,10 +483,15 @@ public class AiServiceImpl implements AiService {
             timer.totalElapsedMs()
         );
         return vo;
+        } finally {
+            exitRequestLlmCache();
+        }
     }
 
     @Override
     public AiGenerateChartVO generateChart(AiGenerateSqlReq req) {
+        enterRequestLlmCache();
+        try {
         long startAt = System.currentTimeMillis();
         StepTimer timer = new StepTimer();
         log.info(
@@ -447,6 +516,7 @@ public class AiServiceImpl implements AiService {
 
         String reasoning;
         String rawContent;
+        OpenAiTextClient.TokenUsage providerTokenUsage = null;
         boolean fallbackUsed = false;
         try {
             TextProviderResult result = generateTextByConfiguredProvider(
@@ -457,6 +527,7 @@ public class AiServiceImpl implements AiService {
             );
             rawContent = safe(result.content());
             reasoning = safe(result.reasoning());
+            providerTokenUsage = result.usage();
             timer.mark("provider_generate_chart");
         } catch (Exception ex) {
             rawContent = "未能生成图表方案：" + safe(ex.getMessage());
@@ -497,6 +568,19 @@ public class AiServiceImpl implements AiService {
                 reasoning += "；";
             }
             reasoning += "未识别到可执行 SQL，已返回说明内容。";
+        } else {
+            AstValidationResult astResult = validateByAst(req, sqlText);
+            timer.mark("ast_validate");
+            if (!astResult.valid()) {
+                fallbackUsed = true;
+                sqlText = fallbackOutputText("图表SQL校验未通过: " + astResult.message() + "\n模型输出:\n" + sqlText);
+                if (!reasoning.isBlank()) {
+                    reasoning += "；";
+                }
+                reasoning += "图表SQL AST 校验未通过，已降级返回说明。原因: " + astResult.message();
+            } else {
+                sqlText = astResult.sqlText();
+            }
         }
 
         if (chartConfig != null) {
@@ -526,11 +610,14 @@ public class AiServiceImpl implements AiService {
         vo.setConfigSummary(configSummary);
         vo.setReasoning(reasoning);
         vo.setFallbackUsed(fallbackUsed);
-        int promptTokens = estimateTokens(req.getPrompt() + "\n" + generationContext.promptContext());
-        int completionTokens = estimateTokens(sqlText + "\n" + reasoning + "\n" + configSummary);
-        vo.setPromptTokens(promptTokens);
-        vo.setCompletionTokens(completionTokens);
-        vo.setTotalTokens(promptTokens + completionTokens);
+        TokenUsageStats tokenUsage = resolveTokenUsage(
+            providerTokenUsage,
+            req.getPrompt() + "\n" + generationContext.promptContext(),
+            sqlText + "\n" + reasoning + "\n" + configSummary
+        );
+        vo.setPromptTokens(tokenUsage.promptTokens());
+        vo.setCompletionTokens(tokenUsage.completionTokens());
+        vo.setTotalTokens(tokenUsage.totalTokens());
         timer.mark("assemble_response");
         log.info(
             "[AI-GENERATE-CHART-RESP] connectionId={}, sessionId={}, databaseName={}, modelName={}, ragHit={}, relatedTableCount={}, sqlLength={}, hasChartConfig={}, fallbackUsed={}, elapsedMs={}",
@@ -555,16 +642,29 @@ public class AiServiceImpl implements AiService {
             timer.totalElapsedMs()
         );
         return vo;
+        } finally {
+            exitRequestLlmCache();
+        }
     }
 
     @Override
     public AiTextResponseVO explainSql(AiGenerateSqlReq req) {
-        return generateTextResponse(req, "EXPLAIN-TEXT", EXPLAIN_SQL_SYSTEM_PROMPT, "SQL 含义解释");
+        enterRequestLlmCache();
+        try {
+            return explainSqlWithPipeline(req);
+        } finally {
+            exitRequestLlmCache();
+        }
     }
 
     @Override
     public AiTextResponseVO analyzeSql(AiGenerateSqlReq req) {
-        return generateTextResponse(req, "ANALYZE-SQL", ANALYZE_SQL_SYSTEM_PROMPT, "SQL 合理性分析");
+        enterRequestLlmCache();
+        try {
+            return analyzeSqlWithPipeline(req);
+        } finally {
+            exitRequestLlmCache();
+        }
     }
 
     @Override
@@ -626,6 +726,7 @@ public class AiServiceImpl implements AiService {
 
     @Override
     public AiRepairVO repairSql(AiRepairReq req) {
+        enterRequestLlmCache();
         long startAt = System.currentTimeMillis();
         StepTimer timer = new StepTimer();
         String sourceSql = safe(req.getSqlText());
@@ -725,6 +826,9 @@ public class AiServiceImpl implements AiService {
                 timer.totalElapsedMs()
             );
             return vo;
+        }
+        finally {
+            exitRequestLlmCache();
         }
     }
 
@@ -1086,32 +1190,30 @@ public class AiServiceImpl implements AiService {
 
     private IntentResult identifyIntent(AiGenerateSqlReq req) {
         StepTimer timer = new StepTimer();
-        TextProviderResult providerResult;
-        try {
-            // 关键操作：意图识别不走 RAG 检索，仅基于当前输入降低噪声和延迟。
-            providerResult = generateTextByConfiguredProvider(
-                req,
-                new GenerationContext("", List.of()),
-                INTENT_CLASSIFY_SYSTEM_PROMPT,
-                "意图识别"
-            );
-            timer.mark("provider_identify_intent");
-        } catch (Exception ex) {
-            timer.mark("provider_identify_intent_failed");
-            log.info(
-                "[AI-IDENTIFY-INTENT-TIMING] connectionId={}, sessionId={}, databaseName={}, modelName={}, steps={}, totalMs={}",
+        AiConfigVO aiConfig = aiConfigService.getConfig();
+        boolean memoryEnabled = resolveMemoryEnabled(req, aiConfig);
+        ParsedIntentResponse parsed;
+        if (!memoryEnabled) {
+            parsed = identifyIntentSingleStage(req);
+            timer.mark("identify_intent_single_stage");
+        } else {
+            List<QueryHistoryEntity> chatHistory = queryHistoryMapper.listBySession(
                 req.getConnectionId(),
                 safe(req.getSessionId()),
-                safe(req.getDatabaseName()),
-                safe(req.getModelName()),
-                timer.stepsSummary(),
-                timer.totalElapsedMs()
+                200
             );
-            throw new BusinessException(400, "意图识别失败: " + safe(ex.getMessage()));
+            List<QueryHistoryEntity> windowRecords = pickWindowRecords(chatHistory, MEMORY_SUMMARY_LIMIT);
+            String recentDialogContext = buildIntentRecentDialogContext(windowRecords);
+            timer.mark("load_recent_dialog");
+            ParsedIntentResponse light = identifyIntentLight(req, recentDialogContext);
+            timer.mark("identify_intent_light");
+            IntentRetrievalParams retrievalParams = light == null ? IntentRetrievalParams.defaultValue() : light.retrievalParams();
+            String historyContext = retrieveIntentHistoryContext(req, retrievalParams);
+            timer.mark("retrieve_history");
+            parsed = identifyIntentFinal(req, recentDialogContext, historyContext);
+            timer.mark("identify_intent_final");
         }
 
-        ParsedIntentResponse parsed = parseIntentResponse(providerResult.content());
-        timer.mark("parse_intent_response");
         if (parsed == null || parsed.intentType() == null) {
             log.info(
                 "[AI-IDENTIFY-INTENT-TIMING] connectionId={}, sessionId={}, databaseName={}, modelName={}, steps={}, totalMs={}",
@@ -1190,12 +1292,222 @@ public class AiServiceImpl implements AiService {
                 if (reason.isBlank()) {
                     reason = safe(root.path("message").asText(""));
                 }
-                return new ParsedIntentResponse(intentType, confidence, reason, true);
+                IntentRetrievalParams retrievalParams = parseIntentRetrievalParams(root.path("retrieval"));
+                return new ParsedIntentResponse(intentType, confidence, reason, true, retrievalParams);
             } catch (Exception ignore) {
                 // ignore malformed JSON candidate
             }
         }
         return null;
+    }
+
+    private ParsedIntentResponse identifyIntentSingleStage(AiGenerateSqlReq req) {
+        String finalInput = "用户输入:\n" + safe(req.getPrompt());
+        TextProviderResult providerResult = generateRawTextByConfiguredProvider(
+            req,
+            INTENT_CLASSIFY_FINAL_SYSTEM_PROMPT,
+            finalInput,
+            "意图识别-单阶段"
+        );
+        ParsedIntentResponse parsed = parseIntentResponse(providerResult.content());
+        if (parsed == null) {
+            throw new BusinessException(400, "意图识别失败，请补充更明确的目标");
+        }
+        return parsed;
+    }
+
+    private ParsedIntentResponse identifyIntentLight(AiGenerateSqlReq req, String recentDialogContext) {
+        StringBuilder input = new StringBuilder();
+        input.append("用户输入:\n").append(safe(req.getPrompt())).append("\n");
+        if (!recentDialogContext.isBlank()) {
+            input.append("\n最近几轮对话:\n").append(recentDialogContext).append("\n");
+        }
+        TextProviderResult providerResult = generateRawTextByConfiguredProvider(
+            req,
+            INTENT_CLASSIFY_LIGHT_SYSTEM_PROMPT,
+            input.toString(),
+            "意图识别-轻量"
+        );
+        ParsedIntentResponse parsed = parseIntentResponse(providerResult.content());
+        if (parsed == null) {
+            return new ParsedIntentResponse(IntentType.GENERATE_SQL, 0.75D, "轻量意图识别降级为默认生成SQL", false, IntentRetrievalParams.defaultValue());
+        }
+        IntentRetrievalParams retrievalParams = parsed.retrievalParams() == null ? IntentRetrievalParams.defaultValue() : parsed.retrievalParams();
+        return new ParsedIntentResponse(parsed.intentType(), parsed.confidence(), parsed.reason(), parsed.parsed(), retrievalParams);
+    }
+
+    private ParsedIntentResponse identifyIntentFinal(AiGenerateSqlReq req, String recentDialogContext, String historyContext) {
+        StringBuilder input = new StringBuilder();
+        input.append("用户输入:\n").append(safe(req.getPrompt())).append("\n");
+        if (!recentDialogContext.isBlank()) {
+            input.append("\n最近几轮对话:\n").append(recentDialogContext).append("\n");
+        }
+        if (!historyContext.isBlank()) {
+            input.append("\n历史检索结果:\n").append(historyContext).append("\n");
+        }
+        TextProviderResult providerResult = generateRawTextByConfiguredProvider(
+            req,
+            INTENT_CLASSIFY_FINAL_SYSTEM_PROMPT,
+            input.toString(),
+            "意图识别-最终"
+        );
+        ParsedIntentResponse parsed = parseIntentResponse(providerResult.content());
+        if (parsed == null) {
+            throw new BusinessException(400, "意图识别失败，请补充更明确的目标");
+        }
+        return parsed;
+    }
+
+    private IntentRetrievalParams parseIntentRetrievalParams(JsonNode retrievalNode) {
+        if (retrievalNode == null || retrievalNode.isMissingNode() || retrievalNode.isNull() || !retrievalNode.isObject()) {
+            return IntentRetrievalParams.defaultValue();
+        }
+        int sessionTopK = normalizeTopK(retrievalNode.path("sessionTopK").asInt(4), 1, SESSION_HISTORY_RECALL_LIMIT);
+        int globalTopK = normalizeTopK(retrievalNode.path("globalTopK").asInt(6), 1, GLOBAL_HISTORY_RECALL_LIMIT);
+        String query = safe(retrievalNode.path("query").asText(""));
+        List<String> focusTables = new ArrayList<>();
+        JsonNode focusNode = retrievalNode.path("focusTables");
+        if (focusNode != null && focusNode.isArray()) {
+            for (JsonNode item : focusNode) {
+                String table = safe(item == null ? "" : item.asText(""));
+                if (!table.isBlank()) {
+                    focusTables.add(normalizeRelatedTableName(table));
+                }
+            }
+        }
+        return new IntentRetrievalParams(sessionTopK, globalTopK, query, focusTables);
+    }
+
+    private int normalizeTopK(int input, int min, int max) {
+        return Math.max(min, Math.min(max, input));
+    }
+
+    private String buildIntentRecentDialogContext(List<QueryHistoryEntity> windowRecords) {
+        if (windowRecords == null || windowRecords.isEmpty()) {
+            return "";
+        }
+        ArrayNode rows = objectMapper.createArrayNode();
+        for (QueryHistoryEntity item : windowRecords) {
+            ObjectNode node = objectMapper.createObjectNode();
+            node.put("role", "user");
+            node.put("prompt", safe(item.getPromptText()));
+            node.put("sql", safe(item.getSqlText()));
+            node.put("assistant", safe(item.getAssistantContent()));
+            node.put("actionType", safe(item.getActionType()));
+            rows.add(node);
+        }
+        return rows.toString();
+    }
+
+    private String retrieveIntentHistoryContext(AiGenerateSqlReq req, IntentRetrievalParams retrievalParams) {
+        IntentRetrievalParams params = retrievalParams == null ? IntentRetrievalParams.defaultValue() : retrievalParams;
+        List<String> lines = new ArrayList<>();
+        String sessionContext = retrieveSessionHistoryContext(req, params.sessionTopK());
+        if (!sessionContext.isBlank()) {
+            lines.add("会话历史:\n" + sessionContext);
+        }
+        String globalContext = retrieveGlobalHistoryContext(req, params.globalTopK(), params.query(), params.focusTables());
+        if (!globalContext.isBlank()) {
+            lines.add("全局历史:\n" + globalContext);
+        }
+        return String.join("\n\n", lines);
+    }
+
+    private String retrieveSessionHistoryContext(AiGenerateSqlReq req, int topK) {
+        List<QueryHistoryEntity> rows = queryHistoryMapper.listBySession(
+            req.getConnectionId(),
+            safe(req.getSessionId()),
+            Math.max(1, topK)
+        );
+        if (rows == null || rows.isEmpty()) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        int index = 1;
+        int start = Math.max(0, rows.size() - topK);
+        for (QueryHistoryEntity item : rows.subList(start, rows.size())) {
+            String prompt = safe(item.getPromptText());
+            String sql = safe(item.getSqlText());
+            String assistant = safe(item.getAssistantContent());
+            if (prompt.isBlank() && sql.isBlank() && assistant.isBlank()) {
+                continue;
+            }
+            builder.append(index++).append(". ");
+            if (!prompt.isBlank()) {
+                builder.append("Q=").append(prompt).append("；");
+            }
+            if (!sql.isBlank()) {
+                builder.append("SQL=").append(sql).append("；");
+            }
+            if (!assistant.isBlank()) {
+                builder.append("A=").append(assistant);
+            }
+            builder.append('\n');
+        }
+        return builder.toString().trim();
+    }
+
+    private String retrieveGlobalHistoryContext(AiGenerateSqlReq req, int topK, String query, List<String> focusTables) {
+        String retrievalText = query.isBlank() ? safe(req.getPrompt()) : query;
+        try {
+            List<Float> vector = ragEmbeddingService.embedText(retrievalText);
+            if (vector == null || vector.isEmpty()) {
+                return "";
+            }
+            List<com.sqlcopilot.studio.service.rag.model.QdrantScoredPoint> points = qdrantClientService.searchPoints(
+                ragCollectionNames.getSqlHistory(),
+                vector,
+                Math.max(1, topK),
+                req.getConnectionId(),
+                req.getDatabaseName()
+            );
+            if (points == null || points.isEmpty()) {
+                return "";
+            }
+            Set<String> tableFilter = new LinkedHashSet<>();
+            if (focusTables != null) {
+                focusTables.stream().map(this::normalizeRelatedTableName).filter(item -> !item.isBlank()).forEach(tableFilter::add);
+            }
+            StringBuilder builder = new StringBuilder();
+            int idx = 1;
+            for (com.sqlcopilot.studio.service.rag.model.QdrantScoredPoint point : points) {
+                Map<String, Object> payload = point.getPayload();
+                String sessionId = Objects.toString(payload.get("session_id"), "").trim();
+                if (safe(req.getSessionId()).equals(sessionId)) {
+                    continue;
+                }
+                List<String> tables = payloadStringList(payload, "tables");
+                if (!tableFilter.isEmpty()) {
+                    boolean matched = tables.stream().map(this::normalizeRelatedTableName).anyMatch(tableFilter::contains);
+                    if (!matched) {
+                        continue;
+                    }
+                }
+                String sqlText = Objects.toString(payload.get("sql_text"), "").trim();
+                String semantic = Objects.toString(payload.get("semantic_description"), "").trim();
+                if (sqlText.isBlank() && semantic.isBlank()) {
+                    continue;
+                }
+                builder.append(idx++).append(". ");
+                if (!semantic.isBlank()) {
+                    builder.append("语义=").append(semantic).append("；");
+                }
+                if (!sqlText.isBlank()) {
+                    builder.append("SQL=").append(sqlText).append("；");
+                }
+                if (!tables.isEmpty()) {
+                    builder.append("Tables=").append(String.join(",", tables));
+                }
+                builder.append('\n');
+                if (idx > topK) {
+                    break;
+                }
+            }
+            return builder.toString().trim();
+        } catch (Exception ex) {
+            log.warn("[AI-INTENT-HISTORY-RECALL-FAILED] sessionId={}, reason={}", safe(req.getSessionId()), safe(ex.getMessage()));
+            return "";
+        }
     }
 
     private IntentType parseIntentType(String rawIntent) {
@@ -1275,6 +1587,338 @@ public class AiServiceImpl implements AiService {
         return vo;
     }
 
+    private AiTextResponseVO explainSqlWithPipeline(AiGenerateSqlReq req) {
+        return generateSqlUnderstandingResponse(req, false);
+    }
+
+    private AiTextResponseVO analyzeSqlWithPipeline(AiGenerateSqlReq req) {
+        return generateSqlUnderstandingResponse(req, true);
+    }
+
+    private AiTextResponseVO generateSqlUnderstandingResponse(AiGenerateSqlReq req, boolean analyzeMode) {
+        String logScene = analyzeMode ? "ANALYZE-SQL" : "EXPLAIN-TEXT";
+        String taskLabel = analyzeMode ? "SQL 合理性分析" : "SQL 含义解释";
+        long startAt = System.currentTimeMillis();
+        StepTimer timer = new StepTimer();
+        log.info(
+            "[AI-{}-REQ] connectionId={}, sessionId={}, databaseName={}, modelName={}, promptLength={}",
+            logScene,
+            req.getConnectionId(),
+            safe(req.getSessionId()),
+            safe(req.getDatabaseName()),
+            safe(req.getModelName()),
+            safe(req.getPrompt()).length()
+        );
+
+        SqlExtractionResult extraction = extractSqlByLlm(req, safe(req.getPrompt()));
+        timer.mark("extract_sql_llm");
+        if (!extraction.hasSql() || extraction.sqlList().isEmpty()) {
+            throw new BusinessException(400, "未识别到 SQL，请在问题中包含 SQL 片段");
+        }
+        String sourceSql = safe(extraction.sqlList().get(0));
+        ParsedSqlInsights insights = parseSqlInsights(sourceSql);
+        timer.mark("parse_sql");
+        ExactMetadataContext metadataContext = buildExactMetadataContext(req, insights.tables(), analyzeMode);
+        timer.mark("exact_metadata");
+        boolean needSupplement = shouldSupplementRetrieval(insights, metadataContext, extraction.sqlList().size());
+        String supplementContext = "";
+        if (needSupplement) {
+            supplementContext = buildSupplementRetrievalContext(req, sourceSql);
+            timer.mark("supplement_retrieve");
+        }
+        String explainPlanContext = "";
+        if (analyzeMode) {
+            explainPlanContext = tryBuildExplainPlanPromptContext(req, sourceSql);
+            timer.mark("append_explain_plan_context");
+        }
+
+        StringBuilder userPrompt = new StringBuilder();
+        userPrompt.append("用户输入:\n").append(safe(req.getPrompt())).append("\n\n");
+        userPrompt.append("提取到的SQL:\n").append(sourceSql).append("\n\n");
+        userPrompt.append("SQL解析结果:\n").append(insights.summary()).append("\n\n");
+        userPrompt.append("精确元数据:\n").append(metadataContext.contextText()).append("\n");
+        if (!supplementContext.isBlank()) {
+            userPrompt.append("\n补充召回(example_sql/metric/history):\n").append(supplementContext).append("\n");
+        }
+        if (!explainPlanContext.isBlank()) {
+            userPrompt.append("\n执行计划上下文:\n").append(explainPlanContext).append("\n");
+        }
+
+        String content;
+        String reasoning;
+        OpenAiTextClient.TokenUsage providerTokenUsage = null;
+        boolean fallbackUsed = false;
+        try {
+            TextProviderResult result = generateRawTextByConfiguredProvider(
+                req,
+                analyzeMode ? ANALYZE_SQL_SYSTEM_PROMPT : EXPLAIN_SQL_SYSTEM_PROMPT,
+                userPrompt.toString(),
+                taskLabel
+            );
+            content = safe(result.content());
+            reasoning = safe(result.reasoning());
+            providerTokenUsage = result.usage();
+            timer.mark("provider_generate_text");
+        } catch (Exception ex) {
+            content = "未能完成本次" + taskLabel + "，请稍后重试。";
+            reasoning = "AI 配置调用失败，已降级为错误提示。原因: " + safe(ex.getMessage());
+            fallbackUsed = true;
+            timer.mark("provider_generate_text_failed");
+        }
+
+        AiTextResponseVO vo = new AiTextResponseVO();
+        vo.setContent(content);
+        vo.setReasoning(reasoning);
+        vo.setFallbackUsed(fallbackUsed);
+        TokenUsageStats tokenUsage = resolveTokenUsage(
+            providerTokenUsage,
+            userPrompt.toString(),
+            content + "\n" + reasoning
+        );
+        vo.setPromptTokens(tokenUsage.promptTokens());
+        vo.setCompletionTokens(tokenUsage.completionTokens());
+        vo.setTotalTokens(tokenUsage.totalTokens());
+        timer.mark("assemble_response");
+        log.info(
+            "[AI-{}-RESP] connectionId={}, sessionId={}, databaseName={}, modelName={}, contextLength={}, contentLength={}, fallbackUsed={}, elapsedMs={}",
+            logScene,
+            req.getConnectionId(),
+            safe(req.getSessionId()),
+            safe(req.getDatabaseName()),
+            safe(req.getModelName()),
+            userPrompt.length(),
+            safe(content).length(),
+            fallbackUsed,
+            System.currentTimeMillis() - startAt
+        );
+        log.info(
+            "[AI-{}-TIMING] connectionId={}, sessionId={}, databaseName={}, modelName={}, steps={}, totalMs={}",
+            logScene,
+            req.getConnectionId(),
+            safe(req.getSessionId()),
+            safe(req.getDatabaseName()),
+            safe(req.getModelName()),
+            timer.stepsSummary(),
+            timer.totalElapsedMs()
+        );
+        return vo;
+    }
+
+    private SqlExtractionResult extractSqlByLlm(AiGenerateSqlReq req, String sourceText) {
+        String cacheKey = "extract_sql:" + safe(sourceText);
+        String raw = getOrComputeRequestCache(cacheKey, () -> {
+            TextProviderResult providerResult = generateRawTextByConfiguredProvider(
+                req,
+                SQL_EXTRACT_SYSTEM_PROMPT,
+                "输入文本:\n" + safe(sourceText),
+                "SQL提取"
+            );
+            return safe(providerResult.content());
+        });
+        SqlExtractionResult parsed = parseSqlExtractionResult(raw);
+        if (parsed != null) {
+            return parsed;
+        }
+        String fallbackSql = extractSql(sourceText);
+        if (!fallbackSql.isBlank()) {
+            return new SqlExtractionResult(true, List.of(fallbackSql), false);
+        }
+        return new SqlExtractionResult(false, List.of(), false);
+    }
+
+    private SqlExtractionResult parseSqlExtractionResult(String rawOutput) {
+        String normalized = safe(rawOutput);
+        if (normalized.isBlank()) {
+            return null;
+        }
+        List<String> candidates = new ArrayList<>();
+        candidates.add(normalized);
+        int jsonStart = normalized.indexOf('{');
+        int jsonEnd = normalized.lastIndexOf('}');
+        if (jsonStart >= 0 && jsonEnd > jsonStart) {
+            candidates.add(normalized.substring(jsonStart, jsonEnd + 1));
+        }
+        for (String candidate : candidates) {
+            try {
+                JsonNode root = objectMapper.readTree(candidate);
+                if (root == null || !root.isObject()) {
+                    continue;
+                }
+                boolean hasSql = root.path("has_sql").asBoolean(root.path("hasSql").asBoolean(false));
+                JsonNode listNode = root.path("sql_list");
+                if (!listNode.isArray()) {
+                    listNode = root.path("sqlList");
+                }
+                List<String> sqlList = new ArrayList<>();
+                if (listNode.isArray()) {
+                    for (JsonNode item : listNode) {
+                        String sql = item == null ? "" : Objects.toString(item.asText(""), "");
+                        if (!sql.isBlank()) {
+                            sqlList.add(sql);
+                        }
+                    }
+                }
+                return new SqlExtractionResult(hasSql || !sqlList.isEmpty(), sqlList, true);
+            } catch (Exception ignore) {
+                // ignore malformed json
+            }
+        }
+        return null;
+    }
+
+    private ParsedSqlInsights parseSqlInsights(String sqlText) {
+        String sourceSql = safe(sqlText);
+        if (sourceSql.isBlank()) {
+            return ParsedSqlInsights.empty("SQL为空");
+        }
+        try {
+            Statements statements = CCJSqlParserUtil.parseStatements(sourceSql);
+            if (statements == null || statements.getStatements() == null || statements.getStatements().isEmpty()) {
+                return ParsedSqlInsights.empty("SQL解析为空");
+            }
+            if (statements.getStatements().size() != 1) {
+                return ParsedSqlInsights.empty("检测到多条SQL语句");
+            }
+            Statement statement = statements.getStatements().get(0);
+            String normalizedSql = safe(statement.toString());
+            TablesNamesFinder finder = new TablesNamesFinder();
+            List<String> tables = finder.getTableList(statement).stream()
+                .map(this::normalizeRelatedTableName)
+                .filter(item -> !item.isBlank())
+                .distinct()
+                .toList();
+            List<String> columns = extractSqlColumns(normalizedSql);
+            List<String> aggregates = extractAggregateFunctions(normalizedSql);
+            int joinCount = countRegexMatches(JOIN_PATTERN, normalizedSql);
+            boolean hasWhere = WHERE_PATTERN.matcher(normalizedSql).find();
+            boolean hasGroupBy = GROUP_BY_PATTERN.matcher(normalizedSql).find();
+            boolean hasOrderBy = ORDER_BY_PATTERN.matcher(normalizedSql).find();
+            return new ParsedSqlInsights(
+                true,
+                normalizedSql,
+                tables,
+                columns,
+                aggregates,
+                joinCount,
+                hasWhere,
+                hasGroupBy,
+                hasOrderBy,
+                "解析成功"
+            );
+        } catch (Exception ex) {
+            return ParsedSqlInsights.empty("SQL解析失败: " + safe(ex.getMessage()), sourceSql);
+        }
+    }
+
+    private List<String> extractSqlColumns(String sqlText) {
+        Matcher matcher = Pattern.compile("([a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)").matcher(safe(sqlText));
+        LinkedHashSet<String> columns = new LinkedHashSet<>();
+        while (matcher.find()) {
+            String table = safe(matcher.group(1));
+            String column = safe(matcher.group(2));
+            if (!table.isBlank() && !column.isBlank()) {
+                columns.add(table + "." + column);
+            }
+        }
+        return new ArrayList<>(columns);
+    }
+
+    private List<String> extractAggregateFunctions(String sqlText) {
+        Matcher matcher = AGGREGATE_FUNCTION_PATTERN.matcher(safe(sqlText));
+        LinkedHashSet<String> functions = new LinkedHashSet<>();
+        while (matcher.find()) {
+            String fn = safe(matcher.group(1)).toUpperCase(Locale.ROOT);
+            if (!fn.isBlank()) {
+                functions.add(fn);
+            }
+        }
+        return new ArrayList<>(functions);
+    }
+
+    private int countRegexMatches(Pattern pattern, String text) {
+        Matcher matcher = pattern.matcher(safe(text));
+        int count = 0;
+        while (matcher.find()) {
+            count++;
+        }
+        return count;
+    }
+
+    private ExactMetadataContext buildExactMetadataContext(AiGenerateSqlReq req, List<String> tables, boolean includeIndexInfo) {
+        if (tables == null || tables.isEmpty()) {
+            return new ExactMetadataContext("未从 SQL 中解析到表名", 0D, false);
+        }
+        StringBuilder builder = new StringBuilder();
+        int total = 0;
+        int covered = 0;
+        for (String table : tables) {
+            if (total >= SQL_UNDERSTAND_TABLE_LIMIT) {
+                break;
+            }
+            String tableName = normalizeRelatedTableName(table);
+            if (tableName.isBlank()) {
+                continue;
+            }
+            total++;
+            try {
+                TableDetailVO detail = schemaService.getTableDetail(req.getConnectionId(), req.getDatabaseName(), tableName);
+                if (detail == null || detail.getColumns() == null || detail.getColumns().isEmpty()) {
+                    builder.append("- ").append(tableName).append(": 未获取到字段元数据\n");
+                    continue;
+                }
+                covered++;
+                builder.append("- 表 ").append(tableName).append(":\n");
+                for (TableDetailVO.ColumnDetailVO column : detail.getColumns()) {
+                    String columnName = safe(column.getColumnName());
+                    if (columnName.isBlank()) {
+                        continue;
+                    }
+                    builder.append("  - ").append(columnName)
+                        .append(" ").append(safe(column.getDataType()));
+                    if (includeIndexInfo) {
+                        if (Boolean.TRUE.equals(column.getPrimaryKey())) {
+                            builder.append(" [PK]");
+                        }
+                        if (Boolean.TRUE.equals(column.getIndexed())) {
+                            builder.append(" [IDX]");
+                        }
+                    }
+                    if (!safe(column.getColumnComment()).isBlank()) {
+                        builder.append(" // ").append(safe(column.getColumnComment()));
+                    }
+                    builder.append('\n');
+                }
+            } catch (Exception ex) {
+                builder.append("- ").append(tableName).append(": 元数据读取失败(").append(safe(ex.getMessage())).append(")\n");
+            }
+        }
+        double coverage = total <= 0 ? 0D : (covered * 1.0D / total);
+        return new ExactMetadataContext(builder.toString().trim(), coverage, covered > 0);
+    }
+
+    private boolean shouldSupplementRetrieval(ParsedSqlInsights insights, ExactMetadataContext metadataContext, int sqlCount) {
+        if (insights == null || !insights.parseSuccess()) {
+            return true;
+        }
+        if (sqlCount > 1) {
+            return true;
+        }
+        if (metadataContext == null || !metadataContext.hasMetadata()) {
+            return true;
+        }
+        return metadataContext.coverage() < 0.6D;
+    }
+
+    private String buildSupplementRetrievalContext(AiGenerateSqlReq req, String sourceSql) {
+        String retrievalInput = buildRetrievalInputForRag(req, sourceSql);
+        RagPromptContext context = ragRetrievalService.retrievePromptContext(
+            req.getConnectionId(),
+            req.getDatabaseName(),
+            retrievalInput
+        );
+        return safe(context == null ? "" : context.getPromptContext());
+    }
+
     private AiTextResponseVO generateTextResponse(AiGenerateSqlReq req,
                                                   String logScene,
                                                   String systemPrompt,
@@ -1314,11 +1958,13 @@ public class AiServiceImpl implements AiService {
 
         String content;
         String reasoning;
+        OpenAiTextClient.TokenUsage providerTokenUsage = null;
         boolean fallbackUsed = false;
         try {
             TextProviderResult result = generateTextByConfiguredProvider(req, generationContext, systemPrompt, taskLabel);
             content = result.content();
             reasoning = result.reasoning();
+            providerTokenUsage = result.usage();
             timer.mark("provider_generate_text");
         } catch (Exception ex) {
             content = "未能完成本次" + taskLabel + "，请稍后重试。";
@@ -1340,11 +1986,14 @@ public class AiServiceImpl implements AiService {
         vo.setContent(safe(content));
         vo.setReasoning(safe(reasoning));
         vo.setFallbackUsed(fallbackUsed);
-        int promptTokens = estimateTokens(req.getPrompt() + "\n" + generationContext.promptContext());
-        int completionTokens = estimateTokens(content + "\n" + reasoning);
-        vo.setPromptTokens(promptTokens);
-        vo.setCompletionTokens(completionTokens);
-        vo.setTotalTokens(promptTokens + completionTokens);
+        TokenUsageStats tokenUsage = resolveTokenUsage(
+            providerTokenUsage,
+            req.getPrompt() + "\n" + generationContext.promptContext(),
+            content + "\n" + reasoning
+        );
+        vo.setPromptTokens(tokenUsage.promptTokens());
+        vo.setCompletionTokens(tokenUsage.completionTokens());
+        vo.setTotalTokens(tokenUsage.totalTokens());
         timer.mark("assemble_response");
         log.info(
             "[AI-{}-RESP] connectionId={}, sessionId={}, databaseName={}, modelName={}, ragHit={}, relatedTableCount={}, contextLength={}, contentLength={}, fallbackUsed={}, elapsedMs={}",
@@ -1375,6 +2024,10 @@ public class AiServiceImpl implements AiService {
 
     private String tryBuildExplainPlanPromptContext(AiGenerateSqlReq req) {
         String sourceSql = extractSqlForAnalyze(req.getPrompt());
+        return tryBuildExplainPlanPromptContext(req, sourceSql);
+    }
+
+    private String tryBuildExplainPlanPromptContext(AiGenerateSqlReq req, String sourceSql) {
         if (sourceSql.isBlank()) {
             return "";
         }
@@ -1550,6 +2203,101 @@ public class AiServiceImpl implements AiService {
         return generateTextByOpenAi(req, context, option, systemPrompt, taskLabel);
     }
 
+    private TextProviderResult generateRawTextByConfiguredProvider(AiGenerateSqlReq req,
+                                                                   String systemPrompt,
+                                                                   String userPrompt,
+                                                                   String taskLabel) {
+        AiConfigVO config = aiConfigService.getConfig();
+        AiModelOptionVO option = resolveModelOption(req.getModelName(), config);
+        if ("LOCAL_CLI".equals(safe(option.getProviderType()).toUpperCase())) {
+            return generateRawTextByLocalCli(req, option, systemPrompt, userPrompt, taskLabel);
+        }
+        return generateRawTextByOpenAi(req, option, systemPrompt, userPrompt, taskLabel);
+    }
+
+    private TextProviderResult generateRawTextByOpenAi(AiGenerateSqlReq req,
+                                                       AiModelOptionVO option,
+                                                       String systemPrompt,
+                                                       String userPrompt,
+                                                       String taskLabel) {
+        String apiKey = safe(option.getOpenaiApiKey());
+        if (apiKey.isBlank()) {
+            throw new BusinessException(400, "OpenAI API Key 未配置: " + safe(option.getName()));
+        }
+        String model = resolveOpenAiModel(req.getModelName(), option);
+        String baseUrl = safe(option.getOpenaiBaseUrl());
+        if (baseUrl.isBlank()) {
+            baseUrl = "https://api.openai.com/v1";
+        }
+        OpenAiTextClient.OpenAiTextResult result = openAiTextClient.requestText(
+            apiKey,
+            baseUrl,
+            model,
+            systemPrompt,
+            userPrompt,
+            Duration.ofSeconds(30),
+            0.1D
+        );
+        String content = safe(result.content());
+        if (safe(content).isBlank()) {
+            throw new BusinessException(500, "OpenAI 返回内容为空");
+        }
+        return new TextProviderResult(
+            content,
+            "已通过 OpenAI API(" + safe(option.getName()) + "/" + model + ")完成" + safe(taskLabel),
+            result.usage()
+        );
+    }
+
+    private TextProviderResult generateRawTextByLocalCli(AiGenerateSqlReq req,
+                                                         AiModelOptionVO option,
+                                                         String systemPrompt,
+                                                         String userPrompt,
+                                                         String taskLabel) {
+        String command = safe(option.getCliCommand());
+        if (command.isBlank()) {
+            throw new BusinessException(400, "本地 CLI 命令未配置: " + safe(option.getName()));
+        }
+        String constrainedPrompt = buildCliConstrainedPromptForText(systemPrompt, userPrompt);
+        List<String> commandLine = parseCliCommand(command);
+        if (commandLine.isEmpty()) {
+            throw new BusinessException(400, "本地 CLI 命令无效");
+        }
+        CliInvocation cliInvocation = buildCliInvocation(commandLine, constrainedPrompt);
+        ProcessBuilder processBuilder = new ProcessBuilder(cliInvocation.commandLine());
+        processBuilder.redirectErrorStream(true);
+        try {
+            Process process = processBuilder.start();
+            if (cliInvocation.writePromptToStdin()) {
+                try (java.io.OutputStream stdin = process.getOutputStream()) {
+                    stdin.write(constrainedPrompt.getBytes(StandardCharsets.UTF_8));
+                    stdin.write('\n');
+                    stdin.flush();
+                }
+            } else {
+                process.getOutputStream().close();
+            }
+            byte[] outputBytes = process.getInputStream().readAllBytes();
+            boolean finished = process.waitFor(CLI_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                throw new BusinessException(500, "本地 CLI 执行超时");
+            }
+            String rawOutput = new String(outputBytes, StandardCharsets.UTF_8);
+            boolean codexCli = isCodexExecutable(cliInvocation.commandLine().get(0));
+            String output = extractTextFromCliOutput(rawOutput, codexCli, expectsJsonOutput(systemPrompt));
+            if (output.isBlank()) {
+                throw new BusinessException(500, "本地 CLI 输出为空");
+            }
+            OpenAiTextClient.TokenUsage usage = parseCliTokenUsage(rawOutput, constrainedPrompt, output, codexCli);
+            return new TextProviderResult(output, "已通过本地 CLI(" + safe(option.getName()) + ")完成" + safe(taskLabel), usage);
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new BusinessException(500, "本地 CLI 调用失败: " + safe(ex.getMessage()));
+        }
+    }
+
     private ProviderResult generateByOpenAi(AiGenerateSqlReq req, GenerationContext context, AiModelOptionVO option) {
         String apiKey = safe(option.getOpenaiApiKey());
         if (apiKey.isBlank()) {
@@ -1560,45 +2308,26 @@ public class AiServiceImpl implements AiService {
         if (baseUrl.isBlank()) {
             baseUrl = "https://api.openai.com/v1";
         }
-        OpenAiEndpoint endpoint = resolveOpenAiEndpoint(baseUrl, model);
-
-        String contextText = safe(context.promptContext());
-        ObjectNode payload = buildOpenAiPayload(
-            req,
+        String userPrompt = buildProviderUserPrompt(req, safe(context.promptContext()), context.relatedTables());
+        OpenAiTextClient.OpenAiTextResult result = openAiTextClient.requestText(
+            apiKey,
+            baseUrl,
             model,
-            contextText,
-            endpoint.apiType(),
             OPENAI_SYSTEM_PROMPT,
-            context.relatedTables()
+            userPrompt,
+            Duration.ofSeconds(30),
+            0.1D
         );
-
-        try {
-            HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(endpoint.url()))
-                .timeout(Duration.ofSeconds(30))
-                .header("Authorization", "Bearer " + apiKey)
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(payload)))
-                .build();
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new BusinessException(500, "OpenAI 接口返回状态码: " + response.statusCode());
-            }
-            // 关键操作：统一兼容 chat/completions 与 responses（含 SSE）两种返回体。
-            String content = parseOpenAiResponseText(response, endpoint.apiType());
-            String sqlText = extractSql(content);
-            if (sqlText.isBlank()) {
-                return new ProviderResult(
-                    content,
-                    "已通过 OpenAI API(" + safe(option.getName()) + "/" + model + ") 返回说明内容（未识别到 SQL）"
-                );
-            }
-            return new ProviderResult(sqlText, "已通过 OpenAI API(" + safe(option.getName()) + "/" + model + ") 生成 SQL");
-        } catch (BusinessException ex) {
-            throw ex;
-        } catch (Exception ex) {
-            throw new BusinessException(500, "OpenAI 调用失败: " + ex.getMessage());
+        String content = safe(result.content());
+        String sqlText = extractSql(content);
+        if (sqlText.isBlank()) {
+            return new ProviderResult(
+                content,
+                "已通过 OpenAI API(" + safe(option.getName()) + "/" + model + ") 返回说明内容（未识别到 SQL）",
+                result.usage()
+            );
         }
+        return new ProviderResult(sqlText, "已通过 OpenAI API(" + safe(option.getName()) + "/" + model + ") 生成 SQL", result.usage());
     }
 
     private TextProviderResult generateTextByOpenAi(AiGenerateSqlReq req,
@@ -1615,111 +2344,25 @@ public class AiServiceImpl implements AiService {
         if (baseUrl.isBlank()) {
             baseUrl = "https://api.openai.com/v1";
         }
-        OpenAiEndpoint endpoint = resolveOpenAiEndpoint(baseUrl, model);
-
-        String contextText = safe(context.promptContext());
-        ObjectNode payload = buildOpenAiPayload(
-            req,
+        String userPrompt = buildProviderUserPrompt(req, safe(context.promptContext()), context.relatedTables());
+        OpenAiTextClient.OpenAiTextResult result = openAiTextClient.requestText(
+            apiKey,
+            baseUrl,
             model,
-            contextText,
-            endpoint.apiType(),
             systemPrompt,
-            context.relatedTables()
+            userPrompt,
+            Duration.ofSeconds(30),
+            0.1D
         );
-
-        try {
-            HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(endpoint.url()))
-                .timeout(Duration.ofSeconds(30))
-                .header("Authorization", "Bearer " + apiKey)
-                .header("Content-Type", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(payload)))
-                .build();
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new BusinessException(500, "OpenAI 接口返回状态码: " + response.statusCode());
-            }
-            String content = parseOpenAiResponseText(response, endpoint.apiType());
-            if (safe(content).isBlank()) {
-                throw new BusinessException(500, "OpenAI 返回内容为空");
-            }
-            return new TextProviderResult(content, "已通过 OpenAI API(" + safe(option.getName()) + "/" + model + ")完成" + taskLabel);
-        } catch (BusinessException ex) {
-            throw ex;
-        } catch (Exception ex) {
-            throw new BusinessException(500, "OpenAI 调用失败: " + ex.getMessage());
+        String content = safe(result.content());
+        if (safe(content).isBlank()) {
+            throw new BusinessException(500, "OpenAI 返回内容为空");
         }
-    }
-
-    private ObjectNode buildOpenAiPayload(AiGenerateSqlReq req,
-                                          String model,
-                                          String contextText,
-                                          OpenAiApiType apiType,
-                                          String systemPrompt,
-                                          List<String> relatedTables) {
-        ObjectNode payload = objectMapper.createObjectNode();
-        payload.put("model", model);
-        String userPrompt = buildProviderUserPrompt(req, contextText, relatedTables);
-        if (apiType == OpenAiApiType.RESPONSES) {
-            ArrayNode input = payload.putArray("input");
-            input.addObject()
-                .put("role", "system")
-                .put("content", systemPrompt);
-            input.addObject()
-                .put("role", "user")
-                .put("content", userPrompt);
-            return payload;
-        }
-        payload.put("temperature", 0.1D);
-        ArrayNode messages = payload.putArray("messages");
-        messages.addObject()
-            .put("role", "system")
-            .put("content", systemPrompt);
-        messages.addObject()
-            .put("role", "user")
-            .put("content", userPrompt);
-        return payload;
-    }
-
-    private String parseOpenAiResponseText(HttpResponse<String> response, OpenAiApiType apiType) throws Exception {
-        String body = Objects.toString(response.body(), "");
-        String contentType = response.headers().firstValue("content-type").orElse("").toLowerCase();
-        if (contentType.contains("text/event-stream") || body.startsWith("event:") || body.contains("\nevent:")) {
-            return parseResponsesSseText(body);
-        }
-        JsonNode root = objectMapper.readTree(body);
-        if (apiType == OpenAiApiType.RESPONSES) {
-            String text = parseResponsesJsonText(root);
-            if (!text.isBlank()) {
-                return text;
-            }
-        }
-        String chatText = parseChatCompletionsText(root);
-        if (!chatText.isBlank()) {
-            return chatText;
-        }
-        return parseResponsesJsonText(root);
-    }
-
-    private String parseChatCompletionsText(JsonNode root) {
-        JsonNode contentNode = root.at("/choices/0/message/content");
-        if (contentNode.isTextual()) {
-            return safe(contentNode.asText(""));
-        }
-        if (contentNode.isArray()) {
-            StringBuilder builder = new StringBuilder();
-            for (JsonNode part : contentNode) {
-                String text = safe(part.path("text").asText(""));
-                if (!text.isBlank()) {
-                    if (builder.length() > 0) {
-                        builder.append('\n');
-                    }
-                    builder.append(text);
-                }
-            }
-            return builder.toString().trim();
-        }
-        return "";
+        return new TextProviderResult(
+            content,
+            "已通过 OpenAI API(" + safe(option.getName()) + "/" + model + ")完成" + taskLabel,
+            result.usage()
+        );
     }
 
     private boolean hasSqlSnippetInPrompt(String prompt) {
@@ -1740,80 +2383,6 @@ public class AiServiceImpl implements AiService {
             || normalized.contains("truncate ");
     }
 
-    private String parseResponsesJsonText(JsonNode root) {
-        String directText = safe(root.path("output_text").asText(""));
-        if (!directText.isBlank()) {
-            return directText;
-        }
-        JsonNode outputItems = root.path("output");
-        if (!outputItems.isArray()) {
-            return "";
-        }
-        StringBuilder builder = new StringBuilder();
-        for (JsonNode item : outputItems) {
-            JsonNode contentItems = item.path("content");
-            if (!contentItems.isArray()) {
-                continue;
-            }
-            for (JsonNode content : contentItems) {
-                String text = safe(content.path("text").asText(""));
-                if (text.isBlank()) {
-                    continue;
-                }
-                if (builder.length() > 0) {
-                    builder.append('\n');
-                }
-                builder.append(text);
-            }
-        }
-        return builder.toString().trim();
-    }
-
-    private String parseResponsesSseText(String body) {
-        StringBuilder deltaText = new StringBuilder();
-        String doneText = "";
-        String[] lines = Objects.toString(body, "").split("\\R");
-        for (String line : lines) {
-            if (line == null) {
-                continue;
-            }
-            String trimmed = line.trim();
-            if (!trimmed.startsWith("data:")) {
-                continue;
-            }
-            String jsonData = trimmed.substring(5).trim();
-            if (jsonData.isEmpty() || "[DONE]".equalsIgnoreCase(jsonData)) {
-                continue;
-            }
-            try {
-                JsonNode eventNode = objectMapper.readTree(jsonData);
-                String eventType = safe(eventNode.path("type").asText(""));
-                if ("response.output_text.delta".equals(eventType)) {
-                    deltaText.append(eventNode.path("delta").asText(""));
-                    continue;
-                }
-                if ("response.output_text.done".equals(eventType)) {
-                    String text = safe(eventNode.path("text").asText(""));
-                    if (!text.isBlank()) {
-                        doneText = text;
-                    }
-                    continue;
-                }
-                if ("response.completed".equals(eventType)) {
-                    String text = parseResponsesJsonText(eventNode.path("response"));
-                    if (!text.isBlank()) {
-                        doneText = text;
-                    }
-                }
-            } catch (Exception ignored) {
-                // 忽略非 JSON data 行，继续消费后续流式事件。
-            }
-        }
-        if (!doneText.isBlank()) {
-            return doneText;
-        }
-        return deltaText.toString().trim();
-    }
 
     private ProviderResult generateByLocalCli(AiGenerateSqlReq req, GenerationContext context, AiModelOptionVO option) {
         String command = safe(option.getCliCommand());
@@ -1871,6 +2440,7 @@ public class AiServiceImpl implements AiService {
             String rawOutput = new String(outputBytes, StandardCharsets.UTF_8);
             boolean codexCli = isCodexExecutable(cliInvocation.commandLine().get(0));
             String output = extractTextFromCliOutput(rawOutput, codexCli, false);
+            OpenAiTextClient.TokenUsage usage = parseCliTokenUsage(rawOutput, constrainedPrompt, output, codexCli);
             log.info(
                 "[AI-CLI-RESULT] providerName={}, providerId={}, connectionId={}, sessionId={}, exitCode={}, outputLength={}",
                 safe(option.getName()),
@@ -1882,9 +2452,9 @@ public class AiServiceImpl implements AiService {
             );
             String sqlText = extractSql(output);
             if (sqlText.isBlank()) {
-                return new ProviderResult(output, "已通过本地 CLI(" + safe(option.getName()) + ") 返回说明内容（未识别到 SQL）");
+                return new ProviderResult(output, "已通过本地 CLI(" + safe(option.getName()) + ") 返回说明内容（未识别到 SQL）", usage);
             }
-            return new ProviderResult(sqlText, "已通过本地 CLI(" + safe(option.getName()) + ") 生成 SQL（提示词由后端构建）");
+            return new ProviderResult(sqlText, "已通过本地 CLI(" + safe(option.getName()) + ") 生成 SQL（提示词由后端构建）", usage);
         } catch (BusinessException ex) {
             throw ex;
         } catch (Exception ex) {
@@ -1934,6 +2504,7 @@ public class AiServiceImpl implements AiService {
             boolean expectJsonOutput = expectsJsonOutput(systemPrompt);
             boolean codexCli = isCodexExecutable(cliInvocation.commandLine().get(0));
             String output = extractTextFromCliOutput(rawOutput, codexCli, expectJsonOutput);
+            OpenAiTextClient.TokenUsage usage = parseCliTokenUsage(rawOutput, constrainedPrompt, output, codexCli);
             if (output.isBlank()) {
                 throw new BusinessException(500, "本地 CLI 输出为空");
             }
@@ -1948,7 +2519,7 @@ public class AiServiceImpl implements AiService {
                 rawOutput.length(),
                 output.length()
             );
-            return new TextProviderResult(output, "已通过本地 CLI(" + safe(option.getName()) + ")完成" + taskLabel + "（提示词由后端构建）");
+            return new TextProviderResult(output, "已通过本地 CLI(" + safe(option.getName()) + ")完成" + taskLabel + "（提示词由后端构建）", usage);
         } catch (BusinessException ex) {
             throw ex;
         } catch (Exception ex) {
@@ -2037,6 +2608,154 @@ public class AiServiceImpl implements AiService {
             return "";
         }
         return String.join("\n", lines.subList(index, lines.size())).trim();
+    }
+
+    private OpenAiTextClient.TokenUsage parseCliTokenUsage(String rawOutput,
+                                                           String promptText,
+                                                           String completionText,
+                                                           boolean codexCli) {
+        if (!codexCli) {
+            return null;
+        }
+        String normalized = normalizeCliRawOutput(rawOutput);
+        if (normalized.isBlank()) {
+            return null;
+        }
+        List<String> lines = new ArrayList<>(Arrays.asList(normalized.split("\n", -1)));
+        int tokensLineIndex = lastLineIndexContainsIgnoreCase(lines, "tokens used");
+        if (tokensLineIndex < 0) {
+            return null;
+        }
+
+        int promptTokens = 0;
+        int completionTokens = 0;
+        int totalTokens = 0;
+        List<Integer> orderedNumbers = new ArrayList<>();
+        boolean sawUsageLine = false;
+
+        for (int i = tokensLineIndex + 1; i < lines.size(); i++) {
+            String line = safe(lines.get(i));
+            if (line.isBlank()) {
+                if (sawUsageLine) {
+                    break;
+                }
+                continue;
+            }
+            Matcher kvMatcher = TOKEN_USAGE_KV_PATTERN.matcher(line);
+            if (kvMatcher.find()) {
+                sawUsageLine = true;
+                String key = safe(kvMatcher.group(1)).toLowerCase(Locale.ROOT);
+                int value = parseTokenNumber(kvMatcher.group(2));
+                if (value <= 0) {
+                    continue;
+                }
+                if ("input".equals(key) || "prompt".equals(key)) {
+                    promptTokens = value;
+                } else if ("output".equals(key) || "completion".equals(key)) {
+                    completionTokens = value;
+                } else if ("total".equals(key)) {
+                    totalTokens = value;
+                }
+                continue;
+            }
+            if (TOKEN_USAGE_VALUE_PATTERN.matcher(line).matches()) {
+                int value = parseTokenNumber(line);
+                if (value > 0) {
+                    sawUsageLine = true;
+                    orderedNumbers.add(value);
+                    continue;
+                }
+            }
+            if (sawUsageLine) {
+                break;
+            }
+            break;
+        }
+
+        if (totalTokens <= 0 && !orderedNumbers.isEmpty()) {
+            if (orderedNumbers.size() == 1) {
+                totalTokens = orderedNumbers.get(0);
+            } else if (orderedNumbers.size() == 2) {
+                promptTokens = promptTokens <= 0 ? orderedNumbers.get(0) : promptTokens;
+                completionTokens = completionTokens <= 0 ? orderedNumbers.get(1) : completionTokens;
+            } else {
+                promptTokens = promptTokens <= 0 ? orderedNumbers.get(0) : promptTokens;
+                completionTokens = completionTokens <= 0 ? orderedNumbers.get(1) : completionTokens;
+                totalTokens = orderedNumbers.get(2);
+            }
+        }
+
+        if (totalTokens <= 0 && (promptTokens > 0 || completionTokens > 0)) {
+            totalTokens = Math.max(0, promptTokens) + Math.max(0, completionTokens);
+        }
+        if (promptTokens <= 0 && completionTokens <= 0 && totalTokens <= 0) {
+            return null;
+        }
+
+        boolean estimated = false;
+        if (promptTokens <= 0 || completionTokens <= 0) {
+            TokenUsageStats estimatedUsage = buildEstimatedBreakdown(promptText, completionText, totalTokens);
+            if (promptTokens <= 0) {
+                promptTokens = estimatedUsage.promptTokens();
+                estimated = true;
+            }
+            if (completionTokens <= 0) {
+                completionTokens = estimatedUsage.completionTokens();
+                estimated = true;
+            }
+        }
+        if (totalTokens <= 0) {
+            totalTokens = promptTokens + completionTokens;
+            estimated = true;
+        }
+        return new OpenAiTextClient.TokenUsage(
+            Math.max(0, promptTokens),
+            Math.max(0, completionTokens),
+            Math.max(0, totalTokens),
+            estimated
+        );
+    }
+
+    private TokenUsageStats buildEstimatedBreakdown(String promptText, String completionText, int totalTokensHint) {
+        int estimatedPrompt = estimateTokens(promptText);
+        int estimatedCompletion = estimateTokens(completionText);
+        int estimatedTotal = estimatedPrompt + estimatedCompletion;
+        if (totalTokensHint <= 0 || estimatedTotal <= 0) {
+            return new TokenUsageStats(estimatedPrompt, estimatedCompletion, estimatedTotal);
+        }
+        int prompt = (int) Math.round((double) totalTokensHint * estimatedPrompt / estimatedTotal);
+        int completion = Math.max(0, totalTokensHint - prompt);
+        return new TokenUsageStats(Math.max(0, prompt), completion, totalTokensHint);
+    }
+
+    private int parseTokenNumber(String raw) {
+        String value = safe(raw).replace(",", "");
+        if (value.isBlank()) {
+            return 0;
+        }
+        Matcher matcher = TOKEN_USAGE_NUMBER_PATTERN.matcher(value);
+        if (!matcher.find()) {
+            return 0;
+        }
+        try {
+            return Math.max(0, Integer.parseInt(matcher.group(1).replace(",", "")));
+        } catch (Exception ignored) {
+            return 0;
+        }
+    }
+
+    private int lastLineIndexContainsIgnoreCase(List<String> lines, String expectedSegment) {
+        String target = safe(expectedSegment).toLowerCase(Locale.ROOT);
+        if (target.isBlank()) {
+            return -1;
+        }
+        for (int i = lines.size() - 1; i >= 0; i--) {
+            String line = safe(lines.get(i)).toLowerCase(Locale.ROOT);
+            if (line.contains(target)) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private String extractLastJsonPayload(String output) {
@@ -2647,7 +3366,7 @@ public class AiServiceImpl implements AiService {
         String windowStructuredContext = buildStructuredContextJson(windowRecords);
         String compressedContext = "";
         if (chatHistory.size() > memoryWindowSize) {
-            compressedContext = buildCompressedSummary(chatHistory.subList(0, Math.max(0, chatHistory.size() - memoryWindowSize)));
+            compressedContext = buildCompressedSummary(req, chatHistory.subList(0, Math.max(0, chatHistory.size() - memoryWindowSize)));
             upsertSessionSummaryVector(req, compressedContext, memoryWindowSize, chatHistory.size());
         }
         String vectorMemoryContext = querySessionMemoryFromVectorStore(req);
@@ -2691,7 +3410,7 @@ public class AiServiceImpl implements AiService {
                 200
             );
             List<QueryHistoryEntity> windowRecords = pickWindowRecords(chatHistory, memoryWindowSize);
-            String windowSummary = buildCompressedSummary(windowRecords);
+            String windowSummary = buildCompressedSummary(req, windowRecords);
             if (!windowSummary.isBlank()) {
                 memorySegments.add("会话窗口摘要:\n" + windowSummary);
             }
@@ -2723,41 +3442,6 @@ public class AiServiceImpl implements AiService {
         return normalizedPrompt + "\n补充上下文:\n" + normalizedExtraContext;
     }
 
-    /**
-     * 关键操作：根据地址与模型自动判断 OpenAI 接口风格，兼容 chat/completions 与 responses。
-     */
-    private OpenAiEndpoint resolveOpenAiEndpoint(String baseUrl, String model) {
-        String normalized = stripTrailingSlash(baseUrl);
-        String lowerUrl = normalized.toLowerCase();
-        if (lowerUrl.endsWith("/chat/completions")) {
-            return new OpenAiEndpoint(normalized, OpenAiApiType.CHAT_COMPLETIONS);
-        }
-        if (lowerUrl.endsWith("/responses")) {
-            return new OpenAiEndpoint(normalized, OpenAiApiType.RESPONSES);
-        }
-        if (preferResponsesApi(normalized, model)) {
-            return new OpenAiEndpoint(normalized + "/responses", OpenAiApiType.RESPONSES);
-        }
-        return new OpenAiEndpoint(normalized + "/chat/completions", OpenAiApiType.CHAT_COMPLETIONS);
-    }
-
-    private boolean preferResponsesApi(String baseUrl, String model) {
-        String lowerModel = safe(model).toLowerCase();
-        String lowerBaseUrl = safe(baseUrl).toLowerCase();
-        return lowerModel.contains("codex")
-            || lowerModel.startsWith("gpt-5")
-            || lowerBaseUrl.contains("/codex/");
-    }
-
-    private String stripTrailingSlash(String value) {
-        String normalized = safe(value);
-        while (normalized.endsWith("/")) {
-            normalized = normalized.substring(0, normalized.length() - 1);
-        }
-        return normalized;
-    }
-
-
     private boolean resolveMemoryEnabled(AiGenerateSqlReq req, AiConfigVO config) {
         if (req.getMemoryEnabled() != null) {
             return Boolean.TRUE.equals(req.getMemoryEnabled());
@@ -2781,7 +3465,7 @@ public class AiServiceImpl implements AiService {
         return rows.subList(start, rows.size());
     }
 
-    private String buildCompressedSummary(List<QueryHistoryEntity> rows) {
+    private String buildCompressedSummary(AiGenerateSqlReq req, List<QueryHistoryEntity> rows) {
         if (rows == null || rows.isEmpty()) {
             return "";
         }
@@ -2791,16 +3475,21 @@ public class AiServiceImpl implements AiService {
             String sql = safe(item.getSqlText());
             String assistant = safe(item.getAssistantContent());
             if (!prompt.isBlank()) {
-                builder.append("U: ").append(cutText(prompt, 80)).append("\n");
+                builder.append("U: ").append(prompt).append("\n");
             }
             if (!sql.isBlank()) {
-                builder.append("SQL: ").append(cutText(sql, 120)).append("\n");
+                builder.append("SQL: ").append(sql).append("\n");
             }
             if (!assistant.isBlank()) {
-                builder.append("A: ").append(cutText(assistant, 120)).append("\n");
+                builder.append("A: ").append(assistant).append("\n");
             }
         }
-        return cutText(builder.toString().trim(), 2000);
+        String source = builder.toString().trim();
+        if (source.isBlank()) {
+            return "";
+        }
+        String cacheKey = "compress:summary:" + source.hashCode();
+        return getOrComputeRequestCache(cacheKey, () -> compactTextByLlm(req, "会话历史压缩", source));
     }
 
     private String buildStructuredContextJson(List<QueryHistoryEntity> rows) {
@@ -2813,9 +3502,9 @@ public class AiServiceImpl implements AiService {
             node.put("id", item.getId() == null ? 0L : item.getId());
             node.put("historyType", safe(item.getHistoryType()));
             node.put("actionType", safe(item.getActionType()));
-            node.put("prompt", cutText(safe(item.getPromptText()), 300));
-            node.put("sql", cutText(safe(item.getSqlText()), 500));
-            node.put("assistant", cutText(safe(item.getAssistantContent()), 400));
+            node.put("prompt", safe(item.getPromptText()));
+            node.put("sql", safe(item.getSqlText()));
+            node.put("assistant", safe(item.getAssistantContent()));
             node.put("database", safe(item.getDatabaseName()));
             node.put("createdAt", item.getCreatedAt() == null ? 0L : item.getCreatedAt());
             arrayNode.add(node);
@@ -2878,22 +3567,101 @@ public class AiServiceImpl implements AiService {
                 }
                 String summary = Objects.toString(point.getPayload().get("summary"), "").trim();
                 if (!summary.isBlank()) {
-                    builder.append("- ").append(cutText(summary, 500)).append("\n");
+                    builder.append("- ").append(summary).append("\n");
                 }
             }
-            return builder.toString().trim();
+            String merged = builder.toString().trim();
+            if (merged.isBlank()) {
+                return "";
+            }
+            String cacheKey = "compress:vector_memory:" + merged.hashCode();
+            return getOrComputeRequestCache(cacheKey, () -> compactTextByLlm(req, "会话向量记忆归并", merged));
         } catch (Exception ex) {
             log.warn("[AI-MEMORY-QUERY-FAILED] sessionId={}, reason={}", safe(req.getSessionId()), safe(ex.getMessage()));
             return "";
         }
     }
 
-    private String cutText(String value, int maxLen) {
-        String text = safe(value);
-        if (text.length() <= maxLen) {
-            return text;
+    private String compactTextByLlm(AiGenerateSqlReq req, String title, String sourceText) {
+        String input = "压缩任务: " + safe(title) + "\n\n原始内容:\n" + safe(sourceText);
+        try {
+            TextProviderResult result = generateRawTextByConfiguredProvider(
+                req,
+                CONTEXT_COMPRESS_SYSTEM_PROMPT,
+                input,
+                "上下文压缩"
+            );
+            String content = safe(result.content());
+            if (!content.isBlank()) {
+                return content;
+            }
+        } catch (Exception ex) {
+            log.warn("[AI-CONTEXT-COMPRESS-FAILED] sessionId={}, reason={}", safe(req.getSessionId()), safe(ex.getMessage()));
         }
-        return text.substring(0, maxLen) + "...";
+        return safe(sourceText);
+    }
+
+    private void enterRequestLlmCache() {
+        int depth = REQUEST_LLM_CACHE_DEPTH.get();
+        REQUEST_LLM_CACHE_DEPTH.set(depth + 1);
+    }
+
+    private void exitRequestLlmCache() {
+        int depth = REQUEST_LLM_CACHE_DEPTH.get();
+        if (depth <= 1) {
+            REQUEST_LLM_CACHE.remove();
+            REQUEST_LLM_CACHE_DEPTH.remove();
+            return;
+        }
+        REQUEST_LLM_CACHE_DEPTH.set(depth - 1);
+    }
+
+    private String getOrComputeRequestCache(String key, Supplier<String> supplier) {
+        if (key == null || key.isBlank()) {
+            return safe(supplier.get());
+        }
+        Map<String, String> cache = REQUEST_LLM_CACHE.get();
+        if (cache.containsKey(key)) {
+            return safe(cache.get(key));
+        }
+        String value = safe(supplier.get());
+        cache.put(key, value);
+        return value;
+    }
+
+    private List<String> payloadStringList(Map<String, Object> payload, String key) {
+        if (payload == null || payload.get(key) == null) {
+            return List.of();
+        }
+        Object value = payload.get(key);
+        if (!(value instanceof List<?> rawList)) {
+            return List.of();
+        }
+        List<String> values = new ArrayList<>();
+        for (Object item : rawList) {
+            String text = Objects.toString(item, "").trim();
+            if (!text.isBlank()) {
+                values.add(text);
+            }
+        }
+        return values;
+    }
+
+    private TokenUsageStats resolveTokenUsage(OpenAiTextClient.TokenUsage providerUsage,
+                                              String promptText,
+                                              String completionText) {
+        if (providerUsage != null) {
+            int promptTokens = Math.max(0, providerUsage.promptTokens());
+            int completionTokens = Math.max(0, providerUsage.completionTokens());
+            int totalTokens = providerUsage.totalTokens();
+            if (totalTokens <= 0) {
+                totalTokens = promptTokens + completionTokens;
+            }
+            return new TokenUsageStats(promptTokens, completionTokens, totalTokens);
+        }
+        int promptTokens = estimateTokens(promptText);
+        int completionTokens = estimateTokens(completionText);
+        return new TokenUsageStats(promptTokens, completionTokens, promptTokens + completionTokens);
     }
 
     private int estimateTokens(String text) {
@@ -2997,10 +3765,13 @@ public class AiServiceImpl implements AiService {
     private record CliInvocation(List<String> commandLine, boolean writePromptToStdin) {
     }
 
-    private record ProviderResult(String sqlText, String reasoning) {
+    private record ProviderResult(String sqlText, String reasoning, OpenAiTextClient.TokenUsage usage) {
     }
 
-    private record TextProviderResult(String content, String reasoning) {
+    private record TextProviderResult(String content, String reasoning, OpenAiTextClient.TokenUsage usage) {
+    }
+
+    private record TokenUsageStats(int promptTokens, int completionTokens, int totalTokens) {
     }
 
     private record ParsedRepairResult(String errorExplanation, String repairedSql) {
@@ -3015,7 +3786,54 @@ public class AiServiceImpl implements AiService {
     private record ParsedIntentResponse(IntentType intentType,
                                         double confidence,
                                         String reason,
-                                        boolean parsed) {
+                                        boolean parsed,
+                                        IntentRetrievalParams retrievalParams) {
+    }
+
+    private record IntentRetrievalParams(int sessionTopK,
+                                         int globalTopK,
+                                         String query,
+                                         List<String> focusTables) {
+        private static IntentRetrievalParams defaultValue() {
+            return new IntentRetrievalParams(4, 6, "", List.of());
+        }
+    }
+
+    private record SqlExtractionResult(boolean hasSql, List<String> sqlList, boolean parsed) {
+    }
+
+    private record ParsedSqlInsights(boolean parseSuccess,
+                                     String normalizedSql,
+                                     List<String> tables,
+                                     List<String> columns,
+                                     List<String> aggregateFunctions,
+                                     int joinCount,
+                                     boolean hasWhere,
+                                     boolean hasGroupBy,
+                                     boolean hasOrderBy,
+                                     String message) {
+        private static ParsedSqlInsights empty(String message) {
+            return new ParsedSqlInsights(false, "", List.of(), List.of(), List.of(), 0, false, false, false, message);
+        }
+
+        private static ParsedSqlInsights empty(String message, String sql) {
+            return new ParsedSqlInsights(false, sql, List.of(), List.of(), List.of(), 0, false, false, false, message);
+        }
+
+        private String summary() {
+            return "parseSuccess=" + parseSuccess
+                + ", tables=" + String.join(",", tables)
+                + ", columns=" + String.join(",", columns)
+                + ", aggregates=" + String.join(",", aggregateFunctions)
+                + ", joinCount=" + joinCount
+                + ", hasWhere=" + hasWhere
+                + ", hasGroupBy=" + hasGroupBy
+                + ", hasOrderBy=" + hasOrderBy
+                + ", message=" + message;
+        }
+    }
+
+    private record ExactMetadataContext(String contextText, double coverage, boolean hasMetadata) {
     }
 
     private record ChartConfigValidationResult(boolean valid, String message) {
@@ -3053,11 +3871,4 @@ public class AiServiceImpl implements AiService {
         }
     }
 
-    private enum OpenAiApiType {
-        CHAT_COMPLETIONS,
-        RESPONSES
-    }
-
-    private record OpenAiEndpoint(String url, OpenAiApiType apiType) {
-    }
 }

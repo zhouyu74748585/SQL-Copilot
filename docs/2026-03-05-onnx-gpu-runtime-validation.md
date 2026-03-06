@@ -34,7 +34,7 @@
 
 ### 前端 clean + preview 验证
 - 执行：`npm run -w @sqlcopilot/desktop build`（成功）
-- 执行 preview 并检测端口：`6044` 监听成功（`FRONTEND_PREVIEW_UP`）。
+- 执行 preview 并检测端口：`8888` 监听成功（`FRONTEND_PREVIEW_UP`）。
 
 ## 结论
 - 在当前机器上，强制 `CUDA` 配置下运行时仍回退为 `CPU`，说明 GPU Provider 依赖未满足。
