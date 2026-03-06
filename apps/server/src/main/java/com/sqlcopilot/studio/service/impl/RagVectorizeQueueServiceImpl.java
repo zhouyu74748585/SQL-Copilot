@@ -60,6 +60,8 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
                                         @Value("${rag.collection.schema-table:schema_table}") String schemaTableCollection,
                                         @Value("${rag.collection.schema-column:schema_column}") String schemaColumnCollection,
                                         @Value("${rag.collection.sql-history:sql_history}") String sqlHistoryCollection,
+                                        @Value("${rag.collection.metric-term:metric_term}") String metricTermCollection,
+                                        @Value("${rag.collection.example-sql:example_sql}") String exampleSqlCollection,
                                         @Value("${rag.collection.sql-fragment:sql_fragment}") String sqlFragmentCollection) {
         this.schemaService = schemaService;
         this.ragVectorizeStatusMapper = ragVectorizeStatusMapper;
@@ -70,6 +72,8 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
             schemaTableCollection,
             schemaColumnCollection,
             sqlHistoryCollection,
+            metricTermCollection,
+            exampleSqlCollection,
             sqlFragmentCollection
         );
     }

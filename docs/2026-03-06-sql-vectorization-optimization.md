@@ -34,3 +34,53 @@
 ## 验证
 - 尝试执行后端 clean 构建：`mvn -f apps/server/pom.xml clean package -DskipTests`
 - 当前环境构建失败，原因为依赖仓库 `https://repo.spring.io/milestone` 返回 `403`，导致 Spring Boot parent POM 无法解析（非本次代码逻辑错误）。
+
+## 追加记录（2026-03-06）- 向量对象扩展与检索重排骨架
+
+### 本次补充
+- 扩展向量集合配置，新增两类对象集合：
+  - `metric_term`（业务术语/口径）
+  - `example_sql`（问法+SQL 语义样例）
+- 检索链路补齐多桶召回：
+  - 原有 `schema_table/schema_column/sql_history`
+  - 新增 `metric_term/example_sql`
+- 在检索侧增加“统一 rerank 层”工程骨架（可开关）：
+  - 新增 `rag.rerank.enabled/alpha/beta/gamma` 配置
+  - 保留关闭时降级路径（仅按向量原始分数）
+  - 开启时按 `final_score = α*vector + β*onnx_proxy + γ*rule_bonus` 重排
+  - 其中 `onnx_proxy` 作为当前阶段过渡打分，后续可替换为真实 ONNX rerank 推理结果
+- Prompt 上下文拼装新增分段：
+  - `【命中业务术语】`
+  - `【命中SQL样例】`
+
+### 主要变更文件
+- `apps/server/src/main/java/com/sqlcopilot/studio/service/rag/model/RagCollectionNames.java`
+- `apps/server/src/main/java/com/sqlcopilot/studio/service/rag/impl/RagRetrievalServiceImpl.java`
+- `apps/server/src/main/java/com/sqlcopilot/studio/service/rag/impl/RagIngestionServiceImpl.java`
+- `apps/server/src/main/java/com/sqlcopilot/studio/service/impl/RagVectorizeQueueServiceImpl.java`
+- `apps/server/src/main/java/com/sqlcopilot/studio/service/impl/AiServiceImpl.java`
+- `apps/server/src/main/resources/application.yml`
+
+### 说明
+- 本阶段为“规划执行落地的第一步”：先打通多对象集合与统一重排接口，不改变既有 SQL 执行逻辑。
+- `query_history` 仍仅作为历史语义样例，不作为 schema 真值来源。
+- 真正的 ONNX rerank 模型推理与特征拼接仍可在此骨架上继续替换实现。
+
+## 追加记录（2026-03-06）- 向量召回链路带上会话记忆
+
+- 根据反馈补齐：当会话记忆开启时，RAG 检索输入会携带会话记忆信息，不再仅使用当前用户问题。
+- 具体实现位于 `AiServiceImpl`：
+  - 新增 `buildRetrievalInputForRag(...)`，在构造向量检索输入时注入：
+    - 最近窗口会话摘要（`会话窗口摘要`）
+    - 向量记忆召回结果（`会话向量记忆召回`）
+  - 在 `generateSql / autoQuery / repair / generateChart` 四条调用 RAG 的链路统一替换为该方法。
+- 关闭会话记忆时保持原行为（仅基于当前 prompt + 额外上下文），保证可降级。
+
+## 追加记录（2026-03-06）- 提交给 LLM 的内容补充上下文
+
+- 根据反馈补齐：不仅向量检索输入要携带上下文，**提交给 LLM 的用户提示词也要显式带上上下文信息**。
+- 在 `AiServiceImpl#buildProviderUserPrompt(...)` 中新增：
+  - `检索增强输入(含会话记忆)` 段落。
+  - 该段落复用 `buildRetrievalInputForRag(req)`，因此在会话记忆开启时会自动携带会话窗口摘要与向量记忆召回内容。
+- 结果：
+  - 向量召回阶段与 LLM 生成阶段使用一致的增强上下文输入语义，减少多轮场景下信息偏差。
