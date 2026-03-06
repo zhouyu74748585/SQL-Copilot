@@ -33,6 +33,8 @@ public class RagIngestionServiceImpl implements RagIngestionService {
     private static final Pattern CTE_PATTERN = Pattern.compile("(?is)([a-zA-Z0-9_]+)\\s+as\\s*\\((.*?)\\)");
     private static final Pattern SELECT_SPLIT_PATTERN = Pattern.compile("(?i)\\bselect\\b");
     private static final Pattern COLUMN_ALIAS_PATTERN = Pattern.compile("([a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)");
+    private static final Pattern SQL_STRING_LITERAL_PATTERN = Pattern.compile("\'(?:\'\'|[^\'])*\'");
+    private static final Pattern SQL_NUMBER_LITERAL_PATTERN = Pattern.compile("(?<![a-zA-Z0-9_])\\d+(?:\\.\\d+)?(?![a-zA-Z0-9_])");
 
     private final QdrantClientService qdrantClientService;
     private final RagEmbeddingService ragEmbeddingService;
@@ -156,6 +158,8 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             if ("__default__".equals(databaseName)) {
                 databaseName = normalizeDatabaseName(connectionEntity.getDatabaseName());
             }
+            String normalizedSqlText = normalizeSqlForEmbedding(historyEntity.getSqlText());
+            List<String> sqlKeywordTags = extractSqlKeywordTags(historyEntity.getSqlText());
             SqlFeatureMeta featureMeta = extractSqlFeatureMeta(historyEntity.getSqlText());
 
             SqlHistoryPayload payload = new SqlHistoryPayload(
@@ -170,7 +174,9 @@ public class RagIngestionServiceImpl implements RagIngestionService {
                 featureMeta.getTables(),
                 featureMeta.getColumns(),
                 featureMeta.getJoinCount(),
-                featureMeta.getHasCte()
+                featureMeta.getHasCte(),
+                normalizedSqlText,
+                sqlKeywordTags
             );
 
             String historyText = buildSqlHistoryDocumentText(payload);
@@ -194,7 +200,7 @@ public class RagIngestionServiceImpl implements RagIngestionService {
                                 String.valueOf(historyEntity.getId() == null ? payload.getCreatedAt() : historyEntity.getId()),
                                 fragment.getFragmentType(),
                                 String.valueOf(fragment.getFragmentIndex())),
-                            fragment.getFragmentText(),
+                            buildSqlFragmentDocumentText(fragment),
                             fragmentMetadata
                         ));
                     }
@@ -316,7 +322,21 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             + "涉及表: " + String.join(",", payload.getTables()) + "\n"
             + "涉及列: " + String.join(",", payload.getColumns()) + "\n"
             + "JOIN数量: " + payload.getJoinCount() + "\n"
-            + "包含CTE: " + payload.getHasCte();
+            + "包含CTE: " + payload.getHasCte() + "\n"
+            + "SQL关键词: " + String.join(",", payload.getSqlKeywordTags()) + "\n"
+            + "SQL归一化: " + payload.getNormalizedSqlText();
+    }
+
+
+
+    private String buildSqlFragmentDocumentText(SqlFragmentPayload fragment) {
+        return "数据库: " + fragment.getDatabaseName() + "\n"
+            + "分片类型: " + fragment.getFragmentType() + "\n"
+            + "涉及表: " + String.join(",", fragment.getTables()) + "\n"
+            + "涉及列: " + String.join(",", fragment.getColumns()) + "\n"
+            + "SQL关键词: " + String.join(",", fragment.getSqlKeywordTags()) + "\n"
+            + "分片SQL: " + fragment.getFragmentText() + "\n"
+            + "分片归一化: " + normalizeSqlForEmbedding(fragment.getFragmentText());
     }
 
     private SchemaTablePayload buildTablePayload(Long connectionId,
@@ -381,7 +401,8 @@ public class RagIngestionServiceImpl implements RagIngestionService {
                 payload.getTables(),
                 payload.getColumns(),
                 payload.getJoinCount(),
-                payload.getHasCte()
+                payload.getHasCte(),
+                payload.getSqlKeywordTags()
             ));
         }
 
@@ -410,7 +431,8 @@ public class RagIngestionServiceImpl implements RagIngestionService {
                 payload.getTables(),
                 payload.getColumns(),
                 payload.getJoinCount(),
-                payload.getHasCte()
+                payload.getHasCte(),
+                payload.getSqlKeywordTags()
             ));
         }
         return fragments;
@@ -449,6 +471,34 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         List<String> tables = tableSet.stream().sorted(String.CASE_INSENSITIVE_ORDER).toList();
         List<String> columns = columnSet.stream().sorted(String.CASE_INSENSITIVE_ORDER).toList();
         return new SqlFeatureMeta(tables, columns, joinCount, hasCte);
+    }
+
+
+
+    private String normalizeSqlForEmbedding(String sqlText) {
+        String normalized = safeText(sqlText).replace('　', ' ');
+        normalized = SQL_STRING_LITERAL_PATTERN.matcher(normalized).replaceAll("<str>");
+        normalized = SQL_NUMBER_LITERAL_PATTERN.matcher(normalized).replaceAll("<num>");
+        return normalized.replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT);
+    }
+
+    private List<String> extractSqlKeywordTags(String sqlText) {
+        String normalized = normalizeSqlForEmbedding(sqlText);
+        if (normalized.isBlank()) {
+            return List.of();
+        }
+        String[] candidateKeywords = new String[]{
+            "select", "insert", "update", "delete", "join", "left join", "right join", "inner join",
+            "group by", "order by", "where", "having", "union", "distinct", "limit", "offset",
+            "with", "exists", "between", "in", "like"
+        };
+        List<String> tags = new ArrayList<>();
+        for (String keyword : candidateKeywords) {
+            if (normalized.contains(keyword)) {
+                tags.add(keyword.replace(' ', '_'));
+            }
+        }
+        return tags;
     }
 
     private String normalizeIdentifier(String raw) {
@@ -662,6 +712,8 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         private final List<String> columns;
         private final Integer joinCount;
         private final Boolean hasCte;
+        private final String normalizedSqlText;
+        private final List<String> sqlKeywordTags;
 
         SqlHistoryPayload(Long connectionId,
                           String databaseName,
@@ -674,7 +726,9 @@ public class RagIngestionServiceImpl implements RagIngestionService {
                           List<String> tables,
                           List<String> columns,
                           Integer joinCount,
-                          Boolean hasCte) {
+                          Boolean hasCte,
+                          String normalizedSqlText,
+                          List<String> sqlKeywordTags) {
             this.connectionId = connectionId;
             this.databaseName = databaseName;
             this.sessionId = sessionId;
@@ -687,6 +741,8 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             this.columns = columns;
             this.joinCount = joinCount;
             this.hasCte = hasCte;
+            this.normalizedSqlText = normalizedSqlText;
+            this.sqlKeywordTags = sqlKeywordTags;
         }
 
         Map<String, Object> toMetadataMap() {
@@ -703,56 +759,25 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             metadata.put("columns", columns);
             metadata.put("join_count", joinCount);
             metadata.put("has_cte", hasCte);
+            metadata.put("normalized_sql_text", normalizedSqlText);
+            metadata.put("sql_keyword_tags", sqlKeywordTags);
             return metadata;
         }
 
-        public Long getConnectionId() {
-            return connectionId;
-        }
-
-        public String getDatabaseName() {
-            return databaseName;
-        }
-
-        public String getSessionId() {
-            return sessionId;
-        }
-
-        public String getPromptText() {
-            return promptText;
-        }
-
-        public String getSqlText() {
-            return sqlText;
-        }
-
-        public Long getExecutionMs() {
-            return executionMs;
-        }
-
-        public Boolean getSuccess() {
-            return success;
-        }
-
-        public Long getCreatedAt() {
-            return createdAt;
-        }
-
-        public List<String> getTables() {
-            return tables;
-        }
-
-        public List<String> getColumns() {
-            return columns;
-        }
-
-        public Integer getJoinCount() {
-            return joinCount;
-        }
-
-        public Boolean getHasCte() {
-            return hasCte;
-        }
+        public Long getConnectionId() { return connectionId; }
+        public String getDatabaseName() { return databaseName; }
+        public String getSessionId() { return sessionId; }
+        public String getPromptText() { return promptText; }
+        public String getSqlText() { return sqlText; }
+        public Long getExecutionMs() { return executionMs; }
+        public Boolean getSuccess() { return success; }
+        public Long getCreatedAt() { return createdAt; }
+        public List<String> getTables() { return tables; }
+        public List<String> getColumns() { return columns; }
+        public Integer getJoinCount() { return joinCount; }
+        public Boolean getHasCte() { return hasCte; }
+        public String getNormalizedSqlText() { return normalizedSqlText; }
+        public List<String> getSqlKeywordTags() { return sqlKeywordTags; }
     }
 
     private static class SqlFragmentPayload {
@@ -768,6 +793,7 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         private final List<String> columns;
         private final Integer joinCount;
         private final Boolean hasCte;
+        private final List<String> sqlKeywordTags;
 
         SqlFragmentPayload(Long connectionId,
                            String databaseName,
@@ -780,7 +806,8 @@ public class RagIngestionServiceImpl implements RagIngestionService {
                            List<String> tables,
                            List<String> columns,
                            Integer joinCount,
-                           Boolean hasCte) {
+                           Boolean hasCte,
+                           List<String> sqlKeywordTags) {
             this.connectionId = connectionId;
             this.databaseName = databaseName;
             this.sessionId = sessionId;
@@ -793,6 +820,7 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             this.columns = columns;
             this.joinCount = joinCount;
             this.hasCte = hasCte;
+            this.sqlKeywordTags = sqlKeywordTags;
         }
 
         Map<String, Object> toMetadataMap() {
@@ -809,19 +837,16 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             metadata.put("columns", columns);
             metadata.put("join_count", joinCount);
             metadata.put("has_cte", hasCte);
+            metadata.put("sql_keyword_tags", sqlKeywordTags);
             return metadata;
         }
 
-        public String getFragmentType() {
-            return fragmentType;
-        }
-
-        public Integer getFragmentIndex() {
-            return fragmentIndex;
-        }
-
-        public String getFragmentText() {
-            return fragmentText;
-        }
+        public String getFragmentType() { return fragmentType; }
+        public Integer getFragmentIndex() { return fragmentIndex; }
+        public String getFragmentText() { return fragmentText; }
+        public String getDatabaseName() { return databaseName; }
+        public List<String> getTables() { return tables; }
+        public List<String> getColumns() { return columns; }
+        public List<String> getSqlKeywordTags() { return sqlKeywordTags; }
     }
 }
