@@ -14,4 +14,13 @@ public class AiGenerateSqlVO {
 
     /** 当前是否触发降级模型。 */
     private Boolean fallbackUsed;
+
+    /** 粗略输入 token。 */
+    private Integer promptTokens;
+
+    /** 粗略输出 token。 */
+    private Integer completionTokens;
+
+    /** 粗略总 token。 */
+    private Integer totalTokens;
 }

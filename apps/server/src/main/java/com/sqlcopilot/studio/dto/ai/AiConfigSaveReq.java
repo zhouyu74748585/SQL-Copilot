@@ -32,4 +32,10 @@ public class AiConfigSaveReq {
     /** 可选模型列表（API/CLI 均可配置）。 */
     @Valid
     private List<AiModelOptionSaveReq> modelOptions;
+
+    /** 对话记忆开关。 */
+    private Boolean conversationMemoryEnabled;
+
+    /** 记忆滑动窗口大小。 */
+    private Integer conversationMemoryWindowSize;
 }

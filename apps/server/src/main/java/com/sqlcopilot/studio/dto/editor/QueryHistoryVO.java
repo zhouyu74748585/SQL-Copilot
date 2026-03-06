@@ -40,6 +40,15 @@ public class QueryHistoryVO {
     /** 图表缓存图片键。 */
     private String chartImageCacheKey;
 
+    /** 结构化上下文（JSON）。 */
+    private String structuredContextJson;
+
+    /** 粗略 token 估算值。 */
+    private Integer tokenEstimate;
+
+    /** 是否开启会话记忆。 */
+    private Boolean memoryEnabled;
+
     /** 执行耗时（毫秒）。 */
     private Long executionMs;
 

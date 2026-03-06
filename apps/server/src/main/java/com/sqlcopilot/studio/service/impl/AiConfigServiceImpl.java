@@ -39,7 +39,7 @@ public class AiConfigServiceImpl implements AiConfigService {
         if (options.isEmpty()) {
             options = defaultModelOptions();
         }
-        return toVO(options, entity.getUpdatedAt());
+        return toVO(options, entity.getUpdatedAt(), entity.getConversationMemoryEnabled(), entity.getConversationMemoryWindowSize());
     }
 
     @Override
@@ -65,6 +65,8 @@ public class AiConfigServiceImpl implements AiConfigService {
         entity.setCliCommand(activeOption.getCliCommand());
         entity.setCliWorkingDir(activeOption.getCliWorkingDir());
         entity.setModelOptionsJson(serializeModelOptions(modelOptions));
+        entity.setConversationMemoryEnabled(Boolean.FALSE.equals(req.getConversationMemoryEnabled()) ? 0 : 1);
+        entity.setConversationMemoryWindowSize(normalizeConversationMemoryWindowSize(req.getConversationMemoryWindowSize()));
         entity.setUpdatedAt(now);
 
         if (!exists) {
@@ -72,14 +74,14 @@ public class AiConfigServiceImpl implements AiConfigService {
         } else {
             aiConfigMapper.update(entity);
         }
-        return toVO(modelOptions, now);
+        return toVO(modelOptions, now, entity.getConversationMemoryEnabled(), entity.getConversationMemoryWindowSize());
     }
 
     private AiConfigVO defaultConfig() {
-        return toVO(defaultModelOptions(), 0L);
+        return toVO(defaultModelOptions(), 0L, 1, 12);
     }
 
-    private AiConfigVO toVO(List<AiModelOptionVO> options, Long updatedAt) {
+    private AiConfigVO toVO(List<AiModelOptionVO> options, Long updatedAt, Integer memoryEnabled, Integer memoryWindowSize) {
         AiModelOptionVO first = options.get(0);
         AiConfigVO vo = new AiConfigVO();
         vo.setProviderType(first.getProviderType());
@@ -89,6 +91,8 @@ public class AiConfigServiceImpl implements AiConfigService {
         vo.setCliCommand(first.getCliCommand());
         vo.setCliWorkingDir(first.getCliWorkingDir());
         vo.setModelOptions(options);
+        vo.setConversationMemoryEnabled(!Integer.valueOf(0).equals(memoryEnabled));
+        vo.setConversationMemoryWindowSize(normalizeConversationMemoryWindowSize(memoryWindowSize));
         vo.setUpdatedAt(updatedAt == null ? 0L : updatedAt);
         return vo;
     }
@@ -245,6 +249,12 @@ public class AiConfigServiceImpl implements AiConfigService {
             return value;
         }
         throw new BusinessException(400, "不支持的 AI 接入方式: " + input);
+    }
+
+
+    private Integer normalizeConversationMemoryWindowSize(Integer value) {
+        int size = value == null ? 12 : value;
+        return Math.max(4, Math.min(size, 50));
     }
 
     private String safe(String input) {

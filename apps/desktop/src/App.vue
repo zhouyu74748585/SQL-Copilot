@@ -801,6 +801,9 @@
                 />
                 <span class="query-chat-auto-label">Auto</span>
                 <a-switch v-model:checked="activeQueryTab.autoMode" size="small" />
+                <span style="margin-left: 12px;">记忆</span>
+                <a-switch v-model:checked="activeQueryTab.memoryEnabled" size="small" />
+                <span style="margin-left: 12px; color: var(--ant-color-text-secondary);">≈Token: {{ activeQueryTab.lastTokenEstimate || 0 }}</span>
                 <template v-if="activeQueryTab.autoMode">
                   <span class="query-chat-auto-label">自动执行</span>
                   <a-switch v-model:checked="activeQueryTab.autoExecute" size="small" />
@@ -1282,6 +1285,18 @@
               <a-button size="small" @click="addOpenAiModelOption">新增 OpenAI 模型</a-button>
               <a-button size="small" @click="addCliModelOption">新增 CLI 模型</a-button>
             </a-space>
+            <a-row :gutter="12" style="margin-top: 12px;">
+              <a-col :span="12">
+                <a-form-item label="默认启用对话记忆">
+                  <a-switch v-model:checked="aiConfigForm.conversationMemoryEnabled" />
+                </a-form-item>
+              </a-col>
+              <a-col :span="12">
+                <a-form-item label="滑动窗口大小">
+                  <a-input-number v-model:value="aiConfigForm.conversationMemoryWindowSize" :min="4" :max="50" style="width: 100%" />
+                </a-form-item>
+              </a-col>
+            </a-row>
             <div v-if="!aiConfigForm.modelOptions?.length" class="empty-pane" style="margin-top: 12px;">请至少配置一个模型</div>
             <div
               v-for="(item, index) in aiConfigForm.modelOptions"
@@ -1787,6 +1802,8 @@ interface QueryWorkspaceTab {
   chartReadonly: boolean;
   createdAt: number;
   updatedAt: number;
+  memoryEnabled: boolean;
+  lastTokenEstimate: number;
 }
 
 interface ErWorkspaceTab {
@@ -1806,6 +1823,8 @@ interface ErWorkspaceTab {
   errorMessage: string;
   createdAt: number;
   updatedAt: number;
+  memoryEnabled: boolean;
+  lastTokenEstimate: number;
 }
 
 interface ErRelationRouteChangePayload {
@@ -2896,6 +2915,8 @@ function openAiQueryTab(initialPrompt = '') {
     chartReadonly: false,
     createdAt: now,
     updatedAt: now,
+    memoryEnabled: true,
+    lastTokenEstimate: 0,
   };
   applySessionTitle(tab);
   queryTabs.value = [...queryTabs.value, tab];
@@ -3170,6 +3191,7 @@ async function refreshErGraphForTab(tab: ErWorkspaceTab, includeAiInference?: bo
       databaseName: tab.databaseName,
       tableNames: [...tab.selectedTableNames],
       modelName: tab.selectedAiModel || undefined,
+      memoryEnabled: tab.memoryEnabled,
       includeAiInference: includeAiInference == null ? tab.includeAiInference : includeAiInference,
       aiConfidenceThreshold: tab.aiConfidenceThreshold,
     };
@@ -3642,6 +3664,7 @@ async function confirmSaveErSnapshot() {
     snapshotName,
     selectedTableNames: [...tab.selectedTableNames],
     modelName: tab.selectedAiModel || undefined,
+      memoryEnabled: tab.memoryEnabled,
     layoutMode: tab.layoutMode,
     aiConfidenceThreshold: tab.aiConfidenceThreshold,
     includeAiInference: tab.includeAiInference,
@@ -4433,6 +4456,7 @@ async function runAiTextActionWithSql(tab: QueryWorkspaceTab, actionType: 'expla
       prompt: mergePromptWithSqlSnippet(promptText, normalizedSqlText),
       databaseName: tab.databaseName || undefined,
       modelName: tab.selectedAiModel || undefined,
+      memoryEnabled: tab.memoryEnabled,
     });
     const content = result.content || '未返回内容';
     appendAssistantTextMessage(tab, content, actionType);
@@ -4441,6 +4465,7 @@ async function runAiTextActionWithSql(tab: QueryWorkspaceTab, actionType: 'expla
       assistantContent: content,
       databaseName: tab.databaseName,
     });
+    tab.lastTokenEstimate = Number(result.totalTokens || 0);
     if (result.reasoning) {
       message.info(result.reasoning);
     }
@@ -5974,6 +5999,8 @@ async function saveAiConfig() {
     aiConfigForm.openaiModel = modelOptions[0].openaiModel || '';
     aiConfigForm.cliCommand = modelOptions[0].cliCommand || '';
     aiConfigForm.cliWorkingDir = modelOptions[0].cliWorkingDir || '';
+    aiConfigForm.conversationMemoryEnabled = aiConfigForm.conversationMemoryEnabled !== false;
+    aiConfigForm.conversationMemoryWindowSize = Math.min(50, Math.max(4, Number(aiConfigForm.conversationMemoryWindowSize || 12)));
     const savedAi = await postApi<AiConfigVO>('/api/ai/config/save', aiConfigForm);
     const savedRag = await postApi<RagConfigVO>('/api/rag/config/save', ragConfigForm);
     fillAiConfigForm(savedAi);
@@ -6059,6 +6086,9 @@ interface SaveConversationHistoryOptions {
   historyType?: 'CHAT' | 'EXECUTE';
   executionMs?: number;
   success?: boolean;
+  structuredContextJson?: string;
+  tokenEstimate?: number;
+  memoryEnabled?: boolean;
 }
 
 async function saveConversationHistory(
@@ -6079,12 +6109,27 @@ async function saveConversationHistory(
       databaseName: options?.databaseName || tab.databaseName || '',
       chartConfigJson: options?.chartConfig ? JSON.stringify(options.chartConfig) : '',
       chartImageCacheKey: options?.chartImageCacheKey || '',
+      structuredContextJson: options?.structuredContextJson || '',
+      tokenEstimate: options?.tokenEstimate,
+      memoryEnabled: options?.memoryEnabled ?? tab.memoryEnabled,
       executionMs: options?.executionMs,
       success: options?.success ?? true,
     });
   } catch {
     // 关键操作：会话历史持久化失败不阻塞主流程。
   }
+}
+
+function buildStructuredContextForTab(tab: QueryWorkspaceTab, windowSize = 12) {
+  const start = Math.max(0, tab.chatMessages.length - windowSize);
+  const rows = tab.chatMessages.slice(start).map((item) => ({
+    role: item.role,
+    actionType: item.actionType,
+    content: (item.content || '').slice(0, 500),
+    sqlText: (item.sqlText || '').slice(0, 500),
+    createdAt: item.createdAt,
+  }));
+  return JSON.stringify(rows);
 }
 
 async function saveConversationHistoryOnce(
@@ -6097,7 +6142,13 @@ async function saveConversationHistoryOnce(
   if (userMessage.historySaved) {
     return;
   }
-  await saveConversationHistory(tab, promptText, sqlText, options);
+  const mergedOptions: SaveConversationHistoryOptions = {
+    ...options,
+    tokenEstimate: options?.tokenEstimate ?? (tab.lastTokenEstimate || Math.max(1, Math.ceil(((promptText || "").length + (sqlText || "").length) / 4))),
+    memoryEnabled: options?.memoryEnabled ?? tab.memoryEnabled,
+    structuredContextJson: options?.structuredContextJson ?? buildStructuredContextForTab(tab),
+  };
+  await saveConversationHistory(tab, promptText, sqlText, mergedOptions);
   userMessage.historySaved = true;
 }
 
@@ -6279,6 +6330,7 @@ async function generateSqlForTab(
         prompt: finalPrompt,
         databaseName: tab.databaseName || undefined,
         modelName: tab.selectedAiModel || undefined,
+        memoryEnabled: tab.memoryEnabled,
       });
       const generatedText = (generated.sqlText || '').trim();
       if (looksLikeSqlText(generatedText)) {
@@ -6289,6 +6341,7 @@ async function generateSqlForTab(
         appendAssistantTextMessage(tab, generatedText || '未返回可执行 SQL', actionType);
         message.warning('未生成可执行 SQL，已返回说明内容');
       }
+      tab.lastTokenEstimate = Number((generated as any).totalTokens || 0);
       if (generated.reasoning) {
         message.info(generated.reasoning);
       }
@@ -6303,6 +6356,7 @@ async function generateSqlForTab(
       prompt: finalPrompt,
       databaseName: tab.databaseName || undefined,
       modelName: tab.selectedAiModel || undefined,
+      memoryEnabled: tab.memoryEnabled,
     });
     const content = result.content || 'No content returned.';
     appendAssistantTextMessage(tab, content, actionType);
@@ -6311,6 +6365,7 @@ async function generateSqlForTab(
       assistantContent: content,
       databaseName: tab.databaseName,
     });
+    tab.lastTokenEstimate = Number(result.totalTokens || 0);
     if (result.reasoning) {
       message.info(result.reasoning);
     }
@@ -6378,6 +6433,7 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
       prompt: finalPrompt,
       databaseName: tab.databaseName || undefined,
       modelName: tab.selectedAiModel || undefined,
+      memoryEnabled: tab.memoryEnabled,
     });
     const actionType = autoActionTypeByIntent(result.intentType);
     if (result.intentType === 'GENERATE_SQL') {
@@ -6768,6 +6824,7 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
       prompt: finalPrompt,
       databaseName: tab.databaseName || undefined,
       modelName: tab.selectedAiModel || undefined,
+      memoryEnabled: tab.memoryEnabled,
     });
     const sqlText = (generated.sqlText || '').trim();
     const config = generated.chartConfig ? cloneChartConfig(generated.chartConfig) : null;
@@ -6791,6 +6848,7 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
       chartConfig: config,
       databaseName: tab.databaseName,
     });
+    tab.lastTokenEstimate = Number(generated.totalTokens || 0);
     if (generated.reasoning) {
       message.info(generated.reasoning);
     }
@@ -7190,6 +7248,7 @@ async function repairSqlForTab(tab: QueryWorkspaceTab) {
       errorMessage,
       databaseName: tab.databaseName || undefined,
       modelName: tab.selectedAiModel || undefined,
+      memoryEnabled: tab.memoryEnabled,
     });
     const repairedSql = (repaired.repairedSql || failedSql || '').trim();
     const assistantContent = (repaired.errorExplanation || repaired.repairNote || '已尝试修复 SQL').trim();
@@ -8004,6 +8063,8 @@ function defaultAiConfigForm(): AiConfigSaveReq {
     cliCommand: defaultOption.cliCommand,
     cliWorkingDir: defaultOption.cliWorkingDir,
     modelOptions: [defaultOption],
+    conversationMemoryEnabled: true,
+    conversationMemoryWindowSize: 12,
   };
 }
 
@@ -8018,6 +8079,8 @@ function fillAiConfigForm(config: AiConfigVO) {
     cliCommand: first.cliCommand || '',
     cliWorkingDir: first.cliWorkingDir || '',
     modelOptions: options,
+    conversationMemoryEnabled: config.conversationMemoryEnabled !== false,
+    conversationMemoryWindowSize: config.conversationMemoryWindowSize || 12,
   } satisfies AiConfigSaveReq);
   const models = options.map((item) => item.id).filter((item) => !!item);
   if (!models.includes(selectedAiModel.value)) {

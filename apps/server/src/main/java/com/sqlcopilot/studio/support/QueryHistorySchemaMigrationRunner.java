@@ -26,6 +26,9 @@ public class QueryHistorySchemaMigrationRunner implements ApplicationRunner {
             ensureHistoryColumn(connection, statement, "database_name", "TEXT");
             ensureHistoryColumn(connection, statement, "chart_config_json", "TEXT");
             ensureHistoryColumn(connection, statement, "chart_image_cache_key", "TEXT");
+            ensureHistoryColumn(connection, statement, "structured_context_json", "TEXT");
+            ensureHistoryColumn(connection, statement, "token_estimate", "INTEGER");
+            ensureHistoryColumn(connection, statement, "memory_enabled", "INTEGER");
             backfillHistoryType(connection);
         } catch (SQLException ex) {
             throw new IllegalStateException("查询历史表迁移失败", ex);

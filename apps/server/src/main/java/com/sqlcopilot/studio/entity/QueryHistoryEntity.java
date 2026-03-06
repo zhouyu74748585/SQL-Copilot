@@ -15,6 +15,9 @@ public class QueryHistoryEntity {
     private String databaseName;
     private String chartConfigJson;
     private String chartImageCacheKey;
+    private String structuredContextJson;
+    private Integer tokenEstimate;
+    private Integer memoryEnabled;
     private Long executionMs;
     private Integer successFlag;
     private Long createdAt;

@@ -12,6 +12,7 @@ import com.sqlcopilot.studio.mapper.ErGraphSnapshotMapper;
 import com.sqlcopilot.studio.mapper.QueryHistoryMapper;
 import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.EditorService;
+import com.sqlcopilot.studio.service.rag.QdrantClientService;
 import com.sqlcopilot.studio.util.BusinessException;
 import com.sqlcopilot.studio.util.ResultSetConverter;
 import com.sqlcopilot.studio.util.SqlClassifier;
@@ -37,15 +38,21 @@ public class EditorServiceImpl implements EditorService {
     private final ErGraphSnapshotMapper erGraphSnapshotMapper;
     private final ConnectionService connectionService;
     private final ObjectMapper objectMapper;
+    private final QdrantClientService qdrantClientService;
+    private final String sqlHistoryCollectionName;
 
     public EditorServiceImpl(QueryHistoryMapper queryHistoryMapper,
                              ErGraphSnapshotMapper erGraphSnapshotMapper,
                              ConnectionService connectionService,
-                             ObjectMapper objectMapper) {
+                             ObjectMapper objectMapper,
+                             QdrantClientService qdrantClientService,
+                             @org.springframework.beans.factory.annotation.Value("${rag.collection.sql-history:sql_history}") String sqlHistoryCollectionName) {
         this.queryHistoryMapper = queryHistoryMapper;
         this.erGraphSnapshotMapper = erGraphSnapshotMapper;
         this.connectionService = connectionService;
         this.objectMapper = objectMapper;
+        this.qdrantClientService = qdrantClientService;
+        this.sqlHistoryCollectionName = sqlHistoryCollectionName;
     }
 
     @Override
@@ -163,6 +170,11 @@ public class EditorServiceImpl implements EditorService {
         }
         // 关键操作：按连接与会话 ID 一次性删除整组历史记录，避免残留碎片数据。
         queryHistoryMapper.deleteBySession(req.getConnectionId(), normalizedSessionId);
+        try {
+            qdrantClientService.deletePointsByFilter(sqlHistoryCollectionName, req.getConnectionId(), "", normalizedSessionId);
+        } catch (Exception ignored) {
+            // 删除向量失败不阻塞主流程。
+        }
     }
 
     @Override
@@ -178,6 +190,9 @@ public class EditorServiceImpl implements EditorService {
         entity.setDatabaseName(safe(req.getDatabaseName()));
         entity.setChartConfigJson(safe(req.getChartConfigJson()));
         entity.setChartImageCacheKey(safe(req.getChartImageCacheKey()));
+        entity.setStructuredContextJson(safe(req.getStructuredContextJson()));
+        entity.setTokenEstimate(req.getTokenEstimate());
+        entity.setMemoryEnabled(Boolean.TRUE.equals(req.getMemoryEnabled()) ? 1 : 0);
         entity.setExecutionMs(req.getExecutionMs());
         entity.setSuccessFlag(Boolean.TRUE.equals(req.getSuccess()) ? 1 : 0);
         entity.setCreatedAt(System.currentTimeMillis());
