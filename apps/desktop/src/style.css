@@ -1706,6 +1706,12 @@ body {
   color: var(--text-sub);
 }
 
+.query-chat-long-dialog-label {
+  margin-left: 12px;
+  color: var(--text-sub);
+  cursor: help;
+}
+
 .query-chat-composer-actions {
   display: flex;
   justify-content: flex-end;

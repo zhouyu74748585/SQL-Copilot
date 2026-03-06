@@ -69,3 +69,24 @@
 - 启动验证（clean）：
   - 后端：`mvn -f apps/server/pom.xml clean spring-boot:run` 启动成功，`http://127.0.0.1:18080/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
   - 前端：执行 clean build 后 `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6044` 启动成功，`http://127.0.0.1:6044` 返回 HTTP 200。
+
+---
+
+## 追加记录（2026-03-06 13:50）- 长对话按钮 Hover 说明
+
+### 本次目标
+- 为查询对话框中的“长对话”开关增加 hover 说明，避免用户不清楚开关含义。
+
+### 关键改动
+- 修改文件：`apps/desktop/src/App.vue`
+  - 在对话区模型行中，将“长对话”文本与对应开关都包裹 `a-tooltip`。
+  - 新增 hover 文案：`开启后会记忆并利用更长的对话上下文，适合连续追问与复杂任务。`
+- 修改文件：`apps/desktop/src/style.css`
+  - 新增 `.query-chat-long-dialog-label`，替换原内联样式，统一处理左边距与 hover 光标。
+
+### 验证结果
+- 前端类型检查：`npm run -w @sqlcopilot/desktop type-check` 通过。
+- 前端构建：`npm run -w @sqlcopilot/desktop build` 通过。
+- 启动验证（clean）：
+  - 后端：`mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18081` 启动成功；`http://127.0.0.1:18081/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+  - 前端：`npm run -w @sqlcopilot/desktop build -- --emptyOutDir` 后执行 `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6046`，`HTTP/1.1 200 OK`。

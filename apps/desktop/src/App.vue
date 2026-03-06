@@ -812,8 +812,9 @@
                 />
                 <span class="query-chat-auto-label">Auto</span>
                 <a-switch v-model:checked="activeQueryTab.autoMode" size="small" />
-                <span style="margin-left: 12px;">记忆理解</span>
-                <a-switch v-model:checked="activeQueryTab.memoryEnabled" size="small" />
+                <a-tooltip title="开启后会记忆并利用更长的对话上下文，适合连续追问与复杂任务。">
+                  <span class="query-chat-long-dialog-label">长对话</span>
+                </a-tooltip>
                 <span style="margin-left: 12px; color: var(--ant-color-text-secondary);">≈Token: {{ activeQueryTab.lastTokenEstimate || 0 }}</span>
                 <template v-if="activeQueryTab.autoMode">
                   <span class="query-chat-auto-label">自动执行</span>
