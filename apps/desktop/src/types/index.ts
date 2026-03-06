@@ -348,11 +348,15 @@ export interface AiModelOption {
 
 export interface RagConfigVO {
   ragEmbeddingModelDir?: string;
+  ragRerankEnabled?: boolean;
+  ragRerankModelDir?: string;
   updatedAt?: number;
 }
 
 export interface RagConfigSaveReq {
   ragEmbeddingModelDir?: string;
+  ragRerankEnabled?: boolean;
+  ragRerankModelDir?: string;
 }
 
 export interface RagVectorizeEnqueueReq {

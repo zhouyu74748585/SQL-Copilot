@@ -102,3 +102,82 @@
 - 额外改动：
   - `RagRetrievalServiceImpl` 改为依赖 `RagRerankService`，并在请求日志中输出 rerank runtime provider。
   - `application.yml` 增加 rerank 模型与运行时配置项。
+
+## 追加记录（2026-03-06 16:13）- 本地 Rerank 配置页并排改造
+
+### 本次目标
+- 在 AI 配置弹窗中新增“本地 Rerank 模型配置”，并与“向量模型配置”并排展示。
+- 配置不仅可保存展示，还需在后端检索链路中实际生效。
+
+### 关键改动
+- 前端（`apps/desktop/src/App.vue`、`apps/desktop/src/types/index.ts`、`apps/desktop/src/style.css`）：
+  - 在“向量化配置”页新增双列卡片布局：左侧向量模型目录，右侧本地 Rerank 配置。
+  - 新增 Rerank 配置项：启用开关、模型目录、模型文件名、执行 Provider（AUTO/CPU/CUDA）、CUDA 设备 ID、特征维度。
+  - 新增本地目录选择函数 `pickRagRerankModelDir`，并在保存前做参数归一化与边界收敛。
+- 后端配置持久化（`RagConfigSaveReq/RagConfigVO/RagEmbeddingConfigEntity/RagConfigMapper/RagConfigServiceImpl`）：
+  - 扩展 RAG 配置 DTO/实体/Mapper，支持上述 Rerank 字段 get/save。
+  - 统一默认值与安全收敛（feature size >= 6、cuda id >= 0、provider 仅 AUTO/CPU/CUDA）。
+- 数据库与迁移（`AiConfigMigrationRunner`、`schema.sql`）：
+  - 为 `rag_embedding_config` 增加 rerank 相关列，并兼容历史库升级/重建。
+- 运行时生效：
+  - `OnnxLocalRerankServiceImpl` 改为读取 `RagConfigService` 配置（短 TTL 缓存），配置变化可触发会话重建。
+  - `RagRetrievalServiceImpl` 的 rerank 开关改为读取 RAG 配置，不再仅依赖 `application.yml` 固定值。
+
+### 规范自检（backend-api-design）
+- 已按规范检查，未发现违规：
+  - 接口仍使用 GET/POST；
+  - 请求/响应均为 DTO/VO（未引入 Map 作为接口载荷）；
+  - SQL 仅在 Mapper 注解中，Service 未拼接 SQL；
+  - 新增 DTO 字段已补充中文注释，关键逻辑补充了中文注释。
+
+### 验证结果
+- 前端类型检查：`npm run -w @sqlcopilot/desktop type-check` 通过。
+- 前端构建：`npm run -w @sqlcopilot/desktop build` 通过。
+- 后端 Maven 打包：`mvn -f apps/server/pom.xml clean package -DskipTests` 通过。
+- 启动验证（clean）：
+  - 后端：`mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18082` 启动成功；`http://127.0.0.1:18082/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+  - 前端：`npm run -w @sqlcopilot/desktop build -- --emptyOutDir` 后执行 `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6048`，`HTTP/1.1 200 OK`。
+
+## 追加记录（2026-03-06 16:17）- 最终回归验证
+
+### 验证补充
+- 后端二次打包验证：`mvn -f apps/server/pom.xml clean package -DskipTests` 通过。
+- 后端 clean 启动验证：`mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18083` 启动成功，`http://127.0.0.1:18083/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+- 前端 clean 预览验证：`npm run -w @sqlcopilot/desktop build -- --emptyOutDir` 后执行 `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6049`，`HTTP/1.1 200 OK`。
+
+## 追加记录（2026-03-06 16:31）- Rerank 配置项精简
+
+### 本次目标
+- 按最新要求将本地 rerank 配置精简为仅支持：`开关 + 模型目录`。
+- `rag.rerank.model-dir` 不再在 `application.yml` 中固定填写，目录来源以用户配置为主。
+
+### 关键改动
+- 前端配置页精简（`apps/desktop/src/App.vue`、`apps/desktop/src/types/index.ts`）：
+  - 删除 rerank 的模型文件名、执行 Provider、CUDA 设备 ID、特征维度输入项。
+  - 保留并排卡片中的“启用本地 Rerank”和“Rerank 模型目录”。
+  - 保存时仅归一化 `ragRerankEnabled` 与 `ragRerankModelDir`。
+  - 前端类型 `RagConfigVO/RagConfigSaveReq` 同步删减为仅两个 rerank 字段。
+- 后端配置模型同步精简：
+  - `RagConfigSaveReq/RagConfigVO/RagEmbeddingConfigEntity/RagConfigMapper/RagConfigServiceImpl` 去除多余 rerank 字段，仅保留 `ragRerankEnabled`、`ragRerankModelDir`。
+- rerank 运行时参数来源调整（`OnnxLocalRerankServiceImpl`）：
+  - 动态配置仅读取 `enabled + modelDir`。
+  - 模型文件名/provider/cuda/feature-size 回退使用后端默认配置项。
+- 配置文件与迁移收敛：
+  - `application.yml` 删除 `rag.rerank.model-dir` 固定项。
+  - `schema.sql` 与 `AiConfigMigrationRunner` 中 `rag_embedding_config` 字段定义收敛为：
+    `rag_embedding_model_dir`、`rag_rerank_enabled`、`rag_rerank_model_dir`、`updated_at`。
+
+### 规范自检（backend-api-design）
+- 已按规范检查，未发现违规：
+  - 接口仍为 GET/POST；
+  - 请求/响应使用 DTO/VO，无 Map 直出；
+  - SQL 仍在 Mapper 注解中，Service 无拼接 SQL；
+  - 新增/保留字段中文注释完整。
+
+### 验证结果
+- 前端类型检查：`npm run -w @sqlcopilot/desktop type-check` 通过。
+- 前端构建：`npm run -w @sqlcopilot/desktop build -- --emptyOutDir` 通过。
+- 后端构建：`mvn -f apps/server/pom.xml clean package -DskipTests` 通过。
+- 启动验证（clean）：
+  - 后端：`mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18084` 启动成功；`http://127.0.0.1:18084/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+  - 前端：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6050`，`HTTP/1.1 200 OK`。

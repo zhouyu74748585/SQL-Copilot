@@ -189,6 +189,130 @@ public class AiServiceImpl implements AiService {
     }
 
     @Override
+    public AiAutoQueryVO autoQuery(AiGenerateSqlReq req) {
+        long startAt = System.currentTimeMillis();
+        StepTimer timer = new StepTimer();
+        log.info(
+                "[AI-AUTO-REQ] connectionId={}, sessionId={}, databaseName={}, modelName={}, promptLength={}",
+                req.getConnectionId(),
+                safe(req.getSessionId()),
+                safe(req.getDatabaseName()),
+                safe(req.getModelName()),
+                safe(req.getPrompt()).length()
+        );
+
+        IntentResult intentResult;
+        try {
+            intentResult = identifyIntent(req);
+            timer.mark("identify_intent");
+        } catch (BusinessException ex) {
+            timer.mark("identify_intent_failed");
+            AiAutoQueryVO clarifyVo = buildIntentClarifyResponse(ex);
+            log.warn(
+                    "[AI-AUTO-INTENT-FALLBACK] connectionId={}, sessionId={}, databaseName={}, modelName={}, message={}",
+                    req.getConnectionId(),
+                    safe(req.getSessionId()),
+                    safe(req.getDatabaseName()),
+                    safe(req.getModelName()),
+                    safe(ex.getMessage())
+            );
+            log.info(
+                    "[AI-AUTO-RESP] connectionId={}, sessionId={}, databaseName={}, modelName={}, intentType={}, intentConfidence={}, fallbackUsed={}, elapsedMs={}",
+                    req.getConnectionId(),
+                    safe(req.getSessionId()),
+                    safe(req.getDatabaseName()),
+                    safe(req.getModelName()),
+                    clarifyVo.getIntentType(),
+                    clarifyVo.getIntentConfidence(),
+                    Boolean.TRUE.equals(clarifyVo.getFallbackUsed()),
+                    System.currentTimeMillis() - startAt
+            );
+            log.info(
+                    "[AI-AUTO-TIMING] connectionId={}, sessionId={}, databaseName={}, modelName={}, intentType={}, steps={}, totalMs={}",
+                    req.getConnectionId(),
+                    safe(req.getSessionId()),
+                    safe(req.getDatabaseName()),
+                    safe(req.getModelName()),
+                    "IDENTIFY_INTENT_FAILED",
+                    timer.stepsSummary(),
+                    timer.totalElapsedMs()
+            );
+            return clarifyVo;
+        }
+        IntentType intentType = intentResult.intentType();
+        boolean hasSqlSnippet = hasSqlSnippetInPrompt(req.getPrompt());
+        timer.mark("detect_sql_snippet");
+
+        AiAutoQueryVO vo = new AiAutoQueryVO();
+        vo.setIntentType(intentType.name());
+        vo.setIntentLabel(intentType.label());
+        vo.setIntentConfidence(intentResult.confidence());
+
+        String baseReasoning = "意图识别: " + intentType.name()
+                + "（置信度 " + String.format(Locale.ROOT, "%.2f", intentResult.confidence()) + "）";
+        if (!safe(intentResult.reason()).isBlank()) {
+            baseReasoning += "，依据：" + safe(intentResult.reason());
+        }
+
+        if (intentType == IntentType.GENERATE_SQL) {
+            AiGenerateSqlVO generated = generateSql(req);
+            timer.mark("route_generate_sql");
+            vo.setSqlText(generated.getSqlText());
+            vo.setFallbackUsed(Boolean.TRUE.equals(generated.getFallbackUsed()));
+            vo.setReasoning(joinReasoning(baseReasoning, generated.getReasoning()));
+        } else if (intentType == IntentType.EXPLAIN_SQL) {
+            if (!hasSqlSnippet) {
+                throw new BusinessException(400, "自动识别为“解释 SQL”时，提示词中必须包含 SQL 片段");
+            }
+            AiTextResponseVO explained = explainSql(req);
+            timer.mark("route_explain_sql");
+            vo.setContent(explained.getContent());
+            vo.setFallbackUsed(Boolean.TRUE.equals(explained.getFallbackUsed()));
+            vo.setReasoning(joinReasoning(baseReasoning, explained.getReasoning()));
+        } else if (intentType == IntentType.ANALYZE_SQL) {
+            if (!hasSqlSnippet) {
+                throw new BusinessException(400, "自动识别为“分析 SQL”时，提示词中必须包含 SQL 片段");
+            }
+            AiTextResponseVO analyzed = analyzeSql(req);
+            timer.mark("route_analyze_sql");
+            vo.setContent(analyzed.getContent());
+            vo.setFallbackUsed(Boolean.TRUE.equals(analyzed.getFallbackUsed()));
+            vo.setReasoning(joinReasoning(baseReasoning, analyzed.getReasoning()));
+        } else {
+            AiGenerateChartVO chart = generateChart(req);
+            timer.mark("route_generate_chart");
+            vo.setSqlText(chart.getSqlText());
+            vo.setChartConfig(chart.getChartConfig());
+            vo.setConfigSummary(chart.getConfigSummary());
+            vo.setFallbackUsed(Boolean.TRUE.equals(chart.getFallbackUsed()));
+            vo.setReasoning(joinReasoning(baseReasoning, chart.getReasoning()));
+        }
+
+        log.info(
+                "[AI-AUTO-RESP] connectionId={}, sessionId={}, databaseName={}, modelName={}, intentType={}, intentConfidence={}, fallbackUsed={}, elapsedMs={}",
+                req.getConnectionId(),
+                safe(req.getSessionId()),
+                safe(req.getDatabaseName()),
+                safe(req.getModelName()),
+                intentType.name(),
+                intentResult.confidence(),
+                Boolean.TRUE.equals(vo.getFallbackUsed()),
+                System.currentTimeMillis() - startAt
+        );
+        log.info(
+                "[AI-AUTO-TIMING] connectionId={}, sessionId={}, databaseName={}, modelName={}, intentType={}, steps={}, totalMs={}",
+                req.getConnectionId(),
+                safe(req.getSessionId()),
+                safe(req.getDatabaseName()),
+                safe(req.getModelName()),
+                intentType.name(),
+                timer.stepsSummary(),
+                timer.totalElapsedMs()
+        );
+        return vo;
+    }
+
+    @Override
     public AiGenerateSqlVO generateSql(AiGenerateSqlReq req) {
         long startAt = System.currentTimeMillis();
         StepTimer timer = new StepTimer();
@@ -291,130 +415,6 @@ public class AiServiceImpl implements AiService {
             safe(req.getSessionId()),
             safe(req.getDatabaseName()),
             safe(req.getModelName()),
-            timer.stepsSummary(),
-            timer.totalElapsedMs()
-        );
-        return vo;
-    }
-
-    @Override
-    public AiAutoQueryVO autoQuery(AiGenerateSqlReq req) {
-        long startAt = System.currentTimeMillis();
-        StepTimer timer = new StepTimer();
-        log.info(
-            "[AI-AUTO-REQ] connectionId={}, sessionId={}, databaseName={}, modelName={}, promptLength={}",
-            req.getConnectionId(),
-            safe(req.getSessionId()),
-            safe(req.getDatabaseName()),
-            safe(req.getModelName()),
-            safe(req.getPrompt()).length()
-        );
-
-        IntentResult intentResult;
-        try {
-            intentResult = identifyIntent(req);
-            timer.mark("identify_intent");
-        } catch (BusinessException ex) {
-            timer.mark("identify_intent_failed");
-            AiAutoQueryVO clarifyVo = buildIntentClarifyResponse(ex);
-            log.warn(
-                "[AI-AUTO-INTENT-FALLBACK] connectionId={}, sessionId={}, databaseName={}, modelName={}, message={}",
-                req.getConnectionId(),
-                safe(req.getSessionId()),
-                safe(req.getDatabaseName()),
-                safe(req.getModelName()),
-                safe(ex.getMessage())
-            );
-            log.info(
-                "[AI-AUTO-RESP] connectionId={}, sessionId={}, databaseName={}, modelName={}, intentType={}, intentConfidence={}, fallbackUsed={}, elapsedMs={}",
-                req.getConnectionId(),
-                safe(req.getSessionId()),
-                safe(req.getDatabaseName()),
-                safe(req.getModelName()),
-                clarifyVo.getIntentType(),
-                clarifyVo.getIntentConfidence(),
-                Boolean.TRUE.equals(clarifyVo.getFallbackUsed()),
-                System.currentTimeMillis() - startAt
-            );
-            log.info(
-                "[AI-AUTO-TIMING] connectionId={}, sessionId={}, databaseName={}, modelName={}, intentType={}, steps={}, totalMs={}",
-                req.getConnectionId(),
-                safe(req.getSessionId()),
-                safe(req.getDatabaseName()),
-                safe(req.getModelName()),
-                "IDENTIFY_INTENT_FAILED",
-                timer.stepsSummary(),
-                timer.totalElapsedMs()
-            );
-            return clarifyVo;
-        }
-        IntentType intentType = intentResult.intentType();
-        boolean hasSqlSnippet = hasSqlSnippetInPrompt(req.getPrompt());
-        timer.mark("detect_sql_snippet");
-
-        AiAutoQueryVO vo = new AiAutoQueryVO();
-        vo.setIntentType(intentType.name());
-        vo.setIntentLabel(intentType.label());
-        vo.setIntentConfidence(intentResult.confidence());
-
-        String baseReasoning = "意图识别: " + intentType.name()
-            + "（置信度 " + String.format(Locale.ROOT, "%.2f", intentResult.confidence()) + "）";
-        if (!safe(intentResult.reason()).isBlank()) {
-            baseReasoning += "，依据：" + safe(intentResult.reason());
-        }
-
-        if (intentType == IntentType.GENERATE_SQL) {
-            AiGenerateSqlVO generated = generateSql(req);
-            timer.mark("route_generate_sql");
-            vo.setSqlText(generated.getSqlText());
-            vo.setFallbackUsed(Boolean.TRUE.equals(generated.getFallbackUsed()));
-            vo.setReasoning(joinReasoning(baseReasoning, generated.getReasoning()));
-        } else if (intentType == IntentType.EXPLAIN_SQL) {
-            if (!hasSqlSnippet) {
-                throw new BusinessException(400, "自动识别为“解释 SQL”时，提示词中必须包含 SQL 片段");
-            }
-            AiTextResponseVO explained = explainSql(req);
-            timer.mark("route_explain_sql");
-            vo.setContent(explained.getContent());
-            vo.setFallbackUsed(Boolean.TRUE.equals(explained.getFallbackUsed()));
-            vo.setReasoning(joinReasoning(baseReasoning, explained.getReasoning()));
-        } else if (intentType == IntentType.ANALYZE_SQL) {
-            if (!hasSqlSnippet) {
-                throw new BusinessException(400, "自动识别为“分析 SQL”时，提示词中必须包含 SQL 片段");
-            }
-            AiTextResponseVO analyzed = analyzeSql(req);
-            timer.mark("route_analyze_sql");
-            vo.setContent(analyzed.getContent());
-            vo.setFallbackUsed(Boolean.TRUE.equals(analyzed.getFallbackUsed()));
-            vo.setReasoning(joinReasoning(baseReasoning, analyzed.getReasoning()));
-        } else {
-            AiGenerateChartVO chart = generateChart(req);
-            timer.mark("route_generate_chart");
-            vo.setSqlText(chart.getSqlText());
-            vo.setChartConfig(chart.getChartConfig());
-            vo.setConfigSummary(chart.getConfigSummary());
-            vo.setFallbackUsed(Boolean.TRUE.equals(chart.getFallbackUsed()));
-            vo.setReasoning(joinReasoning(baseReasoning, chart.getReasoning()));
-        }
-
-        log.info(
-            "[AI-AUTO-RESP] connectionId={}, sessionId={}, databaseName={}, modelName={}, intentType={}, intentConfidence={}, fallbackUsed={}, elapsedMs={}",
-            req.getConnectionId(),
-            safe(req.getSessionId()),
-            safe(req.getDatabaseName()),
-            safe(req.getModelName()),
-            intentType.name(),
-            intentResult.confidence(),
-            Boolean.TRUE.equals(vo.getFallbackUsed()),
-            System.currentTimeMillis() - startAt
-        );
-        log.info(
-            "[AI-AUTO-TIMING] connectionId={}, sessionId={}, databaseName={}, modelName={}, intentType={}, steps={}, totalMs={}",
-            req.getConnectionId(),
-            safe(req.getSessionId()),
-            safe(req.getDatabaseName()),
-            safe(req.getModelName()),
-            intentType.name(),
             timer.stepsSummary(),
             timer.totalElapsedMs()
         );

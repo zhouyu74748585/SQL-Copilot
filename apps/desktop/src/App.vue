@@ -722,7 +722,10 @@
                     <span>{{ assistantActionLabel(item.actionType) }}</span>
                     <span>{{ formatTime(item.createdAt) }}</span>
                   </div>
-                  <div v-if="item.content" class="query-chat-text">{{ item.content }}</div>
+                  <div v-if="item.content" class="query-chat-text" :class="{ 'is-thinking': item.pending }">
+                    <loading-outlined v-if="item.pending" class="query-chat-thinking-icon" />
+                    <span>{{ item.content }}</span>
+                  </div>
                   <div v-if="item.chartConfig" class="query-chat-chart-summary">
                     {{ item.chartConfigSummary || chartSummaryText(item.chartConfig) }}
                   </div>
@@ -815,6 +818,7 @@
                 <a-tooltip title="开启后会记忆并利用更长的对话上下文，适合连续追问与复杂任务。">
                   <span class="query-chat-long-dialog-label">长对话</span>
                 </a-tooltip>
+                <a-switch v-model:checked="activeQueryTab.memoryEnabled" size="small" />
                 <span style="margin-left: 12px; color: var(--ant-color-text-secondary);">≈Token: {{ activeQueryTab.lastTokenEstimate || 0 }}</span>
                 <template v-if="activeQueryTab.autoMode">
                   <span class="query-chat-auto-label">自动执行</span>
@@ -1397,16 +1401,38 @@
           </a-tab-pane>
 
           <a-tab-pane key="embedding" tab="向量化配置">
-            <a-form-item label="向量模型目录（推荐：填写 clone 的模型仓库目录）">
-              <div class="file-picker-row">
-                <a-input
-                  :value="ragConfigForm.ragEmbeddingModelDir"
-                  readonly
-                  placeholder="/path/to/bge-m3-onnx-o4"
-                />
-                <a-button :loading="pickingRagModelDir" @click="pickRagEmbeddingModelDir">选择目录</a-button>
+            <div class="rag-config-grid">
+              <div class="rag-config-card">
+                <div class="rag-config-card-title">向量模型配置</div>
+                <a-form-item label="向量模型目录（推荐：填写 clone 的模型仓库目录）">
+                  <div class="file-picker-row">
+                    <a-input
+                      :value="ragConfigForm.ragEmbeddingModelDir"
+                      readonly
+                      placeholder="/path/to/bge-m3-onnx-o4"
+                    />
+                    <a-button :loading="pickingRagModelDir" @click="pickRagEmbeddingModelDir">选择目录</a-button>
+                  </div>
+                </a-form-item>
               </div>
-            </a-form-item>
+              <div class="rag-config-card">
+                <div class="rag-config-card-title">本地 Rerank 配置</div>
+                <a-form-item>
+                  <a-switch v-model:checked="ragConfigForm.ragRerankEnabled" />
+                  <span style="margin-left: 8px;">启用本地 Rerank</span>
+                </a-form-item>
+                <a-form-item label="Rerank 模型目录">
+                  <div class="file-picker-row">
+                    <a-input
+                      :value="ragConfigForm.ragRerankModelDir"
+                      readonly
+                      placeholder="/path/to/rerank-model"
+                    />
+                    <a-button :loading="pickingRagRerankModelDir" @click="pickRagRerankModelDir">选择目录</a-button>
+                  </div>
+                </a-form-item>
+              </div>
+            </div>
           </a-tab-pane>
         </a-tabs>
       </a-form>
@@ -1781,6 +1807,7 @@ interface QueryChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  pending?: boolean;
   sqlText?: string;
   actionType: QueryActionType;
   chartConfig?: ChartConfigVO;
@@ -1996,6 +2023,7 @@ const connectionPreviewError = ref('');
 const aiConfigForm = reactive<AiConfigSaveReq>(defaultAiConfigForm());
 const ragConfigForm = reactive<RagConfigSaveReq>(defaultRagConfigForm());
 const pickingRagModelDir = ref(false);
+const pickingRagRerankModelDir = ref(false);
 
 const workflow = reactive({
   connectionId: 0,
@@ -4398,25 +4426,14 @@ function appendUserChatMessage(tab: QueryWorkspaceTab, promptText: string, actio
   return messageItem;
 }
 
-function appendAssistantSqlMessage(
-  tab: QueryWorkspaceTab,
-  sqlText: string,
-  actionType: QueryChatMessage['actionType'],
-  content = '',
-  chartConfig?: ChartConfigVO | null,
-  chartConfigSummary?: string,
-  chartImageCacheKey?: string,
-) {
+function appendAssistantThinkingMessage(tab: QueryWorkspaceTab, actionType: QueryChatMessage['actionType']) {
   const now = Date.now();
   const messageItem: QueryChatMessage = {
-    id: `chat-assistant-${now}-${Math.random().toString(16).slice(2, 8)}`,
+    id: `chat-assistant-thinking-${now}-${Math.random().toString(16).slice(2, 8)}`,
     role: 'assistant',
-    content: content.trim(),
-    sqlText,
+    content: '思考中...',
+    pending: true,
     actionType,
-    chartConfig: chartConfig ? cloneChartConfig(chartConfig) : undefined,
-    chartConfigSummary: (chartConfigSummary || '').trim() || undefined,
-    chartImageCacheKey: (chartImageCacheKey || '').trim() || undefined,
     createdAt: now,
   };
   tab.chatMessages.push(messageItem);
@@ -4425,18 +4442,94 @@ function appendAssistantSqlMessage(
   return messageItem;
 }
 
-function appendAssistantTextMessage(tab: QueryWorkspaceTab, content: string, actionType: QueryChatMessage['actionType']) {
+function removeQueryChatMessage(tab: QueryWorkspaceTab, targetMessage: QueryChatMessage | undefined) {
+  if (!targetMessage) {
+    return;
+  }
+  const index = tab.chatMessages.findIndex((item) => item.id === targetMessage.id);
+  if (index < 0) {
+    return;
+  }
+  tab.chatMessages.splice(index, 1);
+  touchQueryTab(tab);
+}
+
+function prepareAssistantMessage(
+  messageItem: QueryChatMessage,
+  actionType: QueryChatMessage['actionType'],
+  createdAt: number,
+) {
+  messageItem.role = 'assistant';
+  messageItem.actionType = actionType;
+  messageItem.pending = false;
+  messageItem.content = '';
+  messageItem.sqlText = undefined;
+  messageItem.chartConfig = undefined;
+  messageItem.chartConfigSummary = undefined;
+  messageItem.chartImageCacheKey = undefined;
+  messageItem.chartImageDataUrl = undefined;
+  messageItem.executionPreview = undefined;
+  messageItem.retryable = undefined;
+  messageItem.retryLoading = undefined;
+  messageItem.retryMeta = undefined;
+  messageItem.historySaved = undefined;
+  messageItem.createdAt = createdAt;
+}
+
+function appendAssistantSqlMessage(
+  tab: QueryWorkspaceTab,
+  sqlText: string,
+  actionType: QueryChatMessage['actionType'],
+  content = '',
+  chartConfig?: ChartConfigVO | null,
+  chartConfigSummary?: string,
+  chartImageCacheKey?: string,
+  targetMessage?: QueryChatMessage,
+) {
   const now = Date.now();
-  const messageItem: QueryChatMessage = {
+  const messageItem: QueryChatMessage = targetMessage ?? {
     id: `chat-assistant-${now}-${Math.random().toString(16).slice(2, 8)}`,
     role: 'assistant',
-    content: content.trim(),
+    content: '',
     actionType,
     createdAt: now,
   };
-  tab.chatMessages.push(messageItem);
+  prepareAssistantMessage(messageItem, actionType, now);
+  messageItem.content = content.trim();
+  messageItem.sqlText = sqlText;
+  messageItem.chartConfig = chartConfig ? cloneChartConfig(chartConfig) : undefined;
+  messageItem.chartConfigSummary = (chartConfigSummary || '').trim() || undefined;
+  messageItem.chartImageCacheKey = (chartImageCacheKey || '').trim() || undefined;
+  if (!targetMessage) {
+    tab.chatMessages.push(messageItem);
+  }
   touchQueryTab(tab);
   scrollToQueryChatMessage(tab, messageItem.id);
+  return messageItem;
+}
+
+function appendAssistantTextMessage(
+  tab: QueryWorkspaceTab,
+  content: string,
+  actionType: QueryChatMessage['actionType'],
+  targetMessage?: QueryChatMessage,
+) {
+  const now = Date.now();
+  const messageItem: QueryChatMessage = targetMessage ?? {
+    id: `chat-assistant-${now}-${Math.random().toString(16).slice(2, 8)}`,
+    role: 'assistant',
+    content: '',
+    actionType,
+    createdAt: now,
+  };
+  prepareAssistantMessage(messageItem, actionType, now);
+  messageItem.content = content.trim();
+  if (!targetMessage) {
+    tab.chatMessages.push(messageItem);
+  }
+  touchQueryTab(tab);
+  scrollToQueryChatMessage(tab, messageItem.id);
+  return messageItem;
 }
 
 function appendSqlToEditor(tab: QueryWorkspaceTab, sqlText: string) {
@@ -4500,6 +4593,7 @@ async function runAiTextActionWithSql(tab: QueryWorkspaceTab, actionType: 'expla
 
   const promptText = actionType === 'explain' ? '请解释这段 SQL 的含义' : '请分析这段 SQL 的合理性';
   const userMessage = appendUserChatMessage(tab, `${promptText}\n\n${normalizedSqlText}`, actionType);
+  const thinkingMessage = appendAssistantThinkingMessage(tab, actionType);
   tab.aiGenerating = true;
 
   try {
@@ -4513,7 +4607,7 @@ async function runAiTextActionWithSql(tab: QueryWorkspaceTab, actionType: 'expla
       memoryEnabled: tab.memoryEnabled,
     });
     const content = result.content || '未返回内容';
-    appendAssistantTextMessage(tab, content, actionType);
+    appendAssistantTextMessage(tab, content, actionType, thinkingMessage);
     await saveConversationHistoryOnce(tab, userMessage, `${promptText}\n\n${normalizedSqlText}`, normalizedSqlText, {
       actionType,
       assistantContent: content,
@@ -4527,9 +4621,11 @@ async function runAiTextActionWithSql(tab: QueryWorkspaceTab, actionType: 'expla
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     if (isAiRequestAbortedMessage(msg)) {
+      removeQueryChatMessage(tab, thinkingMessage);
       message.info('已终止对话执行');
       return;
     }
+    removeQueryChatMessage(tab, thinkingMessage);
     message.error(msg);
   } finally {
     tab.aiGenerating = false;
@@ -6090,6 +6186,30 @@ async function pickRagEmbeddingModelDir() {
   }
 }
 
+async function pickRagRerankModelDir() {
+  const bridge = getDesktopBridge();
+  if (!bridge || typeof bridge.pickDirectory !== 'function') {
+    message.warning('Directory picker is unavailable in this runtime. Please run in desktop app.');
+    return;
+  }
+  if (pickingRagRerankModelDir.value) {
+    return;
+  }
+  pickingRagRerankModelDir.value = true;
+  try {
+    const selectedPath = await bridge.pickDirectory({
+      title: 'Select local rerank model directory',
+      defaultPath: ragConfigForm.ragRerankModelDir || undefined,
+    });
+    if (!selectedPath) {
+      return;
+    }
+    ragConfigForm.ragRerankModelDir = selectedPath;
+  } finally {
+    pickingRagRerankModelDir.value = false;
+  }
+}
+
 async function openAiConfigModal() {
   aiConfigModalOpen.value = true;
   await runSafely(async () => {
@@ -6115,6 +6235,8 @@ async function saveAiConfig() {
     aiConfigForm.cliWorkingDir = modelOptions[0].cliWorkingDir || '';
     aiConfigForm.conversationMemoryEnabled = aiConfigForm.conversationMemoryEnabled !== false;
     aiConfigForm.conversationMemoryWindowSize = Math.min(50, Math.max(4, Number(aiConfigForm.conversationMemoryWindowSize || 12)));
+    ragConfigForm.ragRerankEnabled = ragConfigForm.ragRerankEnabled === true;
+    ragConfigForm.ragRerankModelDir = (ragConfigForm.ragRerankModelDir || '').trim();
     const savedAi = await postApi<AiConfigVO>('/api/ai/config/save', aiConfigForm);
     const savedRag = await postApi<RagConfigVO>('/api/rag/config/save', ragConfigForm);
     fillAiConfigForm(savedAi);
@@ -6189,6 +6311,14 @@ function resolveSqlForAction(tab: QueryWorkspaceTab, sqlOverride?: string) {
     return selected;
   }
   return tab.sqlText.trim();
+}
+
+function resolveSelectedSqlSnippet(tab: QueryWorkspaceTab, sqlOverride?: string) {
+  const override = (sqlOverride ?? '').trim();
+  if (override) {
+    return override;
+  }
+  return tab.selectedSqlText.trim();
 }
 
 interface SaveConversationHistoryOptions {
@@ -6409,7 +6539,9 @@ async function generateSqlForTab(
     return;
   }
   const rawPrompt = retryOptions?.promptText ?? tab.prompt.trim();
-  const actionSqlSnippet = retryOptions?.actionSqlSnippet ?? (actionType === 'generate' ? '' : resolveSqlForAction(tab));
+  const actionSqlSnippet = retryOptions?.actionSqlSnippet ?? (actionType === 'generate'
+    ? ''
+    : resolveSelectedSqlSnippet(tab));
   if (actionType === 'generate' && !rawPrompt.trim()) {
     message.info('Please enter a natural language request first.');
     return;
@@ -6422,6 +6554,7 @@ async function generateSqlForTab(
     ? 'Please explain this SQL.'
     : 'Please analyze whether this SQL is reasonable.');
   const userMessage = retryOptions?.userMessage ?? appendUserChatMessage(tab, promptText, actionType);
+  const thinkingMessage = appendAssistantThinkingMessage(tab, actionType);
   if (!retryOptions) {
     tab.prompt = '';
   }
@@ -6448,11 +6581,11 @@ async function generateSqlForTab(
       });
       const generatedText = (generated.sqlText || '').trim();
       if (looksLikeSqlText(generatedText)) {
-        appendAssistantSqlMessage(tab, generatedText, actionType);
+        appendAssistantSqlMessage(tab, generatedText, actionType, '', undefined, undefined, undefined, thinkingMessage);
         await saveConversationHistoryOnce(tab, userMessage, promptText, generatedText);
         message.success('SQL generated.');
       } else {
-        appendAssistantTextMessage(tab, generatedText || '未返回可执行 SQL', actionType);
+        appendAssistantTextMessage(tab, generatedText || '未返回可执行 SQL', actionType, thinkingMessage);
         message.warning('未生成可执行 SQL，已返回说明内容');
       }
       tab.lastTokenEstimate = Number((generated as any).totalTokens || 0);
@@ -6473,7 +6606,7 @@ async function generateSqlForTab(
       memoryEnabled: tab.memoryEnabled,
     });
     const content = result.content || 'No content returned.';
-    appendAssistantTextMessage(tab, content, actionType);
+    appendAssistantTextMessage(tab, content, actionType, thinkingMessage);
     await saveConversationHistoryOnce(tab, userMessage, promptText, actionSqlSnippet || '', {
       actionType,
       assistantContent: content,
@@ -6488,10 +6621,12 @@ async function generateSqlForTab(
   } catch (error) {
     const msg = getErrorMessage(error);
     if (isAiRequestAbortedMessage(msg)) {
+      removeQueryChatMessage(tab, thinkingMessage);
       clearUserRetryState(userMessage);
       message.info('Conversation was stopped.');
       return;
     }
+    removeQueryChatMessage(tab, thinkingMessage);
     if (isTimeoutErrorMessage(msg)) {
       markUserMessageRetryable(tab, userMessage, retryMeta);
       message.error(timeoutRetryErrorMessage(msg));
@@ -6527,9 +6662,10 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
     message.info('Please enter a natural language request first.');
     return;
   }
-  const sqlSnippet = retryOptions?.actionSqlSnippet ?? resolveSqlForAction(tab);
+  const sqlSnippet = retryOptions?.actionSqlSnippet ?? resolveSelectedSqlSnippet(tab);
   const finalPrompt = retryOptions?.finalPrompt ?? mergePromptWithSqlSnippet(rawPrompt, sqlSnippet);
   const userMessage = retryOptions?.userMessage ?? appendUserChatMessage(tab, rawPrompt, 'auto_generate');
+  const thinkingMessage = appendAssistantThinkingMessage(tab, 'auto_generate');
   if (!retryOptions) {
     tab.prompt = '';
   }
@@ -6553,7 +6689,16 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
     if (result.intentType === 'GENERATE_SQL') {
       const sqlText = (result.sqlText || '').trim();
       if (looksLikeSqlText(sqlText)) {
-        const assistantMessage = appendAssistantSqlMessage(tab, sqlText, actionType);
+        const assistantMessage = appendAssistantSqlMessage(
+          tab,
+          sqlText,
+          actionType,
+          '',
+          undefined,
+          undefined,
+          undefined,
+          thinkingMessage,
+        );
         await saveConversationHistoryOnce(tab, userMessage, rawPrompt, sqlText, {
           actionType,
           databaseName: tab.databaseName,
@@ -6569,7 +6714,7 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
         }
       } else {
         const contentText = sqlText || '未返回可执行 SQL';
-        appendAssistantTextMessage(tab, contentText, actionType);
+        appendAssistantTextMessage(tab, contentText, actionType, thinkingMessage);
         await saveConversationHistoryOnce(tab, userMessage, rawPrompt, '', {
           actionType,
           assistantContent: contentText,
@@ -6581,7 +6726,7 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
       const config = result.chartConfig ? cloneChartConfig(result.chartConfig) : null;
       const summary = (result.configSummary || '').trim() || chartSummaryText(config);
       if (!sqlText) {
-        appendAssistantTextMessage(tab, summary || 'No chart plan returned.', actionType);
+        appendAssistantTextMessage(tab, summary || 'No chart plan returned.', actionType, thinkingMessage);
         await saveConversationHistoryOnce(tab, userMessage, rawPrompt, '', {
           actionType,
           assistantContent: summary || 'No chart plan returned.',
@@ -6596,6 +6741,8 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
           summary,
           config,
           summary,
+          undefined,
+          thinkingMessage,
         );
         await saveConversationHistoryOnce(tab, userMessage, rawPrompt, sqlText, {
           actionType,
@@ -6613,7 +6760,7 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
       }
     } else if (result.intentType === 'EXPLAIN_SQL' || result.intentType === 'ANALYZE_SQL') {
       const content = (result.content || '').trim() || 'No content returned.';
-      appendAssistantTextMessage(tab, content, actionType);
+      appendAssistantTextMessage(tab, content, actionType, thinkingMessage);
       await saveConversationHistoryOnce(tab, userMessage, rawPrompt, sqlSnippet || '', {
         actionType,
         assistantContent: content,
@@ -6630,10 +6777,12 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
   } catch (error) {
     const msg = getErrorMessage(error);
     if (isAiRequestAbortedMessage(msg)) {
+      removeQueryChatMessage(tab, thinkingMessage);
       clearUserRetryState(userMessage);
       message.info('Conversation was stopped.');
       return;
     }
+    removeQueryChatMessage(tab, thinkingMessage);
     if (isTimeoutErrorMessage(msg)) {
       markUserMessageRetryable(tab, userMessage, retryMeta);
       message.error(timeoutRetryErrorMessage(msg));
@@ -6922,6 +7071,7 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
   }
   const finalPrompt = retryOptions?.finalPrompt ?? buildChartPrompt(rawPrompt);
   const userMessage = retryOptions?.userMessage ?? appendUserChatMessage(tab, rawPrompt, 'chart_auto_plan');
+  const thinkingMessage = appendAssistantThinkingMessage(tab, 'chart_auto_plan');
   if (!retryOptions) {
     tab.prompt = '';
   }
@@ -6944,7 +7094,7 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
     const config = generated.chartConfig ? cloneChartConfig(generated.chartConfig) : null;
     const summary = (generated.configSummary || '').trim() || chartSummaryText(config);
     if (!sqlText) {
-      appendAssistantTextMessage(tab, summary || 'No chart plan returned.', 'chart_auto_plan');
+      appendAssistantTextMessage(tab, summary || 'No chart plan returned.', 'chart_auto_plan', thinkingMessage);
       message.warning('未生成可执行 SQL');
       return;
     }
@@ -6955,6 +7105,8 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
       summary,
       config,
       summary,
+      undefined,
+      thinkingMessage,
     );
     await saveConversationHistoryOnce(tab, userMessage, rawPrompt, sqlText, {
       actionType: 'chart_auto_plan',
@@ -6979,10 +7131,12 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
   } catch (error) {
     const msg = getErrorMessage(error);
     if (isAiRequestAbortedMessage(msg)) {
+      removeQueryChatMessage(tab, thinkingMessage);
       clearUserRetryState(userMessage);
       message.info('Conversation was stopped.');
       return;
     }
+    removeQueryChatMessage(tab, thinkingMessage);
     if (isTimeoutErrorMessage(msg)) {
       markUserMessageRetryable(tab, userMessage, retryMeta);
       message.error(timeoutRetryErrorMessage(msg));
@@ -7352,10 +7506,12 @@ async function repairSqlForTab(tab: QueryWorkspaceTab) {
   if (tab.aiGenerating) {
     return;
   }
+  let thinkingMessage: QueryChatMessage | undefined;
   tab.aiGenerating = true;
   try {
     const promptText = `请修复以下 SQL 执行错误。\n错误信息：${errorMessage}\n\nSQL:\n${failedSql}`;
     const userMessage = appendUserChatMessage(tab, promptText, 'repair');
+    thinkingMessage = appendAssistantThinkingMessage(tab, 'repair');
     const repaired = await postApi<AiRepairVO>('/api/ai/query/repair', {
       connectionId: tab.connectionId,
       sessionId: tab.sessionId,
@@ -7372,6 +7528,10 @@ async function repairSqlForTab(tab: QueryWorkspaceTab) {
       repairedSql,
       'repair',
       assistantContent,
+      undefined,
+      undefined,
+      undefined,
+      thinkingMessage,
     );
     await saveConversationHistoryOnce(tab, userMessage, promptText, repairedSql, {
       actionType: 'repair',
@@ -7384,6 +7544,7 @@ async function repairSqlForTab(tab: QueryWorkspaceTab) {
     touchQueryTab(tab);
     message.success(repaired.repairNote || 'Repair suggestion generated.');
   } catch (error) {
+    removeQueryChatMessage(tab, thinkingMessage);
     const errMsg = error instanceof Error ? error.message : String(error);
     message.error(errMsg);
   } finally {
@@ -8210,12 +8371,16 @@ function fillAiConfigForm(config: AiConfigVO) {
 function defaultRagConfigForm(): RagConfigSaveReq {
   return {
     ragEmbeddingModelDir: '',
+    ragRerankEnabled: false,
+    ragRerankModelDir: '',
   };
 }
 
 function fillRagConfigForm(config: RagConfigVO) {
   Object.assign(ragConfigForm, {
     ragEmbeddingModelDir: config.ragEmbeddingModelDir || '',
+    ragRerankEnabled: config.ragRerankEnabled === true,
+    ragRerankModelDir: config.ragRerankModelDir || '',
   } satisfies RagConfigSaveReq);
 }
 
