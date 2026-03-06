@@ -68,6 +68,11 @@ rag:
     alpha: 0.65
     beta: 0.30
     gamma: 0.05
+    model-dir: ./models/rerank
+    model-file-name: rerank.onnx
+    feature-size: 6
+    execution-provider: AUTO
+    cuda-device-id: 0
   sql-fragment:
     enabled: true
     max-count: 8

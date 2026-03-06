@@ -2,6 +2,7 @@ package com.sqlcopilot.studio.service.rag.impl;
 
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
 import com.sqlcopilot.studio.service.rag.RagEmbeddingService;
+import com.sqlcopilot.studio.service.rag.RagRerankService;
 import com.sqlcopilot.studio.service.rag.RagRetrievalService;
 import com.sqlcopilot.studio.service.rag.model.QdrantScoredPoint;
 import com.sqlcopilot.studio.service.rag.model.RagCollectionNames;
@@ -21,6 +22,7 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
     private final boolean ragEnabled;
     private final RagEmbeddingService ragEmbeddingService;
     private final QdrantClientService qdrantClientService;
+    private final RagRerankService ragRerankService;
     private final RagCollectionNames collectionNames;
     private final int schemaTableLimit;
     private final int schemaColumnLimit;
@@ -49,7 +51,8 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
                                    @Value("${rag.rerank.beta:0.30}") double betaOnnxScore,
                                    @Value("${rag.rerank.gamma:0.05}") double gammaRuleBonus,
                                    RagEmbeddingService ragEmbeddingService,
-                                   QdrantClientService qdrantClientService) {
+                                   QdrantClientService qdrantClientService,
+                                   RagRerankService ragRerankService) {
         this.ragEnabled = ragEnabled;
         this.collectionNames = new RagCollectionNames(
             schemaTableCollection,
@@ -70,13 +73,14 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         this.gammaRuleBonus = gammaRuleBonus;
         this.ragEmbeddingService = ragEmbeddingService;
         this.qdrantClientService = qdrantClientService;
+        this.ragRerankService = ragRerankService;
     }
 
     @Override
     public RagPromptContext retrievePromptContext(Long connectionId, String databaseName, String userInput) {
         String normalizedDatabaseName = normalizeDatabaseName(databaseName);
         log.info(
-            "[RAG-RETRIEVE-REQ] connectionId={}, databaseName={}, inputLength={}, ragEnabled={}, schemaTableLimit={}, schemaColumnLimit={}, sqlHistoryLimit={}, metricTermLimit={}, exampleSqlLimit={}, rerankEnabled={}",
+            "[RAG-RETRIEVE-REQ] connectionId={}, databaseName={}, inputLength={}, ragEnabled={}, schemaTableLimit={}, schemaColumnLimit={}, sqlHistoryLimit={}, metricTermLimit={}, exampleSqlLimit={}, rerankEnabled={}, rerankProvider={}",
             connectionId,
             normalizedDatabaseName,
             Objects.toString(userInput, "").trim().length(),
@@ -86,7 +90,8 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             sqlHistoryLimit,
             metricTermLimit,
             exampleSqlLimit,
-            rerankEnabled
+            rerankEnabled,
+            ragRerankService.getRuntimeProvider()
         );
 
         RagPromptContext empty = emptyContext();
@@ -415,13 +420,18 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         if (!rerankEnabled) {
             return hits;
         }
-        double queryTimeBonus = containsTimeSignal(userInput) ? 0.05 : 0.0;
+
+        List<Double> onnxScores = ragRerankService.score(userInput, bucket, hits);
+        boolean onnxAvailable = onnxScores.size() == hits.size();
         List<ScoredHit> rescored = new ArrayList<>(hits.size());
-        for (QdrantScoredPoint hit : hits) {
+        for (int i = 0; i < hits.size(); i++) {
+            QdrantScoredPoint hit = hits.get(i);
             double vectorScore = hit.getScore() == null ? 0.0 : hit.getScore();
-            double schemaBonus = resolveSchemaBonus(bucket, hit.getPayload());
-            double onnxProxy = Math.min(1.0, vectorScore + schemaBonus * 0.2 + queryTimeBonus);
-            double finalScore = alphaVectorScore * vectorScore + betaOnnxScore * onnxProxy + gammaRuleBonus * schemaBonus;
+            double ruleBonus = resolveRuleBonus(userInput, bucket, hit.getPayload());
+            double onnxScore = onnxAvailable
+                ? clip01(onnxScores.get(i))
+                : clip01(vectorScore + ruleBonus * 0.2);
+            double finalScore = alphaVectorScore * vectorScore + betaOnnxScore * onnxScore + gammaRuleBonus * ruleBonus;
             rescored.add(new ScoredHit(hit, finalScore));
         }
         rescored.sort(Comparator.comparingDouble(ScoredHit::score).reversed());
@@ -432,17 +442,26 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         return sorted;
     }
 
-    private double resolveSchemaBonus(String bucket, Map<String, Object> payload) {
+    private double resolveRuleBonus(String userInput, String bucket, Map<String, Object> payload) {
         if (payload == null) {
             return 0.0;
         }
-        return switch (bucket) {
+        double schemaBonus = switch (bucket) {
             case "table" -> isBlank(payloadString(payload, "table_name")) ? 0.0 : 1.0;
             case "column" -> (!isBlank(payloadString(payload, "table_name")) && !isBlank(payloadString(payload, "column_name"))) ? 1.0 : 0.0;
             case "metric_term" -> isBlank(payloadString(payload, "metric_expression")) ? 0.2 : 1.0;
             case "example_sql", "query_history" -> isBlank(payloadString(payload, "sql_text")) ? 0.3 : 1.0;
             default -> 0.0;
         };
+        double timeBonus = containsTimeSignal(userInput) ? 0.2 : 0.0;
+        return clip01(schemaBonus + timeBonus);
+    }
+
+    private double clip01(double score) {
+        if (score < 0.0) {
+            return 0.0;
+        }
+        return Math.min(1.0, score);
     }
 
     private boolean containsTimeSignal(String text) {

@@ -84,3 +84,21 @@
   - 该段落复用 `buildRetrievalInputForRag(req)`，因此在会话记忆开启时会自动携带会话窗口摘要与向量记忆召回内容。
 - 结果：
   - 向量召回阶段与 LLM 生成阶段使用一致的增强上下文输入语义，减少多轮场景下信息偏差。
+
+## 追加记录（2026-03-06）- 本地 ONNX rerank 落地
+
+- 根据反馈将原“onnx_proxy 重排骨架”升级为**本地 ONNX rerank 实现**，并保持可降级。
+- 新增服务：
+  - `RagRerankService`
+  - `OnnxLocalRerankServiceImpl`
+- 实现要点：
+  - 参考本地向量化 ONNX 运行方式，使用 ONNX Runtime 在本地加载 `rag.rerank.model-dir/model-file-name`。
+  - 支持 provider 配置（AUTO/CPU/CUDA）与 CUDA 自动回退 CPU。
+  - 按桶构造特征（vector_score/schema_hit/time_signal/hit_coverage/recency_decay/bucket_code）并送入 ONNX 模型推理。
+  - 兼容输出 `float[]/float[][]`，统一归一化为 `[0,1]` 评分。
+  - 模型缺失或运行失败时返回空评分，由检索层自动降级到“向量分+规则分”。
+- 检索融合公式保持：
+  - `final = α * vector_score + β * onnx_rerank_score + γ * rule_bonus`。
+- 额外改动：
+  - `RagRetrievalServiceImpl` 改为依赖 `RagRerankService`，并在请求日志中输出 rerank runtime provider。
+  - `application.yml` 增加 rerank 模型与运行时配置项。
