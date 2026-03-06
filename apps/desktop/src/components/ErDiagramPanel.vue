@@ -96,6 +96,7 @@
             @mousedown.stop.prevent="onRouteAnchorMouseDown(activeRelationHandle.relationKey, 'target', $event)"
           />
           <circle
+            v-if="!isStraightLineMode"
             class="er-route-handle"
             :cx="activeRelationHandle.x"
             :cy="activeRelationHandle.y"
@@ -112,7 +113,10 @@
         v-for="table in tableViews"
         :key="table.key"
         class="er-table-card"
-        :class="{'is-dragging': dragState.kind === 'node' && dragState.tableKey === table.key}"
+        :class="{
+          'is-dragging': dragState.kind === 'node' && dragState.tableKey === table.key,
+          'is-show-comments': showComments,
+        }"
         :style="{
           width: `${table.width}px`,
           height: `${table.height}px`,
@@ -143,7 +147,7 @@
               <span v-else-if="field.indexed" class="er-field-mark er-field-mark-idx">IDX</span>
             </span>
             <span class="er-table-field-type">{{ field.dataType || '-' }}</span>
-            <span v-if="showComments && field.columnComment" class="er-table-field-comment">{{ field.columnComment }}</span>
+            <span v-if="showComments" class="er-table-field-comment">{{ field.columnComment || '-' }}</span>
           </div>
           <div v-if="table.moreCount > 0" class="er-table-more">{{ table.moreCount }} more columns...</div>
         </div>
@@ -184,9 +188,14 @@ interface ViewportState {
   offsetY: number;
 }
 
+interface LayoutCanvasState {
+  width: number;
+  height: number;
+}
+
 interface RouteAnchorOffsets {
-  sourceOffsetY?: number;
-  targetOffsetY?: number;
+  sourcePerimeterPos?: number;
+  targetPerimeterPos?: number;
 }
 
 interface RelationViewModel {
@@ -201,6 +210,7 @@ interface RelationViewModel {
   targetX: number;
   targetY: number;
   laneX: number;
+  points: NodePosition[];
   pointsText: string;
   strokeColor: string;
   strokeWidth: number;
@@ -241,15 +251,19 @@ interface TableViewModel {
 }
 
 type RelationDirection = 'SOURCE_TO_TARGET' | 'TARGET_TO_SOURCE' | 'BIDIRECTIONAL';
+type RelationLineType = 'POLYLINE' | 'STRAIGHT';
+type AnchorSide = 'top' | 'right' | 'bottom' | 'left';
 type RouteAnchorRole = '' | 'source' | 'target';
 type DragKind = 'none' | 'pan' | 'node' | 'route' | 'route-anchor';
 
 const props = withDefaults(defineProps<{
   graph: ErGraphVO | null;
   layoutMode?: ErLayoutMode;
+  lineType?: RelationLineType;
   showComments?: boolean;
 }>(), {
   layoutMode: 'GRID',
+  lineType: 'POLYLINE',
   showComments: false,
 });
 
@@ -257,7 +271,8 @@ const emit = defineEmits<{
   (e: 'relation-route-change', payload: RelationRouteChangePayload): void;
 }>();
 
-const NODE_WIDTH = 226;
+const NODE_WIDTH_COMPACT = 226;
+const NODE_WIDTH_WITH_COMMENTS = 320;
 const NODE_TITLE_HEIGHT = 24;
 const NODE_SUBTITLE_HEIGHT = 18;
 const NODE_ROW_HEIGHT = 15;
@@ -268,6 +283,7 @@ const NODE_BODY_BOTTOM_PADDING = 7;
 const NODE_HORIZONTAL_GAP = 16;
 const NODE_VERTICAL_GAP = 18;
 const ORTHOGONAL_LANE_GAP = 22;
+const ANCHOR_STUB_LENGTH = 14;
 
 const MIN_SCALE = 0.35;
 const MAX_SCALE = 2.5;
@@ -282,6 +298,11 @@ const viewport = reactive<ViewportState>({
   scale: 1,
   offsetX: 0,
   offsetY: 0,
+});
+
+const layoutCanvas = reactive<LayoutCanvasState>({
+  width: 0,
+  height: 0,
 });
 
 const manualNodePositions = reactive<Record<string, NodePosition>>({});
@@ -312,7 +333,6 @@ const dragState = reactive({
   relationKey: '',
   routeLaneX: 0,
   routeAnchorRole: '' as RouteAnchorRole,
-  routeAnchorOffsetY: 0,
 });
 
 let resizeObserver: ResizeObserver | null = null;
@@ -320,6 +340,7 @@ let lastLayoutModeKey = '';
 let lastTableSignature = '';
 
 const showComments = computed(() => props.showComments === true);
+const isStraightLineMode = computed(() => props.lineType === 'STRAIGHT');
 
 function subtitleHeight() {
   return showComments.value ? NODE_SUBTITLE_HEIGHT : 0;
@@ -329,8 +350,25 @@ function headerHeight() {
   return NODE_TITLE_HEIGHT + subtitleHeight();
 }
 
+function nodeCardWidth() {
+  return showComments.value ? NODE_WIDTH_WITH_COMMENTS : NODE_WIDTH_COMPACT;
+}
+
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
+}
+
+function anchorOutwardVector(side: AnchorSide) {
+  if (side === 'top') {
+    return {dx: 0, dy: -1};
+  }
+  if (side === 'right') {
+    return {dx: 1, dy: 0};
+  }
+  if (side === 'bottom') {
+    return {dx: 0, dy: 1};
+  }
+  return {dx: -1, dy: 0};
 }
 
 function safeText(text: string | null | undefined) {
@@ -456,6 +494,88 @@ function resolveAnchorOffsetBounds(table: TableViewModel) {
   };
 }
 
+function normalizePerimeterPos(raw: number) {
+  if (!Number.isFinite(raw)) {
+    return 0;
+  }
+  return ((raw % 1) + 1) % 1;
+}
+
+function resolvePointByPerimeterPos(table: TableViewModel, rawPerimeterPos: number) {
+  const width = Math.max(1, table.width);
+  const height = Math.max(1, table.height);
+  const perimeter = (width + height) * 2;
+  if (!Number.isFinite(perimeter) || perimeter <= 0) {
+    return {x: table.centerX, y: table.centerY, side: 'right' as AnchorSide};
+  }
+  const perimeterPos = normalizePerimeterPos(rawPerimeterPos);
+  const distance = perimeterPos * perimeter;
+  const left = table.left;
+  const top = table.top;
+  const right = table.left + width;
+  const bottom = table.top + height;
+
+  if (distance <= width) {
+    return {x: left + distance, y: top, side: 'top' as AnchorSide};
+  }
+  if (distance <= width + height) {
+    return {x: right, y: top + (distance - width), side: 'right' as AnchorSide};
+  }
+  if (distance <= (width * 2) + height) {
+    return {x: right - (distance - width - height), y: bottom, side: 'bottom' as AnchorSide};
+  }
+  return {x: left, y: bottom - (distance - (width * 2) - height), side: 'left' as AnchorSide};
+}
+
+function projectPointToTablePerimeter(table: TableViewModel, x: number, y: number) {
+  type PerimeterCandidate = {side: AnchorSide; x: number; y: number};
+  const left = table.left;
+  const top = table.top;
+  const right = table.left + table.width;
+  const bottom = table.top + table.height;
+  const clampX = clamp(x, left, right);
+  const clampY = clamp(y, top, bottom);
+  const candidates: PerimeterCandidate[] = [
+    {side: 'top', x: clampX, y: top},
+    {side: 'right', x: right, y: clampY},
+    {side: 'bottom', x: clampX, y: bottom},
+    {side: 'left', x: left, y: clampY},
+  ];
+
+  let selected: PerimeterCandidate = candidates[0];
+  let minDistance2 = Number.POSITIVE_INFINITY;
+  candidates.forEach((candidate) => {
+    const dx = x - candidate.x;
+    const dy = y - candidate.y;
+    const distance2 = (dx * dx) + (dy * dy);
+    if (distance2 < minDistance2) {
+      minDistance2 = distance2;
+      selected = candidate;
+    }
+  });
+
+  const width = Math.max(1, table.width);
+  const height = Math.max(1, table.height);
+  const perimeter = (width + height) * 2;
+  let distance = 0;
+  if (selected.side === 'top') {
+    distance = selected.x - left;
+  } else if (selected.side === 'right') {
+    distance = width + (selected.y - top);
+  } else if (selected.side === 'bottom') {
+    distance = width + height + (right - selected.x);
+  } else {
+    distance = (width * 2) + height + (bottom - selected.y);
+  }
+
+  return {
+    x: selected.x,
+    y: selected.y,
+    side: selected.side,
+    perimeterPos: perimeter > 0 ? (distance / perimeter) : 0,
+  };
+}
+
 function resolveAdaptiveAnchorY(
   table: TableViewModel,
   oppositeCenterY: number,
@@ -475,23 +595,23 @@ function resolveAdaptiveAnchorY(
   return clamp(baseY + hashFactor * jitterRange, minY, maxY);
 }
 
-function buildGridPositions(tables: ErTableNodeVO[], canvasWidth: number): Record<string, NodePosition> {
+function buildGridPositions(tables: ErTableNodeVO[], canvasWidth: number, cardWidth: number): Record<string, NodePosition> {
   const positions: Record<string, NodePosition> = {};
   const paddingLeft = 24;
   const paddingTop = 24;
   const availableWidth = Math.max(1, canvasWidth - paddingLeft * 2 + NODE_HORIZONTAL_GAP);
-  const columnCount = clamp(Math.floor(availableWidth / (NODE_WIDTH + NODE_HORIZONTAL_GAP)), 1, 8);
+  const columnCount = clamp(Math.floor(availableWidth / (cardWidth + NODE_HORIZONTAL_GAP)), 1, 8);
   let currentY = paddingTop;
 
   for (let row = 0; row * columnCount < tables.length; row += 1) {
     const rowStart = row * columnCount;
     const rowTables = tables.slice(rowStart, rowStart + columnCount);
     const rowMaxHeight = Math.max(...rowTables.map((table) => nodeHeight(table)));
-    const rowWidth = rowTables.length * NODE_WIDTH + (rowTables.length - 1) * NODE_HORIZONTAL_GAP;
+    const rowWidth = rowTables.length * cardWidth + (rowTables.length - 1) * NODE_HORIZONTAL_GAP;
     const startX = Math.max(paddingLeft, (canvasWidth - rowWidth) / 2);
     rowTables.forEach((table, col) => {
       positions[normalizeIdentifier(table.tableName)] = {
-        x: startX + col * (NODE_WIDTH + NODE_HORIZONTAL_GAP) + NODE_WIDTH / 2,
+        x: startX + col * (cardWidth + NODE_HORIZONTAL_GAP) + cardWidth / 2,
         y: currentY + rowMaxHeight / 2,
       };
     });
@@ -500,7 +620,12 @@ function buildGridPositions(tables: ErTableNodeVO[], canvasWidth: number): Recor
   return positions;
 }
 
-function buildCirclePositions(tables: ErTableNodeVO[], canvasWidth: number, canvasHeight: number): Record<string, NodePosition> {
+function buildCirclePositions(
+  tables: ErTableNodeVO[],
+  canvasWidth: number,
+  canvasHeight: number,
+  cardWidth: number,
+): Record<string, NodePosition> {
   const positions: Record<string, NodePosition> = {};
   const centerX = canvasWidth / 2;
   const centerY = canvasHeight / 2;
@@ -509,7 +634,7 @@ function buildCirclePositions(tables: ErTableNodeVO[], canvasWidth: number, canv
     return positions;
   }
   const maxNodeHeight = Math.max(...tables.map((table) => nodeHeight(table)));
-  const radius = Math.max(100, Math.min(canvasWidth, canvasHeight) / 2 - Math.max(NODE_WIDTH, maxNodeHeight) / 2 - 30);
+  const radius = Math.max(100, Math.min(canvasWidth, canvasHeight) / 2 - Math.max(cardWidth, maxNodeHeight) / 2 - 30);
   tables.forEach((table, index) => {
     const angle = (-Math.PI / 2) + (Math.PI * 2 * index) / tables.length;
     positions[normalizeIdentifier(table.tableName)] = {
@@ -618,15 +743,16 @@ function buildNodePositions(
   layoutMode: ErLayoutMode,
   canvasWidth: number,
   canvasHeight: number,
+  cardWidth: number,
 ) {
   const mode = normalizeLayoutMode(layoutMode);
   if (mode === 'CIRCLE') {
-    return buildCirclePositions(tables, canvasWidth, canvasHeight);
+    return buildCirclePositions(tables, canvasWidth, canvasHeight, cardWidth);
   }
   if (mode === 'HIERARCHICAL') {
     return buildHierarchicalPositions(tables, relations, canvasWidth, canvasHeight);
   }
-  return buildGridPositions(tables, canvasWidth);
+  return buildGridPositions(tables, canvasWidth, cardWidth);
 }
 
 function tableSignature(graph: ErGraphVO | null) {
@@ -661,9 +787,16 @@ const defaultNodeCenters = computed<Record<string, NodePosition>>(() => {
   if (!graph?.tables?.length) {
     return {};
   }
-  const width = Math.max(640, viewport.width || 640);
-  const height = Math.max(420, viewport.height || 420);
-  return buildNodePositions(graph.tables, allRelations.value, normalizeLayoutMode(props.layoutMode), width, height);
+  const width = Math.max(640, layoutCanvas.width || 640);
+  const height = Math.max(420, layoutCanvas.height || 420);
+  return buildNodePositions(
+    graph.tables,
+    allRelations.value,
+    normalizeLayoutMode(props.layoutMode),
+    width,
+    height,
+    nodeCardWidth(),
+  );
 });
 
 const tableViews = computed<TableViewModel[]>(() => {
@@ -676,6 +809,7 @@ const tableViews = computed<TableViewModel[]>(() => {
     const defaultCenter = defaultNodeCenters.value[key] || {x: 160, y: 120};
     const center = manualNodePositions[key] || defaultCenter;
     const height = nodeHeight(table);
+    const width = nodeCardWidth();
     const columns = table.columns || [];
     const displayColumns = columns.slice(0, NODE_MAX_COLUMNS).map((column) => {
       const columnName = safeText(column.columnName) || '-';
@@ -698,9 +832,9 @@ const tableViews = computed<TableViewModel[]>(() => {
       key,
       tableName: table.tableName,
       tableComment: safeText(table.tableComment),
-      width: NODE_WIDTH,
+      width,
       height,
-      left: center.x - NODE_WIDTH / 2,
+      left: center.x - width / 2,
       top: center.y - height / 2,
       centerX: center.x,
       centerY: center.y,
@@ -733,24 +867,46 @@ const relationViews = computed<RelationViewModel[]>(() => {
       const relationKey = buildRelationKey(relation);
       const direction = normalizeRelationDirection(relation.relationDirection);
       const sourceTargetCenterDeltaX = Math.abs(sourceTable.centerX - targetTable.centerX);
-      const useSameSideAnchor = sourceTargetCenterDeltaX < NODE_WIDTH * 0.72;
-      const sameSideAnchorOnRight = sourceTable.centerX <= Math.max(viewport.width, 1) / 2;
+      const useSameSideAnchor = sourceTargetCenterDeltaX < Math.min(sourceTable.width, targetTable.width) * 0.72;
+      const sameSideAnchorOnRight = sourceTable.centerX <= Math.max(layoutCanvas.width, 1) / 2;
       const sourceOnRight = useSameSideAnchor ? sameSideAnchorOnRight : (targetTable.centerX >= sourceTable.centerX);
       const targetOnRight = useSameSideAnchor ? sameSideAnchorOnRight : (sourceTable.centerX > targetTable.centerX);
-
-      const sourceX = sourceTable.left + (sourceOnRight ? sourceTable.width : 0);
-      const targetX = targetTable.left + (targetOnRight ? targetTable.width : 0);
       const sourceBounds = resolveAnchorOffsetBounds(sourceTable);
       const targetBounds = resolveAnchorOffsetBounds(targetTable);
       const manualAnchor = manualRouteAnchorOffsets[relationKey] || {};
-      const sourceOffsetY = Number.isFinite(manualAnchor.sourceOffsetY)
-        ? clamp(Number(manualAnchor.sourceOffsetY), sourceBounds.minY, sourceBounds.maxY)
-        : (resolveAdaptiveAnchorY(sourceTable, targetTable.centerY, relationKey, 'source') - sourceTable.top);
-      const targetOffsetY = Number.isFinite(manualAnchor.targetOffsetY)
-        ? clamp(Number(manualAnchor.targetOffsetY), targetBounds.minY, targetBounds.maxY)
-        : (resolveAdaptiveAnchorY(targetTable, sourceTable.centerY, relationKey, 'target') - targetTable.top);
-      const sourceY = sourceTable.top + sourceOffsetY;
-      const targetY = targetTable.top + targetOffsetY;
+      const sourcePoint = Number.isFinite(manualAnchor.sourcePerimeterPos)
+        ? resolvePointByPerimeterPos(sourceTable, Number(manualAnchor.sourcePerimeterPos))
+        : {
+          x: sourceTable.left + (sourceOnRight ? sourceTable.width : 0),
+          y: sourceTable.top + clamp(
+            resolveAdaptiveAnchorY(sourceTable, targetTable.centerY, relationKey, 'source') - sourceTable.top,
+            sourceBounds.minY,
+            sourceBounds.maxY,
+          ),
+          side: sourceOnRight ? 'right' as AnchorSide : 'left' as AnchorSide,
+        };
+      const targetPoint = Number.isFinite(manualAnchor.targetPerimeterPos)
+        ? resolvePointByPerimeterPos(targetTable, Number(manualAnchor.targetPerimeterPos))
+        : {
+          x: targetTable.left + (targetOnRight ? targetTable.width : 0),
+          y: targetTable.top + clamp(
+            resolveAdaptiveAnchorY(targetTable, sourceTable.centerY, relationKey, 'target') - targetTable.top,
+            targetBounds.minY,
+            targetBounds.maxY,
+          ),
+          side: targetOnRight ? 'right' as AnchorSide : 'left' as AnchorSide,
+        };
+
+      const sourceX = sourcePoint.x;
+      const sourceY = sourcePoint.y;
+      const targetX = targetPoint.x;
+      const targetY = targetPoint.y;
+      const sourceVector = anchorOutwardVector(sourcePoint.side);
+      const targetVector = anchorOutwardVector(targetPoint.side);
+      const sourceGuideX = sourceX + sourceVector.dx * ANCHOR_STUB_LENGTH;
+      const sourceGuideY = sourceY + sourceVector.dy * ANCHOR_STUB_LENGTH;
+      const targetGuideX = targetX + targetVector.dx * ANCHOR_STUB_LENGTH;
+      const targetGuideY = targetY + targetVector.dy * ANCHOR_STUB_LENGTH;
 
       const autoLaneX = sourceOnRight === targetOnRight
         ? (sourceOnRight ? Math.max(sourceX, targetX) + ORTHOGONAL_LANE_GAP : Math.min(sourceX, targetX) - ORTHOGONAL_LANE_GAP)
@@ -760,12 +916,21 @@ const relationViews = computed<RelationViewModel[]>(() => {
         ? Number(manualRouteLaneX[relationKey])
         : ((relation.routeManual === true && Number.isFinite(graphLaneX)) ? graphLaneX : autoLaneX);
 
-      const points = [
-        [sourceX, sourceY],
-        [laneX, sourceY],
-        [laneX, targetY],
-        [targetX, targetY],
-      ];
+      const points: NodePosition[] = isStraightLineMode.value
+        ? [
+          {x: sourceX, y: sourceY},
+          {x: targetX, y: targetY},
+        ]
+        : [
+          {x: sourceX, y: sourceY},
+          {x: sourceGuideX, y: sourceGuideY},
+          {x: laneX, y: sourceGuideY},
+          {x: laneX, y: targetGuideY},
+          {x: targetGuideX, y: targetGuideY},
+          {x: targetX, y: targetY},
+        ];
+      const confidenceX = isStraightLineMode.value ? ((sourceX + targetX) / 2 + 6) : (laneX + 6);
+      const confidenceY = isStraightLineMode.value ? ((sourceY + targetY) / 2) : ((sourceGuideY + targetGuideY) / 2);
 
       const isAi = normalizeRelationType(relation.relationType) === 'AI_INFERRED';
       const confidence = normalizeConfidence(relation.confidence);
@@ -788,7 +953,8 @@ const relationViews = computed<RelationViewModel[]>(() => {
         targetX,
         targetY,
         laneX,
-        pointsText: points.map((item) => `${item[0]},${item[1]}`).join(' '),
+        points,
+        pointsText: points.map((item) => `${item.x},${item.y}`).join(' '),
         strokeColor: isHighlighted ? hoverColor : baseColor,
         strokeWidth: isHighlighted ? (isAi ? 3.2 : 3.4) : (isAi ? 1.9 : 2.2),
         dashArray: '',
@@ -798,8 +964,8 @@ const relationViews = computed<RelationViewModel[]>(() => {
         isActive,
         isAi,
         confidenceText,
-        confidenceX: laneX + 6,
-        confidenceY: (sourceY + targetY) / 2,
+        confidenceX,
+        confidenceY,
       };
     })
     .filter((item): item is RelationViewModel => !!item);
@@ -957,6 +1123,10 @@ function initViewportSize() {
   }
   viewport.width = Math.max(320, root.clientWidth || 0);
   viewport.height = Math.max(240, root.clientHeight || 0);
+  if (layoutCanvas.width <= 0 || layoutCanvas.height <= 0) {
+    layoutCanvas.width = Math.max(640, viewport.width || 640);
+    layoutCanvas.height = Math.max(420, viewport.height || 420);
+  }
 }
 
 function maybeResetLayoutState() {
@@ -1022,7 +1192,6 @@ function endDrag() {
   dragState.tableKey = '';
   dragState.relationKey = '';
   dragState.routeAnchorRole = '';
-  dragState.routeAnchorOffsetY = 0;
   stopWindowDragListeners();
 }
 
@@ -1080,6 +1249,9 @@ function onRouteHandleMouseDown(handle: {relationKey: string; x: number; y: numb
   if (event.button !== 0) {
     return;
   }
+  if (isStraightLineMode.value) {
+    return;
+  }
   const world = toWorldByClient(event.clientX, event.clientY);
   dragState.kind = 'route';
   dragState.relationKey = handle.relationKey;
@@ -1094,25 +1266,12 @@ function onRouteAnchorMouseDown(relationKey: string, anchorRole: Exclude<RouteAn
   if (event.button !== 0) {
     return;
   }
-  const relation = relationViews.value.find((item) => item.relationKey === relationKey);
-  if (!relation) {
-    return;
-  }
   const world = toWorldByClient(event.clientX, event.clientY);
-  const table = anchorRole === 'source'
-    ? tableMap.value.get(relation.sourceTableKey)
-    : tableMap.value.get(relation.targetTableKey);
-  if (!table) {
-    return;
-  }
   dragState.kind = 'route-anchor';
   dragState.relationKey = relationKey;
   dragState.routeAnchorRole = anchorRole;
   dragState.startWorldX = world.x;
   dragState.startWorldY = world.y;
-  dragState.routeAnchorOffsetY = anchorRole === 'source'
-    ? (relation.sourceY - table.top)
-    : (relation.targetY - table.top);
   hideTooltip();
   startWindowDragListeners();
 }
@@ -1158,16 +1317,11 @@ function onWindowMouseMove(event: MouseEvent) {
       hideTooltip();
       return;
     }
-    const bounds = resolveAnchorOffsetBounds(table);
-    const nextOffsetY = clamp(
-      dragState.routeAnchorOffsetY + (world.y - dragState.startWorldY),
-      bounds.minY,
-      bounds.maxY,
-    );
+    const projected = projectPointToTablePerimeter(table, world.x, world.y);
     const existing = manualRouteAnchorOffsets[relation.relationKey] || {};
     manualRouteAnchorOffsets[relation.relationKey] = {
-      sourceOffsetY: dragState.routeAnchorRole === 'source' ? nextOffsetY : existing.sourceOffsetY,
-      targetOffsetY: dragState.routeAnchorRole === 'target' ? nextOffsetY : existing.targetOffsetY,
+      sourcePerimeterPos: dragState.routeAnchorRole === 'source' ? projected.perimeterPos : existing.sourcePerimeterPos,
+      targetPerimeterPos: dragState.routeAnchorRole === 'target' ? projected.perimeterPos : existing.targetPerimeterPos,
     };
     hideTooltip();
   }
@@ -1235,6 +1389,10 @@ function onRelationMouseDown(relation: RelationViewModel, event: MouseEvent) {
   }
   event.stopPropagation();
   activeRelationKey.value = relation.relationKey;
+  if (isStraightLineMode.value) {
+    hideTooltip();
+    return;
+  }
   const world = toWorldByClient(event.clientX, event.clientY);
   dragState.kind = 'route';
   dragState.relationKey = relation.relationKey;
@@ -1353,12 +1511,7 @@ async function exportPngDataUrl(options?: ExportPngOptions) {
   }
 
   relationViews.value.forEach((relation) => {
-    const points = [
-      worldToScreen({x: relation.sourceX, y: relation.sourceY}),
-      worldToScreen({x: relation.laneX, y: relation.sourceY}),
-      worldToScreen({x: relation.laneX, y: relation.targetY}),
-      worldToScreen({x: relation.targetX, y: relation.targetY}),
-    ];
+    const points = relation.points.map((point) => worldToScreen(point));
 
     ctx.save();
     ctx.strokeStyle = relation.strokeColor;
@@ -1635,6 +1788,10 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
+.er-table-card.is-show-comments .er-table-field-row {
+  grid-template-columns: minmax(0, 104px) 30px minmax(0, 58px) minmax(0, 1fr);
+}
+
 .er-table-field-row.is-relation-endpoint {
   background: rgba(255, 202, 106, 0.23);
 }
@@ -1753,7 +1910,7 @@ onBeforeUnmount(() => {
 .er-route-handle-endpoint {
   fill: #ffe6a8;
   stroke: #a36500;
-  cursor: ns-resize;
+  cursor: move;
 }
 
 .er-float-tooltip {
