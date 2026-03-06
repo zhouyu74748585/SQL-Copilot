@@ -17,6 +17,12 @@ public class RagCollectionNames {
     /** SQL 历史语义集合。 */
     private String sqlHistory;
 
+    /** 指标术语语义集合。 */
+    private String metricTerm;
+
+    /** SQL 样例语义集合。 */
+    private String exampleSql;
+
     /** SQL 片段语义集合。 */
     private String sqlFragment;
 }

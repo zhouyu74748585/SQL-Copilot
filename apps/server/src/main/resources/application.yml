@@ -38,6 +38,8 @@ rag:
     schema-table: schema_table
     schema-column: schema_column
     sql-history: sql_history
+    metric-term: metric_term
+    example-sql: example_sql
     sql-fragment: sql_fragment
   embedding:
     model-file-name: model_optimized.onnx
@@ -59,6 +61,18 @@ rag:
     schema-table-limit: 10
     schema-column-limit: 20
     sql-history-limit: 8
+    metric-term-limit: 6
+    example-sql-limit: 6
+  rerank:
+    enabled: false
+    alpha: 0.65
+    beta: 0.30
+    gamma: 0.05
+    model-dir: ./models/rerank
+    model-file-name: rerank.onnx
+    feature-size: 6
+    execution-provider: AUTO
+    cuda-device-id: 0
   sql-fragment:
     enabled: true
     max-count: 8

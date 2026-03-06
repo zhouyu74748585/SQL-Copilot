@@ -56,6 +56,8 @@ public class RagIngestionServiceImpl implements RagIngestionService {
                                    @Value("${rag.collection.schema-table:schema_table}") String schemaTableCollection,
                                    @Value("${rag.collection.schema-column:schema_column}") String schemaColumnCollection,
                                    @Value("${rag.collection.sql-history:sql_history}") String sqlHistoryCollection,
+                                   @Value("${rag.collection.metric-term:metric_term}") String metricTermCollection,
+                                   @Value("${rag.collection.example-sql:example_sql}") String exampleSqlCollection,
                                    @Value("${rag.collection.sql-fragment:sql_fragment}") String sqlFragmentCollection,
                                    @Value("${rag.sql-fragment.enabled:true}") boolean sqlFragmentEnabled,
                                    @Value("${rag.sql-fragment.max-count:8}") int sqlFragmentMaxCount,
@@ -78,6 +80,8 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             schemaTableCollection,
             schemaColumnCollection,
             sqlHistoryCollection,
+            metricTermCollection,
+            exampleSqlCollection,
             sqlFragmentCollection
         );
     }
