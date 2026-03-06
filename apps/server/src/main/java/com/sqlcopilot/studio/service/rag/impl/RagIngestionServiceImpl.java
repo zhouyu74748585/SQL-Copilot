@@ -1,9 +1,16 @@
 package com.sqlcopilot.studio.service.rag.impl;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.sqlcopilot.studio.dto.ai.AiConfigVO;
+import com.sqlcopilot.studio.dto.ai.AiModelOptionVO;
 import com.sqlcopilot.studio.entity.ConnectionEntity;
 import com.sqlcopilot.studio.entity.QueryHistoryEntity;
 import com.sqlcopilot.studio.entity.SchemaColumnCacheEntity;
 import com.sqlcopilot.studio.entity.SchemaTableCacheEntity;
+import com.sqlcopilot.studio.service.AiConfigService;
 import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
 import com.sqlcopilot.studio.service.rag.RagEmbeddingService;
@@ -17,7 +24,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -35,10 +47,28 @@ public class RagIngestionServiceImpl implements RagIngestionService {
     private static final Pattern COLUMN_ALIAS_PATTERN = Pattern.compile("([a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)");
     private static final Pattern SQL_STRING_LITERAL_PATTERN = Pattern.compile("\'(?:\'\'|[^\'])*\'");
     private static final Pattern SQL_NUMBER_LITERAL_PATTERN = Pattern.compile("(?<![a-zA-Z0-9_])\\d+(?:\\.\\d+)?(?![a-zA-Z0-9_])");
+    private static final String SQL_HISTORY_SEMANTIC_SYSTEM_PROMPT = """
+        你是 SQL 历史语义标注器。请根据输入 SQL 和元数据生成严格 JSON，不要输出额外文本。
+        输出格式：
+        {
+          "semantic_description": "中文最终语义描述",
+          "business_tags": {
+            "metrics": ["..."],
+            "dimensions": ["..."],
+            "time_semantics": ["..."],
+            "chart_types": ["..."],
+            "calibers": ["..."],
+            "topics": ["..."]
+          }
+        }
+        要求：只输出最终结果，不要输出推理过程。
+        """;
 
     private final QdrantClientService qdrantClientService;
     private final RagEmbeddingService ragEmbeddingService;
     private final ConnectionService connectionService;
+    private final AiConfigService aiConfigService;
+    private final ObjectMapper objectMapper;
 
     private final boolean ragEnabled;
     private final boolean sqlFragmentEnabled;
@@ -47,11 +77,17 @@ public class RagIngestionServiceImpl implements RagIngestionService {
     private final int embeddingParallelism;
     private final int qdrantUpsertBatchSize;
     private final ExecutorService embeddingBatchExecutor;
+    private final ExecutorService sqlHistoryExecutor;
     private final RagCollectionNames collectionNames;
+    private final HttpClient httpClient = HttpClient.newBuilder()
+        .connectTimeout(Duration.ofSeconds(10))
+        .build();
 
     public RagIngestionServiceImpl(QdrantClientService qdrantClientService,
                                    RagEmbeddingService ragEmbeddingService,
                                    ConnectionService connectionService,
+                                   AiConfigService aiConfigService,
+                                   ObjectMapper objectMapper,
                                    @Value("${rag.enabled:true}") boolean ragEnabled,
                                    @Value("${rag.collection.schema-table:schema_table}") String schemaTableCollection,
                                    @Value("${rag.collection.schema-column:schema_column}") String schemaColumnCollection,
@@ -67,6 +103,8 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         this.qdrantClientService = qdrantClientService;
         this.ragEmbeddingService = ragEmbeddingService;
         this.connectionService = connectionService;
+        this.aiConfigService = aiConfigService;
+        this.objectMapper = objectMapper;
         this.ragEnabled = ragEnabled;
         this.sqlFragmentEnabled = sqlFragmentEnabled;
         this.sqlFragmentMaxCount = Math.max(1, sqlFragmentMaxCount);
@@ -76,6 +114,11 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         this.embeddingBatchExecutor = this.embeddingParallelism <= 1
             ? null
             : Executors.newFixedThreadPool(this.embeddingParallelism, new EmbeddingThreadFactory());
+        this.sqlHistoryExecutor = Executors.newSingleThreadExecutor(r -> {
+            Thread thread = new Thread(r, "rag-sql-history-worker");
+            thread.setDaemon(true);
+            return thread;
+        });
         this.collectionNames = new RagCollectionNames(
             schemaTableCollection,
             schemaColumnCollection,
@@ -91,6 +134,7 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         if (embeddingBatchExecutor != null) {
             embeddingBatchExecutor.shutdownNow();
         }
+        sqlHistoryExecutor.shutdownNow();
     }
 
     @Override
@@ -155,7 +199,11 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         if (historyEntity.getSuccessFlag() == null || historyEntity.getSuccessFlag() != 1) {
             return;
         }
+        QueryHistoryEntity snapshot = copyHistoryEntity(historyEntity);
+        sqlHistoryExecutor.submit(() -> ingestSqlHistoryInternal(snapshot));
+    }
 
+    private void ingestSqlHistoryInternal(QueryHistoryEntity historyEntity) {
         try {
             ConnectionEntity connectionEntity = connectionService.getConnectionEntity(historyEntity.getConnectionId());
             String databaseName = normalizeDatabaseName(historyEntity.getDatabaseName());
@@ -165,6 +213,15 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             String normalizedSqlText = normalizeSqlForEmbedding(historyEntity.getSqlText());
             List<String> sqlKeywordTags = extractSqlKeywordTags(historyEntity.getSqlText());
             SqlFeatureMeta featureMeta = extractSqlFeatureMeta(historyEntity.getSqlText());
+            PreciseMetadata preciseMetadata = loadPreciseMetadata(connectionEntity, databaseName, featureMeta.getTables());
+            SqlSemanticEnrichment enrichment = enrichSqlSemanticByLlm(
+                historyEntity,
+                databaseName,
+                featureMeta,
+                preciseMetadata,
+                normalizedSqlText,
+                sqlKeywordTags
+            );
 
             SqlHistoryPayload payload = new SqlHistoryPayload(
                 historyEntity.getConnectionId(),
@@ -180,7 +237,10 @@ public class RagIngestionServiceImpl implements RagIngestionService {
                 featureMeta.getJoinCount(),
                 featureMeta.getHasCte(),
                 normalizedSqlText,
-                sqlKeywordTags
+                sqlKeywordTags,
+                "history_query",
+                enrichment.semanticDescription(),
+                enrichment.tags()
             );
 
             String historyText = buildSqlHistoryDocumentText(payload);
@@ -215,6 +275,336 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         } catch (Exception ex) {
             log.warn("SQL 历史 RAG 写入失败, historyId={}, reason={}", historyEntity.getId(), ex.getMessage());
         }
+    }
+
+    private QueryHistoryEntity copyHistoryEntity(QueryHistoryEntity source) {
+        QueryHistoryEntity target = new QueryHistoryEntity();
+        target.setId(source.getId());
+        target.setConnectionId(source.getConnectionId());
+        target.setSessionId(source.getSessionId());
+        target.setPromptText(source.getPromptText());
+        target.setSqlText(source.getSqlText());
+        target.setHistoryType(source.getHistoryType());
+        target.setActionType(source.getActionType());
+        target.setAssistantContent(source.getAssistantContent());
+        target.setDatabaseName(source.getDatabaseName());
+        target.setChartConfigJson(source.getChartConfigJson());
+        target.setChartImageCacheKey(source.getChartImageCacheKey());
+        target.setStructuredContextJson(source.getStructuredContextJson());
+        target.setTokenEstimate(source.getTokenEstimate());
+        target.setMemoryEnabled(source.getMemoryEnabled());
+        target.setExecutionMs(source.getExecutionMs());
+        target.setSuccessFlag(source.getSuccessFlag());
+        target.setCreatedAt(source.getCreatedAt());
+        return target;
+    }
+
+    private PreciseMetadata loadPreciseMetadata(ConnectionEntity connectionEntity, String databaseName, List<String> tables) {
+        if (tables == null || tables.isEmpty()) {
+            return new PreciseMetadata("", false);
+        }
+        StringBuilder builder = new StringBuilder();
+        try (java.sql.Connection connection = connectionService.openTargetConnection(connectionEntity.getId())) {
+            applyDatabaseContext(connection, connectionEntity.getDbType(), databaseName);
+            java.sql.DatabaseMetaData metaData = connection.getMetaData();
+            String catalog = resolveCatalog(connection, connectionEntity.getDbType(), databaseName);
+            String schemaPattern = resolveSchemaPattern(connectionEntity.getDbType(), databaseName);
+            int tableCount = 0;
+            for (String table : tables) {
+                if (tableCount >= 8) {
+                    break;
+                }
+                String tableName = normalizeIdentifier(table);
+                if (tableName.isBlank()) {
+                    continue;
+                }
+                tableCount++;
+                Set<String> primaryKeys = readPrimaryKeys(metaData, catalog, schemaPattern, tableName);
+                Set<String> indexedColumns = readIndexedColumns(metaData, catalog, schemaPattern, tableName);
+                builder.append("- 表 ").append(tableName).append(":\n");
+                try (java.sql.ResultSet columnRs = metaData.getColumns(catalog, schemaPattern, tableName, "%")) {
+                    while (columnRs.next()) {
+                        String columnName = safeText(columnRs.getString("COLUMN_NAME"));
+                        if (columnName.isBlank()) {
+                            continue;
+                        }
+                        String dataType = safeText(columnRs.getString("TYPE_NAME"));
+                        builder.append("  - ").append(columnName).append(" ").append(dataType);
+                        if (primaryKeys.contains(columnName)) {
+                            builder.append(" [PK]");
+                        }
+                        if (indexedColumns.contains(columnName)) {
+                            builder.append(" [IDX]");
+                        }
+                        String comment = safeText(columnRs.getString("REMARKS"));
+                        if (!comment.isBlank()) {
+                            builder.append(" // ").append(comment);
+                        }
+                        builder.append('\n');
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            log.warn("SQL 历史精确元数据读取失败, connectionId={}, databaseName={}, reason={}",
+                connectionEntity.getId(), databaseName, ex.getMessage());
+        }
+        String context = builder.toString().trim();
+        return new PreciseMetadata(context, !context.isBlank());
+    }
+
+    private SqlSemanticEnrichment enrichSqlSemanticByLlm(QueryHistoryEntity historyEntity,
+                                                         String databaseName,
+                                                         SqlFeatureMeta featureMeta,
+                                                         PreciseMetadata preciseMetadata,
+                                                         String normalizedSqlText,
+                                                         List<String> sqlKeywordTags) {
+        String input = """
+            连接ID: %s
+            数据库: %s
+            用户问题: %s
+            SQL: %s
+            SQL归一化: %s
+            涉及表: %s
+            涉及列: %s
+            JOIN数量: %s
+            包含CTE: %s
+            SQL关键词: %s
+            精确元数据:
+            %s
+            """.formatted(
+            historyEntity.getConnectionId(),
+            databaseName,
+            safeText(historyEntity.getPromptText()),
+            safeText(historyEntity.getSqlText()),
+            safeText(normalizedSqlText),
+            String.join(",", featureMeta.getTables()),
+            String.join(",", featureMeta.getColumns()),
+            featureMeta.getJoinCount(),
+            featureMeta.getHasCte(),
+            String.join(",", sqlKeywordTags),
+            preciseMetadata.contextText()
+        );
+        String content = callSemanticLlm(input);
+        SqlSemanticEnrichment parsed = parseSemanticEnrichment(content);
+        if (parsed != null) {
+            return parsed;
+        }
+        return fallbackSemanticEnrichment(featureMeta, historyEntity.getSqlText(), sqlKeywordTags);
+    }
+
+    private String callSemanticLlm(String userPrompt) {
+        try {
+            AiConfigVO config = aiConfigService.getConfig();
+            List<AiModelOptionVO> options = config.getModelOptions() == null ? List.of() : config.getModelOptions();
+            AiModelOptionVO openAiOption = null;
+            for (AiModelOptionVO option : options) {
+                if (option == null) {
+                    continue;
+                }
+                if ("OPENAI".equalsIgnoreCase(safeText(option.getProviderType())) && !safeText(option.getOpenaiApiKey()).isBlank()) {
+                    openAiOption = option;
+                    break;
+                }
+            }
+            if (openAiOption == null) {
+                return "";
+            }
+            String model = safeText(openAiOption.getOpenaiModel());
+            if (model.isBlank()) {
+                model = "gpt-4.1-mini";
+            }
+            String baseUrl = safeText(openAiOption.getOpenaiBaseUrl());
+            if (baseUrl.isBlank()) {
+                baseUrl = "https://api.openai.com/v1";
+            }
+            String endpoint = stripTrailingSlash(baseUrl) + "/chat/completions";
+            ObjectNode payload = objectMapper.createObjectNode();
+            payload.put("model", model);
+            payload.put("temperature", 0.1D);
+            ArrayNode messages = payload.putArray("messages");
+            messages.addObject().put("role", "system").put("content", SQL_HISTORY_SEMANTIC_SYSTEM_PROMPT);
+            messages.addObject().put("role", "user").put("content", safeText(userPrompt));
+            HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(endpoint))
+                .timeout(Duration.ofSeconds(20))
+                .header("Authorization", "Bearer " + safeText(openAiOption.getOpenaiApiKey()))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(payload), StandardCharsets.UTF_8))
+                .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                return "";
+            }
+            JsonNode root = objectMapper.readTree(Objects.toString(response.body(), ""));
+            String content = safeText(root.path("choices").path(0).path("message").path("content").asText(""));
+            if (!content.isBlank()) {
+                return content;
+            }
+            JsonNode arrayContent = root.path("choices").path(0).path("message").path("content");
+            if (arrayContent.isArray()) {
+                StringBuilder builder = new StringBuilder();
+                for (JsonNode item : arrayContent) {
+                    String text = safeText(item.path("text").asText(""));
+                    if (!text.isBlank()) {
+                        if (builder.length() > 0) {
+                            builder.append('\n');
+                        }
+                        builder.append(text);
+                    }
+                }
+                return builder.toString().trim();
+            }
+            return "";
+        } catch (Exception ex) {
+            log.warn("SQL 历史语义 LLM 调用失败，降级规则生成, reason={}", ex.getMessage());
+            return "";
+        }
+    }
+
+    private SqlSemanticEnrichment parseSemanticEnrichment(String rawContent) {
+        String normalized = safeText(rawContent);
+        if (normalized.isBlank()) {
+            return null;
+        }
+        List<String> candidates = new ArrayList<>();
+        candidates.add(normalized);
+        int jsonStart = normalized.indexOf('{');
+        int jsonEnd = normalized.lastIndexOf('}');
+        if (jsonStart >= 0 && jsonEnd > jsonStart) {
+            candidates.add(normalized.substring(jsonStart, jsonEnd + 1));
+        }
+        for (String candidate : candidates) {
+            try {
+                JsonNode root = objectMapper.readTree(candidate);
+                if (root == null || !root.isObject()) {
+                    continue;
+                }
+                String semanticDescription = safeText(root.path("semantic_description").asText(""));
+                JsonNode tagsNode = root.path("business_tags");
+                Map<String, List<String>> tags = new LinkedHashMap<>();
+                tags.put("metrics", readTagArray(tagsNode, "metrics"));
+                tags.put("dimensions", readTagArray(tagsNode, "dimensions"));
+                tags.put("time_semantics", readTagArray(tagsNode, "time_semantics"));
+                tags.put("chart_types", readTagArray(tagsNode, "chart_types"));
+                tags.put("calibers", readTagArray(tagsNode, "calibers"));
+                tags.put("topics", readTagArray(tagsNode, "topics"));
+                if (semanticDescription.isBlank()) {
+                    continue;
+                }
+                return new SqlSemanticEnrichment(semanticDescription, tags);
+            } catch (Exception ignore) {
+                // ignore malformed candidate
+            }
+        }
+        return null;
+    }
+
+    private List<String> readTagArray(JsonNode tagsNode, String key) {
+        if (tagsNode == null || !tagsNode.isObject()) {
+            return List.of();
+        }
+        JsonNode arrayNode = tagsNode.path(key);
+        if (!arrayNode.isArray()) {
+            return List.of();
+        }
+        List<String> values = new ArrayList<>();
+        for (JsonNode item : arrayNode) {
+            String text = safeText(item == null ? "" : item.asText(""));
+            if (!text.isBlank()) {
+                values.add(text);
+            }
+        }
+        return values;
+    }
+
+    private SqlSemanticEnrichment fallbackSemanticEnrichment(SqlFeatureMeta featureMeta, String sqlText, List<String> sqlKeywordTags) {
+        String semanticDescription = "查询主题表: " + String.join(",", featureMeta.getTables())
+            + "；涉及字段: " + String.join(",", featureMeta.getColumns())
+            + "；关键词: " + String.join(",", sqlKeywordTags);
+        Map<String, List<String>> tags = new LinkedHashMap<>();
+        tags.put("metrics", featureMeta.getColumns().stream().filter(item -> item.toLowerCase(Locale.ROOT).contains("count")
+            || item.toLowerCase(Locale.ROOT).contains("amount")
+            || item.toLowerCase(Locale.ROOT).contains("sum")).limit(8).toList());
+        tags.put("dimensions", featureMeta.getColumns().stream().filter(item -> !tags.get("metrics").contains(item)).limit(8).toList());
+        String lowerSql = safeText(sqlText).toLowerCase(Locale.ROOT);
+        List<String> timeSemantics = new ArrayList<>();
+        if (lowerSql.contains("date") || lowerSql.contains("day") || lowerSql.contains("month") || lowerSql.contains("year")
+            || lowerSql.contains("time") || lowerSql.contains("日期") || lowerSql.contains("时间")) {
+            timeSemantics.add("time_series");
+        }
+        tags.put("time_semantics", timeSemantics);
+        tags.put("chart_types", timeSemantics.isEmpty() ? List.of("bar") : List.of("line", "bar"));
+        tags.put("calibers", List.of("默认口径"));
+        tags.put("topics", featureMeta.getTables().stream().limit(6).toList());
+        return new SqlSemanticEnrichment(semanticDescription, tags);
+    }
+
+    private void applyDatabaseContext(java.sql.Connection connection, String dbType, String targetDatabaseName) throws java.sql.SQLException {
+        String type = safeText(dbType).toUpperCase(Locale.ROOT);
+        if (targetDatabaseName.isBlank()) {
+            return;
+        }
+        if ("MYSQL".equals(type) || "POSTGRESQL".equals(type)) {
+            connection.setCatalog(targetDatabaseName);
+        }
+        if ("SQLSERVER".equals(type) || "ORACLE".equals(type)) {
+            connection.setSchema(targetDatabaseName);
+        }
+    }
+
+    private String resolveCatalog(java.sql.Connection connection, String dbType, String targetDatabaseName) throws java.sql.SQLException {
+        String type = safeText(dbType).toUpperCase(Locale.ROOT);
+        if ("MYSQL".equals(type) || "POSTGRESQL".equals(type)) {
+            if (!targetDatabaseName.isBlank()) {
+                return targetDatabaseName;
+            }
+            return safeText(connection.getCatalog());
+        }
+        return null;
+    }
+
+    private String resolveSchemaPattern(String dbType, String targetDatabaseName) {
+        String type = safeText(dbType).toUpperCase(Locale.ROOT);
+        if (("SQLSERVER".equals(type) || "ORACLE".equals(type)) && !targetDatabaseName.isBlank()) {
+            return targetDatabaseName;
+        }
+        if ("POSTGRESQL".equals(type)) {
+            return "public";
+        }
+        return null;
+    }
+
+    private Set<String> readPrimaryKeys(java.sql.DatabaseMetaData metaData, String catalog, String schemaPattern, String tableName)
+        throws java.sql.SQLException {
+        Set<String> keys = new HashSet<>();
+        try (java.sql.ResultSet pk = metaData.getPrimaryKeys(catalog, schemaPattern, tableName)) {
+            while (pk.next()) {
+                keys.add(safeText(pk.getString("COLUMN_NAME")));
+            }
+        }
+        return keys;
+    }
+
+    private Set<String> readIndexedColumns(java.sql.DatabaseMetaData metaData, String catalog, String schemaPattern, String tableName)
+        throws java.sql.SQLException {
+        Set<String> columns = new HashSet<>();
+        try (java.sql.ResultSet indexes = metaData.getIndexInfo(catalog, schemaPattern, tableName, false, false)) {
+            while (indexes.next()) {
+                String columnName = safeText(indexes.getString("COLUMN_NAME"));
+                if (!columnName.isBlank()) {
+                    columns.add(columnName);
+                }
+            }
+        }
+        return columns;
+    }
+
+    private String stripTrailingSlash(String value) {
+        String normalized = safeText(value);
+        while (normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized;
     }
 
     private void writePoints(String collectionName, List<QdrantPoint> points) {
@@ -319,6 +709,7 @@ public class RagIngestionServiceImpl implements RagIngestionService {
     private String buildSqlHistoryDocumentText(SqlHistoryPayload payload) {
         return "连接ID: " + payload.getConnectionId() + "\n"
             + "数据库: " + payload.getDatabaseName() + "\n"
+            + "条目类型: " + payload.getEntryType() + "\n"
             + "Prompt: " + payload.getPromptText() + "\n"
             + "SQL: " + payload.getSqlText() + "\n"
             + "执行耗时: " + payload.getExecutionMs() + "ms\n"
@@ -328,7 +719,9 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             + "JOIN数量: " + payload.getJoinCount() + "\n"
             + "包含CTE: " + payload.getHasCte() + "\n"
             + "SQL关键词: " + String.join(",", payload.getSqlKeywordTags()) + "\n"
-            + "SQL归一化: " + payload.getNormalizedSqlText();
+            + "SQL归一化: " + payload.getNormalizedSqlText() + "\n"
+            + "语义描述: " + payload.getSemanticDescription() + "\n"
+            + "业务标签: " + payload.getBusinessTags();
     }
 
 
@@ -582,6 +975,12 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         return value;
     }
 
+    private record PreciseMetadata(String contextText, boolean hasMetadata) {
+    }
+
+    private record SqlSemanticEnrichment(String semanticDescription, Map<String, List<String>> tags) {
+    }
+
     private record PointEmbeddingTask(String pointId, String text, Map<String, Object> metadata) {
     }
 
@@ -718,6 +1117,9 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         private final Boolean hasCte;
         private final String normalizedSqlText;
         private final List<String> sqlKeywordTags;
+        private final String entryType;
+        private final String semanticDescription;
+        private final Map<String, List<String>> businessTags;
 
         SqlHistoryPayload(Long connectionId,
                           String databaseName,
@@ -732,7 +1134,10 @@ public class RagIngestionServiceImpl implements RagIngestionService {
                           Integer joinCount,
                           Boolean hasCte,
                           String normalizedSqlText,
-                          List<String> sqlKeywordTags) {
+                          List<String> sqlKeywordTags,
+                          String entryType,
+                          String semanticDescription,
+                          Map<String, List<String>> businessTags) {
             this.connectionId = connectionId;
             this.databaseName = databaseName;
             this.sessionId = sessionId;
@@ -747,6 +1152,9 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             this.hasCte = hasCte;
             this.normalizedSqlText = normalizedSqlText;
             this.sqlKeywordTags = sqlKeywordTags;
+            this.entryType = entryType;
+            this.semanticDescription = semanticDescription;
+            this.businessTags = businessTags == null ? Map.of() : businessTags;
         }
 
         Map<String, Object> toMetadataMap() {
@@ -754,6 +1162,7 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             metadata.put("connection_id", connectionId);
             metadata.put("database_name", databaseName);
             metadata.put("session_id", sessionId);
+            metadata.put("entry_type", entryType);
             metadata.put("prompt_text", promptText);
             metadata.put("sql_text", sqlText);
             metadata.put("execution_ms", executionMs);
@@ -765,6 +1174,14 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             metadata.put("has_cte", hasCte);
             metadata.put("normalized_sql_text", normalizedSqlText);
             metadata.put("sql_keyword_tags", sqlKeywordTags);
+            metadata.put("semantic_description", semanticDescription);
+            metadata.put("business_tags", businessTags);
+            metadata.put("metrics", businessTags.getOrDefault("metrics", List.of()));
+            metadata.put("dimensions", businessTags.getOrDefault("dimensions", List.of()));
+            metadata.put("time_semantics", businessTags.getOrDefault("time_semantics", List.of()));
+            metadata.put("chart_types", businessTags.getOrDefault("chart_types", List.of()));
+            metadata.put("calibers", businessTags.getOrDefault("calibers", List.of()));
+            metadata.put("topics", businessTags.getOrDefault("topics", List.of()));
             return metadata;
         }
 
@@ -782,6 +1199,9 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         public Boolean getHasCte() { return hasCte; }
         public String getNormalizedSqlText() { return normalizedSqlText; }
         public List<String> getSqlKeywordTags() { return sqlKeywordTags; }
+        public String getEntryType() { return entryType; }
+        public String getSemanticDescription() { return semanticDescription; }
+        public Map<String, List<String>> getBusinessTags() { return businessTags; }
     }
 
     private static class SqlFragmentPayload {
