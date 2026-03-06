@@ -1385,25 +1385,19 @@ body {
   border-bottom: 1px solid var(--line);
 }
 
-.query-editor-memory-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--surface-1, #f8fbff) 94%, transparent);
+.query-memory-title-actions {
   font-size: 12px;
+}
+
+.query-memory-title-label {
   color: var(--text-2, #51627d);
-}
-
-.query-editor-memory-label {
   font-weight: 600;
-  color: var(--text-1, #2f4568);
 }
 
-.query-editor-memory-hint {
-  color: var(--text-3, #6f829f);
+.query-memory-title-help {
+  color: #5b7bb4;
+  cursor: help;
+  user-select: none;
 }
 
 .sql-selection-popover {

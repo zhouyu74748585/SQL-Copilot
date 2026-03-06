@@ -690,7 +690,7 @@
 
           <div ref="queryChatScrollRef" class="query-chat-scroll">
             <div v-if="!activeQueryTab.chatMessages.length" class="query-chat-empty">
-              输入自然语言后发送消息；可使用 Auto 自动识别意图，或关闭 Auto 后手动选择“生成 SQL”“解释 SQL”“分析 SQL”“生成图表”。
+              使用自然语言描述需求后发送消息；可使用 Auto 自动识别意图，或关闭 Auto 后手动选择“生成 SQL”“解释 SQL”“分析 SQL”“生成图表”。
             </div>
             <div
               v-for="item in activeQueryTab.chatMessages"
@@ -890,11 +890,15 @@
         <div v-if="activeQueryTab" class="pane-splitter pane-splitter-right query-pane-splitter" @mousedown="startResizeQueryPane" />
 
         <aside v-if="activeQueryTab" class="pane pane-right query-editor-pane">
-          <div class="pane-title">SQL 编辑与执行</div>
-          <div class="query-editor-memory-row">
-            <span class="query-editor-memory-label">记忆理解</span>
-            <a-switch v-model:checked="activeQueryTab.memoryEnabled" size="small" />
-            <span class="query-editor-memory-hint">开启后，执行成功 SQL 才会提交向量化</span>
+          <div class="pane-title pane-title-with-action">
+            <span>SQL 编辑与执行</span>
+            <div class="pane-title-actions query-memory-title-actions">
+              <span class="query-memory-title-label">记忆理解</span>
+              <a-switch v-model:checked="activeQueryTab.memoryEnabled" size="small" />
+              <a-tooltip title="开启后，执行成功的 SQL 会被理解记忆，并在后续生成与执行中参与向量召回。">
+                <span class="query-memory-title-help">说明</span>
+              </a-tooltip>
+            </div>
           </div>
 
           <div class="editor-group" ref="sqlEditorContainerRef">
