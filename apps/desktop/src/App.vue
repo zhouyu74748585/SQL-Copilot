@@ -1315,7 +1315,7 @@
                 </a-form-item>
               </a-col>
               <a-col :span="12">
-                <a-form-item label="滑动窗口大小">
+                <a-form-item label="记忆窗口轮数">
                   <a-input-number v-model:value="aiConfigForm.conversationMemoryWindowSize" :min="4" :max="50" style="width: 100%" />
                 </a-form-item>
               </a-col>
