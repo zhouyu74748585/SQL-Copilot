@@ -1,5 +1,7 @@
 package com.sqlcopilot.studio.service.rag.impl;
 
+import com.sqlcopilot.studio.dto.rag.RagConfigVO;
+import com.sqlcopilot.studio.service.RagConfigService;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
 import com.sqlcopilot.studio.service.rag.RagEmbeddingService;
 import com.sqlcopilot.studio.service.rag.RagRerankService;
@@ -18,8 +20,11 @@ import java.util.*;
 public class RagRetrievalServiceImpl implements RagRetrievalService {
 
     private static final Logger log = LoggerFactory.getLogger(RagRetrievalServiceImpl.class);
+    private static final long RAG_CONFIG_CACHE_TTL_MS = 10_000L;
 
     private final boolean ragEnabled;
+    private final boolean defaultRerankEnabled;
+    private final RagConfigService ragConfigService;
     private final RagEmbeddingService ragEmbeddingService;
     private final QdrantClientService qdrantClientService;
     private final RagRerankService ragRerankService;
@@ -29,10 +34,12 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
     private final int sqlHistoryLimit;
     private final int metricTermLimit;
     private final int exampleSqlLimit;
-    private final boolean rerankEnabled;
     private final double alphaVectorScore;
     private final double betaOnnxScore;
     private final double gammaRuleBonus;
+    private final Object configCacheLock = new Object();
+    private RagConfigVO cachedRagConfig;
+    private long cachedRagConfigLoadedAt;
 
     public RagRetrievalServiceImpl(@Value("${rag.enabled:true}") boolean ragEnabled,
                                    @Value("${rag.collection.schema-table:schema_table}") String schemaTableCollection,
@@ -46,10 +53,11 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
                                    @Value("${rag.retrieval.sql-history-limit:6}") int sqlHistoryLimit,
                                    @Value("${rag.retrieval.metric-term-limit:6}") int metricTermLimit,
                                    @Value("${rag.retrieval.example-sql-limit:6}") int exampleSqlLimit,
-                                   @Value("${rag.rerank.enabled:false}") boolean rerankEnabled,
+                                   @Value("${rag.rerank.enabled:false}") boolean defaultRerankEnabled,
                                    @Value("${rag.rerank.alpha:0.65}") double alphaVectorScore,
                                    @Value("${rag.rerank.beta:0.30}") double betaOnnxScore,
                                    @Value("${rag.rerank.gamma:0.05}") double gammaRuleBonus,
+                                   RagConfigService ragConfigService,
                                    RagEmbeddingService ragEmbeddingService,
                                    QdrantClientService qdrantClientService,
                                    RagRerankService ragRerankService) {
@@ -67,10 +75,11 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         this.sqlHistoryLimit = Math.max(1, sqlHistoryLimit);
         this.metricTermLimit = Math.max(1, metricTermLimit);
         this.exampleSqlLimit = Math.max(1, exampleSqlLimit);
-        this.rerankEnabled = rerankEnabled;
+        this.defaultRerankEnabled = defaultRerankEnabled;
         this.alphaVectorScore = alphaVectorScore;
         this.betaOnnxScore = betaOnnxScore;
         this.gammaRuleBonus = gammaRuleBonus;
+        this.ragConfigService = ragConfigService;
         this.ragEmbeddingService = ragEmbeddingService;
         this.qdrantClientService = qdrantClientService;
         this.ragRerankService = ragRerankService;
@@ -78,6 +87,7 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
 
     @Override
     public RagPromptContext retrievePromptContext(Long connectionId, String databaseName, String userInput) {
+        boolean rerankEnabled = isRerankEnabled();
         String normalizedDatabaseName = normalizeDatabaseName(databaseName);
         log.info(
             "[RAG-RETRIEVE-REQ] connectionId={}, databaseName={}, inputLength={}, ragEnabled={}, schemaTableLimit={}, schemaColumnLimit={}, sqlHistoryLimit={}, metricTermLimit={}, exampleSqlLimit={}, rerankEnabled={}, rerankProvider={}",
@@ -187,11 +197,11 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             );
         }
 
-        tableHits = rerankHits(userInput, "table", tableHits);
-        columnHits = rerankHits(userInput, "column", columnHits);
-        historyHits = rerankHits(userInput, "query_history", historyHits);
-        metricTermHits = rerankHits(userInput, "metric_term", metricTermHits);
-        exampleSqlHits = rerankHits(userInput, "example_sql", exampleSqlHits);
+        tableHits = rerankHits(userInput, "table", tableHits, rerankEnabled);
+        columnHits = rerankHits(userInput, "column", columnHits, rerankEnabled);
+        historyHits = rerankHits(userInput, "query_history", historyHits, rerankEnabled);
+        metricTermHits = rerankHits(userInput, "metric_term", metricTermHits, rerankEnabled);
+        exampleSqlHits = rerankHits(userInput, "example_sql", exampleSqlHits, rerankEnabled);
 
         Set<String> relatedTables = new LinkedHashSet<>();
         Set<String> relatedColumns = new LinkedHashSet<>();
@@ -413,7 +423,10 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             .toList();
     }
 
-    private List<QdrantScoredPoint> rerankHits(String userInput, String bucket, List<QdrantScoredPoint> hits) {
+    private List<QdrantScoredPoint> rerankHits(String userInput,
+                                               String bucket,
+                                               List<QdrantScoredPoint> hits,
+                                               boolean rerankEnabled) {
         if (hits == null || hits.isEmpty()) {
             return List.of();
         }
@@ -440,6 +453,32 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             sorted.add(item.hit());
         }
         return sorted;
+    }
+
+    private boolean isRerankEnabled() {
+        RagConfigVO config = getCachedRagConfig();
+        if (config.getRagRerankEnabled() != null) {
+            return config.getRagRerankEnabled();
+        }
+        return defaultRerankEnabled;
+    }
+
+    private RagConfigVO getCachedRagConfig() {
+        long now = System.currentTimeMillis();
+        RagConfigVO localCache = cachedRagConfig;
+        if (localCache != null && now - cachedRagConfigLoadedAt < RAG_CONFIG_CACHE_TTL_MS) {
+            return localCache;
+        }
+        synchronized (configCacheLock) {
+            long refreshedNow = System.currentTimeMillis();
+            if (cachedRagConfig != null && refreshedNow - cachedRagConfigLoadedAt < RAG_CONFIG_CACHE_TTL_MS) {
+                return cachedRagConfig;
+            }
+            // 关键优化：检索链路中短时缓存配置，降低频繁读取配置表的开销。
+            cachedRagConfig = ragConfigService.getConfig();
+            cachedRagConfigLoadedAt = refreshedNow;
+            return cachedRagConfig;
+        }
     }
 
     private double resolveRuleBonus(String userInput, String bucket, Map<String, Object> payload) {

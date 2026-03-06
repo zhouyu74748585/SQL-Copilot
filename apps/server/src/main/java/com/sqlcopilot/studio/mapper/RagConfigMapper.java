@@ -11,6 +11,8 @@ public interface RagConfigMapper {
     @Select("""
         SELECT id,
                rag_embedding_model_dir,
+               rag_rerank_enabled,
+               rag_rerank_model_dir,
                updated_at
         FROM rag_embedding_config
         WHERE id = #{id}
@@ -21,11 +23,15 @@ public interface RagConfigMapper {
         INSERT INTO rag_embedding_config(
             id,
             rag_embedding_model_dir,
+            rag_rerank_enabled,
+            rag_rerank_model_dir,
             updated_at
         )
         VALUES(
             #{id},
             #{ragEmbeddingModelDir},
+            #{ragRerankEnabled},
+            #{ragRerankModelDir},
             #{updatedAt}
         )
         """)
@@ -34,6 +40,8 @@ public interface RagConfigMapper {
     @Update("""
         UPDATE rag_embedding_config
         SET rag_embedding_model_dir = #{ragEmbeddingModelDir},
+            rag_rerank_enabled = #{ragRerankEnabled},
+            rag_rerank_model_dir = #{ragRerankModelDir},
             updated_at = #{updatedAt}
         WHERE id = #{id}
         """)

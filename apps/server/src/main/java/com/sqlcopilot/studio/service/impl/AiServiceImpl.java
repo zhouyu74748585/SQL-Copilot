@@ -2638,14 +2638,11 @@ public class AiServiceImpl implements AiService {
             return new GenerationContext(fallbackContext, relatedTables);
         }
 
-        List<QueryHistoryEntity> sessionHistory = queryHistoryMapper.listBySession(
+        List<QueryHistoryEntity> chatHistory = queryHistoryMapper.listBySession(
             req.getConnectionId(),
             safe(req.getSessionId()),
             500
         );
-        List<QueryHistoryEntity> chatHistory = sessionHistory.stream()
-            .filter(item -> "CHAT".equalsIgnoreCase(safe(item.getHistoryType())))
-            .toList();
         List<QueryHistoryEntity> windowRecords = pickWindowRecords(chatHistory, memoryWindowSize);
         String windowStructuredContext = buildStructuredContextJson(windowRecords);
         String compressedContext = "";
@@ -2688,14 +2685,11 @@ public class AiServiceImpl implements AiService {
         List<String> memorySegments = new ArrayList<>();
         try {
             int memoryWindowSize = resolveMemoryWindowSize(aiConfig);
-            List<QueryHistoryEntity> sessionHistory = queryHistoryMapper.listBySession(
+            List<QueryHistoryEntity> chatHistory = queryHistoryMapper.listBySession(
                 req.getConnectionId(),
                 safe(req.getSessionId()),
                 200
             );
-            List<QueryHistoryEntity> chatHistory = sessionHistory.stream()
-                .filter(item -> "CHAT".equalsIgnoreCase(safe(item.getHistoryType())))
-                .toList();
             List<QueryHistoryEntity> windowRecords = pickWindowRecords(chatHistory, memoryWindowSize);
             String windowSummary = buildCompressedSummary(windowRecords);
             if (!windowSummary.isBlank()) {

@@ -92,6 +92,8 @@ CREATE TABLE IF NOT EXISTS ai_provider_config (
 CREATE TABLE IF NOT EXISTS rag_embedding_config (
     id INTEGER PRIMARY KEY,
     rag_embedding_model_dir TEXT,
+    rag_rerank_enabled INTEGER DEFAULT 0,
+    rag_rerank_model_dir TEXT,
     updated_at INTEGER NOT NULL
 );
 

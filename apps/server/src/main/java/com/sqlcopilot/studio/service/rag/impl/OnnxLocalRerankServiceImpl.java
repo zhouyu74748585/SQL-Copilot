@@ -4,6 +4,8 @@ import ai.onnxruntime.OnnxTensor;
 import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtProvider;
 import ai.onnxruntime.OrtSession;
+import com.sqlcopilot.studio.dto.rag.RagConfigVO;
+import com.sqlcopilot.studio.service.RagConfigService;
 import com.sqlcopilot.studio.service.rag.RagRerankService;
 import com.sqlcopilot.studio.service.rag.model.QdrantScoredPoint;
 import jakarta.annotation.PreDestroy;
@@ -23,45 +25,61 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 public class OnnxLocalRerankServiceImpl implements RagRerankService {
 
     private static final Logger log = LoggerFactory.getLogger(OnnxLocalRerankServiceImpl.class);
+    private static final long RAG_CONFIG_CACHE_TTL_MS = 10_000L;
+    private static final String PROVIDER_AUTO = "AUTO";
+    private static final String PROVIDER_CPU = "CPU";
+    private static final String PROVIDER_CUDA = "CUDA";
 
-    private final boolean rerankEnabled;
-    private final String modelDir;
-    private final String modelFileName;
-    private final int featureSize;
-    private final String executionProvider;
-    private final int cudaDeviceId;
+    private final RagConfigService ragConfigService;
+    private final boolean defaultRerankEnabled;
+    private final String defaultModelDir;
+    private final String defaultModelFileName;
+    private final String defaultExecutionProvider;
+    private final int defaultCudaDeviceId;
+    private final int defaultFeatureSize;
 
     private final ReentrantReadWriteLock runtimeLock = new ReentrantReadWriteLock();
     private final Lock readLock = runtimeLock.readLock();
     private final Lock writeLock = runtimeLock.writeLock();
+    private final Object configCacheLock = new Object();
 
     private volatile boolean initialized;
     private volatile boolean available;
     private volatile String runtimeProvider = "UNAVAILABLE";
+    private volatile RerankRuntimeConfig loadedConfig;
+
+    private RagConfigVO cachedRagConfig;
+    private long cachedRagConfigLoadedAt;
 
     private OrtEnvironment ortEnvironment;
     private OrtSession ortSession;
 
-    public OnnxLocalRerankServiceImpl(@Value("${rag.rerank.enabled:false}") boolean rerankEnabled,
-                                      @Value("${rag.rerank.model-dir:./models/rerank}") String modelDir,
-                                      @Value("${rag.rerank.model-file-name:rerank.onnx}") String modelFileName,
-                                      @Value("${rag.rerank.feature-size:6}") int featureSize,
-                                      @Value("${rag.rerank.execution-provider:AUTO}") String executionProvider,
-                                      @Value("${rag.rerank.cuda-device-id:0}") int cudaDeviceId) {
-        this.rerankEnabled = rerankEnabled;
-        this.modelDir = Objects.toString(modelDir, "").trim();
-        this.modelFileName = Objects.toString(modelFileName, "rerank.onnx").trim();
-        this.featureSize = Math.max(4, featureSize);
-        this.executionProvider = Objects.toString(executionProvider, "AUTO").trim().toUpperCase(Locale.ROOT);
-        this.cudaDeviceId = Math.max(0, cudaDeviceId);
+    public OnnxLocalRerankServiceImpl(RagConfigService ragConfigService,
+                                      @Value("${rag.rerank.enabled:false}") boolean defaultRerankEnabled,
+                                      @Value("${rag.rerank.model-dir:}") String defaultModelDir,
+                                      @Value("${rag.rerank.model-file-name:rerank.onnx}") String defaultModelFileName,
+                                      @Value("${rag.rerank.feature-size:6}") int defaultFeatureSize,
+                                      @Value("${rag.rerank.execution-provider:AUTO}") String defaultExecutionProvider,
+                                      @Value("${rag.rerank.cuda-device-id:0}") int defaultCudaDeviceId) {
+        this.ragConfigService = ragConfigService;
+        this.defaultRerankEnabled = defaultRerankEnabled;
+        this.defaultModelDir = safe(defaultModelDir);
+        this.defaultModelFileName = safe(defaultModelFileName);
+        this.defaultFeatureSize = Math.max(6, defaultFeatureSize);
+        this.defaultExecutionProvider = normalizeExecutionProvider(defaultExecutionProvider);
+        this.defaultCudaDeviceId = Math.max(0, defaultCudaDeviceId);
     }
 
     @Override
     public List<Double> score(String query, String bucket, List<QdrantScoredPoint> hits) {
-        if (!rerankEnabled || hits == null || hits.isEmpty()) {
+        if (hits == null || hits.isEmpty()) {
             return List.of();
         }
-        ensureInitialized();
+        RerankRuntimeConfig runtimeConfig = resolveRuntimeConfig();
+        if (!runtimeConfig.enabled()) {
+            return List.of();
+        }
+        ensureInitialized(runtimeConfig);
         if (!available || ortEnvironment == null || ortSession == null) {
             return List.of();
         }
@@ -69,20 +87,12 @@ public class OnnxLocalRerankServiceImpl implements RagRerankService {
         readLock.lock();
         try {
             long now = System.currentTimeMillis();
-            float[][] features = new float[hits.size()][featureSize];
+            float[][] features = new float[hits.size()][defaultFeatureSize];
             for (int i = 0; i < hits.size(); i++) {
-                QdrantScoredPoint hit = hits.get(i);
-                double vectorScore = hit.getScore() == null ? 0.0 : hit.getScore();
-                Map<String, Object> payload = hit.getPayload();
-                features[i][0] = (float) clip01(vectorScore);
-                features[i][1] = (float) schemaExactHit(bucket, payload);
-                features[i][2] = (float) queryTimeSignal(query);
-                features[i][3] = (float) hitCoverage(query, payload);
-                features[i][4] = (float) recencyDecay(payload, now);
-                features[i][5] = (float) bucketCode(bucket);
+                fillFeatureRow(features[i], query, bucket, hits.get(i), now);
             }
-            float[] flat = flatten(features);
-            long[] shape = new long[]{features.length, featureSize};
+            float[] flat = flatten(features, defaultFeatureSize);
+            long[] shape = new long[]{features.length, defaultFeatureSize};
             String inputName = ortSession.getInputNames().stream().findFirst().orElse("input");
 
             try (OnnxTensor featureTensor = OnnxTensor.createTensor(ortEnvironment, FloatBuffer.wrap(flat), shape)) {
@@ -116,24 +126,23 @@ public class OnnxLocalRerankServiceImpl implements RagRerankService {
         }
     }
 
-    private void ensureInitialized() {
-        if (initialized) {
-            return;
-        }
+    private void ensureInitialized(RerankRuntimeConfig targetConfig) {
         writeLock.lock();
         try {
-            if (initialized) {
+            if (initialized && targetConfig.equals(loadedConfig)) {
                 return;
             }
             initialized = true;
-            if (!rerankEnabled) {
-                available = false;
+            loadedConfig = targetConfig;
+            closeQuietly();
+
+            if (!targetConfig.enabled()) {
                 runtimeProvider = "DISABLED";
                 return;
             }
-            Path modelPath = Path.of(modelDir).resolve(modelFileName).normalize();
+
+            Path modelPath = Path.of(targetConfig.modelDir()).resolve(defaultModelFileName).normalize();
             if (!Files.exists(modelPath)) {
-                available = false;
                 runtimeProvider = "MODEL_MISSING";
                 log.warn("[RAG-RERANK-INIT-SKIP] onnx model missing: {}", modelPath);
                 return;
@@ -146,7 +155,6 @@ public class OnnxLocalRerankServiceImpl implements RagRerankService {
             available = true;
             log.info("[RAG-RERANK-INIT] provider={}, model={}", runtimeProvider, modelPath);
         } catch (Exception | LinkageError ex) {
-            available = false;
             runtimeProvider = "INIT_FAILED";
             log.warn("[RAG-RERANK-INIT-FAILED] reason={}", ex.getMessage());
             closeQuietly();
@@ -156,10 +164,10 @@ public class OnnxLocalRerankServiceImpl implements RagRerankService {
     }
 
     private void configureProvider(OrtSession.SessionOptions options) {
-        String provider = executionProvider;
-        if ("CUDA".equals(provider)) {
+        String provider = defaultExecutionProvider;
+        if (PROVIDER_CUDA.equals(provider)) {
             try {
-                options.addCUDA(cudaDeviceId);
+                options.addCUDA(defaultCudaDeviceId);
                 runtimeProvider = OrtProvider.CUDA.getName();
                 return;
             } catch (Throwable ex) {
@@ -167,6 +175,29 @@ public class OnnxLocalRerankServiceImpl implements RagRerankService {
             }
         }
         runtimeProvider = OrtProvider.CPU.getName();
+    }
+
+    private void fillFeatureRow(float[] row, String query, String bucket, QdrantScoredPoint hit, long now) {
+        double vectorScore = hit.getScore() == null ? 0.0 : hit.getScore();
+        Map<String, Object> payload = hit.getPayload();
+        if (row.length > 0) {
+            row[0] = (float) clip01(vectorScore);
+        }
+        if (row.length > 1) {
+            row[1] = (float) schemaExactHit(bucket, payload);
+        }
+        if (row.length > 2) {
+            row[2] = (float) queryTimeSignal(query);
+        }
+        if (row.length > 3) {
+            row[3] = (float) hitCoverage(query, payload);
+        }
+        if (row.length > 4) {
+            row[4] = (float) recencyDecay(payload, now);
+        }
+        if (row.length > 5) {
+            row[5] = (float) bucketCode(bucket);
+        }
     }
 
     private List<Double> normalizeScores(Object value, int size) {
@@ -188,7 +219,7 @@ public class OnnxLocalRerankServiceImpl implements RagRerankService {
         return List.of();
     }
 
-    private float[] flatten(float[][] matrix) {
+    private float[] flatten(float[][] matrix, int featureSize) {
         float[] flat = new float[matrix.length * featureSize];
         int idx = 0;
         for (float[] row : matrix) {
@@ -197,6 +228,33 @@ public class OnnxLocalRerankServiceImpl implements RagRerankService {
             }
         }
         return flat;
+    }
+
+    private RerankRuntimeConfig resolveRuntimeConfig() {
+        RagConfigVO config = getCachedRagConfig();
+        boolean enabled = config.getRagRerankEnabled() == null
+            ? defaultRerankEnabled
+            : config.getRagRerankEnabled();
+        String modelDir = nonBlankOrDefault(config.getRagRerankModelDir(), defaultModelDir);
+        return new RerankRuntimeConfig(enabled, modelDir);
+    }
+
+    private RagConfigVO getCachedRagConfig() {
+        long now = System.currentTimeMillis();
+        RagConfigVO localCache = cachedRagConfig;
+        if (localCache != null && now - cachedRagConfigLoadedAt < RAG_CONFIG_CACHE_TTL_MS) {
+            return localCache;
+        }
+        synchronized (configCacheLock) {
+            long refreshedNow = System.currentTimeMillis();
+            if (cachedRagConfig != null && refreshedNow - cachedRagConfigLoadedAt < RAG_CONFIG_CACHE_TTL_MS) {
+                return cachedRagConfig;
+            }
+            // 关键优化：Rerank 高频检索场景下短时缓存配置，避免每次查询 DB。
+            cachedRagConfig = ragConfigService.getConfig();
+            cachedRagConfigLoadedAt = refreshedNow;
+            return cachedRagConfig;
+        }
     }
 
     private double schemaExactHit(String bucket, Map<String, Object> payload) {
@@ -306,7 +364,28 @@ public class OnnxLocalRerankServiceImpl implements RagRerankService {
         return text == null || text.trim().isEmpty();
     }
 
+    private String safe(String input) {
+        return Objects.toString(input, "").trim();
+    }
+
+    private String nonBlankOrDefault(String input, String fallback) {
+        String normalized = safe(input);
+        return normalized.isBlank() ? safe(fallback) : normalized;
+    }
+
+    private String normalizeExecutionProvider(String input) {
+        String normalized = safe(input).toUpperCase(Locale.ROOT);
+        if (PROVIDER_CUDA.equals(normalized)) {
+            return PROVIDER_CUDA;
+        }
+        if (PROVIDER_CPU.equals(normalized)) {
+            return PROVIDER_CPU;
+        }
+        return PROVIDER_AUTO;
+    }
+
     private void closeQuietly() {
+        available = false;
         try {
             if (ortSession != null) {
                 ortSession.close();
@@ -315,5 +394,9 @@ public class OnnxLocalRerankServiceImpl implements RagRerankService {
         }
         ortSession = null;
         ortEnvironment = null;
+    }
+
+    private record RerankRuntimeConfig(boolean enabled,
+                                       String modelDir) {
     }
 }

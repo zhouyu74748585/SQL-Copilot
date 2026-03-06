@@ -74,6 +74,8 @@ public class AiConfigMigrationRunner implements ApplicationRunner {
             CREATE TABLE IF NOT EXISTS rag_embedding_config (
                 id INTEGER PRIMARY KEY,
                 rag_embedding_model_dir TEXT,
+                rag_rerank_enabled INTEGER DEFAULT 0,
+                rag_rerank_model_dir TEXT,
                 updated_at INTEGER NOT NULL
             )
             """);
@@ -96,6 +98,7 @@ public class AiConfigMigrationRunner implements ApplicationRunner {
                 statement.execute("ALTER TABLE rag_embedding_config ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0");
             }
         }
+        ensureRagRerankColumns(connection);
         if (!hasAnyLegacyRagConfigColumns(connection)) {
             return;
         }
@@ -104,13 +107,23 @@ public class AiConfigMigrationRunner implements ApplicationRunner {
                 CREATE TABLE IF NOT EXISTS rag_embedding_config_new (
                     id INTEGER PRIMARY KEY,
                     rag_embedding_model_dir TEXT,
+                    rag_rerank_enabled INTEGER DEFAULT 0,
+                    rag_rerank_model_dir TEXT,
                     updated_at INTEGER NOT NULL
                 )
                 """);
             statement.execute("""
-                INSERT OR REPLACE INTO rag_embedding_config_new(id, rag_embedding_model_dir, updated_at)
+                INSERT OR REPLACE INTO rag_embedding_config_new(
+                    id,
+                    rag_embedding_model_dir,
+                    rag_rerank_enabled,
+                    rag_rerank_model_dir,
+                    updated_at
+                )
                 SELECT id,
                        rag_embedding_model_dir,
+                       COALESCE(rag_rerank_enabled, 0),
+                       rag_rerank_model_dir,
                        CASE
                            WHEN updated_at IS NULL OR updated_at <= 0 THEN CAST(strftime('%s', 'now') AS INTEGER) * 1000
                            ELSE updated_at
@@ -119,6 +132,20 @@ public class AiConfigMigrationRunner implements ApplicationRunner {
                 """);
             statement.execute("DROP TABLE rag_embedding_config");
             statement.execute("ALTER TABLE rag_embedding_config_new RENAME TO rag_embedding_config");
+        }
+    }
+
+    private void ensureRagRerankColumns(Connection connection) throws SQLException {
+        if (!hasTable(connection, "rag_embedding_config")) {
+            return;
+        }
+        try (Statement statement = connection.createStatement()) {
+            if (!hasColumn(connection, "rag_embedding_config", "rag_rerank_enabled")) {
+                statement.execute("ALTER TABLE rag_embedding_config ADD COLUMN rag_rerank_enabled INTEGER DEFAULT 0");
+            }
+            if (!hasColumn(connection, "rag_embedding_config", "rag_rerank_model_dir")) {
+                statement.execute("ALTER TABLE rag_embedding_config ADD COLUMN rag_rerank_model_dir TEXT");
+            }
         }
     }
 
@@ -194,9 +221,11 @@ public class AiConfigMigrationRunner implements ApplicationRunner {
                     INSERT INTO rag_embedding_config(
                         id,
                         rag_embedding_model_dir,
+                        rag_rerank_enabled,
+                        rag_rerank_model_dir,
                         updated_at
                     )
-                    VALUES(?, ?, ?)
+                    VALUES(?, ?, 0, NULL, ?)
                     """;
                 try (PreparedStatement insert = connection.prepareStatement(insertSql)) {
                     insert.setLong(1, SINGLETON_ID);
