@@ -184,7 +184,7 @@ public class AiServiceImpl implements AiService {
         this.ragEmbeddingService = ragEmbeddingService;
         this.qdrantClientService = qdrantClientService;
         this.queryHistoryMapper = queryHistoryMapper;
-        this.ragCollectionNames = new RagCollectionNames("schema_table", "schema_column", sqlHistoryCollection, "sql_fragment");
+        this.ragCollectionNames = new RagCollectionNames("schema_table", "schema_column", sqlHistoryCollection, "metric_term", "example_sql", "sql_fragment");
         this.objectMapper = objectMapper;
     }
 
@@ -201,7 +201,7 @@ public class AiServiceImpl implements AiService {
             safe(req.getPrompt()).length()
         );
         // 关键操作：先将用户需求向量化并做 Qdrant 分层检索，构造 Prompt 上下文。
-        String retrievalInput = buildRetrievalInput(req.getPrompt());
+        String retrievalInput = buildRetrievalInputForRag(req);
         timer.mark("build_retrieval_input");
         RagPromptContext ragPromptContext = ragRetrievalService.retrievePromptContext(
             req.getConnectionId(),
@@ -434,7 +434,7 @@ public class AiServiceImpl implements AiService {
             safe(req.getPrompt()).length()
         );
 
-        String retrievalInput = buildRetrievalInput(req.getPrompt());
+        String retrievalInput = buildRetrievalInputForRag(req);
         timer.mark("build_retrieval_input");
         RagPromptContext ragPromptContext = ragRetrievalService.retrievePromptContext(
             req.getConnectionId(),
@@ -644,7 +644,7 @@ public class AiServiceImpl implements AiService {
         try {
             AiGenerateSqlReq providerReq = buildRepairGenerateReq(req, sourceSql, errorMessage);
             timer.mark("build_repair_prompt");
-            String retrievalInput = buildRetrievalInput(providerReq.getPrompt(), sourceSql + "\n" + errorMessage);
+            String retrievalInput = buildRetrievalInputForRag(providerReq, sourceSql + "\n" + errorMessage);
             timer.mark("build_retrieval_input");
             RagPromptContext ragPromptContext = ragRetrievalService.retrievePromptContext(
                 req.getConnectionId(),
@@ -1291,7 +1291,7 @@ public class AiServiceImpl implements AiService {
             safe(req.getPrompt()).length()
         );
 
-        String retrievalInput = buildRetrievalInput(req.getPrompt());
+        String retrievalInput = buildRetrievalInputForRag(req);
         timer.mark("build_retrieval_input");
         RagPromptContext ragPromptContext = ragRetrievalService.retrievePromptContext(
             req.getConnectionId(),
@@ -2226,8 +2226,10 @@ public class AiServiceImpl implements AiService {
         if (!relatedIndexInfo.isBlank()) {
             builder.append("\n\n关联表索引字段:\n").append(relatedIndexInfo);
         }
+        String retrievalInputForLlm = buildRetrievalInputForRag(req);
         builder.append("\n\n");
         builder.append("用户需求:\n").append(req.getPrompt());
+        builder.append("\n\n检索增强输入(含会话记忆):\n").append(retrievalInputForLlm);
         builder.append("\n\nRAG Context:\n").append(contextText);
         return builder.toString();
     }
@@ -2669,6 +2671,49 @@ public class AiServiceImpl implements AiService {
             segments.add(schemaContextText);
         }
         return new GenerationContext(String.join("\n\n", segments), relatedTables);
+    }
+
+    private String buildRetrievalInputForRag(AiGenerateSqlReq req) {
+        return buildRetrievalInputForRag(req, "");
+    }
+
+    private String buildRetrievalInputForRag(AiGenerateSqlReq req, String extraContext) {
+        String baseInput = buildRetrievalInput(req.getPrompt(), extraContext);
+        AiConfigVO aiConfig = aiConfigService.getConfig();
+        boolean memoryEnabled = resolveMemoryEnabled(req, aiConfig);
+        if (!memoryEnabled) {
+            return baseInput;
+        }
+
+        List<String> memorySegments = new ArrayList<>();
+        try {
+            int memoryWindowSize = resolveMemoryWindowSize(aiConfig);
+            List<QueryHistoryEntity> sessionHistory = queryHistoryMapper.listBySession(
+                req.getConnectionId(),
+                safe(req.getSessionId()),
+                200
+            );
+            List<QueryHistoryEntity> chatHistory = sessionHistory.stream()
+                .filter(item -> "CHAT".equalsIgnoreCase(safe(item.getHistoryType())))
+                .toList();
+            List<QueryHistoryEntity> windowRecords = pickWindowRecords(chatHistory, memoryWindowSize);
+            String windowSummary = buildCompressedSummary(windowRecords);
+            if (!windowSummary.isBlank()) {
+                memorySegments.add("会话窗口摘要:\n" + windowSummary);
+            }
+        } catch (Exception ex) {
+            log.warn("[AI-RAG-RETRIEVAL-MEMORY-WINDOW-FAILED] sessionId={}, reason={}", safe(req.getSessionId()), safe(ex.getMessage()));
+        }
+
+        String vectorMemoryContext = querySessionMemoryFromVectorStore(req);
+        if (!vectorMemoryContext.isBlank()) {
+            memorySegments.add("会话向量记忆召回:\n" + vectorMemoryContext);
+        }
+
+        if (memorySegments.isEmpty()) {
+            return baseInput;
+        }
+        return buildRetrievalInput(baseInput, String.join("\n", memorySegments));
     }
 
     private String buildRetrievalInput(String prompt) {

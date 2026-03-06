@@ -12,7 +12,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
-import java.util.regex.Pattern;
 
 @Service
 public class RagRetrievalServiceImpl implements RagRetrievalService {
@@ -26,15 +25,29 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
     private final int schemaTableLimit;
     private final int schemaColumnLimit;
     private final int sqlHistoryLimit;
+    private final int metricTermLimit;
+    private final int exampleSqlLimit;
+    private final boolean rerankEnabled;
+    private final double alphaVectorScore;
+    private final double betaOnnxScore;
+    private final double gammaRuleBonus;
 
     public RagRetrievalServiceImpl(@Value("${rag.enabled:true}") boolean ragEnabled,
                                    @Value("${rag.collection.schema-table:schema_table}") String schemaTableCollection,
                                    @Value("${rag.collection.schema-column:schema_column}") String schemaColumnCollection,
                                    @Value("${rag.collection.sql-history:sql_history}") String sqlHistoryCollection,
+                                   @Value("${rag.collection.metric-term:metric_term}") String metricTermCollection,
+                                   @Value("${rag.collection.example-sql:example_sql}") String exampleSqlCollection,
                                    @Value("${rag.collection.sql-fragment:sql_fragment}") String sqlFragmentCollection,
                                    @Value("${rag.retrieval.schema-table-limit:6}") int schemaTableLimit,
                                    @Value("${rag.retrieval.schema-column-limit:8}") int schemaColumnLimit,
                                    @Value("${rag.retrieval.sql-history-limit:6}") int sqlHistoryLimit,
+                                   @Value("${rag.retrieval.metric-term-limit:6}") int metricTermLimit,
+                                   @Value("${rag.retrieval.example-sql-limit:6}") int exampleSqlLimit,
+                                   @Value("${rag.rerank.enabled:false}") boolean rerankEnabled,
+                                   @Value("${rag.rerank.alpha:0.65}") double alphaVectorScore,
+                                   @Value("${rag.rerank.beta:0.30}") double betaOnnxScore,
+                                   @Value("${rag.rerank.gamma:0.05}") double gammaRuleBonus,
                                    RagEmbeddingService ragEmbeddingService,
                                    QdrantClientService qdrantClientService) {
         this.ragEnabled = ragEnabled;
@@ -42,11 +55,19 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             schemaTableCollection,
             schemaColumnCollection,
             sqlHistoryCollection,
+            metricTermCollection,
+            exampleSqlCollection,
             sqlFragmentCollection
         );
         this.schemaTableLimit = Math.max(1, schemaTableLimit);
         this.schemaColumnLimit = Math.max(1, schemaColumnLimit);
         this.sqlHistoryLimit = Math.max(1, sqlHistoryLimit);
+        this.metricTermLimit = Math.max(1, metricTermLimit);
+        this.exampleSqlLimit = Math.max(1, exampleSqlLimit);
+        this.rerankEnabled = rerankEnabled;
+        this.alphaVectorScore = alphaVectorScore;
+        this.betaOnnxScore = betaOnnxScore;
+        this.gammaRuleBonus = gammaRuleBonus;
         this.ragEmbeddingService = ragEmbeddingService;
         this.qdrantClientService = qdrantClientService;
     }
@@ -55,14 +76,17 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
     public RagPromptContext retrievePromptContext(Long connectionId, String databaseName, String userInput) {
         String normalizedDatabaseName = normalizeDatabaseName(databaseName);
         log.info(
-            "[RAG-RETRIEVE-REQ] connectionId={}, databaseName={}, inputLength={}, ragEnabled={}, schemaTableLimit={}, schemaColumnLimit={}, sqlHistoryLimit={}",
+            "[RAG-RETRIEVE-REQ] connectionId={}, databaseName={}, inputLength={}, ragEnabled={}, schemaTableLimit={}, schemaColumnLimit={}, sqlHistoryLimit={}, metricTermLimit={}, exampleSqlLimit={}, rerankEnabled={}",
             connectionId,
             normalizedDatabaseName,
             Objects.toString(userInput, "").trim().length(),
             ragEnabled,
             schemaTableLimit,
             schemaColumnLimit,
-            sqlHistoryLimit
+            sqlHistoryLimit,
+            metricTermLimit,
+            exampleSqlLimit,
+            rerankEnabled
         );
 
         RagPromptContext empty = emptyContext();
@@ -118,23 +142,51 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             connectionId,
             normalizedDatabaseName
         );
+        List<QdrantScoredPoint> metricTermHits = safeSearch(
+            collectionNames.getMetricTerm(),
+            inputVector,
+            metricTermLimit,
+            connectionId,
+            normalizedDatabaseName
+        );
+        List<QdrantScoredPoint> exampleSqlHits = safeSearch(
+            collectionNames.getExampleSql(),
+            inputVector,
+            exampleSqlLimit,
+            connectionId,
+            normalizedDatabaseName
+        );
         Set<String> tableConstraints = collectConstraintTables(tableHits);
         if (!tableConstraints.isEmpty()) {
             int columnBefore = columnHits.size();
             int historyBefore = historyHits.size();
+            int metricBefore = metricTermHits.size();
+            int exampleBefore = exampleSqlHits.size();
             columnHits = filterColumnHitsByTables(columnHits, tableConstraints);
             historyHits = filterHistoryHitsByTables(historyHits, tableConstraints);
+            metricTermHits = filterHitsByTables(metricTermHits, tableConstraints);
+            exampleSqlHits = filterHitsByTables(exampleSqlHits, tableConstraints);
             log.info(
-                "[RAG-RETRIEVE-TABLE-CONSTRAINT] connectionId={}, databaseName={}, tableConstraintCount={}, columnBefore={}, columnAfter={}, historyBefore={}, historyAfter={}",
+                "[RAG-RETRIEVE-TABLE-CONSTRAINT] connectionId={}, databaseName={}, tableConstraintCount={}, columnBefore={}, columnAfter={}, historyBefore={}, historyAfter={}, metricBefore={}, metricAfter={}, exampleBefore={}, exampleAfter={}",
                 connectionId,
                 normalizedDatabaseName,
                 tableConstraints.size(),
                 columnBefore,
                 columnHits.size(),
                 historyBefore,
-                historyHits.size()
+                historyHits.size(),
+                metricBefore,
+                metricTermHits.size(),
+                exampleBefore,
+                exampleSqlHits.size()
             );
         }
+
+        tableHits = rerankHits(userInput, "table", tableHits);
+        columnHits = rerankHits(userInput, "column", columnHits);
+        historyHits = rerankHits(userInput, "query_history", historyHits);
+        metricTermHits = rerankHits(userInput, "metric_term", metricTermHits);
+        exampleSqlHits = rerankHits(userInput, "example_sql", exampleSqlHits);
 
         Set<String> relatedTables = new LinkedHashSet<>();
         Set<String> relatedColumns = new LinkedHashSet<>();
@@ -192,6 +244,43 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             contextBuilder.append("\n");
         }
 
+        if (!metricTermHits.isEmpty()) {
+            contextBuilder.append("【命中业务术语】\n");
+            int idx = 1;
+            for (QdrantScoredPoint hit : metricTermHits) {
+                Map<String, Object> payload = hit.getPayload();
+                String term = payloadString(payload, "term");
+                String definition = payloadString(payload, "definition");
+                String expression = payloadString(payload, "metric_expression");
+                contextBuilder.append(idx++)
+                    .append(". ")
+                    .append(term.isBlank() ? "术语" : term)
+                    .append(definition.isBlank() ? "" : "：" + definition)
+                    .append(expression.isBlank() ? "" : "（口径=" + expression + "）")
+                    .append("\n");
+            }
+            contextBuilder.append("\n");
+        }
+
+        if (!exampleSqlHits.isEmpty()) {
+            contextBuilder.append("【命中SQL样例】\n");
+            int idx = 1;
+            for (QdrantScoredPoint hit : exampleSqlHits) {
+                Map<String, Object> payload = hit.getPayload();
+                String sqlText = payloadString(payload, "sql_text");
+                String nlQuestion = payloadString(payload, "nl_question");
+                if (!isBlank(sqlText)) {
+                    historySqlSamples.add(sqlText);
+                }
+                contextBuilder.append(idx++)
+                    .append(". ")
+                    .append(nlQuestion.isBlank() ? "" : ("问法=" + nlQuestion + "；"))
+                    .append(sqlText.isBlank() ? payloadString(payload, "sql_semantic") : sqlText)
+                    .append("\n");
+            }
+            contextBuilder.append("\n");
+        }
+
         if (!historyHits.isEmpty()) {
             contextBuilder.append("【命中历史SQL】\n");
             int idx = 1;
@@ -213,16 +302,19 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         context.setRelatedTables(new ArrayList<>(relatedTables));
         context.setRelatedColumns(new ArrayList<>(relatedColumns));
         context.setHistorySqlSamples(historySqlSamples);
-        context.setHit(!tableHits.isEmpty() || !columnHits.isEmpty() || !historyHits.isEmpty());
+        context.setHit(!tableHits.isEmpty() || !columnHits.isEmpty() || !historyHits.isEmpty()
+            || !metricTermHits.isEmpty() || !exampleSqlHits.isEmpty());
 
         log.info(
-            "[RAG-RETRIEVE-RESP] connectionId={}, databaseName={}, hit={}, tableHitCount={}, columnHitCount={}, historyHitCount={}, relatedTableCount={}, relatedColumnCount={}, historyCount={}, contextLength={}",
+            "[RAG-RETRIEVE-RESP] connectionId={}, databaseName={}, hit={}, tableHitCount={}, columnHitCount={}, historyHitCount={}, metricHitCount={}, exampleHitCount={}, relatedTableCount={}, relatedColumnCount={}, historyCount={}, contextLength={}",
             connectionId,
             normalizedDatabaseName,
             context.getHit(),
             tableHits.size(),
             columnHits.size(),
             historyHits.size(),
+            metricTermHits.size(),
+            exampleSqlHits.size(),
             context.getRelatedTables().size(),
             context.getRelatedColumns().size(),
             context.getHistorySqlSamples().size(),
@@ -292,6 +384,74 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
                 return false;
             })
             .toList();
+    }
+
+
+    private List<QdrantScoredPoint> filterHitsByTables(List<QdrantScoredPoint> hits, Set<String> constraints) {
+        if (hits == null || hits.isEmpty() || constraints == null || constraints.isEmpty()) {
+            return hits == null ? List.of() : hits;
+        }
+        return hits.stream()
+            .filter(hit -> {
+                String tableName = normalizeTableName(payloadString(hit.getPayload(), "table_name"));
+                if (!tableName.isBlank() && constraints.contains(tableName)) {
+                    return true;
+                }
+                List<String> tables = payloadStringList(hit.getPayload(), "tables");
+                for (String table : tables) {
+                    if (constraints.contains(normalizeTableName(table))) {
+                        return true;
+                    }
+                }
+                return false;
+            })
+            .toList();
+    }
+
+    private List<QdrantScoredPoint> rerankHits(String userInput, String bucket, List<QdrantScoredPoint> hits) {
+        if (hits == null || hits.isEmpty()) {
+            return List.of();
+        }
+        if (!rerankEnabled) {
+            return hits;
+        }
+        double queryTimeBonus = containsTimeSignal(userInput) ? 0.05 : 0.0;
+        List<ScoredHit> rescored = new ArrayList<>(hits.size());
+        for (QdrantScoredPoint hit : hits) {
+            double vectorScore = hit.getScore() == null ? 0.0 : hit.getScore();
+            double schemaBonus = resolveSchemaBonus(bucket, hit.getPayload());
+            double onnxProxy = Math.min(1.0, vectorScore + schemaBonus * 0.2 + queryTimeBonus);
+            double finalScore = alphaVectorScore * vectorScore + betaOnnxScore * onnxProxy + gammaRuleBonus * schemaBonus;
+            rescored.add(new ScoredHit(hit, finalScore));
+        }
+        rescored.sort(Comparator.comparingDouble(ScoredHit::score).reversed());
+        List<QdrantScoredPoint> sorted = new ArrayList<>(rescored.size());
+        for (ScoredHit item : rescored) {
+            sorted.add(item.hit());
+        }
+        return sorted;
+    }
+
+    private double resolveSchemaBonus(String bucket, Map<String, Object> payload) {
+        if (payload == null) {
+            return 0.0;
+        }
+        return switch (bucket) {
+            case "table" -> isBlank(payloadString(payload, "table_name")) ? 0.0 : 1.0;
+            case "column" -> (!isBlank(payloadString(payload, "table_name")) && !isBlank(payloadString(payload, "column_name"))) ? 1.0 : 0.0;
+            case "metric_term" -> isBlank(payloadString(payload, "metric_expression")) ? 0.2 : 1.0;
+            case "example_sql", "query_history" -> isBlank(payloadString(payload, "sql_text")) ? 0.3 : 1.0;
+            default -> 0.0;
+        };
+    }
+
+    private boolean containsTimeSignal(String text) {
+        String normalized = Objects.toString(text, "").toLowerCase(Locale.ROOT);
+        return normalized.contains("日") || normalized.contains("周") || normalized.contains("月")
+            || normalized.contains("季度") || normalized.contains("year") || normalized.contains("month");
+    }
+
+    private record ScoredHit(QdrantScoredPoint hit, double score) {
     }
 
 
