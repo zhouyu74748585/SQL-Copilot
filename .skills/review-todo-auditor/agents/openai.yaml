@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review待办审查"
+  short_description: "处理最新reviewTodo并归档为reviewDone"
+  default_prompt: "当用户提出review时，读取docs/review最新reviewTodo，按检查清单输出问题清单、修复建议和风险等级，写回文档并重命名为reviewDone。"

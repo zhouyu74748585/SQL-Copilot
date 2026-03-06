@@ -1,0 +1,4 @@
+interface:
+  display_name: "Project Skill Bootstrap"
+  short_description: "Initialize .skills and AGENTS.md rules for new projects"
+  default_prompt: "Use $project-skill-bootstrap to initialize .skills and AGENTS.md for this repository."

@@ -321,6 +321,7 @@ public class SqlServiceImpl implements SqlService {
     }
 
     private void appendHistory(SqlExecuteReq req, SqlExecuteVO result, String targetDatabaseName) {
+        boolean memoryEnabled = resolveExecuteMemoryEnabled(req);
         QueryHistoryEntity history = new QueryHistoryEntity();
         history.setConnectionId(req.getConnectionId());
         history.setSessionId(req.getSessionId());
@@ -332,14 +333,23 @@ public class SqlServiceImpl implements SqlService {
         history.setDatabaseName(normalize(targetDatabaseName));
         history.setChartConfigJson(null);
         history.setChartImageCacheKey(null);
+        history.setMemoryEnabled(memoryEnabled ? 1 : 0);
         history.setExecutionMs(result.getExecutionMs());
         history.setSuccessFlag(Boolean.TRUE.equals(result.getSuccess()) ? 1 : 0);
         history.setCreatedAt(System.currentTimeMillis());
         queryHistoryMapper.insert(history);
-        // 关键策略：仅对执行成功的 SQL 做向量化写入，避免未成功语句污染检索样本。
-        if (history.getSuccessFlag() != null && history.getSuccessFlag() == 1) {
+        // 关键策略：仅在“记忆理解开启 + 执行成功”时向量化，避免无效样本进入检索库。
+        if (memoryEnabled && history.getSuccessFlag() != null && history.getSuccessFlag() == 1) {
             ragIngestionService.ingestSqlHistory(history);
         }
+    }
+
+    private boolean resolveExecuteMemoryEnabled(SqlExecuteReq req) {
+        if (req.getMemoryEnabled() != null) {
+            return Boolean.TRUE.equals(req.getMemoryEnabled());
+        }
+        // 向后兼容：旧客户端未传开关时保持历史行为（默认开启）。
+        return true;
     }
 
     private void appendAudit(SqlExecuteReq req, String riskLevel, String action) {

@@ -4,7 +4,7 @@ server:
 spring:
   datasource:
     driver-class-name: org.sqlite.JDBC
-    url: jdbc:sqlite:D:\Ideaprojects\SQL-Copilot\sql-copilot.db
+    url: jdbc:sqlite:/Users/zhouyu/IdeaProjects/SQL_Copilot/sql-copilot.db
   sql:
     init:
       mode: always

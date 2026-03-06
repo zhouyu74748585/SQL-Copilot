@@ -23,6 +23,9 @@ public class SqlExecuteReq {
     /** 目标数据库名称（可选，未传时使用连接默认库）。 */
     private String databaseName;
 
+    /** 记忆理解开关：开启后执行成功 SQL 才提交向量化。 */
+    private Boolean memoryEnabled;
+
     /** 风险确认令牌，当前风险策略要求确认时必填。 */
     private String riskAckToken;
 

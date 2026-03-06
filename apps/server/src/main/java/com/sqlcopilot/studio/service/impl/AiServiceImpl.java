@@ -2752,16 +2752,13 @@ public class AiServiceImpl implements AiService {
             String sql = safe(item.getSqlText());
             String assistant = safe(item.getAssistantContent());
             if (!prompt.isBlank()) {
-                builder.append("U: ").append(cutText(prompt, 80)).append("
-");
+                builder.append("U: ").append(cutText(prompt, 80)).append("\n");
             }
             if (!sql.isBlank()) {
-                builder.append("SQL: ").append(cutText(sql, 120)).append("
-");
+                builder.append("SQL: ").append(cutText(sql, 120)).append("\n");
             }
             if (!assistant.isBlank()) {
-                builder.append("A: ").append(cutText(assistant, 120)).append("
-");
+                builder.append("A: ").append(cutText(assistant, 120)).append("\n");
             }
         }
         return cutText(builder.toString().trim(), 2000);
@@ -2842,8 +2839,7 @@ public class AiServiceImpl implements AiService {
                 }
                 String summary = Objects.toString(point.getPayload().get("summary"), "").trim();
                 if (!summary.isBlank()) {
-                    builder.append("- ").append(cutText(summary, 500)).append("
-");
+                    builder.append("- ").append(cutText(summary, 500)).append("\n");
                 }
             }
             return builder.toString().trim();

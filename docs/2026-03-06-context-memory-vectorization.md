@@ -46,3 +46,26 @@
 
 ## 备注
 - 以上改动均按 UTF-8 文本编码提交。
+
+---
+
+## 追加记录（2026-03-06 11:42）- 编译错误修复
+
+### 修复内容
+- 修复后端编译失败：
+  - `AiServiceImpl.java` 中多处字符串字面量断行导致 `未结束的字符串文字`，统一改为 `"\n"` 拼接。
+  - `QdrantClientServiceImpl.java` 中补齐缺失请求体类型 `DeleteReq`，修复 `DeleteReq` 符号找不到错误。
+- 修复前端 TypeScript 编译失败：
+  - `App.vue` 中 ER 请求/快照保存移除未在类型中定义的 `memoryEnabled` 字段。
+  - 修复 ER 标签页创建与快照恢复流程中的 `null` 类型推断问题，显式收敛为 `ErWorkspaceTab`。
+  - 历史会话恢复时补齐 `QueryWorkspaceTab` 必填字段：`memoryEnabled` 与 `lastTokenEstimate`。
+- 修复共享类型定义不一致：
+  - `packages/shared-contracts/src/index.ts` 中 `AiGenerateChartVO` 补充 `promptTokens/completionTokens/totalTokens` 可选字段。
+
+### 验证结果
+- 后端构建：`mvn -f apps/server/pom.xml clean package -DskipTests` 通过。
+- 前端构建：`npm run -w @sqlcopilot/desktop build` 通过。
+- 前端类型检查：`npm run -w @sqlcopilot/desktop type-check` 通过。
+- 启动验证（clean）：
+  - 后端：`mvn -f apps/server/pom.xml clean spring-boot:run` 启动成功，`http://127.0.0.1:18080/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+  - 前端：执行 clean build 后 `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6044` 启动成功，`http://127.0.0.1:6044` 返回 HTTP 200。

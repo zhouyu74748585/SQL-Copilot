@@ -1,0 +1,4 @@
+review-task-loginterface:
+  display_name: "review-task-log"
+  short_description: "仅在代码变更时生成任务评审日志"
+  default_prompt: "在任务完成前检查 git 变更；仅当代码文件发生变化时，在 docs/review 创建 reviewTodo 文件并写入需求描述、变动文件和行号。"

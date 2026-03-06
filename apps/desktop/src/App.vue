@@ -285,6 +285,8 @@
         </div>
       </aside>
 
+      <div class="pane-splitter pane-splitter-left" @mousedown="startResizeLeftPane" />
+
       <template v-if="activeWorkbenchTab === browserTabKey">
         <section class="pane pane-center">
           <div class="pane-title">对象浏览</div>
@@ -388,7 +390,7 @@
           </div>
         </section>
 
-        <div class="pane-splitter" @mousedown="startResizeBrowserPane" />
+        <div class="pane-splitter pane-splitter-right" @mousedown="startResizeBrowserPane" />
 
         <aside class="pane pane-right detail-pane">
           <div class="pane-title">对象详情</div>
@@ -490,6 +492,14 @@
                 :options="erLayoutModeOptions"
                 @change="touchErTab(activeErTab)"
               />
+              <span class="er-toolbar-label">线型</span>
+              <a-select
+                v-model:value="activeErTab.lineType"
+                size="small"
+                style="width: 104px"
+                :options="erLineTypeOptions"
+                @change="touchErTab(activeErTab)"
+              />
             </a-space>
           </div>
           <div class="er-canvas-wrap">
@@ -498,13 +508,14 @@
                 ref="erDiagramPanelRef"
                 :graph="activeErDisplayGraph"
                 :layout-mode="activeErTab.layoutMode"
+                :line-type="activeErTab.lineType"
                 :show-comments="activeErTab.showCardComments"
                 @relation-route-change="handleErRelationRouteChange(activeErTab, $event)"
               />
             </a-spin>
           </div>
         </section>
-        <div class="pane-splitter er-pane-splitter" @mousedown="startResizeErPane" />
+        <div class="pane-splitter pane-splitter-right er-pane-splitter" @mousedown="startResizeErPane" />
 
         <aside class="pane pane-right er-side-pane">
           <div class="pane-title">ER 图信息</div>
@@ -801,7 +812,7 @@
                 />
                 <span class="query-chat-auto-label">Auto</span>
                 <a-switch v-model:checked="activeQueryTab.autoMode" size="small" />
-                <span style="margin-left: 12px;">记忆</span>
+                <span style="margin-left: 12px;">记忆理解</span>
                 <a-switch v-model:checked="activeQueryTab.memoryEnabled" size="small" />
                 <span style="margin-left: 12px; color: var(--ant-color-text-secondary);">≈Token: {{ activeQueryTab.lastTokenEstimate || 0 }}</span>
                 <template v-if="activeQueryTab.autoMode">
@@ -876,8 +887,15 @@
           </div>
         </section>
 
+        <div v-if="activeQueryTab" class="pane-splitter pane-splitter-right query-pane-splitter" @mousedown="startResizeQueryPane" />
+
         <aside v-if="activeQueryTab" class="pane pane-right query-editor-pane">
           <div class="pane-title">SQL 编辑与执行</div>
+          <div class="query-editor-memory-row">
+            <span class="query-editor-memory-label">记忆理解</span>
+            <a-switch v-model:checked="activeQueryTab.memoryEnabled" size="small" />
+            <span class="query-editor-memory-hint">开启后，执行成功 SQL 才会提交向量化</span>
+          </div>
 
           <div class="editor-group" ref="sqlEditorContainerRef">
             <MonacoEditor
@@ -1815,6 +1833,7 @@ interface ErWorkspaceTab {
   selectedTableNames: string[];
   selectedAiModel: string;
   layoutMode: ErLayoutMode;
+  lineType: ErLineType;
   showCardComments: boolean;
   aiConfidenceThreshold: number;
   includeAiInference: boolean;
@@ -1823,8 +1842,6 @@ interface ErWorkspaceTab {
   errorMessage: string;
   createdAt: number;
   updatedAt: number;
-  memoryEnabled: boolean;
-  lastTokenEstimate: number;
 }
 
 interface ErRelationRouteChangePayload {
@@ -1832,6 +1849,8 @@ interface ErRelationRouteChangePayload {
   routeManual: boolean;
   routeLaneX: number;
 }
+
+type ErLineType = 'POLYLINE' | 'STRAIGHT';
 
 const browserTabKey = 'browser';
 const uiThemeStorageKey = 'sqlcopilot.ui-theme.v1';
@@ -1929,6 +1948,12 @@ const sqlSelectionPopover = reactive({
   top: 0,
 });
 const viewportWidth = ref(typeof window === 'undefined' ? 1440 : window.innerWidth);
+const leftPaneWidth = ref(270);
+const leftPaneResizeState = reactive({
+  resizing: false,
+  startX: 0,
+  startWidth: 270,
+});
 const browserRightPaneWidth = ref(390);
 const browserPaneResizeState = reactive({
   resizing: false,
@@ -1940,6 +1965,12 @@ const erPaneResizeState = reactive({
   resizing: false,
   startX: 0,
   startWidth: 400,
+});
+const queryRightPaneWidth = ref(420);
+const queryPaneResizeState = reactive({
+  resizing: false,
+  startX: 0,
+  startWidth: 420,
 });
 
 const contextMenu = reactive({
@@ -2417,16 +2448,16 @@ const workbenchStyle = computed(() => {
   }
   if (activeWorkbenchTab.value === browserTabKey) {
     return {
-      gridTemplateColumns: `270px minmax(460px, 1fr) 8px ${browserRightPaneWidth.value}px`,
+      gridTemplateColumns: `${leftPaneWidth.value}px 4px minmax(460px, 1fr) 4px ${browserRightPaneWidth.value}px`,
     };
   }
   if (activeErTab.value) {
     return {
-      gridTemplateColumns: `270px minmax(560px, 1fr) 8px ${erRightPaneWidth.value}px`,
+      gridTemplateColumns: `${leftPaneWidth.value}px 4px minmax(560px, 1fr) 4px ${erRightPaneWidth.value}px`,
     };
   }
   return {
-    gridTemplateColumns: '270px minmax(560px, 1.12fr) minmax(420px, 0.88fr)',
+    gridTemplateColumns: `${leftPaneWidth.value}px 4px minmax(520px, 1fr) 4px ${queryRightPaneWidth.value}px`,
   };
 });
 
@@ -2481,6 +2512,11 @@ const erLayoutModeOptions = [
   { label: '网格布局', value: 'GRID' as ErLayoutMode },
   { label: '环形布局', value: 'CIRCLE' as ErLayoutMode },
   { label: '分层布局', value: 'HIERARCHICAL' as ErLayoutMode },
+];
+
+const erLineTypeOptions = [
+  { label: '折线', value: 'POLYLINE' as ErLineType },
+  { label: '直线', value: 'STRAIGHT' as ErLineType },
 ];
 
 const activeChartRows = computed(() => activeResultRows.value.map((row) => {
@@ -3191,7 +3227,6 @@ async function refreshErGraphForTab(tab: ErWorkspaceTab, includeAiInference?: bo
       databaseName: tab.databaseName,
       tableNames: [...tab.selectedTableNames],
       modelName: tab.selectedAiModel || undefined,
-      memoryEnabled: tab.memoryEnabled,
       includeAiInference: includeAiInference == null ? tab.includeAiInference : includeAiInference,
       aiConfidenceThreshold: tab.aiConfidenceThreshold,
     };
@@ -3250,8 +3285,8 @@ async function confirmErTableSelection() {
     const targetTab = erSelectTargetTabKey.value
       ? erTabs.value.find((item) => item.key === erSelectTargetTabKey.value) ?? null
       : null;
-    let tab = targetTab;
-    if (!tab) {
+    let tab: ErWorkspaceTab;
+    if (!targetTab) {
       const now = Date.now();
       tab = {
         key: `er-${now}-${Math.round(Math.random() * 1000)}`,
@@ -3262,6 +3297,7 @@ async function confirmErTableSelection() {
         selectedTableNames: [...selected],
         selectedAiModel: selectedModel,
         layoutMode: 'GRID',
+        lineType: 'POLYLINE',
         showCardComments: false,
         aiConfidenceThreshold: 0.6,
         includeAiInference: true,
@@ -3273,6 +3309,7 @@ async function confirmErTableSelection() {
       };
       erTabs.value = [...erTabs.value, tab];
     } else {
+      tab = targetTab;
       tab.snapshotId = undefined;
       tab.connectionId = erSelectConnectionId.value;
       tab.databaseName = erSelectDatabaseName.value;
@@ -3280,6 +3317,9 @@ async function confirmErTableSelection() {
       tab.selectedAiModel = selectedModel;
       if (!tab.layoutMode) {
         tab.layoutMode = 'GRID';
+      }
+      if (tab.lineType !== 'STRAIGHT' && tab.lineType !== 'POLYLINE') {
+        tab.lineType = 'POLYLINE';
       }
       if (tab.showCardComments == null) {
         tab.showCardComments = false;
@@ -3572,8 +3612,9 @@ async function openErSnapshot(item: ErGraphSnapshotSummaryVO) {
       new Set((detail.selectedTableNames ?? []).map((entry) => (entry || '').trim()).filter((entry) => !!entry)),
     );
     const now = Date.now();
-    let tab = findErTabBySnapshotId(detail.id);
-    if (!tab) {
+    const existingTab = findErTabBySnapshotId(detail.id);
+    let tab: ErWorkspaceTab;
+    if (!existingTab) {
       tab = {
         key: `er-snapshot-${detail.id}`,
         title: buildErSnapshotTabTitle(detail),
@@ -3583,6 +3624,7 @@ async function openErSnapshot(item: ErGraphSnapshotSummaryVO) {
         selectedTableNames: normalizedTables,
         selectedAiModel: modelName,
         layoutMode: layoutMode as ErLayoutMode,
+        lineType: 'POLYLINE',
         showCardComments: false,
         aiConfidenceThreshold: Number.isFinite(aiConfidenceThreshold) ? aiConfidenceThreshold : 0.6,
         includeAiInference: detail.includeAiInference !== false,
@@ -3594,6 +3636,7 @@ async function openErSnapshot(item: ErGraphSnapshotSummaryVO) {
       };
       erTabs.value = [...erTabs.value, tab];
     } else {
+      tab = existingTab;
       tab.title = buildErSnapshotTabTitle(detail);
       tab.snapshotId = detail.id;
       tab.connectionId = detail.connectionId;
@@ -3601,6 +3644,9 @@ async function openErSnapshot(item: ErGraphSnapshotSummaryVO) {
       tab.selectedTableNames = normalizedTables;
       tab.selectedAiModel = modelName;
       tab.layoutMode = layoutMode as ErLayoutMode;
+      if (tab.lineType !== 'STRAIGHT' && tab.lineType !== 'POLYLINE') {
+        tab.lineType = 'POLYLINE';
+      }
       tab.showCardComments = tab.showCardComments === true;
       tab.aiConfidenceThreshold = Number.isFinite(aiConfidenceThreshold) ? aiConfidenceThreshold : 0.6;
       tab.includeAiInference = detail.includeAiInference !== false;
@@ -3664,7 +3710,6 @@ async function confirmSaveErSnapshot() {
     snapshotName,
     selectedTableNames: [...tab.selectedTableNames],
     modelName: tab.selectedAiModel || undefined,
-      memoryEnabled: tab.memoryEnabled,
     layoutMode: tab.layoutMode,
     aiConfidenceThreshold: tab.aiConfidenceThreshold,
     includeAiInference: tab.includeAiInference,
@@ -4011,6 +4056,8 @@ function buildHistoryTabFromRows(connectionId: number, sessionId: string, rows: 
   const ordered = [...rows].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
   const last = ordered[ordered.length - 1];
   const first = ordered[0];
+  const latestMemoryFlag = [...ordered].reverse().find((item) => item.memoryEnabled != null)?.memoryEnabled;
+  const latestTokenEstimate = [...ordered].reverse().find((item) => item.tokenEstimate != null)?.tokenEstimate;
   const models = aiModelOptions.value.map((item) => String(item.value)).filter((item) => !!item);
   const tab: QueryWorkspaceTab = {
     key: `query-history-${connectionId}-${encodeURIComponent(sessionId)}`,
@@ -4042,6 +4089,8 @@ function buildHistoryTabFromRows(connectionId: number, sessionId: string, rows: 
     chartReadonly: false,
     createdAt: first?.createdAt ?? Date.now(),
     updatedAt: last?.createdAt ?? Date.now(),
+    memoryEnabled: latestMemoryFlag ?? true,
+    lastTokenEstimate: Number(latestTokenEstimate ?? 0),
   };
   applySessionTitle(tab);
   return tab;
@@ -5858,6 +5907,36 @@ function clearObjectDetail() {
   tableDetail.value = null;
 }
 
+function startResizeLeftPane(event: MouseEvent) {
+  if (viewportWidth.value < 1200) {
+    return;
+  }
+  event.preventDefault();
+  leftPaneResizeState.resizing = true;
+  leftPaneResizeState.startX = event.clientX;
+  leftPaneResizeState.startWidth = leftPaneWidth.value;
+  window.addEventListener('mousemove', handleResizeLeftPane);
+  window.addEventListener('mouseup', stopResizeLeftPane);
+}
+
+function handleResizeLeftPane(event: MouseEvent) {
+  if (!leftPaneResizeState.resizing) {
+    return;
+  }
+  const delta = event.clientX - leftPaneResizeState.startX;
+  const next = leftPaneResizeState.startWidth + delta;
+  leftPaneWidth.value = Math.min(420, Math.max(220, next));
+}
+
+function stopResizeLeftPane() {
+  if (!leftPaneResizeState.resizing) {
+    return;
+  }
+  leftPaneResizeState.resizing = false;
+  window.removeEventListener('mousemove', handleResizeLeftPane);
+  window.removeEventListener('mouseup', stopResizeLeftPane);
+}
+
 function startResizeBrowserPane(event: MouseEvent) {
   if (activeWorkbenchTab.value !== browserTabKey) {
     return;
@@ -5916,6 +5995,36 @@ function stopResizeErPane() {
   erPaneResizeState.resizing = false;
   window.removeEventListener('mousemove', handleResizeErPane);
   window.removeEventListener('mouseup', stopResizeErPane);
+}
+
+function startResizeQueryPane(event: MouseEvent) {
+  if (!activeQueryTab.value || viewportWidth.value < 1200) {
+    return;
+  }
+  event.preventDefault();
+  queryPaneResizeState.resizing = true;
+  queryPaneResizeState.startX = event.clientX;
+  queryPaneResizeState.startWidth = queryRightPaneWidth.value;
+  window.addEventListener('mousemove', handleResizeQueryPane);
+  window.addEventListener('mouseup', stopResizeQueryPane);
+}
+
+function handleResizeQueryPane(event: MouseEvent) {
+  if (!queryPaneResizeState.resizing) {
+    return;
+  }
+  const delta = queryPaneResizeState.startX - event.clientX;
+  const next = queryPaneResizeState.startWidth + delta;
+  queryRightPaneWidth.value = Math.min(820, Math.max(320, next));
+}
+
+function stopResizeQueryPane() {
+  if (!queryPaneResizeState.resizing) {
+    return;
+  }
+  queryPaneResizeState.resizing = false;
+  window.removeEventListener('mousemove', handleResizeQueryPane);
+  window.removeEventListener('mouseup', stopResizeQueryPane);
 }
 
 function openQueryTabByObject(record: ObjectRow, autoExecute = false) {
@@ -7174,6 +7283,7 @@ async function executeSqlForTab(
         sessionId: tab.sessionId,
         sqlText,
         databaseName: tab.databaseName || undefined,
+        memoryEnabled: tab.memoryEnabled,
         riskAckToken: riskAckToken || undefined,
         operatorName: 'desktop-user',
       }, {
@@ -7440,10 +7550,14 @@ onBeforeUnmount(() => {
   stopVectorizeStatusPolling();
   clearAllTableStatsPollingTimers();
   window.removeEventListener('resize', handleWindowResize);
+  window.removeEventListener('mousemove', handleResizeLeftPane);
+  window.removeEventListener('mouseup', stopResizeLeftPane);
   window.removeEventListener('mousemove', handleResizeBrowserPane);
   window.removeEventListener('mouseup', stopResizeBrowserPane);
   window.removeEventListener('mousemove', handleResizeErPane);
   window.removeEventListener('mouseup', stopResizeErPane);
+  window.removeEventListener('mousemove', handleResizeQueryPane);
+  window.removeEventListener('mouseup', stopResizeQueryPane);
   sqlEditorTypeDisposable?.dispose();
   sqlEditorTypeDisposable = null;
   sqlEditorSelectionDisposable?.dispose();

@@ -391,6 +391,9 @@ public class QdrantClientServiceImpl implements QdrantClientService {
     private record CountReq(FilterReq filter, Boolean exact) {
     }
 
+    private record DeleteReq(FilterReq filter) {
+    }
+
     private static class SearchReq {
         private List<Float> vector;
         private Integer limit;

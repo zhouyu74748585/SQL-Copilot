@@ -82,6 +82,9 @@ export interface AiGenerateChartVO {
   configSummary: string;
   reasoning: string;
   fallbackUsed: boolean;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
 }
 
 export type AiIntentType = 'GENERATE_SQL' | 'EXPLAIN_SQL' | 'ANALYZE_SQL' | 'GENERATE_CHART';

@@ -437,6 +437,14 @@ body {
   background: linear-gradient(180deg, #d9e7ff 0%, #d1e1ff 100%);
 }
 
+.pane-splitter-left {
+  grid-column: 2;
+}
+
+.workbench.workbench-query .pane-splitter-left {
+  grid-row: 1 / 3;
+}
+
 .pane {
   background: var(--panel);
   border-right: 1px solid var(--line);
@@ -1377,6 +1385,27 @@ body {
   border-bottom: 1px solid var(--line);
 }
 
+.query-editor-memory-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface-1, #f8fbff) 94%, transparent);
+  font-size: 12px;
+  color: var(--text-2, #51627d);
+}
+
+.query-editor-memory-label {
+  font-weight: 600;
+  color: var(--text-1, #2f4568);
+}
+
+.query-editor-memory-hint {
+  color: var(--text-3, #6f829f);
+}
+
 .sql-selection-popover {
   position: absolute;
   z-index: 12;
@@ -1412,7 +1441,7 @@ body {
   border-bottom: 1px solid var(--line);
   background: #fbfdff;
   flex-wrap: wrap;
-  grid-column: 2 / 4;
+  grid-column: 3 / 6;
   grid-row: 1;
 }
 
@@ -1697,15 +1726,20 @@ body {
 }
 
 .workbench.workbench-query .query-editor-pane {
-  grid-column: 2;
+  grid-column: 3;
   grid-row: 2;
   border-right: 1px solid var(--line);
 }
 
 .workbench.workbench-query .query-chat-pane {
-  grid-column: 3;
+  grid-column: 5;
   grid-row: 2;
   border-right: none;
+}
+
+.workbench.workbench-query .query-pane-splitter {
+  grid-column: 4;
+  grid-row: 2;
 }
 
 .query-result-panel {
@@ -2132,6 +2166,10 @@ body {
     overflow: auto;
   }
 
+  .pane-splitter {
+    display: none;
+  }
+
   .pane {
     border-right: none;
     border-bottom: 1px solid var(--line);
@@ -2272,7 +2310,7 @@ body {
 }
 
 .studio-root .pane-splitter {
-  width: 8px;
+  width: 4px;
   background: transparent;
   border: none;
 }
@@ -2362,6 +2400,11 @@ body {
 .studio-root .query-pane-right {
   border-right: none;
   background: var(--surface-0);
+}
+
+.studio-root .query-editor-pane {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
 }
 
 .studio-root .query-chat-scroll {
@@ -2588,8 +2631,8 @@ body {
 
 @media (max-width: 1200px) {
   .studio-root .workbench {
-    padding: 8px 0 0;
-    gap: 8px;
+    padding: 4px 0 0;
+    gap: 4px;
   }
 
   .studio-root .pane {
@@ -2824,18 +2867,11 @@ body {
 
 .studio-root .workbench {
   height: calc(100% - var(--chrome-height));
-  padding: 8px 0 0;
-  gap: 10px;
+  padding: 4px 0 0;
+  row-gap: 4px;
+  column-gap: 0;
   background: var(--bg-app);
   margin-top: 0;
-}
-
-.studio-root .workbench.workbench-browser {
-  column-gap: 0;
-}
-
-.studio-root .workbench.workbench-browser > .pane-left {
-  margin-right: 8px;
 }
 
 .studio-root.theme-dark .top-chrome .tool-item .anticon,
