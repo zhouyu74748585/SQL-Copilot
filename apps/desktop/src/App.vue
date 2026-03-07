@@ -41,6 +41,16 @@
             <span>{{ tab.title }}</span>
             <close-outlined class="tab-close" @click.stop="closeErTab(tab.key)" />
           </button>
+          <button
+            v-for="tab in tableEditorTabs"
+            :key="tab.key"
+            class="workspace-tab"
+            :class="{ 'is-active': activeWorkbenchTab === tab.key }"
+            @click="activeWorkbenchTab = tab.key"
+          >
+            <span>{{ tab.title }}</span>
+            <close-outlined class="tab-close" @click.stop="closeTableEditorTab(tab.key)" />
+          </button>
           <a-tooltip title="新建 AI 查询页签">
             <button class="top-chrome-tab-add" @click="openAiQueryTab()">
               <plus-outlined />
@@ -210,7 +220,8 @@
     <main
       class="workbench"
       :class="{
-        'workbench-query': activeWorkbenchTab !== browserTabKey && !activeErTab,
+        'workbench-query': !!activeQueryTab,
+        'workbench-table-editor': !!activeTableEditorTab,
         'workbench-er': !!activeErTab,
         'workbench-browser': activeWorkbenchTab === browserTabKey,
       }"
@@ -292,10 +303,18 @@
           <div class="pane-title">对象浏览</div>
           <div class="center-toolbar">
             <div v-if="currentObjectType === 'tables'" class="center-toolbar-left">
+              <a-button
+                size="small"
+                type="primary"
+                :disabled="!canCreateTable"
+                @click="openNewTableEditor()"
+              >
+                <template #icon><plus-outlined /></template>
+                新建表
+              </a-button>
               <a-tooltip :title="browserErEntryTooltip">
                 <a-button
                   size="small"
-                  type="primary"
                   :disabled="!canOpenBrowserErFeature"
                   @click="openErTableSelectModal()"
                 >
@@ -658,6 +677,67 @@
               </div>
             </div>
           </div>
+        </aside>
+      </template>
+
+      <template v-else-if="activeTableEditorTab">
+        <div class="query-shared-meta table-editor-shared-meta">
+          <div class="query-meta-item">
+            <span>连接</span>
+            <a-select
+              v-model:value="activeTableEditorTab.connectionId"
+              size="small"
+              style="min-width: 156px"
+              :options="connectionSelectOptions"
+              :disabled="activeTableEditorTab.mode === 'edit'"
+              @change="handleTableEditorConnectionChange(activeTableEditorTab)"
+            />
+          </div>
+          <div class="query-meta-item">
+            <span>数据库</span>
+            <a-select
+              v-model:value="activeTableEditorTab.databaseName"
+              size="small"
+              style="min-width: 166px"
+              :options="databaseOptionsForTableEditorTab(activeTableEditorTab)"
+              :disabled="activeTableEditorTab.mode === 'edit'"
+              @change="handleTableEditorDatabaseChange(activeTableEditorTab)"
+            />
+          </div>
+        </div>
+
+        <section class="pane pane-center table-editor-structure-pane">
+          <div class="pane-title">表结构编辑 · {{ activeTableEditorTab.title }}</div>
+          <TableEditor
+            :key="activeTableEditorTab.key"
+            :tab="activeTableEditorTab"
+            @change="handleTableEditorChange(activeTableEditorTab, $event)"
+            @save="handleTableEditorSave"
+            @close="closeTableEditorTab(activeTableEditorTab.key)"
+          />
+        </section>
+
+        <div class="pane-splitter pane-splitter-right table-editor-pane-splitter" @mousedown="startResizeQueryPane" />
+
+        <aside class="pane pane-right table-editor-preview-pane">
+          <div class="detail-code-head">
+            <span>SQL 预览</span>
+            <a-space size="small" class="sql-preview-actions">
+              <a-button size="small" type="text" class="btn-mini" @click="handleTableEditorRefresh">
+                <template #icon><sync-outlined /></template>
+                刷新预览
+              </a-button>
+              <a-button size="small" type="primary" :loading="tableEditorSaving" :disabled="!activeTableEditorTab?.canSave" class="btn-execute" @click="handleTableEditorExecute">
+                <template #icon><play-circle-outlined /></template>
+                执行
+              </a-button>
+              <a-button size="small" type="text" class="btn-mini" @click="copyTableEditorSql">
+                <template #icon><copy-outlined /></template>
+                复制
+              </a-button>
+            </a-space>
+          </div>
+          <pre class="detail-code-block"><code v-html="tableEditorSqlHighlighted"></code></pre>
         </aside>
       </template>
 
@@ -1555,6 +1635,13 @@
       <template v-else-if="contextMenu.targetType === 'object'">
         <button
           class="context-menu-item"
+          :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
+          @click="triggerContextAction('editTable')"
+        >
+          编辑表结构
+        </button>
+        <button
+          class="context-menu-item"
           :disabled="contextMenu.objectType !== 'tables' && contextMenu.objectType !== 'views'"
           @click="triggerContextAction('queryData')"
         >
@@ -1674,6 +1761,7 @@ import {
   SendOutlined,
   SettingOutlined,
   StopOutlined,
+  SyncOutlined,
   TableOutlined,
   ToolOutlined,
   UnorderedListOutlined,
@@ -1687,6 +1775,7 @@ import {computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch}
 import {getApi, postApi} from './api/client';
 import QueryChartPanel from './components/QueryChartPanel.vue';
 import ErDiagramPanel from './components/ErDiagramPanel.vue';
+import TableEditor from './components/TableEditor.vue';
 import mysqlIcon from './assets/db/mysql.svg';
 import oracleIcon from './assets/db/oracle.svg';
 import postgresqlIcon from './assets/db/postgresql.svg';
@@ -1876,6 +1965,63 @@ interface ErWorkspaceTab {
   updatedAt: number;
 }
 
+interface TableEditorColumnDraft {
+  uuid: string;
+  columnName: string;
+  dataType: string;
+  columnSize: number | null;
+  decimalDigits: number | null;
+  defaultValue: string;
+  autoIncrement: boolean;
+  nullable: boolean;
+  columnComment: string;
+  primaryKey: boolean;
+  indexed: boolean;
+  defaultCurrentTimestamp: boolean;
+  onUpdateCurrentTimestamp: boolean;
+}
+
+interface TableEditorIndexDraft {
+  uuid: string;
+  indexName: string;
+  unique: boolean;
+  columns: string[];
+}
+
+interface TableEditorDraft {
+  tableName: string;
+  tableComment: string;
+  columns: TableEditorColumnDraft[];
+  indexes: TableEditorIndexDraft[];
+}
+
+interface TableEditorChangePayload {
+  draft: TableEditorDraft;
+  previewSql: string;
+  canSave: boolean;
+  dirty: boolean;
+}
+
+interface TableEditorWorkspaceTab {
+  key: string;
+  title: string;
+  connectionId: number;
+  databaseName: string;
+  tableName: string;
+  dbType: string;
+  mode: 'create' | 'edit';
+  tableDetail: TableDetailVO | null;
+  draft: TableEditorDraft | null;
+  baselineDraft: TableEditorDraft | null;
+  previewSql: string;
+  canSave: boolean;
+  dirty: boolean;
+  loading: boolean;
+  saved: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
 interface ErRelationRouteChangePayload {
   relationKey: string;
   routeManual: boolean;
@@ -1928,6 +2074,7 @@ const selectedAiModel = ref('');
 const activeWorkbenchTab = ref(browserTabKey);
 const queryTabs = ref<QueryWorkspaceTab[]>([]);
 const erTabs = ref<ErWorkspaceTab[]>([]);
+const tableEditorTabs = ref<TableEditorWorkspaceTab[]>([]);
 const erTableSelectModalOpen = ref(false);
 const erTableSelectSubmitting = ref(false);
 const erSelectConnectionId = ref(0);
@@ -2109,6 +2256,10 @@ const activeErTab = computed(() =>
   erTabs.value.find((item) => item.key === activeWorkbenchTab.value) ?? null,
 );
 
+const activeTableEditorTab = computed(() =>
+  tableEditorTabs.value.find((item) => item.key === activeWorkbenchTab.value) ?? null,
+);
+
 const activeErConfidenceThreshold = computed(() => {
   const threshold = Number(activeErTab.value?.aiConfidenceThreshold ?? 0.6);
   if (!Number.isFinite(threshold)) {
@@ -2240,6 +2391,12 @@ const browserErEntryTooltip = computed(() => {
   }
   const databaseName = getActiveDatabaseName(connectionId);
   return resolveErUnavailableReason(connectionId, databaseName) || '智能ER图';
+});
+
+const canCreateTable = computed(() => {
+  const connectionId = workflow.connectionId;
+  const databaseName = getActiveDatabaseName(connectionId);
+  return !!(connectionId && databaseName);
 });
 
 const connectionSelectOptions = computed(() =>
@@ -2441,6 +2598,11 @@ const createTableSqlText = computed(() => {
 });
 
 const createTableSqlHighlighted = computed(() => highlightSqlForDisplay(createTableSqlText.value));
+
+const tableEditorSqlHighlighted = computed(() => {
+  const sql = activeTableEditorTab.value?.previewSql || '-- 在右侧预览区展示结构变更 SQL';
+  return highlightSqlForDisplay(sql);
+});
 
 const filteredObjectRows = computed(() => {
   const keyword = tableKeyword.value.trim().toLowerCase();
@@ -3185,19 +3347,184 @@ function closeErTab(tabKey: string) {
   }
 }
 
+function closeTableEditorTab(tabKey: string) {
+  const index = tableEditorTabs.value.findIndex((item) => item.key === tabKey);
+  if (index < 0) {
+    return;
+  }
+  const tabs = [...tableEditorTabs.value];
+  tabs.splice(index, 1);
+  tableEditorTabs.value = tabs;
+  if (activeWorkbenchTab.value === tabKey) {
+    activeWorkbenchTab.value = tabs[index]?.key || tabs[index - 1]?.key || browserTabKey;
+    ensureActiveWorkbenchTab();
+  }
+}
+
+async function openNewTableEditor() {
+  const connectionId = workflow.connectionId;
+  const databaseName = getActiveDatabaseName(connectionId);
+  if (!connectionId || !databaseName) {
+    message.error('请先选择连接和数据库');
+    return;
+  }
+  const dbType = connections.value.find((item) => item.id === connectionId)?.dbType ?? 'MYSQL';
+  const now = Date.now();
+  const key = `table-editor-${now}`;
+  const tab: TableEditorWorkspaceTab = {
+    key,
+    title: '新建表',
+    connectionId,
+    databaseName,
+    tableName: '',
+    dbType,
+    mode: 'create',
+    tableDetail: null,
+    draft: null,
+    baselineDraft: null,
+    previewSql: '',
+    canSave: false,
+    dirty: false,
+    loading: false,
+    saved: false,
+    createdAt: now,
+    updatedAt: now,
+  };
+  tableEditorTabs.value = [...tableEditorTabs.value, tab];
+  activeWorkbenchTab.value = key;
+}
+
+async function openEditTableEditor(connectionId: number, databaseName: string, tableName: string) {
+  const existingTab = tableEditorTabs.value.find(
+    (item) => item.connectionId === connectionId && item.databaseName === databaseName && item.tableName === tableName,
+  );
+  if (existingTab) {
+    activeWorkbenchTab.value = existingTab.key;
+    return;
+  }
+  const dbType = connections.value.find((item) => item.id === connectionId)?.dbType ?? 'MYSQL';
+  const now = Date.now();
+  const key = `table-editor-${now}`;
+  const tab: TableEditorWorkspaceTab = {
+    key,
+    title: tableName,
+    connectionId,
+    databaseName,
+    tableName,
+    dbType,
+    mode: 'edit',
+    tableDetail: null,
+    draft: null,
+    baselineDraft: null,
+    previewSql: '',
+    canSave: false,
+    dirty: false,
+    loading: true,
+    saved: false,
+    createdAt: now,
+    updatedAt: now,
+  };
+  tableEditorTabs.value = [...tableEditorTabs.value, tab];
+  activeWorkbenchTab.value = key;
+  try {
+    const detail = await getApi<TableDetailVO>(
+      `/api/schema/tableDetail?connectionId=${connectionId}&databaseName=${encodeURIComponent(databaseName)}&tableName=${encodeURIComponent(tableName)}`,
+    );
+    const targetTab = tableEditorTabs.value.find((item) => item.key === key);
+    if (targetTab) {
+      targetTab.tableDetail = detail;
+      targetTab.loading = false;
+      targetTab.updatedAt = Date.now();
+    }
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    message.error(`加载表结构失败: ${msg}`);
+    closeTableEditorTab(key);
+  }
+}
+
+function handleTableEditorChange(tab: TableEditorWorkspaceTab, payload: TableEditorChangePayload) {
+  tab.draft = payload.draft;
+  tab.previewSql = payload.previewSql;
+  tab.canSave = payload.canSave;
+  tab.dirty = payload.dirty;
+  tab.updatedAt = Date.now();
+}
+
+async function handleTableEditorSave(tab: TableEditorWorkspaceTab) {
+  tab.saved = true;
+  tab.updatedAt = Date.now();
+  message.success(tab.mode === 'create' ? '表创建成功' : '表结构更新成功');
+  await refreshCurrentObjects();
+}
+
+const tableEditorSaving = ref(false);
+
+function handleTableEditorRefresh() {
+  // 刷新预览：手动触发 change 事件，让 TableEditor 重新计算 SQL
+  if (activeTableEditorTab.value) {
+    // 通过修改 tab.updatedAt 触发 TableEditor 的 watch，重新 emit change
+    activeTableEditorTab.value.updatedAt = Date.now();
+  }
+}
+
+async function handleTableEditorExecute() {
+  const tab = activeTableEditorTab.value;
+  if (!tab || !tab.canSave || !tab.dirty) {
+    if (!tab?.canSave) {
+      message.warning('请先完善表结构定义');
+    } else {
+      message.info('未检测到结构变更，无需执行');
+    }
+    return;
+  }
+  const ddl = tab.previewSql?.trim();
+  if (!ddl || ddl.startsWith('--')) {
+    message.warning('SQL 预览为空，无法执行');
+    return;
+  }
+
+  tableEditorSaving.value = true;
+  try {
+    await postApi(tab.mode === 'create' ? '/api/schema/table/create' : '/api/schema/table/alter', {
+      connectionId: tab.connectionId,
+      databaseName: tab.databaseName,
+      tableName: tab.draft?.tableName || tab.tableName,
+      tableComment: tab.draft?.tableComment || undefined,
+      columns: tab.draft?.columns || [],
+      indexes: tab.draft?.indexes || [],
+      ddl,
+    });
+    message.success(tab.mode === 'create' ? '表创建成功' : '表结构更新成功');
+    tab.saved = true;
+    tab.dirty = false;
+    tab.updatedAt = Date.now();
+    await refreshCurrentObjects();
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    message.error(`执行失败: ${msg}`);
+  } finally {
+    tableEditorSaving.value = false;
+  }
+}
+
 function hasWorkbenchTab(tabKey: string) {
   if (tabKey === browserTabKey) {
     return true;
   }
   return queryTabs.value.some((item) => item.key === tabKey)
-    || erTabs.value.some((item) => item.key === tabKey);
+    || erTabs.value.some((item) => item.key === tabKey)
+    || tableEditorTabs.value.some((item) => item.key === tabKey);
 }
 
 function ensureActiveWorkbenchTab() {
   if (hasWorkbenchTab(activeWorkbenchTab.value)) {
     return;
   }
-  activeWorkbenchTab.value = queryTabs.value[0]?.key ?? erTabs.value[0]?.key ?? browserTabKey;
+  activeWorkbenchTab.value = queryTabs.value[0]?.key
+    ?? erTabs.value[0]?.key
+    ?? tableEditorTabs.value[0]?.key
+    ?? browserTabKey;
 }
 
 async function openErTableSelectModal(tab?: ErWorkspaceTab) {
@@ -4974,6 +5301,7 @@ async function removeConnection(id: number) {
     }
     queryTabs.value = queryTabs.value.filter((item) => item.connectionId !== id);
     erTabs.value = erTabs.value.filter((item) => item.connectionId !== id);
+    tableEditorTabs.value = tableEditorTabs.value.filter((item) => item.connectionId !== id);
     if (erSnapshotConnectionId.value === id) {
       erSnapshotConnectionId.value = 0;
       erSnapshotItems.value = [];
@@ -5771,7 +6099,7 @@ function closeContextMenu() {
 }
 
 async function triggerContextAction(
-  action: 'edit' | 'test' | 'sync' | 'delete' | 'revectorize' | 'interruptVectorize' | 'viewVectorizedData' | 'queryData' | 'vectorizeTable',
+  action: 'edit' | 'test' | 'sync' | 'delete' | 'revectorize' | 'interruptVectorize' | 'viewVectorizedData' | 'queryData' | 'vectorizeTable' | 'editTable',
 ) {
   const id = contextMenu.connectionId;
   const databaseName = contextMenu.databaseName;
@@ -5804,6 +6132,13 @@ async function triggerContextAction(
       return;
     }
     await vectorizeSingleTable(id, databaseName, objectName);
+    return;
+  }
+  if (action === 'editTable') {
+    if (targetType !== 'object' || !objectName || objectType !== 'tables' || !databaseName) {
+      return;
+    }
+    await openEditTableEditor(id, databaseName, objectName);
     return;
   }
   if (action === 'revectorize') {
@@ -6260,6 +6595,19 @@ function databaseOptionsForTab(tab: QueryWorkspaceTab) {
   return [{ label: fallback, value: fallback }];
 }
 
+function databaseOptionsForTableEditorTab(tab: TableEditorWorkspaceTab) {
+  const connection = connections.value.find((item) => item.id === tab.connectionId);
+  const cached = connection ? visibleDatabasesForConnection(connection) : [];
+  if (cached.length) {
+    return cached.map((item) => ({ label: item, value: item }));
+  }
+  const fallback = tab.databaseName || getActiveDatabaseName(tab.connectionId);
+  if (!fallback) {
+    return [];
+  }
+  return [{ label: fallback, value: fallback }];
+}
+
 function queryTabConnectionName(tab: QueryWorkspaceTab) {
   return connections.value.find((item) => item.id === tab.connectionId)?.name ?? '-';
 }
@@ -6300,6 +6648,30 @@ function handleQueryDatabaseChange(tab: QueryWorkspaceTab) {
   tab.chartReadonly = false;
   touchQueryTab(tab);
   void warmupTableSuggestions(tab);
+}
+
+async function handleTableEditorConnectionChange(tab: TableEditorWorkspaceTab) {
+  if (tab.mode === 'edit') {
+    return;
+  }
+  await runSafely(async () => {
+    await prepareConnectionTreeData(tab.connectionId);
+    tab.databaseName = getActiveDatabaseName(tab.connectionId);
+    tab.dbType = connections.value.find((item) => item.id === tab.connectionId)?.dbType ?? 'MYSQL';
+    tab.draft = null;
+    tab.baselineDraft = null;
+    tab.previewSql = '';
+    tab.canSave = false;
+    tab.dirty = false;
+    tab.updatedAt = Date.now();
+  });
+}
+
+function handleTableEditorDatabaseChange(tab: TableEditorWorkspaceTab) {
+  if (tab.mode === 'edit') {
+    return;
+  }
+  tab.updatedAt = Date.now();
 }
 
 function resolveSqlForAction(tab: QueryWorkspaceTab, sqlOverride?: string) {
@@ -8102,6 +8474,7 @@ function highlightSqlForDisplay(sqlText: string) {
   const escaped = escapeHtml(sqlText || '');
   const keywords = [
     'CREATE',
+    'ALTER',
     'TABLE',
     'PRIMARY',
     'KEY',
@@ -8114,6 +8487,15 @@ function highlightSqlForDisplay(sqlText: string) {
     'BY',
     'AS',
     'IDENTITY',
+    'ADD',
+    'DROP',
+    'COLUMN',
+    'INDEX',
+    'UNIQUE',
+    'MODIFY',
+    'CURRENT_TIMESTAMP',
+    'ON',
+    'UPDATE',
   ];
   const dataTypes = [
     'BIGINT',
@@ -8192,6 +8574,11 @@ async function copyTextContent(text: string, successText: string) {
 
 async function copyCreateTableSql() {
   await copyTextContent(createTableSqlText.value, '建表语句已复制');
+}
+
+async function copyTableEditorSql() {
+  const sql = activeTableEditorTab.value?.previewSql || '';
+  await copyTextContent(sql, 'SQL 已复制');
 }
 
 function dbIconUrl(dbType: string) {

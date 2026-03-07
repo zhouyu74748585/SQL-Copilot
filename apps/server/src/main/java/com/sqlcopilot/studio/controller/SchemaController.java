@@ -101,6 +101,16 @@ public class SchemaController {
         return ApiResponse.success(erDiagramService.buildErGraph(req));
     }
 
+    @PostMapping("/table/create")
+    public ApiResponse<TableOperationVO> createTable(@Valid @RequestBody TableCreateReq req) {
+        return ApiResponse.success(schemaService.createTable(req));
+    }
+
+    @PostMapping("/table/alter")
+    public ApiResponse<TableOperationVO> alterTable(@Valid @RequestBody TableAlterReq req) {
+        return ApiResponse.success(schemaService.alterTable(req));
+    }
+
     private void tryEnqueueVectorizeTask(Long connectionId, String databaseName) {
         if (databaseName == null || databaseName.isBlank()) {
             return;

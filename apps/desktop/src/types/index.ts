@@ -106,6 +106,7 @@ export interface SchemaTableStatsVO {
 export interface TableDetailVO {
   connectionId: number;
   tableName: string;
+  tableComment?: string;
   columns: Array<{
     columnName: string;
     dataType?: string;
@@ -117,6 +118,13 @@ export interface TableDetailVO {
     columnComment?: string;
     indexed?: boolean;
     primaryKey?: boolean;
+    defaultCurrentTimestamp?: boolean;
+    onUpdateCurrentTimestamp?: boolean;
+  }>;
+  indexes?: Array<{
+    indexName: string;
+    unique?: boolean;
+    columns: string[];
   }>;
 }
 

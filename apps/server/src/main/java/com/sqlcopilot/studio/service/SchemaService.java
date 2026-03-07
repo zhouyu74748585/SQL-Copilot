@@ -19,4 +19,8 @@ public interface SchemaService {
     List<String> listObjectNames(Long connectionId, String databaseName, String objectType);
 
     ContextBuildVO buildContext(ContextBuildReq req);
+
+    TableOperationVO createTable(TableCreateReq req);
+
+    TableOperationVO alterTable(TableAlterReq req);
 }

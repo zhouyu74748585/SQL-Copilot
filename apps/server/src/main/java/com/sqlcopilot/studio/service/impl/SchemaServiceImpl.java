@@ -143,9 +143,35 @@ public class SchemaServiceImpl implements SchemaService {
                 .toList();
         }
 
+        String tableComment = snapshot.tables().stream()
+            .filter(item -> tableName.equals(item.getTableName()))
+            .map(SchemaTableCacheEntity::getTableComment)
+            .filter(Objects::nonNull)
+            .findFirst()
+            .orElse("");
+        List<TableDetailVO.IndexDetailVO> indexDetails = List.of();
+        Map<String, String> mysqlColumnExtraMap = Map.of();
+        ConnectionEntity connectionEntity = connectionService.getConnectionEntity(connectionId);
+        String targetDatabaseName = resolveTargetDatabaseName(connectionEntity, databaseName);
+        try (Connection connection = connectionService.openTargetConnection(connectionId)) {
+            applyDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
+            DatabaseMetaData metaData = connection.getMetaData();
+            String catalog = resolveCatalog(connection, connectionEntity.getDbType(), targetDatabaseName);
+            String schemaPattern = resolveSchemaPattern(connectionEntity.getDbType(), targetDatabaseName);
+            indexDetails = readTableIndexDetails(metaData, catalog, schemaPattern, tableName);
+            if ("MYSQL".equalsIgnoreCase(normalize(connectionEntity.getDbType()))) {
+                mysqlColumnExtraMap = readMysqlColumnExtras(connection, targetDatabaseName, tableName);
+            }
+        } catch (SQLException ex) {
+            log.warn("读取表索引/扩展信息失败, connectionId={}, databaseName={}, tableName={}, reason={}",
+                connectionId, databaseName, tableName, ex.getMessage());
+        }
+
         TableDetailVO vo = new TableDetailVO();
         vo.setConnectionId(connectionId);
         vo.setTableName(tableName);
+        vo.setTableComment(tableComment);
+        Map<String, String> finalMysqlColumnExtraMap = mysqlColumnExtraMap;
         List<TableDetailVO.ColumnDetailVO> columnDetails = columnCache.stream().map(item -> {
             TableDetailVO.ColumnDetailVO detail = new TableDetailVO.ColumnDetailVO();
             detail.setColumnName(item.getColumnName());
@@ -158,9 +184,13 @@ public class SchemaServiceImpl implements SchemaService {
             detail.setColumnComment(item.getColumnComment());
             detail.setIndexed(item.getIndexedFlag() == 1);
             detail.setPrimaryKey(item.getPrimaryKeyFlag() == 1);
+            detail.setDefaultCurrentTimestamp(isCurrentTimestampDefault(item.getColumnDefault()));
+            String extra = finalMysqlColumnExtraMap.getOrDefault(normalize(item.getColumnName()).toLowerCase(Locale.ROOT), "");
+            detail.setOnUpdateCurrentTimestamp(hasOnUpdateCurrentTimestamp(extra));
             return detail;
         }).toList();
         vo.setColumns(columnDetails);
+        vo.setIndexes(indexDetails);
         return vo;
     }
 
@@ -281,6 +311,136 @@ public class SchemaServiceImpl implements SchemaService {
         vo.setUsedTokens(usedTokens);
         vo.setRelatedTables(relatedTables);
         return vo;
+    }
+
+    @Override
+    public TableOperationVO createTable(TableCreateReq req) {
+        String ddl = req.getDdl();
+        if (ddl == null || ddl.isBlank()) {
+            ddl = buildCreateTableDDL(req);
+        }
+        return executeDDL(req.getConnectionId(), req.getDatabaseName(), ddl, "表创建成功");
+    }
+
+    @Override
+    public TableOperationVO alterTable(TableAlterReq req) {
+        String ddl = req.getDdl();
+        if (ddl == null || ddl.isBlank()) {
+            return TableOperationVO.failure("暂不支持自动生成ALTER TABLE，请手动编写DDL");
+        }
+        return executeDDL(req.getConnectionId(), req.getDatabaseName(), ddl, "表结构更新成功");
+    }
+
+    private String buildCreateTableDDL(TableCreateReq req) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("CREATE TABLE ").append(req.getTableName()).append(" (");
+
+        List<String> definitionSegments = new ArrayList<>();
+        for (TableCreateReq.ColumnDefinition col : req.getColumns()) {
+            definitionSegments.add(buildColumnDefinitionSql(col));
+        }
+
+        List<String> pkColumns = req.getColumns().stream()
+            .filter(c -> Boolean.TRUE.equals(c.getPrimaryKey()))
+            .map(TableCreateReq.ColumnDefinition::getColumnName)
+            .toList();
+        if (!pkColumns.isEmpty()) {
+            definitionSegments.add("PRIMARY KEY (" + String.join(", ", pkColumns) + ")");
+        }
+
+        if (req.getIndexes() != null) {
+            req.getIndexes().stream()
+                .map(this::buildIndexDefinitionSql)
+                .filter(def -> !def.isBlank())
+                .forEach(definitionSegments::add);
+        }
+
+        sb.append(String.join(", ", definitionSegments));
+
+        if (req.getTableComment() != null && !req.getTableComment().isBlank()) {
+            sb.append(") COMMENT='").append(escapeSingleQuote(req.getTableComment())).append("'");
+        } else {
+            sb.append(")");
+        }
+
+        sb.append(";");
+        return sb.toString();
+    }
+
+    private String buildColumnDefinitionSql(TableCreateReq.ColumnDefinition col) {
+        StringBuilder colDef = new StringBuilder();
+        colDef.append(col.getColumnName()).append(" ").append(col.getDataType());
+
+        if (col.getColumnSize() != null && !isTypeWithoutSize(col.getDataType())) {
+            colDef.append("(").append(col.getColumnSize());
+            if (col.getDecimalDigits() != null) {
+                colDef.append(",").append(col.getDecimalDigits());
+            }
+            colDef.append(")");
+        }
+
+        if (Boolean.FALSE.equals(col.getNullable())) {
+            colDef.append(" NOT NULL");
+        }
+
+        if (Boolean.TRUE.equals(col.getAutoIncrement()) && Boolean.TRUE.equals(col.getPrimaryKey())) {
+            colDef.append(" AUTO_INCREMENT");
+        }
+
+        if (Boolean.TRUE.equals(col.getDefaultCurrentTimestamp())) {
+            colDef.append(" DEFAULT CURRENT_TIMESTAMP");
+        } else if (col.getDefaultValue() != null && !col.getDefaultValue().isBlank()) {
+            colDef.append(" DEFAULT ").append(col.getDefaultValue());
+        }
+
+        if (Boolean.TRUE.equals(col.getOnUpdateCurrentTimestamp())) {
+            colDef.append(" ON UPDATE CURRENT_TIMESTAMP");
+        }
+
+        if (col.getColumnComment() != null && !col.getColumnComment().isBlank()) {
+            colDef.append(" COMMENT '").append(escapeSingleQuote(col.getColumnComment())).append("'");
+        }
+        return colDef.toString();
+    }
+
+    private String buildIndexDefinitionSql(TableCreateReq.IndexDefinition idx) {
+        String indexName = normalize(idx.getIndexName());
+        if (indexName.isBlank()) {
+            return "";
+        }
+        List<String> columns = idx.getColumns() == null ? List.of() : idx.getColumns().stream()
+            .map(this::normalize)
+            .filter(column -> !column.isBlank())
+            .toList();
+        if (columns.isEmpty()) {
+            return "";
+        }
+        String prefix = Boolean.TRUE.equals(idx.getUnique()) ? "UNIQUE INDEX " : "INDEX ";
+        return prefix + indexName + " (" + String.join(", ", columns) + ")";
+    }
+
+    private boolean isTypeWithoutSize(String dataType) {
+        String upper = dataType.toUpperCase(Locale.ROOT);
+        return upper.equals("INT") || upper.equals("INTEGER") || upper.equals("BIGINT")
+            || upper.equals("SMALLINT") || upper.equals("TINYINT") || upper.equals("TEXT")
+            || upper.equals("LONGTEXT") || upper.equals("MEDIUMTEXT") || upper.equals("DATE")
+            || upper.equals("DATETIME") || upper.equals("TIMESTAMP") || upper.equals("TIME")
+            || upper.equals("BLOB") || upper.equals("JSON") || upper.equals("BOOLEAN")
+            || upper.equals("BOOL") || upper.equals("FLOAT") || upper.equals("DOUBLE");
+    }
+
+    private TableOperationVO executeDDL(Long connectionId, String databaseName, String ddl, String successMessage) {
+        ConnectionEntity connectionEntity = connectionService.getConnectionEntity(connectionId);
+        try (Connection connection = connectionService.openTargetConnection(connectionId)) {
+            applyDatabaseContext(connection, connectionEntity.getDbType(), databaseName);
+            try (Statement stmt = connection.createStatement()) {
+                stmt.execute(ddl);
+                return TableOperationVO.success(successMessage, ddl);
+            }
+        } catch (SQLException ex) {
+            log.error("执行DDL失败: {}", ddl, ex);
+            return TableOperationVO.failure("执行失败: " + ex.getMessage());
+        }
     }
 
     @Scheduled(
@@ -746,6 +906,90 @@ public class SchemaServiceImpl implements SchemaService {
         return columns;
     }
 
+    private List<TableDetailVO.IndexDetailVO> readTableIndexDetails(DatabaseMetaData metaData,
+                                                                    String catalog,
+                                                                    String schemaPattern,
+                                                                    String tableName) throws SQLException {
+        Map<String, IndexAccumulator> indexMap = new LinkedHashMap<>();
+        try (ResultSet indexes = metaData.getIndexInfo(catalog, schemaPattern, tableName, false, false)) {
+            while (indexes.next()) {
+                short type = indexes.getShort("TYPE");
+                if (type == DatabaseMetaData.tableIndexStatistic) {
+                    continue;
+                }
+                String indexName = normalize(indexes.getString("INDEX_NAME"));
+                String columnName = normalize(indexes.getString("COLUMN_NAME"));
+                if (indexName.isBlank() || columnName.isBlank() || "PRIMARY".equalsIgnoreCase(indexName)) {
+                    continue;
+                }
+                boolean nonUnique = indexes.getBoolean("NON_UNIQUE");
+                boolean unique = !nonUnique;
+                IndexAccumulator accumulator = indexMap.computeIfAbsent(indexName, key -> new IndexAccumulator());
+                Integer ordinal = readIntegerColumn(indexes, "ORDINAL_POSITION");
+                int position = ordinal == null || ordinal <= 0 ? accumulator.columnsByPosition.size() + 1 : ordinal;
+                accumulator.unique = accumulator.initialized ? (accumulator.unique && unique) : unique;
+                accumulator.initialized = true;
+                accumulator.columnsByPosition.put(position, columnName);
+            }
+        }
+        return indexMap.entrySet().stream()
+            .sorted(Map.Entry.comparingByKey(String.CASE_INSENSITIVE_ORDER))
+            .map(entry -> {
+                List<String> indexColumns = entry.getValue().columnsByPosition.values().stream()
+                    .filter(value -> !value.isBlank())
+                    .distinct()
+                    .toList();
+                if (indexColumns.isEmpty()) {
+                    return null;
+                }
+                TableDetailVO.IndexDetailVO detail = new TableDetailVO.IndexDetailVO();
+                detail.setIndexName(entry.getKey());
+                detail.setUnique(entry.getValue().unique);
+                detail.setColumns(indexColumns);
+                return detail;
+            })
+            .filter(Objects::nonNull)
+            .toList();
+    }
+
+    private Map<String, String> readMysqlColumnExtras(Connection connection,
+                                                      String databaseName,
+                                                      String tableName) throws SQLException {
+        if (normalize(databaseName).isBlank()) {
+            return Map.of();
+        }
+        Map<String, String> extras = new HashMap<>();
+        String sql = "SELECT COLUMN_NAME, EXTRA FROM information_schema.columns WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?";
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, databaseName);
+            statement.setString(2, tableName);
+            try (ResultSet rs = statement.executeQuery()) {
+                while (rs.next()) {
+                    String columnName = normalize(rs.getString("COLUMN_NAME"));
+                    if (columnName.isBlank()) {
+                        continue;
+                    }
+                    extras.put(columnName.toLowerCase(Locale.ROOT), normalize(rs.getString("EXTRA")));
+                }
+            }
+        }
+        return extras;
+    }
+
+    private boolean isCurrentTimestampDefault(String defaultValue) {
+        String normalized = normalize(defaultValue)
+            .replace("(", "")
+            .replace(")", "")
+            .replace("`", "")
+            .replace("'", "")
+            .toUpperCase(Locale.ROOT);
+        return "CURRENT_TIMESTAMP".equals(normalized) || "NOW".equals(normalized);
+    }
+
+    private boolean hasOnUpdateCurrentTimestamp(String extra) {
+        return normalize(extra).toUpperCase(Locale.ROOT).contains("ON UPDATE CURRENT_TIMESTAMP");
+    }
+
     private List<String> readTableLikeObjects(DatabaseMetaData metaData, String catalog, String schemaPattern, String type)
         throws SQLException {
         List<String> names = new ArrayList<>();
@@ -792,6 +1036,16 @@ public class SchemaServiceImpl implements SchemaService {
 
     private String normalize(String value) {
         return Objects.toString(value, "").trim();
+    }
+
+    private String escapeSingleQuote(String value) {
+        return normalize(value).replace("'", "''");
+    }
+
+    private static class IndexAccumulator {
+        private final TreeMap<Integer, String> columnsByPosition = new TreeMap<>();
+        private boolean unique = true;
+        private boolean initialized = false;
     }
 
     private String resolveCacheDatabaseName(Long connectionId, String databaseName) {
