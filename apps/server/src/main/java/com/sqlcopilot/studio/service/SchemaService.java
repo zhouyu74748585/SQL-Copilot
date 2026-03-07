@@ -23,4 +23,10 @@ public interface SchemaService {
     TableOperationVO createTable(TableCreateReq req);
 
     TableOperationVO alterTable(TableAlterReq req);
+
+    TableOperationVO dropTable(Long connectionId, String databaseName, String tableName);
+
+    TableOperationVO truncateTable(Long connectionId, String databaseName, String tableName);
+
+    void refreshSchemaCache(Long connectionId, String databaseName);
 }

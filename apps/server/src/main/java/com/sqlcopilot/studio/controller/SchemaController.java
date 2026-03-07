@@ -111,6 +111,31 @@ public class SchemaController {
         return ApiResponse.success(schemaService.alterTable(req));
     }
 
+    @DeleteMapping("/table")
+    public ApiResponse<TableOperationVO> dropTable(@RequestParam("connectionId") Long connectionId,
+                                                   @RequestParam("databaseName") String databaseName,
+                                                   @RequestParam("tableName") String tableName) {
+        TableOperationVO result = schemaService.dropTable(connectionId, databaseName, tableName);
+        if (result.isSuccess()) {
+            schemaService.refreshSchemaCache(connectionId, databaseName);
+        }
+        return ApiResponse.success(result);
+    }
+
+    @DeleteMapping("/table/truncate")
+    public ApiResponse<TableOperationVO> truncateTable(@RequestParam("connectionId") Long connectionId,
+                                                      @RequestParam("databaseName") String databaseName,
+                                                      @RequestParam("tableName") String tableName) {
+        return ApiResponse.success(schemaService.truncateTable(connectionId, databaseName, tableName));
+    }
+
+    @PostMapping("/cache/refresh")
+    public ApiResponse<Void> refreshCache(@RequestParam("connectionId") Long connectionId,
+                                          @RequestParam(value = "databaseName", required = false) String databaseName) {
+        schemaService.refreshSchemaCache(connectionId, databaseName);
+        return ApiResponse.success(null);
+    }
+
     private void tryEnqueueVectorizeTask(Long connectionId, String databaseName) {
         if (databaseName == null || databaseName.isBlank()) {
             return;

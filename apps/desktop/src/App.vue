@@ -1497,10 +1497,6 @@
               </div>
               <div class="rag-config-card">
                 <div class="rag-config-card-title">本地 Rerank 配置</div>
-                <a-form-item>
-                  <a-switch v-model:checked="ragConfigForm.ragRerankEnabled" />
-                  <span style="margin-left: 8px;">启用本地 Rerank</span>
-                </a-form-item>
                 <a-form-item label="Rerank 模型目录">
                   <div class="file-picker-row">
                     <a-input
@@ -1510,6 +1506,10 @@
                     />
                     <a-button :loading="pickingRagRerankModelDir" @click="pickRagRerankModelDir">选择目录</a-button>
                   </div>
+                </a-form-item>
+                <a-form-item>
+                  <a-switch v-model:checked="ragConfigForm.ragRerankEnabled" />
+                  <span style="margin-left: 8px;">启用本地 Rerank</span>
                 </a-form-item>
               </div>
             </div>
@@ -1654,8 +1654,51 @@
         >
           向量化
         </button>
+        <div class="context-menu-divider" />
+        <button
+          class="context-menu-item danger"
+          :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
+          @click="triggerContextAction('truncateTable')"
+        >
+          清空表数据
+        </button>
+        <button
+          class="context-menu-item danger"
+          :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
+          @click="triggerContextAction('dropTable')"
+        >
+          删除表
+        </button>
       </template>
     </div>
+
+    <!-- 清空表确认弹窗 -->
+    <a-modal
+      v-model:open="truncateTableModalOpen"
+      title="清空表数据"
+      width="420px"
+      @ok="confirmTruncateTable"
+      @cancel="truncateTableModalOpen = false"
+    >
+      <div style="padding: 16px 0;">
+        <p>确定要清空表 <strong>{{ truncateTableName }}</strong> 的所有数据吗？</p>
+        <p style="color: #ff4d4f; font-size: 12px;">此操作将删除表中所有数据，且不可恢复！</p>
+      </div>
+    </a-modal>
+
+    <!-- 删除表确认弹窗 -->
+    <a-modal
+      v-model:open="dropTableModalOpen"
+      title="删除表"
+      width="420px"
+      @ok="confirmDropTable"
+      @cancel="dropTableModalOpen = false"
+    >
+      <div style="padding: 16px 0;">
+        <p>确定要删除表 <strong>{{ dropTableName }}</strong> 吗？</p>
+        <p style="color: #ff4d4f; font-size: 12px;">此操作将永久删除该表及其所有数据，且不可恢复！</p>
+      </div>
+    </a-modal>
 
     <a-modal
       v-model:open="vectorizeOverviewModalOpen"
@@ -2067,6 +2110,13 @@ const viewportHeight = ref(typeof window === 'undefined' ? 900 : window.innerHei
 const vectorizeOverviewModalOpen = ref(false);
 const vectorizeOverviewLoading = ref(false);
 const vectorizeOverviewData = ref<RagVectorizeOverviewVO | null>(null);
+
+// 删除/清空表相关状态
+const truncateTableModalOpen = ref(false);
+const truncateTableName = ref('');
+const dropTableModalOpen = ref(false);
+const dropTableName = ref('');
+
 const aiConfigModalOpen = ref(false);
 const aiConfigActiveTab = ref<'model' | 'embedding'>('model');
 const uiTheme = ref<UiTheme>('light');
@@ -3455,6 +3505,8 @@ async function handleTableEditorSave(tab: TableEditorWorkspaceTab) {
   tab.saved = true;
   tab.updatedAt = Date.now();
   message.success(tab.mode === 'create' ? '表创建成功' : '表结构更新成功');
+  // 刷新元数据缓存
+  await refreshSchemaMetadata(tab.connectionId, tab.databaseName);
   await refreshCurrentObjects();
 }
 
@@ -3465,6 +3517,62 @@ function handleTableEditorRefresh() {
   if (activeTableEditorTab.value) {
     // 通过修改 tab.updatedAt 触发 TableEditor 的 watch，重新 emit change
     activeTableEditorTab.value.updatedAt = Date.now();
+  }
+}
+
+// 清空表数据
+async function confirmTruncateTable() {
+  const tableName = truncateTableName.value;
+  const dbName = contextMenu.databaseName;
+  const connId = contextMenu.connectionId;
+  truncateTableModalOpen.value = false;
+
+  try {
+    await postApi('/api/schema/table/truncate', {
+      connectionId: connId,
+      databaseName: dbName,
+      tableName: tableName,
+    });
+    message.success('表数据已清空');
+    // 刷新元数据缓存
+    await refreshSchemaMetadata(connId, dbName);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    message.error(`清空失败: ${msg}`);
+  }
+}
+
+// 删除表
+async function confirmDropTable() {
+  const tableName = dropTableName.value;
+  const dbName = contextMenu.databaseName;
+  const connId = contextMenu.connectionId;
+  dropTableModalOpen.value = false;
+
+  try {
+    await postApi('/api/schema/table', {
+      connectionId: connId,
+      databaseName: dbName,
+      tableName: tableName,
+    });
+    message.success('表已删除');
+    // 刷新元数据缓存
+    await refreshSchemaMetadata(connId, dbName);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    message.error(`删除失败: ${msg}`);
+  }
+}
+
+// 刷新元数据缓存
+async function refreshSchemaMetadata(connectionId: number, databaseName: string) {
+  try {
+    await postApi('/api/schema/cache/refresh', {
+      connectionId,
+      databaseName,
+    });
+  } catch (e) {
+    console.warn('刷新缓存失败:', e);
   }
 }
 
@@ -3510,6 +3618,8 @@ async function handleTableEditorExecute() {
     tab.saved = true;
     tab.dirty = false;
     tab.updatedAt = Date.now();
+    // 刷新元数据缓存
+    await refreshSchemaMetadata(tab.connectionId, tab.databaseName);
     await refreshCurrentObjects();
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -6110,7 +6220,7 @@ function closeContextMenu() {
 }
 
 async function triggerContextAction(
-  action: 'edit' | 'test' | 'sync' | 'delete' | 'revectorize' | 'interruptVectorize' | 'viewVectorizedData' | 'queryData' | 'vectorizeTable' | 'editTable',
+  action: 'edit' | 'test' | 'sync' | 'delete' | 'revectorize' | 'interruptVectorize' | 'viewVectorizedData' | 'queryData' | 'vectorizeTable' | 'editTable' | 'dropTable' | 'truncateTable',
 ) {
   const id = contextMenu.connectionId;
   const databaseName = contextMenu.databaseName;
@@ -6150,6 +6260,22 @@ async function triggerContextAction(
       return;
     }
     await openEditTableEditor(id, databaseName, objectName);
+    return;
+  }
+  if (action === 'truncateTable') {
+    if (targetType !== 'object' || !objectName || objectType !== 'tables' || !databaseName) {
+      return;
+    }
+    truncateTableName.value = objectName;
+    truncateTableModalOpen.value = true;
+    return;
+  }
+  if (action === 'dropTable') {
+    if (targetType !== 'object' || !objectName || objectType !== 'tables' || !databaseName) {
+      return;
+    }
+    dropTableName.value = objectName;
+    dropTableModalOpen.value = true;
     return;
   }
   if (action === 'revectorize') {

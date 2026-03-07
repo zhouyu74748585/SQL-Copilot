@@ -331,6 +331,38 @@ public class SchemaServiceImpl implements SchemaService {
         return executeDDL(req.getConnectionId(), req.getDatabaseName(), ddl, "表结构更新成功");
     }
 
+    @Override
+    public TableOperationVO dropTable(Long connectionId, String databaseName, String tableName) {
+        String normalizedTableName = normalize(tableName);
+        if (normalizedTableName.isBlank()) {
+            return TableOperationVO.failure("表名不能为空");
+        }
+        String ddl = "DROP TABLE `" + normalizedTableName + "`";
+        return executeDDL(connectionId, databaseName, ddl, "表删除成功");
+    }
+
+    @Override
+    public TableOperationVO truncateTable(Long connectionId, String databaseName, String tableName) {
+        String normalizedTableName = normalize(tableName);
+        if (normalizedTableName.isBlank()) {
+            return TableOperationVO.failure("表名不能为空");
+        }
+        String ddl = "TRUNCATE TABLE `" + normalizedTableName + "`";
+        return executeDDL(connectionId, databaseName, ddl, "表清空成功");
+    }
+
+    @Override
+    public void refreshSchemaCache(Long connectionId, String databaseName) {
+        if (connectionId == null) {
+            return;
+        }
+        String cacheDatabaseName = resolveCacheDatabaseName(connectionId, databaseName);
+        SchemaCacheKey cacheKey = new SchemaCacheKey(connectionId, cacheDatabaseName);
+        // 移除缓存，强制下次访问时重新加载
+        schemaSnapshotCache.remove(cacheKey);
+        log.info("Schema缓存已刷新, connectionId={}, databaseName={}", connectionId, databaseName);
+    }
+
     private String buildCreateTableDDL(TableCreateReq req) {
         StringBuilder sb = new StringBuilder();
         sb.append("CREATE TABLE ").append(req.getTableName()).append(" (");

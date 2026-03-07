@@ -2048,7 +2048,7 @@ body {
   margin: 0 10px 10px;
   padding: 10px;
   border: 1px solid #d8e2f2;
-  border-radius: 10px;
+  border-radius: 0;
   background: #fff;
 }
 
@@ -2382,7 +2382,7 @@ body {
 
 .studio-root .pane {
   border: none;
-  border-radius: 14px;
+  border-radius: 0;
   box-shadow: var(--shadow-1);
   background: var(--surface-0);
 }
@@ -2500,6 +2500,16 @@ body {
 }
 
 .studio-root .query-editor-pane {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.studio-root .query-pane-right {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.studio-root .detail-pane {
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
 }
