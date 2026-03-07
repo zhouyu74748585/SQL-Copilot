@@ -3495,6 +3495,17 @@ async function handleTableEditorExecute() {
       indexes: tab.draft?.indexes || [],
       ddl,
     });
+    // 执行成功后触发向量化
+    const tableName = tab.draft?.tableName || tab.tableName;
+    try {
+      await postApi('/api/rag/table/manual', {
+        connectionId: tab.connectionId,
+        databaseName: tab.databaseName,
+        tableName: tableName,
+      });
+    } catch (e) {
+      console.warn('向量化请求失败:', e);
+    }
     message.success(tab.mode === 'create' ? '表创建成功' : '表结构更新成功');
     tab.saved = true;
     tab.dirty = false;
