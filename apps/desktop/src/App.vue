@@ -2905,7 +2905,6 @@ function buildCategoryChildren(connectionId: number, databaseName: string) {
     { suffix: 'functions', title: '函数', nodeType: 'functions' },
     { suffix: 'events', title: '事件', nodeType: 'events' },
     { suffix: 'queries', title: '查询', nodeType: 'queries' },
-    { suffix: 'backups', title: '备份', nodeType: 'backups' },
   ];
   return categoryNodes.map((category) => ({
     key: buildCategoryNodeKey(connectionId, databaseName, category.suffix),
@@ -8462,9 +8461,6 @@ function objectTypeLabel(value: string) {
   }
   if (value === 'queries') {
     return '查询';
-  }
-  if (value === 'backups') {
-    return '备份';
   }
   return value;
 }
