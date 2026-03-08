@@ -1080,9 +1080,9 @@ const objectColumns = computed(() => {
   ];
 });
 
-const tableScrollY = computed(() => Math.max(300, viewportHeight.value - 300));
+const tableScrollY = computed(() => Math.max(360, viewportHeight.value));
 
-const queryResultScrollY = computed(() => Math.max(200, viewportHeight.value - 520));
+const queryResultScrollY = computed(() => Math.max(200, viewportHeight.value));
 
 const aiModelOptions = computed(() =>
   (aiConfigForm.modelOptions ?? []).map((item) => ({

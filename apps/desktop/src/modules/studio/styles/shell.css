@@ -527,11 +527,20 @@ body {
 }
 
 .left-nav-collapse {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
   background: transparent;
 }
 
 .left-nav-collapse .ant-collapse-item {
   border-bottom: 1px solid var(--line);
+}
+
+.left-nav-collapse .ant-collapse-content-box {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .left-nav-collapse .ant-collapse-header {
@@ -891,6 +900,19 @@ body {
 
 .pane-center .ant-table-tbody > tr.ant-table-row:hover > td {
   background: #f3f8ff;
+}
+
+.object-browser-content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.object-list-table {
+  flex: 1;
+  min-height: 0;
 }
 
 .object-grid {

@@ -317,13 +317,6 @@
             </button>
           </a-collapse-panel>
         </a-collapse>
-
-        <div class="pane-footer">
-          <div class="selected-name">{{ selectedConnection?.name ?? '未选择连接' }}</div>
-          <div class="selected-desc">
-            {{ selectedConnection?.host || '本地连接' }} : {{ selectedConnection?.port || '-' }} / {{ getActiveDatabaseName(workflow.connectionId) || '未指定库' }}
-          </div>
-        </div>
       </aside>
 
       <div class="pane-splitter pane-splitter-left" @mousedown="startResizeLeftPane" />
@@ -358,54 +351,57 @@
               </div>
             </div>
 
-            <a-table
-              v-if="objectViewMode === 'row'"
-              size="small"
-              :pagination="false"
-              :columns="objectColumns"
-              :data-source="filteredObjectRows"
-              row-key="objectName"
-              :scroll="{ y: tableScrollY }"
-              :custom-row="onObjectRow"
-            >
-              <template #bodyCell="{ column, record }">
-                <template v-if="column.key === 'objectName'">
-                  <div class="table-name-cell" :class="{ 'is-active': selectedObjectName === record.objectName, 'is-queryable': record.objectType === 'tables' || record.objectType === 'queries' }" @dblclick.stop="openQueryTabByObject(record)">
-                    <database-outlined />
-                    <span>{{ record.objectName }}</span>
-                  </div>
-                </template>
-                <template v-else-if="column.key === 'description'">
-                  <span class="object-desc-ellipsis">{{ record.description || '-' }}</span>
-                </template>
-                <template v-else-if="column.key === 'vectorizeStatus'">
-                  <a-tooltip :title="record.vectorizeMessage ? `${databaseStatusLabel(record.vectorizeStatus)} | ${record.vectorizeMessage}` : databaseStatusLabel(record.vectorizeStatus)">
-                    <span class="object-vectorize-cell" :class="databaseStatusClass(record.vectorizeStatus)">
-                      <component :is="databaseStatusIcon(record.vectorizeStatus)" class="object-vectorize-icon" />
-                      <span>{{ databaseStatusLabel(record.vectorizeStatus) }}</span>
-                    </span>
-                  </a-tooltip>
-                </template>
-              </template>
-            </a-table>
-
-            <div v-else class="object-grid">
-              <div
-                v-for="item in filteredObjectRows"
-                :key="item.objectName"
-                class="object-card"
-                :class="{ 'is-active': selectedObjectName === item.objectName }"
-                @click="onObjectRow(item).onClick()"
-                @dblclick="onObjectRow(item).onDblclick()"
-                @contextmenu.prevent.stop="onObjectRow(item).onContextmenu($event)"
+            <div class="object-browser-content">
+              <a-table
+                v-if="objectViewMode === 'row'"
+                class="object-list-table"
+                size="small"
+                :pagination="false"
+                :columns="objectColumns"
+                :data-source="filteredObjectRows"
+                row-key="objectName"
+                :scroll="{ y: tableScrollY }"
+                :custom-row="onObjectRow"
               >
-                <div class="object-card-title">{{ item.objectName }}</div>
-                <div class="object-card-meta">{{ currentObjectType === 'queries' ? '保存查询' : objectTypeLabel(item.objectType) }}</div>
-                <div v-if="currentObjectType !== 'queries'" class="object-card-vectorize" :class="databaseStatusClass(item.vectorizeStatus)">
-                  <component :is="databaseStatusIcon(item.vectorizeStatus)" class="object-vectorize-icon" />
-                  <span>{{ databaseStatusLabel(item.vectorizeStatus) }}</span>
+                <template #bodyCell="{ column, record }">
+                  <template v-if="column.key === 'objectName'">
+                    <div class="table-name-cell" :class="{ 'is-active': selectedObjectName === record.objectName, 'is-queryable': record.objectType === 'tables' || record.objectType === 'queries' }" @dblclick.stop="openQueryTabByObject(record)">
+                      <database-outlined />
+                      <span>{{ record.objectName }}</span>
+                    </div>
+                  </template>
+                  <template v-else-if="column.key === 'description'">
+                    <span class="object-desc-ellipsis">{{ record.description || '-' }}</span>
+                  </template>
+                  <template v-else-if="column.key === 'vectorizeStatus'">
+                    <a-tooltip :title="record.vectorizeMessage ? `${databaseStatusLabel(record.vectorizeStatus)} | ${record.vectorizeMessage}` : databaseStatusLabel(record.vectorizeStatus)">
+                      <span class="object-vectorize-cell" :class="databaseStatusClass(record.vectorizeStatus)">
+                        <component :is="databaseStatusIcon(record.vectorizeStatus)" class="object-vectorize-icon" />
+                        <span>{{ databaseStatusLabel(record.vectorizeStatus) }}</span>
+                      </span>
+                    </a-tooltip>
+                  </template>
+                </template>
+              </a-table>
+
+              <div v-else class="object-grid">
+                <div
+                  v-for="item in filteredObjectRows"
+                  :key="item.objectName"
+                  class="object-card"
+                  :class="{ 'is-active': selectedObjectName === item.objectName }"
+                  @click="onObjectRow(item).onClick()"
+                  @dblclick="onObjectRow(item).onDblclick()"
+                  @contextmenu.prevent.stop="onObjectRow(item).onContextmenu($event)"
+                >
+                  <div class="object-card-title">{{ item.objectName }}</div>
+                  <div class="object-card-meta">{{ currentObjectType === 'queries' ? '保存查询' : objectTypeLabel(item.objectType) }}</div>
+                  <div v-if="currentObjectType !== 'queries'" class="object-card-vectorize" :class="databaseStatusClass(item.vectorizeStatus)">
+                    <component :is="databaseStatusIcon(item.vectorizeStatus)" class="object-vectorize-icon" />
+                    <span>{{ databaseStatusLabel(item.vectorizeStatus) }}</span>
+                  </div>
+                  <div class="object-card-desc">{{ item.description || '-' }}</div>
                 </div>
-                <div class="object-card-desc">{{ item.description || '-' }}</div>
               </div>
             </div>
 
