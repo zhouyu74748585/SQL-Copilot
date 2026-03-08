@@ -3332,6 +3332,9 @@ public class AiServiceImpl implements AiService {
             List.of(buildTraceField("retrievalInput", "retrievalInput", retrievalInput)), 
             List.of(
                 buildTraceField("hit", "hit", ragPromptContext == null ? null : ragPromptContext.getHit()),
+                buildTraceField("rerankEnabled", "rerankEnabled", ragPromptContext == null ? null : ragPromptContext.getRerankEnabled()),
+                buildTraceField("rerankProvider", "rerankProvider", ragPromptContext == null ? "" : ragPromptContext.getRerankProvider()),
+                buildTraceField("rerankDetails", "rerankDetails", ragPromptContext == null ? List.of() : ragPromptContext.getRerankDetails()),
                 buildTraceField("relatedTables", "relatedTables", ragPromptContext == null ? List.of() : ragPromptContext.getRelatedTables()), 
                 buildTraceField("relatedColumns", "relatedColumns", ragPromptContext == null ? List.of() : ragPromptContext.getRelatedColumns()), 
                 buildTraceField("historySqlSamples", "historySqlSamples", ragPromptContext == null ? List.of() : ragPromptContext.getHistorySqlSamples()),

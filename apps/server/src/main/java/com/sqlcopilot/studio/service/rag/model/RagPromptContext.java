@@ -3,6 +3,7 @@ package com.sqlcopilot.studio.service.rag.model;
 import lombok.Data;
 
 import java.util.List;
+import java.util.Map;
 
 /** RAG 检索后生成的 Prompt 上下文对象。 */
 @Data
@@ -22,4 +23,10 @@ public class RagPromptContext {
 
     /** 是否命中任何向量结果。 */
     private Boolean hit;
+
+    private Boolean rerankEnabled;
+
+    private String rerankProvider;
+
+    private List<Map<String, Object>> rerankDetails;
 }

@@ -90,6 +90,7 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
     @Override
     public RagPromptContext retrievePromptContext(Long connectionId, String databaseName, String userInput) {
         boolean rerankEnabled = isRerankEnabled();
+        String rerankProvider = ragRerankService.getRuntimeProvider();
         String normalizedDatabaseName = normalizeDatabaseName(databaseName);
         log.info(
             "[RAG-RETRIEVE-REQ] connectionId={}, databaseName={}, inputLength={}, ragEnabled={}, schemaTableLimit={}, schemaColumnLimit={}, sqlHistoryLimit={}, metricTermLimit={}, exampleSqlLimit={}, rerankEnabled={}, rerankProvider={}",
@@ -103,10 +104,10 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             metricTermLimit,
             exampleSqlLimit,
             rerankEnabled,
-            ragRerankService.getRuntimeProvider()
+            rerankProvider
         );
 
-        RagPromptContext empty = emptyContext();
+        RagPromptContext empty = emptyContext(rerankEnabled, rerankProvider);
         if (!ragEnabled || connectionId == null || isBlank(userInput)) {
             log.info(
                 "[RAG-RETRIEVE-RESP] connectionId={}, databaseName={}, hit={}, reason={}, relatedTableCount={}, relatedColumnCount={}, historyCount={}, contextLength={}",
@@ -199,11 +200,22 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             );
         }
 
-        tableHits = rerankHits(userInput, "table", tableHits, rerankEnabled);
-        columnHits = rerankHits(userInput, "column", columnHits, rerankEnabled);
-        historyHits = rerankHits(userInput, "query_history", historyHits, rerankEnabled);
-        metricTermHits = rerankHits(userInput, "metric_term", metricTermHits, rerankEnabled);
-        exampleSqlHits = rerankHits(userInput, "example_sql", exampleSqlHits, rerankEnabled);
+        List<Map<String, Object>> rerankDetails = new ArrayList<>();
+        RerankResult tableRerank = rerankHits(userInput, "table", tableHits, rerankEnabled, rerankProvider);
+        tableHits = tableRerank.hits();
+        rerankDetails.add(tableRerank.traceDetail());
+        RerankResult columnRerank = rerankHits(userInput, "column", columnHits, rerankEnabled, rerankProvider);
+        columnHits = columnRerank.hits();
+        rerankDetails.add(columnRerank.traceDetail());
+        RerankResult historyRerank = rerankHits(userInput, "query_history", historyHits, rerankEnabled, rerankProvider);
+        historyHits = historyRerank.hits();
+        rerankDetails.add(historyRerank.traceDetail());
+        RerankResult metricRerank = rerankHits(userInput, "metric_term", metricTermHits, rerankEnabled, rerankProvider);
+        metricTermHits = metricRerank.hits();
+        rerankDetails.add(metricRerank.traceDetail());
+        RerankResult exampleRerank = rerankHits(userInput, "example_sql", exampleSqlHits, rerankEnabled, rerankProvider);
+        exampleSqlHits = exampleRerank.hits();
+        rerankDetails.add(exampleRerank.traceDetail());
 
         Set<String> relatedTables = new LinkedHashSet<>();
         Set<String> relatedColumns = new LinkedHashSet<>();
@@ -321,6 +333,9 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         context.setHistorySqlSamples(historySqlSamples);
         context.setHit(!tableHits.isEmpty() || !columnHits.isEmpty() || !historyHits.isEmpty()
             || !metricTermHits.isEmpty() || !exampleSqlHits.isEmpty());
+        context.setRerankEnabled(rerankEnabled);
+        context.setRerankProvider(rerankProvider);
+        context.setRerankDetails(rerankDetails);
 
         log.info(
             "[RAG-RETRIEVE-RESP] connectionId={}, databaseName={}, hit={}, tableHitCount={}, columnHitCount={}, historyHitCount={}, metricHitCount={}, exampleHitCount={}, relatedTableCount={}, relatedColumnCount={}, historyCount={}, contextLength={}",
@@ -486,15 +501,22 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             .toList();
     }
 
-    private List<QdrantScoredPoint> rerankHits(String userInput,
-                                               String bucket,
-                                               List<QdrantScoredPoint> hits,
-                                               boolean rerankEnabled) {
+    private RerankResult rerankHits(String userInput,
+                                    String bucket,
+                                    List<QdrantScoredPoint> hits,
+                                    boolean rerankEnabled,
+                                    String rerankProvider) {
         if (hits == null || hits.isEmpty()) {
-            return List.of();
+            return new RerankResult(
+                List.of(),
+                buildRerankTraceDetail(bucket, rerankEnabled, false, false, rerankProvider, 0, 0, List.of())
+            );
         }
         if (!rerankEnabled) {
-            return hits;
+            return new RerankResult(
+                hits,
+                buildRerankTraceDetail(bucket, false, false, false, rerankProvider, hits.size(), 0, summarizeVectorTopHits(bucket, hits))
+            );
         }
 
         List<Double> onnxScores = ragRerankService.score(userInput, bucket, hits);
@@ -508,14 +530,103 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
                 ? clip01(onnxScores.get(i))
                 : clip01(vectorScore + ruleBonus * 0.2);
             double finalScore = alphaVectorScore * vectorScore + betaOnnxScore * onnxScore + gammaRuleBonus * ruleBonus;
-            rescored.add(new ScoredHit(hit, finalScore));
+            rescored.add(new ScoredHit(hit, finalScore, vectorScore, onnxScore, ruleBonus));
         }
         rescored.sort(Comparator.comparingDouble(ScoredHit::score).reversed());
         List<QdrantScoredPoint> sorted = new ArrayList<>(rescored.size());
         for (ScoredHit item : rescored) {
             sorted.add(item.hit());
         }
-        return sorted;
+        return new RerankResult(
+            sorted,
+            buildRerankTraceDetail(
+                bucket,
+                true,
+                true,
+                onnxAvailable,
+                rerankProvider,
+                hits.size(),
+                countRankingChanges(hits, sorted),
+                summarizeRerankedTopHits(bucket, rescored)
+            )
+        );
+    }
+
+    private Map<String, Object> buildRerankTraceDetail(String bucket,
+                                                       boolean enabled,
+                                                       boolean applied,
+                                                       boolean onnxAvailable,
+                                                       String rerankProvider,
+                                                       int candidateCount,
+                                                       int rankingChangedCount,
+                                                       List<String> topResults) {
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("bucket", bucket);
+        detail.put("enabled", enabled);
+        detail.put("applied", applied);
+        detail.put("onnxAvailable", onnxAvailable);
+        detail.put("provider", Objects.toString(rerankProvider, "").trim());
+        detail.put("candidateCount", Math.max(0, candidateCount));
+        detail.put("rankingChangedCount", Math.max(0, rankingChangedCount));
+        detail.put("topResults", topResults == null ? List.of() : topResults);
+        return detail;
+    }
+
+    private int countRankingChanges(List<QdrantScoredPoint> original, List<QdrantScoredPoint> sorted) {
+        int max = Math.min(original == null ? 0 : original.size(), sorted == null ? 0 : sorted.size());
+        int changed = 0;
+        for (int i = 0; i < max; i++) {
+            String originalId = original.get(i) == null ? "" : Objects.toString(original.get(i).getId(), "");
+            String sortedId = sorted.get(i) == null ? "" : Objects.toString(sorted.get(i).getId(), "");
+            if (!Objects.equals(originalId, sortedId)) {
+                changed++;
+            }
+        }
+        return changed;
+    }
+
+    private List<String> summarizeVectorTopHits(String bucket, List<QdrantScoredPoint> hits) {
+        return hits.stream()
+            .limit(3)
+            .map(hit -> describeHit(bucket, hit) + " | vector=" + String.format(Locale.ROOT, "%.3f", clip01(hit.getScore() == null ? 0.0 : hit.getScore())))
+            .toList();
+    }
+
+    private List<String> summarizeRerankedTopHits(String bucket, List<ScoredHit> rescored) {
+        return rescored.stream()
+            .limit(3)
+            .map(item -> describeHit(bucket, item.hit())
+                + " | vector=" + String.format(Locale.ROOT, "%.3f", item.vectorScore())
+                + " | onnx=" + String.format(Locale.ROOT, "%.3f", item.onnxScore())
+                + " | rule=" + String.format(Locale.ROOT, "%.3f", item.ruleBonus())
+                + " | final=" + String.format(Locale.ROOT, "%.3f", item.score()))
+            .toList();
+    }
+
+    private String describeHit(String bucket, QdrantScoredPoint hit) {
+        if (hit == null) {
+            return "";
+        }
+        Map<String, Object> payload = hit.getPayload();
+        return switch (bucket) {
+            case "table" -> payloadString(payload, "table_name");
+            case "column" -> {
+                String tableName = payloadString(payload, "table_name");
+                String columnName = payloadString(payload, "column_name");
+                yield isBlank(tableName) || isBlank(columnName) ? Objects.toString(hit.getId(), "") : tableName + "." + columnName;
+            }
+            case "metric_term" -> payloadString(payload, "term");
+            case "example_sql", "query_history" -> shorten(payloadString(payload, "sql_text"), 96);
+            default -> Objects.toString(hit.getId(), "");
+        };
+    }
+
+    private String shorten(String text, int maxLength) {
+        String normalized = Objects.toString(text, "").trim();
+        if (normalized.length() <= Math.max(0, maxLength)) {
+            return normalized;
+        }
+        return normalized.substring(0, Math.max(0, maxLength - 3)) + "...";
     }
 
     private boolean isRerankEnabled() {
@@ -572,17 +683,26 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             || normalized.contains("季度") || normalized.contains("year") || normalized.contains("month");
     }
 
-    private record ScoredHit(QdrantScoredPoint hit, double score) {
+    private record ScoredHit(QdrantScoredPoint hit,
+                             double score,
+                             double vectorScore,
+                             double onnxScore,
+                             double ruleBonus) {
     }
 
+    private record RerankResult(List<QdrantScoredPoint> hits, Map<String, Object> traceDetail) {
+    }
 
-    private RagPromptContext emptyContext() {
+    private RagPromptContext emptyContext(boolean rerankEnabled, String rerankProvider) {
         RagPromptContext context = new RagPromptContext();
         context.setPromptContext("");
         context.setRelatedTables(List.of());
         context.setRelatedColumns(List.of());
         context.setHistorySqlSamples(List.of());
         context.setHit(Boolean.FALSE);
+        context.setRerankEnabled(rerankEnabled);
+        context.setRerankProvider(Objects.toString(rerankProvider, "").trim());
+        context.setRerankDetails(List.of());
         return context;
     }
 

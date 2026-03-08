@@ -114,3 +114,25 @@
 
 ### Note
 - The local auto spot check hit the intent-fallback path in the current environment, so the runtime verification confirmed fallback trace presence directly; routed success-path aggregation was validated by code path inspection plus clean compile/startup.
+
+### 2026-03-08 22:25:00
+
+## Additional Record: rag rerank trace output
+
+### Scope
+- Added rerank summary into the existing RAG trace stage so query trace can show whether rerank was enabled and how each retrieval bucket was rescored.
+
+### Backend
+- Extended `RagPromptContext` with `rerankEnabled`, `rerankProvider`, and `rerankDetails`.
+- Updated `RagRetrievalServiceImpl` to collect rerank trace details for `table`, `column`, `query_history`, `metric_term`, and `example_sql`.
+- Each rerank detail now records bucket name, provider, whether rerank was applied, whether ONNX scores were available, candidate count, ranking change count, and top rescored results.
+- Updated `AiServiceImpl.buildRagTraceStage` to expose `rerankEnabled`, `rerankProvider`, and `rerankDetails` in the `rag_retrieve` trace stage output.
+
+### Validation
+- Backend compile: `mvn -f apps/server/pom.xml clean compile -DskipTests` passed.
+- Backend startup: `mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18291` passed health check at `http://127.0.0.1:18291/api/health` and returned `{"code":0,"message":"success","data":"ok"}`.
+- Frontend clean build: `npm run -w @sqlcopilot/desktop build -- --emptyOutDir` passed.
+- Frontend preview: `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 14291 --strictPort` returned HTTP 200.
+
+### Note
+- `npm run -w @sqlcopilot/desktop type-check` currently fails on an existing frontend typing error at `src/modules/studio/components/StudioShell.vue` about `tokenEstimate` vs `lastTokenEstimate`; this was not introduced by the rerank trace change.
