@@ -261,6 +261,21 @@ public class AiServiceImpl implements AiService {
         } catch (BusinessException ex) {
             timer.mark("identify_intent_failed");
             AiAutoQueryVO clarifyVo = buildIntentClarifyResponse(ex);
+            if (detailOutputEnabled) {
+                clarifyVo.setTrace(buildTrace(
+                    new ArrayList<>(List.of(buildTraceStage(
+                        "identify_intent",
+                        "意图识别",
+                        "pipeline",
+                        "failed",
+                        0L,
+                        List.of(buildTraceField("prompt", "userPrompt", req.getPrompt())),
+                        List.of(buildTraceField("error", "error", ex.getMessage())),
+                        null
+                    ))),
+                    System.currentTimeMillis() - startAt
+                ));
+            }
             log.warn(
                     "[AI-AUTO-INTENT-FALLBACK] connectionId={}, sessionId={}, databaseName={}, modelName={}, message={}",
                     req.getConnectionId(),
@@ -363,6 +378,12 @@ public class AiServiceImpl implements AiService {
             vo.setFallbackUsed(Boolean.TRUE.equals(chart.getFallbackUsed()));
             vo.setReasoning(joinReasoning(baseReasoning, chart.getReasoning()));
             vo.setTotalTokens(chart.getTotalTokens());
+            delegatedTrace = chart.getTrace();
+        }
+
+        if (detailOutputEnabled) {
+            mergeTraceStages(traceStages, delegatedTrace);
+            vo.setTrace(buildTrace(traceStages, System.currentTimeMillis() - startAt));
         }
 
         log.info(
@@ -419,7 +440,7 @@ public class AiServiceImpl implements AiService {
         );
         timer.mark("rag_retrieve");
         if (detailOutputEnabled) {
-            traceStages.add(buildRagTraceStage("rag_retrieve", "RAG retrieve", retrievalInput, ragPromptContext, System.currentTimeMillis() - ragStageStart));
+            traceStages.add(buildRagTraceStage("rag_retrieve", "向量库召回", retrievalInput, ragPromptContext, System.currentTimeMillis() - ragStageStart));
         }
         long contextStageStart = System.currentTimeMillis();
         GenerationContext generationContext = buildGenerationContext(req, ragPromptContext);
@@ -607,7 +628,7 @@ public class AiServiceImpl implements AiService {
         );
         timer.mark("rag_retrieve");
         if (detailOutputEnabled) {
-            traceStages.add(buildRagTraceStage("rag_retrieve", "RAG retrieve", retrievalInput, ragPromptContext, System.currentTimeMillis() - ragStageStart));
+            traceStages.add(buildRagTraceStage("rag_retrieve", "向量库召回", retrievalInput, ragPromptContext, System.currentTimeMillis() - ragStageStart));
         }
         long contextStageStart = System.currentTimeMillis();
         GenerationContext generationContext = buildGenerationContext(req, ragPromptContext);
@@ -921,7 +942,7 @@ public class AiServiceImpl implements AiService {
             );
             timer.mark("rag_retrieve");
             if (detailOutputEnabled) {
-                traceStages.add(buildRagTraceStage("rag_retrieve", "RAG retrieve", retrievalInput, ragPromptContext, 0L));
+                traceStages.add(buildRagTraceStage("rag_retrieve", "向量库召回", retrievalInput, ragPromptContext, 0L));
             }
             GenerationContext generationContext = buildGenerationContext(providerReq, ragPromptContext);
             timer.mark("build_generation_context");
@@ -3209,6 +3230,18 @@ public class AiServiceImpl implements AiService {
         return trace;
     }
 
+    private void mergeTraceStages(List<AiTraceStageVO> targetStages, AiTraceVO delegatedTrace) {
+        if (targetStages == null || delegatedTrace == null || delegatedTrace.getStages() == null || delegatedTrace.getStages().isEmpty()) {
+            return;
+        }
+        targetStages.addAll(
+            delegatedTrace.getStages()
+                .stream()
+                .filter(Objects::nonNull)
+                .toList()
+        );
+    }
+
     private AiTraceStageVO buildTraceStage(String stageCode,
                                            String stageLabel,
                                            String stageType,
@@ -3311,7 +3344,7 @@ public class AiServiceImpl implements AiService {
     private AiTraceStageVO buildGenerationContextTraceStage(GenerationContext context, long durationMs) {
         return buildTraceStage(
             "generation_context",
-            "generation_context",
+            "构建上下文",
             "pipeline",
             "success",
             durationMs,

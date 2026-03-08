@@ -90,3 +90,27 @@
 
 ### Note
 - During implementation, `AiServiceImpl.java` had broken string literals from prior edits. The file was repaired and validated with a clean backend compile before final startup verification.
+
+### 2026-03-08 21:40:00
+
+## Additional Record: auto-mode trace aggregation fix
+
+### Scope
+- Fixed missing trace output in `/api/ai/query/auto`.
+- Ensured both routed child responses and intent-identify fallback can return trace payloads.
+
+### Backend
+- Updated `AiServiceImpl.autoQuery` to merge the `identify_intent` stage with delegated trace stages returned by `generateSql` / `explainSql` / `analyzeSql` / `generateChart`.
+- Fixed the `GENERATE_CHART` branch to forward `chart.getTrace()` into the auto response.
+- Added fallback trace generation for `identifyIntent` failure so auto mode still shows at least one trace stage when it degrades to clarify content.
+
+### Validation
+- Backend compile: `mvn -f apps/server/pom.xml clean compile -DskipTests` passed.
+- Backend startup: `mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18191` passed health check at `http://127.0.0.1:18191/api/health` and returned `{"code":0,"message":"success","data":"ok"}`.
+- Frontend type-check: `npm run -w @sqlcopilot/desktop type-check` passed.
+- Frontend clean build: `npm run -w @sqlcopilot/desktop build -- --emptyOutDir` passed.
+- Frontend preview: `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 14191 --strictPort` returned HTTP 200.
+- Auto API spot check: `POST /api/ai/query/auto` with `detailOutputEnabled=true` returned `trace != null` and `traceStageCount = 1` on the local fallback path.
+
+### Note
+- The local auto spot check hit the intent-fallback path in the current environment, so the runtime verification confirmed fallback trace presence directly; routed success-path aggregation was validated by code path inspection plus clean compile/startup.

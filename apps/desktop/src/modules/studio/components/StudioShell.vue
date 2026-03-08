@@ -955,19 +955,26 @@
                           <strong>{{ stage.stageLabel }}</strong>
                           <span>{{ stage.stageType }} · {{ stage.status }} · {{ stage.durationMs || 0 }}ms</span>
                         </div>
-                        <div v-if="stage.inputFields?.length" class="query-chat-trace-fields">
-                          <div v-for="field in stage.inputFields" :key="`in-${stage.stageCode}-${field.fieldCode}`" class="query-chat-trace-field">
-                            <span>{{ field.fieldLabel }}</span>
-                            <pre>{{ field.fieldValue }}</pre>
+                        <div v-if="stage.inputFields?.length" class="query-chat-trace-section query-chat-trace-section-input">
+                          <div class="query-chat-trace-section-title">输入</div>
+                          <div class="query-chat-trace-fields">
+                            <div v-for="field in stage.inputFields" :key="`in-${stage.stageCode}-${field.fieldCode}`" class="query-chat-trace-field">
+                              <span>{{ field.fieldLabel }}</span>
+                              <pre>{{ field.fieldValue }}</pre>
+                            </div>
                           </div>
                         </div>
-                        <div v-if="stage.outputFields?.length" class="query-chat-trace-fields">
-                          <div v-for="field in stage.outputFields" :key="`out-${stage.stageCode}-${field.fieldCode}`" class="query-chat-trace-field">
+                        <div v-if="stage.outputFields?.length" class="query-chat-trace-section query-chat-trace-section-output">
+                          <div class="query-chat-trace-section-title">输出</div>
+                          <div class="query-chat-trace-fields">
+                            <div v-for="field in stage.outputFields" :key="`out-${stage.stageCode}-${field.fieldCode}`" class="query-chat-trace-field">
                             <span>{{ field.fieldLabel }}</span>
                             <pre>{{ field.fieldValue }}</pre>
+                            </div>
                           </div>
                         </div>
-                        <div v-if="stage.llmCall" class="query-chat-trace-llm">
+                        <div v-if="stage.llmCall" class="query-chat-trace-section query-chat-trace-section-llm">
+                          <div class="query-chat-trace-section-title">大模型调用</div>
                           <div class="query-chat-trace-llm-meta">
                             模型 {{ stage.llmCall.modelId || '-' }} · {{ stage.llmCall.providerType || '-' }} · {{ stage.llmCall.actualModel || '-' }} · Token {{ stage.llmCall.totalTokens || 0 }}
                           </div>

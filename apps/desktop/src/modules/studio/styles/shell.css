@@ -1906,6 +1906,12 @@ body {
   border-top: 1px dashed #d9e3f2;
 }
 
+.query-chat-trace-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .query-chat-trace-stage-head {
   display: flex;
   align-items: center;
@@ -1914,6 +1920,33 @@ body {
   margin-bottom: 8px;
   font-size: 12px;
   color: #45617f;
+}
+
+.query-chat-trace-section {
+  border: 1px solid #dfe7f3;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.85);
+  padding: 8px;
+}
+
+.query-chat-trace-section-input {
+  order: 1;
+}
+
+.query-chat-trace-section-llm {
+  order: 2;
+}
+
+.query-chat-trace-section-output {
+  order: 3;
+}
+
+.query-chat-trace-section-title {
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #35537a;
 }
 
 .query-chat-trace-fields {
@@ -1945,11 +1978,12 @@ body {
 }
 
 .query-chat-trace-llm {
-  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .query-chat-trace-llm-meta {
-  margin-bottom: 8px;
   font-size: 12px;
   color: #547090;
 }
