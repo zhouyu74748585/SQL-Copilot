@@ -1696,7 +1696,7 @@ async function confirmErTableSelection() {
     let tab: ErWorkspaceTab;
     if (!targetTab) {
       const now = Date.now();
-      tab = {
+      const createdTab: ErWorkspaceTab = {
         key: `er-${now}-${Math.round(Math.random() * 1000)}`,
         title: `ER · ${erSelectDatabaseName.value}`,
         snapshotId: undefined,
@@ -1715,7 +1715,9 @@ async function confirmErTableSelection() {
         createdAt: now,
         updatedAt: now,
       };
-      erTabs.value = [...erTabs.value, tab];
+      erTabs.value = [...erTabs.value, createdTab];
+      // Ensure later async graph updates operate on the reactive tab instance.
+      tab = erTabs.value.find((item) => item.key === createdTab.key) ?? createdTab;
     } else {
       tab = targetTab;
       tab.snapshotId = undefined;

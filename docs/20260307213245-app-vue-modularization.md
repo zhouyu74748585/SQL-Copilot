@@ -356,3 +356,33 @@ px vite preview --host 127.0.0.1 --port 55060 后，GET http://127.0.0.1:55060 �
 - 前端预览验证：
   - `npx vite preview --host 127.0.0.1 --port 55060` 启动后，`GET http://127.0.0.1:55060` 返回 `200`。
   - 验证后已终止预览进程并确认端口释放。
+
+### 2026-03-08 09:48:20
+
+## 追加记录（2026-03-08 09:48:20）- ER 图首次加载不渲染修复
+
+### 问题现象
+- 请求 ER 图后页面不立即显示，仅在切换到其他页签再切回后才显示。
+
+### 根因分析
+- 在 `confirmErTableSelection` 新建 ER Tab 的分支中，先创建了普通对象 `tab`，再放入 `erTabs`。
+- 后续异步请求 `refreshErGraphForTab(tab, true)` 继续操作这个“原始对象引用”，导致 `tab.graph` 更新未命中 Vue 的响应式代理对象。
+- 因此首次请求完成后视图无响应，直到发生页签切换等其它响应式变更才触发重渲染。
+
+### 修复方案
+- 修改文件：apps/desktop/src/modules/studio/composables/useStudioRuntime.ts
+  - 在新建 ER Tab 后，立即从 `erTabs.value` 中按 `key` 取回响应式实例，再将该实例传给 `refreshErGraphForTab`。
+  - 保证异步加载过程中对 `loading/graph/errorMessage` 的写入都作用在响应式对象上，首轮加载即可触发渲染。
+
+### 验证结果
+- 前端类型检查：
+  - `npm run -w @sqlcopilot/desktop type-check` 通过。
+- 前端构建（clean）：
+  - `npm run -w @sqlcopilot/desktop build -- --emptyOutDir` 通过。
+- 后端启动验证（clean）：
+  - `mvn -f apps/server/pom.xml clean compile spring-boot:start "-Dstart-class=com.sqlcopilot.studio.SqlCopilotApplication" "-Dspring-boot.run.arguments=--server.port=18086"` 启动成功。
+  - 健康检查：`GET http://127.0.0.1:18086/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+  - `mvn -f apps/server/pom.xml spring-boot:stop` 停止成功。
+- 前端预览验证：
+  - `npx vite preview --host 127.0.0.1 --port 55060` 启动后，`GET http://127.0.0.1:55060` 返回 `200`。
+  - 验证后已终止预览进程并确认端口释放。
