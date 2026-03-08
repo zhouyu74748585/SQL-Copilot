@@ -896,7 +896,7 @@
 
         <section v-if="activeQueryTab" class="pane pane-center query-chat-pane">
           <div class="pane-title pane-title-with-action query-chat-title-bar">
-            <span>{{ activeQueryTab.title }} 路 瀵硅瘽</span>
+            <span>{{ activeQueryTab.title }} · 对话</span>
             <div class="pane-title-actions">
               <span class="query-chat-title-token">≈Token: {{ activeQueryTab.lastTokenEstimate || 0 }}</span>
             </div>
