@@ -1245,7 +1245,6 @@ function buildCategoryChildren(connectionId: number, databaseName: string) {
     { suffix: 'tables', title: '表', nodeType: 'tables' },
     { suffix: 'views', title: '视图', nodeType: 'views' },
     { suffix: 'functions', title: '函数', nodeType: 'functions' },
-    { suffix: 'events', title: '事件', nodeType: 'events' },
     { suffix: 'queries', title: '查询', nodeType: 'queries' },
   ];
   return categoryNodes.map((category) => ({
@@ -5233,9 +5232,6 @@ function objectTypeLabel(value: string) {
   }
   if (value === 'functions') {
     return '函数';
-  }
-  if (value === 'events') {
-    return '事件';
   }
   if (value === 'queries') {
     return '查询';
