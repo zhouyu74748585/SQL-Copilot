@@ -2060,6 +2060,10 @@ body {
   flex: 0 0 auto;
 }
 
+.query-chat-pane > .pane-title:not(.query-chat-title-bar) {
+  display: none;
+}
+
 .query-chat-model-pill,
 .query-chat-mode-pill,
 .query-chat-token-pill {
@@ -2108,7 +2112,20 @@ body {
 }
 
 .query-chat-token-pill {
-  color: #6a7f9a;
+  display: none;
+}
+
+.query-chat-title-token {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #eef5ff;
+  border: 1px solid #d5e3fb;
+  font-size: 12px;
+  font-weight: 600;
+  color: #4f6b92;
 }
 
 .query-chat-settings-trigger {

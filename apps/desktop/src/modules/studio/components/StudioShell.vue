@@ -895,6 +895,12 @@
         />
 
         <section v-if="activeQueryTab" class="pane pane-center query-chat-pane">
+          <div class="pane-title pane-title-with-action query-chat-title-bar">
+            <span>{{ activeQueryTab.title }} 路 瀵硅瘽</span>
+            <div class="pane-title-actions">
+              <span class="query-chat-title-token">≈Token: {{ activeQueryTab.lastTokenEstimate || 0 }}</span>
+            </div>
+          </div>
           <div class="pane-title">{{ activeQueryTab.title }} · 对话</div>
 
           <div ref="queryChatScrollRef" class="query-chat-scroll">
@@ -1082,7 +1088,7 @@
                   <template #overlay>
                     <a-menu
                       :selectedKeys="activeQueryTab?.selectedAiModel ? [activeQueryTab.selectedAiModel] : []"
-                      @click="({ key }) => activeQueryTab && (activeQueryTab.selectedAiModel = String(key))"
+                      @click="handleActiveQueryModelMenuClick"
                     >
                       <a-menu-item v-for="item in aiModelOptions" :key="String(item.value)">
                         {{ item.label }}
@@ -2736,6 +2742,13 @@ function handleKnowledgeConnectionSelectorChange(value: string | number) {
 function handleKnowledgeDatabaseSelectorChange(value: string) {
   knowledgeDatabaseName.value = value;
   void handleKnowledgeDatabaseChange();
+}
+
+function handleActiveQueryModelMenuClick(event: { key: string | number }) {
+  if (!activeQueryTab.value) {
+    return;
+  }
+  activeQueryTab.value.selectedAiModel = String(event.key);
 }
 
 function handleQueryConnectionSelectorChange(
