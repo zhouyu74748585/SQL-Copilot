@@ -60,6 +60,7 @@ import type {
   AiGenerateSqlVO,
   AiIntentType,
   AiModelOption,
+  AiTraceVO,
   AiRepairVO,
   AiTextResponseVO,
   ChartCacheReadVO,
@@ -184,6 +185,8 @@ interface QueryChatMessage {
   retryLoading?: boolean;
   retryMeta?: RetryRequestMeta;
   historySaved?: boolean;
+  trace?: AiTraceVO;
+  traceExpanded?: boolean;
   createdAt: number;
 }
 
@@ -218,6 +221,7 @@ interface QueryWorkspaceTab {
   createdAt: number;
   updatedAt: number;
   memoryEnabled: boolean;
+  detailOutputOverride: boolean | null;
   lastTokenEstimate: number;
 }
 
@@ -1552,6 +1556,7 @@ function createQueryTab(options?: {
   databaseName?: string;
   prompt?: string;
   sqlText?: string;
+  detailOutputOverride?: boolean | null;
 }) {
   ensureConnection();
   const connectionId = options?.connectionId ?? workflow.connectionId;
@@ -1589,6 +1594,7 @@ function createQueryTab(options?: {
     createdAt: now,
     updatedAt: now,
     memoryEnabled: true,
+    detailOutputOverride: options?.detailOutputOverride ?? null,
     lastTokenEstimate: 0,
   };
   if (options?.title?.trim()) {
@@ -2055,6 +2061,25 @@ function modelLabelById(modelId: string) {
   return model.name || model.id || '-';
 }
 
+function detailOutputEnabledForTab(tab: QueryWorkspaceTab | null | undefined) {
+  if (!tab) {
+    return aiConfigForm.detailOutputEnabled === true;
+  }
+  if (tab.detailOutputOverride == null) {
+    return aiConfigForm.detailOutputEnabled === true;
+  }
+  return tab.detailOutputOverride === true;
+}
+
+function toggleMessageTraceExpanded(tab: QueryWorkspaceTab, messageId: string) {
+  const target = tab.chatMessages.find((item) => item.id === messageId);
+  if (!target || !target.trace) {
+    return;
+  }
+  target.traceExpanded = target.traceExpanded !== true;
+  touchQueryTab(tab);
+}
+
 function lastPromptText(tab: QueryWorkspaceTab) {
   const latestPrompt = [...tab.chatMessages].reverse().find((item) => item.role === 'user');
   return latestPrompt?.content || '暂无自然语言对话';
@@ -2152,6 +2177,14 @@ function touchQueryTab(tab: QueryWorkspaceTab) {
   tab.updatedAt = Date.now();
 }
 
+function isQueryChatMessage(value: unknown): value is QueryChatMessage {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const candidate = value as Partial<QueryChatMessage>;
+  return (candidate.role === 'user' || candidate.role === 'assistant') && typeof candidate.id === 'string';
+}
+
 function bindQueryChatMessageRef(messageId: string, element: unknown) {
   if (element instanceof HTMLElement) {
     queryChatMessageElementMap.set(messageId, element);
@@ -2245,6 +2278,8 @@ function prepareAssistantMessage(
   messageItem.retryLoading = undefined;
   messageItem.retryMeta = undefined;
   messageItem.historySaved = undefined;
+  messageItem.trace = undefined;
+  messageItem.traceExpanded = undefined;
   messageItem.createdAt = createdAt;
 }
 
@@ -2256,10 +2291,13 @@ function appendAssistantSqlMessage(
   chartConfig?: ChartConfigVO | null,
   chartConfigSummary?: string,
   chartImageCacheKey?: string,
+  traceOrTargetMessage?: AiTraceVO | QueryChatMessage,
   targetMessage?: QueryChatMessage,
 ) {
   const now = Date.now();
-  const messageItem: QueryChatMessage = targetMessage ?? {
+  const resolvedTrace = isQueryChatMessage(traceOrTargetMessage) ? undefined : traceOrTargetMessage;
+  const resolvedTargetMessage = isQueryChatMessage(traceOrTargetMessage) ? traceOrTargetMessage : targetMessage;
+  const messageItem: QueryChatMessage = resolvedTargetMessage ?? {
     id: `chat-assistant-${now}-${Math.random().toString(16).slice(2, 8)}`,
     role: 'assistant',
     content: '',
@@ -2272,7 +2310,9 @@ function appendAssistantSqlMessage(
   messageItem.chartConfig = chartConfig ? cloneChartConfig(chartConfig) : undefined;
   messageItem.chartConfigSummary = (chartConfigSummary || '').trim() || undefined;
   messageItem.chartImageCacheKey = (chartImageCacheKey || '').trim() || undefined;
-  if (!targetMessage) {
+  messageItem.trace = resolvedTrace;
+  messageItem.traceExpanded = false;
+  if (!resolvedTargetMessage) {
     tab.chatMessages.push(messageItem);
   }
   touchQueryTab(tab);
@@ -2284,10 +2324,13 @@ function appendAssistantTextMessage(
   tab: QueryWorkspaceTab,
   content: string,
   actionType: QueryChatMessage['actionType'],
+  traceOrTargetMessage?: AiTraceVO | QueryChatMessage,
   targetMessage?: QueryChatMessage,
 ) {
   const now = Date.now();
-  const messageItem: QueryChatMessage = targetMessage ?? {
+  const resolvedTrace = isQueryChatMessage(traceOrTargetMessage) ? undefined : traceOrTargetMessage;
+  const resolvedTargetMessage = isQueryChatMessage(traceOrTargetMessage) ? traceOrTargetMessage : targetMessage;
+  const messageItem: QueryChatMessage = resolvedTargetMessage ?? {
     id: `chat-assistant-${now}-${Math.random().toString(16).slice(2, 8)}`,
     role: 'assistant',
     content: '',
@@ -2296,7 +2339,9 @@ function appendAssistantTextMessage(
   };
   prepareAssistantMessage(messageItem, actionType, now);
   messageItem.content = content.trim();
-  if (!targetMessage) {
+  messageItem.trace = resolvedTrace;
+  messageItem.traceExpanded = false;
+  if (!resolvedTargetMessage) {
     tab.chatMessages.push(messageItem);
   }
   touchQueryTab(tab);
@@ -2352,16 +2397,18 @@ async function runAiTextActionWithSql(tab: QueryWorkspaceTab, actionType: 'expla
       sessionId: tab.sessionId,
       prompt: mergePromptWithSqlSnippet(promptText, normalizedSqlText),
       databaseName: tab.databaseName || undefined,
-      modelName: tab.selectedAiModel || undefined,
+      modelId: tab.selectedAiModel || undefined,
       memoryEnabled: tab.memoryEnabled,
+      detailOutputEnabled: detailOutputEnabledForTab(tab),
     });
     tab.lastTokenEstimate = Number(result.totalTokens || 0);
     const content = result.content || '未返回内容';
-    appendAssistantTextMessage(tab, content, actionType, thinkingMessage);
+    appendAssistantTextMessage(tab, content, actionType, result.trace, thinkingMessage);
     await saveConversationHistoryOnce(tab, userMessage, `${promptText}\n\n${normalizedSqlText}`, normalizedSqlText, {
       actionType,
       assistantContent: content,
       databaseName: tab.databaseName,
+      trace: result.trace,
       tokenEstimate: tab.lastTokenEstimate,
     });
     if (result.reasoning) {
@@ -3879,6 +3926,7 @@ async function saveAiConfig() {
     aiConfigForm.cliWorkingDir = modelOptions[0].cliWorkingDir || '';
     aiConfigForm.conversationMemoryEnabled = aiConfigForm.conversationMemoryEnabled !== false;
     aiConfigForm.conversationMemoryWindowSize = Math.min(50, Math.max(4, Number(aiConfigForm.conversationMemoryWindowSize || 12)));
+    aiConfigForm.detailOutputEnabled = aiConfigForm.detailOutputEnabled === true;
     ragConfigForm.ragRerankEnabled = ragConfigForm.ragRerankEnabled === true;
     ragConfigForm.ragRerankModelDir = (ragConfigForm.ragRerankModelDir || '').trim();
     const savedAi = await postApi<AiConfigVO>('/api/ai/config/save', aiConfigForm);
@@ -4012,6 +4060,8 @@ interface SaveConversationHistoryOptions {
   executionMs?: number;
   success?: boolean;
   structuredContextJson?: string;
+  trace?: AiTraceVO;
+  traceJson?: string;
   tokenEstimate?: number;
   memoryEnabled?: boolean;
 }
@@ -4035,6 +4085,8 @@ async function saveConversationHistory(
       chartConfigJson: options?.chartConfig ? JSON.stringify(options.chartConfig) : '',
       chartImageCacheKey: options?.chartImageCacheKey || '',
       structuredContextJson: options?.structuredContextJson || '',
+      traceJson: options?.traceJson || (options?.trace ? JSON.stringify(options.trace) : ''),
+      trace: options?.trace,
       tokenEstimate: options?.tokenEstimate,
       memoryEnabled: options?.memoryEnabled ?? tab.memoryEnabled,
       executionMs: options?.executionMs,
@@ -4072,6 +4124,7 @@ async function saveConversationHistoryOnce(
     tokenEstimate: options?.tokenEstimate ?? (tab.lastTokenEstimate || Math.max(1, Math.ceil(((promptText || "").length + (sqlText || "").length) / 4))),
     memoryEnabled: options?.memoryEnabled ?? tab.memoryEnabled,
     structuredContextJson: options?.structuredContextJson ?? buildStructuredContextForTab(tab),
+    traceJson: options?.traceJson ?? (options?.trace ? JSON.stringify(options.trace) : ''),
   };
   await saveConversationHistory(tab, promptText, sqlText, mergedOptions);
   userMessage.historySaved = true;
@@ -4240,19 +4293,28 @@ async function generateSqlForTab(
         sessionId: tab.sessionId,
         prompt: finalPrompt,
         databaseName: tab.databaseName || undefined,
-        modelName: tab.selectedAiModel || undefined,
+        modelId: tab.selectedAiModel || undefined,
         memoryEnabled: tab.memoryEnabled,
+        detailOutputEnabled: detailOutputEnabledForTab(tab),
       });
       tab.lastTokenEstimate = Number(generated.totalTokens || 0);
       const generatedText = (generated.sqlText || '').trim();
       if (looksLikeSqlText(generatedText)) {
-        appendAssistantSqlMessage(tab, generatedText, actionType, '', undefined, undefined, undefined, thinkingMessage);
+        appendAssistantSqlMessage(tab, generatedText, actionType, '', undefined, undefined, undefined, generated.trace, thinkingMessage);
         await saveConversationHistoryOnce(tab, userMessage, promptText, generatedText, {
+          trace: generated.trace,
           tokenEstimate: tab.lastTokenEstimate,
         });
         message.success('SQL generated.');
       } else {
-        appendAssistantTextMessage(tab, generatedText || '未返回可执行 SQL', actionType, thinkingMessage);
+        appendAssistantTextMessage(tab, generatedText || '未返回可执行 SQL', actionType, generated.trace, thinkingMessage);
+        await saveConversationHistoryOnce(tab, userMessage, promptText, '', {
+          actionType,
+          assistantContent: generatedText || '未返回可执行 SQL',
+          databaseName: tab.databaseName,
+          trace: generated.trace,
+          tokenEstimate: tab.lastTokenEstimate,
+        });
         message.warning('未生成可执行 SQL，已返回说明内容');
       }
       if (generated.reasoning) {
@@ -4268,16 +4330,18 @@ async function generateSqlForTab(
       sessionId: tab.sessionId,
       prompt: finalPrompt,
       databaseName: tab.databaseName || undefined,
-      modelName: tab.selectedAiModel || undefined,
+      modelId: tab.selectedAiModel || undefined,
       memoryEnabled: tab.memoryEnabled,
+      detailOutputEnabled: detailOutputEnabledForTab(tab),
     });
     tab.lastTokenEstimate = Number(result.totalTokens || 0);
     const content = result.content || 'No content returned.';
-    appendAssistantTextMessage(tab, content, actionType, thinkingMessage);
+    appendAssistantTextMessage(tab, content, actionType, result.trace, thinkingMessage);
     await saveConversationHistoryOnce(tab, userMessage, promptText, actionSqlSnippet || '', {
       actionType,
       assistantContent: content,
       databaseName: tab.databaseName,
+      trace: result.trace,
       tokenEstimate: tab.lastTokenEstimate,
     });
     if (result.reasoning) {
@@ -4349,8 +4413,9 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
       sessionId: tab.sessionId,
       prompt: finalPrompt,
       databaseName: tab.databaseName || undefined,
-      modelName: tab.selectedAiModel || undefined,
+      modelId: tab.selectedAiModel || undefined,
       memoryEnabled: tab.memoryEnabled,
+      detailOutputEnabled: detailOutputEnabledForTab(tab),
     });
     const latestTokenEstimate = result.totalTokens;
     if (latestTokenEstimate != null) {
@@ -4368,11 +4433,13 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
           undefined,
           undefined,
           undefined,
+          result.trace,
           thinkingMessage,
         );
         await saveConversationHistoryOnce(tab, userMessage, rawPrompt, sqlText, {
           actionType,
           databaseName: tab.databaseName,
+          trace: result.trace,
           tokenEstimate: tab.lastTokenEstimate,
         });
         if (tab.autoExecute) {
@@ -4386,11 +4453,12 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
         }
       } else {
         const contentText = sqlText || '未返回可执行 SQL';
-        appendAssistantTextMessage(tab, contentText, actionType, thinkingMessage);
+        appendAssistantTextMessage(tab, contentText, actionType, result.trace, thinkingMessage);
         await saveConversationHistoryOnce(tab, userMessage, rawPrompt, '', {
           actionType,
           assistantContent: contentText,
           databaseName: tab.databaseName,
+          trace: result.trace,
           tokenEstimate: tab.lastTokenEstimate,
         });
       }
@@ -4399,12 +4467,13 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
       const config = result.chartConfig ? cloneChartConfig(result.chartConfig) : null;
       const summary = (result.configSummary || '').trim() || chartSummaryText(config);
       if (!sqlText) {
-        appendAssistantTextMessage(tab, summary || 'No chart plan returned.', actionType, thinkingMessage);
+        appendAssistantTextMessage(tab, summary || 'No chart plan returned.', actionType, result.trace, thinkingMessage);
         await saveConversationHistoryOnce(tab, userMessage, rawPrompt, '', {
           actionType,
           assistantContent: summary || 'No chart plan returned.',
           chartConfig: config,
           databaseName: tab.databaseName,
+          trace: result.trace,
           tokenEstimate: tab.lastTokenEstimate,
         });
       } else {
@@ -4416,6 +4485,7 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
           config,
           summary,
           undefined,
+          result.trace,
           thinkingMessage,
         );
         await saveConversationHistoryOnce(tab, userMessage, rawPrompt, sqlText, {
@@ -4423,6 +4493,7 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
           assistantContent: summary,
           chartConfig: config,
           databaseName: tab.databaseName,
+          trace: result.trace,
           tokenEstimate: tab.lastTokenEstimate,
         });
         const generatedChart = await generateChartFromMessage(tab, plannedMessage, {
@@ -4435,11 +4506,12 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
       }
     } else if (result.intentType === 'EXPLAIN_SQL' || result.intentType === 'ANALYZE_SQL') {
       const content = (result.content || '').trim() || 'No content returned.';
-      appendAssistantTextMessage(tab, content, actionType, thinkingMessage);
+      appendAssistantTextMessage(tab, content, actionType, result.trace, thinkingMessage);
       await saveConversationHistoryOnce(tab, userMessage, rawPrompt, sqlSnippet || '', {
         actionType,
         assistantContent: content,
         databaseName: tab.databaseName,
+        trace: result.trace,
         tokenEstimate: tab.lastTokenEstimate,
       });
     } else {
@@ -4735,15 +4807,16 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
       sessionId: tab.sessionId,
       prompt: finalPrompt,
       databaseName: tab.databaseName || undefined,
-      modelName: tab.selectedAiModel || undefined,
+      modelId: tab.selectedAiModel || undefined,
       memoryEnabled: tab.memoryEnabled,
+      detailOutputEnabled: detailOutputEnabledForTab(tab),
     });
     tab.lastTokenEstimate = Number(generated.totalTokens || 0);
     const sqlText = (generated.sqlText || '').trim();
     const config = generated.chartConfig ? cloneChartConfig(generated.chartConfig) : null;
     const summary = (generated.configSummary || '').trim() || chartSummaryText(config);
     if (!sqlText) {
-      appendAssistantTextMessage(tab, summary || 'No chart plan returned.', 'chart_auto_plan', thinkingMessage);
+      appendAssistantTextMessage(tab, summary || 'No chart plan returned.', 'chart_auto_plan', generated.trace, thinkingMessage);
       message.warning('未生成可执行 SQL');
       return;
     }
@@ -4755,6 +4828,7 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
       config,
       summary,
       undefined,
+      generated.trace,
       thinkingMessage,
     );
     await saveConversationHistoryOnce(tab, userMessage, rawPrompt, sqlText, {
@@ -4762,6 +4836,7 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
       assistantContent: summary,
       chartConfig: config,
       databaseName: tab.databaseName,
+      trace: generated.trace,
       tokenEstimate: tab.lastTokenEstimate,
     });
     if (generated.reasoning) {
@@ -5168,8 +5243,8 @@ async function repairSqlForTab(tab: QueryWorkspaceTab) {
       sqlText: failedSql,
       errorMessage,
       databaseName: tab.databaseName || undefined,
-      modelName: tab.selectedAiModel || undefined,
-      memoryEnabled: tab.memoryEnabled,
+      modelId: tab.selectedAiModel || undefined,
+      detailOutputEnabled: detailOutputEnabledForTab(tab),
     });
     const repairedSql = (repaired.repairedSql || failedSql || '').trim();
     const assistantContent = (repaired.errorExplanation || repaired.repairNote || '已尝试修复 SQL').trim();
@@ -5181,12 +5256,14 @@ async function repairSqlForTab(tab: QueryWorkspaceTab) {
       undefined,
       undefined,
       undefined,
+      repaired.trace,
       thinkingMessage,
     );
     await saveConversationHistoryOnce(tab, userMessage, promptText, repairedSql, {
       actionType: 'repair',
       assistantContent,
       databaseName: tab.databaseName,
+      trace: repaired.trace,
     });
     tab.lastExecuteFailed = false;
     tab.lastExecuteErrorMessage = '';
@@ -5962,6 +6039,7 @@ function defaultAiConfigForm(): AiConfigSaveReq {
     modelOptions: [defaultOption],
     conversationMemoryEnabled: true,
     conversationMemoryWindowSize: 12,
+    detailOutputEnabled: false,
   };
 }
 
@@ -5978,6 +6056,7 @@ function fillAiConfigForm(config: AiConfigVO) {
     modelOptions: options,
     conversationMemoryEnabled: config.conversationMemoryEnabled !== false,
     conversationMemoryWindowSize: config.conversationMemoryWindowSize || 12,
+    detailOutputEnabled: config.detailOutputEnabled === true,
   } satisfies AiConfigSaveReq);
   const models = options.map((item) => item.id).filter((item) => !!item);
   if (!models.includes(selectedAiModel.value)) {
@@ -6254,6 +6333,8 @@ function resetConnectionModalState() {
     persistSessionTitleOverrides,
     cancelHistoryTitleEdit,
     modelLabelById,
+    detailOutputEnabledForTab,
+    toggleMessageTraceExpanded,
     lastPromptText,
     assistantActionLabel,
     normalizeHistoryActionType,

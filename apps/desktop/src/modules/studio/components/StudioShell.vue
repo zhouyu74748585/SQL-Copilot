@@ -931,6 +931,56 @@
                     <span>{{ assistantActionLabel(item.actionType) }}</span>
                     <span>{{ formatTime(item.createdAt) }}</span>
                   </div>
+                  <div
+                    v-if="item.trace && detailOutputEnabledForTab(activeQueryTab)"
+                    class="query-chat-trace-block"
+                  >
+                    <button class="query-chat-trace-toggle" @click="toggleMessageTraceExpanded(activeQueryTab, item.id)">
+                      <span>过程详情</span>
+                      <span>{{ item.trace.stageCount || item.trace.stages?.length || 0 }} 阶段 · {{ item.trace.totalDurationMs || 0 }}ms · {{ item.traceExpanded ? '收起' : '展开' }}</span>
+                    </button>
+                    <div v-if="item.traceExpanded" class="query-chat-trace-panel">
+                      <div
+                        v-for="stage in item.trace.stages || []"
+                        :key="stage.stageCode"
+                        class="query-chat-trace-stage"
+                      >
+                        <div class="query-chat-trace-stage-head">
+                          <strong>{{ stage.stageLabel }}</strong>
+                          <span>{{ stage.stageType }} · {{ stage.status }} · {{ stage.durationMs || 0 }}ms</span>
+                        </div>
+                        <div v-if="stage.inputFields?.length" class="query-chat-trace-fields">
+                          <div v-for="field in stage.inputFields" :key="`in-${stage.stageCode}-${field.fieldCode}`" class="query-chat-trace-field">
+                            <span>{{ field.fieldLabel }}</span>
+                            <pre>{{ field.fieldValue }}</pre>
+                          </div>
+                        </div>
+                        <div v-if="stage.outputFields?.length" class="query-chat-trace-fields">
+                          <div v-for="field in stage.outputFields" :key="`out-${stage.stageCode}-${field.fieldCode}`" class="query-chat-trace-field">
+                            <span>{{ field.fieldLabel }}</span>
+                            <pre>{{ field.fieldValue }}</pre>
+                          </div>
+                        </div>
+                        <div v-if="stage.llmCall" class="query-chat-trace-llm">
+                          <div class="query-chat-trace-llm-meta">
+                            模型 {{ stage.llmCall.modelId || '-' }} · {{ stage.llmCall.providerType || '-' }} · {{ stage.llmCall.actualModel || '-' }} · Token {{ stage.llmCall.totalTokens || 0 }}
+                          </div>
+                          <div v-if="stage.llmCall.systemPrompt" class="query-chat-trace-field">
+                            <span>System Prompt</span>
+                            <pre>{{ stage.llmCall.systemPrompt }}</pre>
+                          </div>
+                          <div v-if="stage.llmCall.userPrompt" class="query-chat-trace-field">
+                            <span>User Prompt</span>
+                            <pre>{{ stage.llmCall.userPrompt }}</pre>
+                          </div>
+                          <div v-if="stage.llmCall.fullOutput" class="query-chat-trace-field">
+                            <span>完整输出</span>
+                            <pre>{{ stage.llmCall.fullOutput }}</pre>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                   <div v-if="item.content" class="query-chat-text" :class="{ 'is-thinking': item.pending }">
                     <loading-outlined v-if="item.pending" class="query-chat-thinking-icon" />
                     <span>{{ item.content }}</span>
@@ -1024,6 +1074,16 @@
                 />
                 <span class="query-chat-auto-label">Auto</span>
                 <a-switch v-model:checked="activeQueryTab.autoMode" size="small" />
+                <a-select
+                  v-model:value="activeQueryTab.detailOutputOverride"
+                  size="small"
+                  style="min-width: 150px"
+                  :options="[
+                    { label: '详情: 跟随全局', value: null },
+                    { label: '详情: 开', value: true },
+                    { label: '详情: 关', value: false },
+                  ]"
+                />
                 <a-tooltip title="开启后会记忆并利用更长的对话上下文，适合连续追问与复杂任务。">
                   <span class="query-chat-long-dialog-label">长对话</span>
                 </a-tooltip>
@@ -1540,6 +1600,13 @@
               <a-col :span="12">
                 <a-form-item label="记忆窗口轮数">
                   <a-input-number v-model:value="aiConfigForm.conversationMemoryWindowSize" :min="4" :max="50" style="width: 100%" />
+                </a-form-item>
+              </a-col>
+            </a-row>
+            <a-row :gutter="12">
+              <a-col :span="12">
+                <a-form-item label="默认输出详情">
+                  <a-switch v-model:checked="aiConfigForm.detailOutputEnabled" />
                 </a-form-item>
               </a-col>
             </a-row>
@@ -2329,6 +2396,8 @@ const {
     handleHistoryMenuScroll,
     openHistorySession,
     modelLabelById,
+    detailOutputEnabledForTab,
+    toggleMessageTraceExpanded,
     lastPromptText,
     assistantActionLabel,
     normalizeHistoryActionType,

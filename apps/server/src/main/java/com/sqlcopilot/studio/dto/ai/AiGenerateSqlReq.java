@@ -24,8 +24,12 @@ public class AiGenerateSqlReq {
     private String databaseName;
 
     /** 本次会话指定模型选项 ID（兼容旧版模型名透传）。 */
+    private String modelId;
+
     private String modelName;
 
     /** 是否启用会话记忆（默认开启）。 */
     private Boolean memoryEnabled;
+
+    private Boolean detailOutputEnabled;
 }

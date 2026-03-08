@@ -29,4 +29,6 @@ public class AiGenerateChartVO {
 
     /** 粗略总 token。 */
     private Integer totalTokens;
+
+    private AiTraceVO trace;
 }

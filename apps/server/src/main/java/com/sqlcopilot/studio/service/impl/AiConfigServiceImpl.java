@@ -39,7 +39,13 @@ public class AiConfigServiceImpl implements AiConfigService {
         if (options.isEmpty()) {
             options = defaultModelOptions();
         }
-        return toVO(options, entity.getUpdatedAt(), entity.getConversationMemoryEnabled(), entity.getConversationMemoryWindowSize());
+        return toVO(
+            options,
+            entity.getUpdatedAt(),
+            entity.getConversationMemoryEnabled(),
+            entity.getConversationMemoryWindowSize(),
+            entity.getDetailOutputEnabled()
+        );
     }
 
     @Override
@@ -67,6 +73,7 @@ public class AiConfigServiceImpl implements AiConfigService {
         entity.setModelOptionsJson(serializeModelOptions(modelOptions));
         entity.setConversationMemoryEnabled(Boolean.FALSE.equals(req.getConversationMemoryEnabled()) ? 0 : 1);
         entity.setConversationMemoryWindowSize(normalizeConversationMemoryWindowSize(req.getConversationMemoryWindowSize()));
+        entity.setDetailOutputEnabled(Boolean.TRUE.equals(req.getDetailOutputEnabled()) ? 1 : 0);
         entity.setUpdatedAt(now);
 
         if (!exists) {
@@ -74,14 +81,24 @@ public class AiConfigServiceImpl implements AiConfigService {
         } else {
             aiConfigMapper.update(entity);
         }
-        return toVO(modelOptions, now, entity.getConversationMemoryEnabled(), entity.getConversationMemoryWindowSize());
+        return toVO(
+            modelOptions,
+            now,
+            entity.getConversationMemoryEnabled(),
+            entity.getConversationMemoryWindowSize(),
+            entity.getDetailOutputEnabled()
+        );
     }
 
     private AiConfigVO defaultConfig() {
-        return toVO(defaultModelOptions(), 0L, 1, 12);
+        return toVO(defaultModelOptions(), 0L, 1, 12, 0);
     }
 
-    private AiConfigVO toVO(List<AiModelOptionVO> options, Long updatedAt, Integer memoryEnabled, Integer memoryWindowSize) {
+    private AiConfigVO toVO(List<AiModelOptionVO> options,
+                            Long updatedAt,
+                            Integer memoryEnabled,
+                            Integer memoryWindowSize,
+                            Integer detailOutputEnabled) {
         AiModelOptionVO first = options.get(0);
         AiConfigVO vo = new AiConfigVO();
         vo.setProviderType(first.getProviderType());
@@ -93,6 +110,7 @@ public class AiConfigServiceImpl implements AiConfigService {
         vo.setModelOptions(options);
         vo.setConversationMemoryEnabled(!Integer.valueOf(0).equals(memoryEnabled));
         vo.setConversationMemoryWindowSize(normalizeConversationMemoryWindowSize(memoryWindowSize));
+        vo.setDetailOutputEnabled(Integer.valueOf(1).equals(detailOutputEnabled));
         vo.setUpdatedAt(updatedAt == null ? 0L : updatedAt);
         return vo;
     }

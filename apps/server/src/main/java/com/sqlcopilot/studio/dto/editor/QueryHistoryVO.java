@@ -1,5 +1,6 @@
 package com.sqlcopilot.studio.dto.editor;
 
+import com.sqlcopilot.studio.dto.ai.AiTraceVO;
 import com.sqlcopilot.studio.dto.ai.ChartConfigVO;
 import lombok.Data;
 
@@ -42,6 +43,10 @@ public class QueryHistoryVO {
 
     /** 结构化上下文（JSON）。 */
     private String structuredContextJson;
+
+    private String traceJson;
+
+    private AiTraceVO trace;
 
     /** 粗略 token 估算值。 */
     private Integer tokenEstimate;

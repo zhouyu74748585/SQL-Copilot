@@ -27,6 +27,7 @@ public class QueryHistorySchemaMigrationRunner implements ApplicationRunner {
             ensureHistoryColumn(connection, statement, "chart_config_json", "TEXT");
             ensureHistoryColumn(connection, statement, "chart_image_cache_key", "TEXT");
             ensureHistoryColumn(connection, statement, "structured_context_json", "TEXT");
+            ensureHistoryColumn(connection, statement, "trace_json", "TEXT");
             ensureHistoryColumn(connection, statement, "token_estimate", "INTEGER");
             ensureHistoryColumn(connection, statement, "memory_enabled", "INTEGER");
             backfillHistoryType(connection);

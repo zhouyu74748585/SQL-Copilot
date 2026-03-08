@@ -35,6 +35,8 @@ public class AiConfigVO {
     /** 记忆滑动窗口大小。 */
     private Integer conversationMemoryWindowSize;
 
+    private Boolean detailOutputEnabled;
+
     /** 最近更新时间戳（毫秒）。 */
     private Long updatedAt;
 }

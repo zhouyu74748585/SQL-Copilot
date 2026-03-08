@@ -76,6 +76,42 @@ export interface ChartConfigVO {
   description?: string;
 }
 
+export interface AiTraceFieldVO {
+  fieldCode: string;
+  fieldLabel: string;
+  fieldValue: string;
+}
+
+export interface AiTraceLlmCallVO {
+  modelId?: string;
+  providerType?: string;
+  providerName?: string;
+  actualModel?: string;
+  systemPrompt?: string;
+  userPrompt?: string;
+  fullOutput?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+}
+
+export interface AiTraceStageVO {
+  stageCode: string;
+  stageLabel: string;
+  stageType: string;
+  status: string;
+  durationMs?: number;
+  inputFields?: AiTraceFieldVO[];
+  outputFields?: AiTraceFieldVO[];
+  llmCall?: AiTraceLlmCallVO;
+}
+
+export interface AiTraceVO {
+  stageCount?: number;
+  totalDurationMs?: number;
+  stages?: AiTraceStageVO[];
+}
+
 export interface AiGenerateChartVO {
   sqlText: string;
   chartConfig?: ChartConfigVO;
@@ -85,6 +121,7 @@ export interface AiGenerateChartVO {
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  trace?: AiTraceVO;
 }
 
 export type AiIntentType = 'GENERATE_SQL' | 'EXPLAIN_SQL' | 'ANALYZE_SQL' | 'GENERATE_CHART';
@@ -100,6 +137,7 @@ export interface AiAutoQueryVO {
   content?: string;
   chartConfig?: ChartConfigVO;
   configSummary?: string;
+  trace?: AiTraceVO;
 }
 
 export interface ChartCacheSaveVO {

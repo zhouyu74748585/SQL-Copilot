@@ -38,4 +38,6 @@ public class AiConfigSaveReq {
 
     /** 记忆滑动窗口大小。 */
     private Integer conversationMemoryWindowSize;
+
+    private Boolean detailOutputEnabled;
 }

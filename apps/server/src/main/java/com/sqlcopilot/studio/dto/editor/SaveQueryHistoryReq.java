@@ -1,5 +1,6 @@
 package com.sqlcopilot.studio.dto.editor;
 
+import com.sqlcopilot.studio.dto.ai.AiTraceVO;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
@@ -43,6 +44,8 @@ public class SaveQueryHistoryReq {
     /** 结构化上下文（JSON）。 */
     private String structuredContextJson;
 
+    private String traceJson;
+
     /** 粗略 token 估算值。 */
     private Integer tokenEstimate;
 
@@ -55,4 +58,6 @@ public class SaveQueryHistoryReq {
     /** 是否执行成功。 */
     @NotNull
     private Boolean success;
+
+    private AiTraceVO trace;
 }

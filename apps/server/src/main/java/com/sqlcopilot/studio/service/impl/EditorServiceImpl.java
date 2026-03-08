@@ -1,6 +1,7 @@
 package com.sqlcopilot.studio.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sqlcopilot.studio.dto.ai.AiTraceVO;
 import com.sqlcopilot.studio.dto.ai.ChartConfigVO;
 import com.sqlcopilot.studio.dto.editor.*;
 import com.sqlcopilot.studio.dto.schema.ErGraphVO;
@@ -196,6 +197,7 @@ public class EditorServiceImpl implements EditorService {
         entity.setChartConfigJson(safe(req.getChartConfigJson()));
         entity.setChartImageCacheKey(safe(req.getChartImageCacheKey()));
         entity.setStructuredContextJson(safe(req.getStructuredContextJson()));
+        entity.setTraceJson(resolveTraceJson(req));
         entity.setTokenEstimate(req.getTokenEstimate());
         entity.setMemoryEnabled(Boolean.TRUE.equals(req.getMemoryEnabled()) ? 1 : 0);
         entity.setExecutionMs(req.getExecutionMs());
@@ -478,6 +480,11 @@ public class EditorServiceImpl implements EditorService {
         vo.setDatabaseName(safe(entity.getDatabaseName()));
         vo.setChartConfig(parseChartConfig(entity.getChartConfigJson()));
         vo.setChartImageCacheKey(safe(entity.getChartImageCacheKey()));
+        vo.setStructuredContextJson(safe(entity.getStructuredContextJson()));
+        vo.setTraceJson(safe(entity.getTraceJson()));
+        vo.setTrace(parseTrace(entity.getTraceJson()));
+        vo.setTokenEstimate(entity.getTokenEstimate());
+        vo.setMemoryEnabled(entity.getMemoryEnabled() == null ? null : entity.getMemoryEnabled() == 1);
         vo.setExecutionMs(entity.getExecutionMs());
         vo.setSuccess(entity.getSuccessFlag() == 1);
         vo.setCreatedAt(entity.getCreatedAt());
@@ -516,6 +523,33 @@ public class EditorServiceImpl implements EditorService {
             return objectMapper.readValue(normalized, ChartConfigVO.class);
         } catch (Exception ex) {
             return null;
+        }
+    }
+
+    private AiTraceVO parseTrace(String traceJson) {
+        String normalized = safe(traceJson);
+        if (normalized.isBlank()) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(normalized, AiTraceVO.class);
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private String resolveTraceJson(SaveQueryHistoryReq req) {
+        String raw = safe(req.getTraceJson());
+        if (!raw.isBlank()) {
+            return raw;
+        }
+        if (req.getTrace() == null) {
+            return "";
+        }
+        try {
+            return objectMapper.writeValueAsString(req.getTrace());
+        } catch (Exception ex) {
+            return "";
         }
     }
 

@@ -17,4 +17,6 @@ public class AiRepairVO {
 
     /** 错误原因说明（文本段）。 */
     private String errorExplanation;
+
+    private AiTraceVO trace;
 }

@@ -55,3 +55,38 @@
 ### 备注
 - 本次仅改后端服务实现与向量入库行为，不变更外部 HTTP API 路径与主 DTO/VO 结构。
 - 保持 UTF-8 编码。
+
+### 2026-03-08 19:30:00
+
+## Additional Record: unified llm gateway and ai trace output
+
+### Scope
+- Unified backend llm entry by `modelId`; callers no longer branch by OpenAI vs CLI.
+- Added trace output for `/api/ai/query/*`: `generate`, `auto`, `explain`, `analyze`, `generate-chart`, `repair`.
+- Added persisted detail-output switch in AI config and tab-level override in query workspace.
+- Added `trace_json` persistence for query history and restored trace playback from history.
+
+### Backend
+- Added `LlmGatewayService`, `LlmGatewayRequest`, `LlmGatewayResult` and routed provider selection by `modelId -> model option -> providerType`.
+- Updated `AiServiceImpl` to use the shared gateway for SQL/text/raw-text tasks and to attach explicit trace stages plus llm call payloads.
+- Updated `RagIngestionServiceImpl` to reuse the shared gateway instead of bypassing with direct OpenAI wiring.
+- Added `AiTraceVO`, `AiTraceStageVO`, `AiTraceFieldVO`, `AiTraceLlmCallVO` and exposed `trace` on query response DTOs.
+- Added `detailOutputEnabled` to AI config DTO/entity/mapper flow.
+- Added `trace_json` to query history entity/mapper/schema/save/load flow.
+
+### Frontend
+- Added shared trace contracts in `packages/shared-contracts` and desktop local types.
+- Updated studio runtime request payloads to send `modelId` and `detailOutputEnabled`.
+- Added assistant trace rendering block in chat cards with collapse/expand behavior.
+- Added global detail-output switch in AI settings and tab-level override in query UI.
+- Added trace persistence and replay when opening query history sessions.
+
+### Validation
+- Backend compile: `mvn -f apps/server/pom.xml clean compile -DskipTests` passed.
+- Backend startup: `mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18087` passed health check at `http://127.0.0.1:18087/api/health` and returned `{"code":0,"message":"success","data":"ok"}`.
+- Frontend type-check: `npm run -w @sqlcopilot/desktop type-check` passed.
+- Frontend build: `npm run -w @sqlcopilot/desktop build -- --emptyOutDir` passed.
+- Frontend preview: `npx vite preview --host=127.0.0.1 --port=14173 --strictPort` returned HTTP 200.
+
+### Note
+- During implementation, `AiServiceImpl.java` had broken string literals from prior edits. The file was repaired and validated with a clean backend compile before final startup verification.

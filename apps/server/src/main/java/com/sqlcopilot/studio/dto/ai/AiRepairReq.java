@@ -28,5 +28,9 @@ public class AiRepairReq {
     private String databaseName;
 
     /** 本次会话指定模型选项 ID（可选）。 */
+    private String modelId;
+
     private String modelName;
+
+    private Boolean detailOutputEnabled;
 }

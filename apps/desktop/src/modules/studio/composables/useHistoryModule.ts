@@ -206,6 +206,8 @@ export function useHistoryModule(runtime: StudioRuntime): HistoryModule {
           chartConfig: item.chartConfig ?? undefined,
           chartConfigSummary: assistantContent || undefined,
           chartImageCacheKey: (item.chartImageCacheKey || '').trim() || undefined,
+          trace: item.trace ?? undefined,
+          traceExpanded: false,
           createdAt: ts + 1,
         });
       }
@@ -252,6 +254,7 @@ export function useHistoryModule(runtime: StudioRuntime): HistoryModule {
       createdAt: first?.createdAt ?? Date.now(),
       updatedAt: last?.createdAt ?? Date.now(),
       memoryEnabled: latestMemoryFlag ?? true,
+      detailOutputOverride: null,
       lastTokenEstimate: Number(latestTokenEstimate ?? 0),
     };
     runtime.applySessionTitle(tab);

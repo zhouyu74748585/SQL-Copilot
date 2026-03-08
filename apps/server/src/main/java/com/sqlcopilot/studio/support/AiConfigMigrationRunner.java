@@ -26,6 +26,7 @@ public class AiConfigMigrationRunner implements ApplicationRunner {
              Statement statement = connection.createStatement()) {
             ensureAiProviderModelOptionsColumn(connection);
             ensureConversationMemoryColumns(connection);
+            ensureDetailOutputColumn(connection);
             ensureRagConfigTable(statement);
             normalizeRagConfigTable(connection);
             ensureRagVectorizeStatusTable(statement);
@@ -62,6 +63,17 @@ public class AiConfigMigrationRunner implements ApplicationRunner {
             }
             if (!hasColumn(connection, "ai_provider_config", "conversation_memory_window_size")) {
                 statement.execute("ALTER TABLE ai_provider_config ADD COLUMN conversation_memory_window_size INTEGER DEFAULT 12");
+            }
+        }
+    }
+
+    private void ensureDetailOutputColumn(Connection connection) throws SQLException {
+        if (!hasTable(connection, "ai_provider_config")) {
+            return;
+        }
+        try (Statement statement = connection.createStatement()) {
+            if (!hasColumn(connection, "ai_provider_config", "detail_output_enabled")) {
+                statement.execute("ALTER TABLE ai_provider_config ADD COLUMN detail_output_enabled INTEGER DEFAULT 0");
             }
         }
     }

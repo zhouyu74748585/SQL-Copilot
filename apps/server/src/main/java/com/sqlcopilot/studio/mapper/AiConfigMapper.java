@@ -14,6 +14,7 @@ public interface AiConfigMapper {
                model_options_json,
                conversation_memory_enabled,
                conversation_memory_window_size,
+               detail_output_enabled,
                updated_at
         FROM ai_provider_config
         WHERE id = #{id}
@@ -27,6 +28,7 @@ public interface AiConfigMapper {
             model_options_json,
             conversation_memory_enabled,
             conversation_memory_window_size,
+            detail_output_enabled,
             updated_at
         )
         VALUES(
@@ -35,6 +37,7 @@ public interface AiConfigMapper {
             #{modelOptionsJson},
             #{conversationMemoryEnabled},
             #{conversationMemoryWindowSize},
+            #{detailOutputEnabled},
             #{updatedAt}
         )
         """)
@@ -51,6 +54,7 @@ public interface AiConfigMapper {
             model_options_json = #{modelOptionsJson},
             conversation_memory_enabled = #{conversationMemoryEnabled},
             conversation_memory_window_size = #{conversationMemoryWindowSize},
+            detail_output_enabled = #{detailOutputEnabled},
             updated_at = #{updatedAt}
         WHERE id = #{id}
         """)

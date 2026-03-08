@@ -184,6 +184,42 @@ export interface ErGraphVO {
   generatedAt: number;
 }
 
+export interface AiTraceFieldVO {
+  fieldCode: string;
+  fieldLabel: string;
+  fieldValue: string;
+}
+
+export interface AiTraceLlmCallVO {
+  modelId?: string;
+  providerType?: string;
+  providerName?: string;
+  actualModel?: string;
+  systemPrompt?: string;
+  userPrompt?: string;
+  fullOutput?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+}
+
+export interface AiTraceStageVO {
+  stageCode: string;
+  stageLabel: string;
+  stageType: string;
+  status: string;
+  durationMs?: number;
+  inputFields?: AiTraceFieldVO[];
+  outputFields?: AiTraceFieldVO[];
+  llmCall?: AiTraceLlmCallVO;
+}
+
+export interface AiTraceVO {
+  stageCount?: number;
+  totalDurationMs?: number;
+  stages?: AiTraceStageVO[];
+}
+
 export interface AiGenerateSqlVO {
   sqlText: string;
   reasoning: string;
@@ -191,6 +227,7 @@ export interface AiGenerateSqlVO {
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  trace?: AiTraceVO;
 }
 
 export interface AiTextResponseVO {
@@ -200,6 +237,7 @@ export interface AiTextResponseVO {
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  trace?: AiTraceVO;
 }
 
 export interface AiRepairVO {
@@ -207,6 +245,7 @@ export interface AiRepairVO {
   repaired: boolean;
   repairNote: string;
   errorExplanation?: string;
+  trace?: AiTraceVO;
 }
 
 export interface ExplainVO {
@@ -227,6 +266,8 @@ export interface QueryHistoryVO {
   chartConfig?: ChartConfigVO;
   chartImageCacheKey?: string;
   structuredContextJson?: string;
+  traceJson?: string;
+  trace?: AiTraceVO;
   tokenEstimate?: number;
   memoryEnabled?: boolean;
   executionMs?: number;
@@ -397,6 +438,7 @@ export interface AiConfigVO {
   modelOptions?: AiModelOption[];
   conversationMemoryEnabled?: boolean;
   conversationMemoryWindowSize?: number;
+  detailOutputEnabled?: boolean;
   updatedAt?: number;
 }
 
@@ -410,6 +452,7 @@ export interface AiConfigSaveReq {
   modelOptions?: AiModelOption[];
   conversationMemoryEnabled?: boolean;
   conversationMemoryWindowSize?: number;
+  detailOutputEnabled?: boolean;
 }
 
 export interface AiModelOption {

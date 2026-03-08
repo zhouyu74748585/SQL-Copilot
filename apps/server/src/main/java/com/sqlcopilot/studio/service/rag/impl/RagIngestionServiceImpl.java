@@ -2,16 +2,16 @@ package com.sqlcopilot.studio.service.rag.impl;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sqlcopilot.studio.dto.ai.AiConfigVO;
-import com.sqlcopilot.studio.dto.ai.AiModelOptionVO;
 import com.sqlcopilot.studio.entity.ConnectionEntity;
 import com.sqlcopilot.studio.entity.KnowledgeExampleSqlEntity;
 import com.sqlcopilot.studio.entity.KnowledgeTermEntity;
 import com.sqlcopilot.studio.entity.QueryHistoryEntity;
 import com.sqlcopilot.studio.entity.SchemaColumnCacheEntity;
 import com.sqlcopilot.studio.entity.SchemaTableCacheEntity;
-import com.sqlcopilot.studio.service.AiConfigService;
 import com.sqlcopilot.studio.service.ConnectionService;
+import com.sqlcopilot.studio.service.llm.LlmGatewayRequest;
+import com.sqlcopilot.studio.service.llm.LlmGatewayResult;
+import com.sqlcopilot.studio.service.llm.LlmGatewayService;
 import com.sqlcopilot.studio.service.llm.OpenAiTextClient;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
 import com.sqlcopilot.studio.service.rag.RagEmbeddingService;
@@ -65,8 +65,7 @@ public class RagIngestionServiceImpl implements RagIngestionService {
     private final QdrantClientService qdrantClientService;
     private final RagEmbeddingService ragEmbeddingService;
     private final ConnectionService connectionService;
-    private final AiConfigService aiConfigService;
-    private final OpenAiTextClient openAiTextClient;
+    private final LlmGatewayService llmGatewayService;
     private final ObjectMapper objectMapper;
 
     private final boolean ragEnabled;
@@ -82,8 +81,7 @@ public class RagIngestionServiceImpl implements RagIngestionService {
     public RagIngestionServiceImpl(QdrantClientService qdrantClientService,
                                    RagEmbeddingService ragEmbeddingService,
                                    ConnectionService connectionService,
-                                   AiConfigService aiConfigService,
-                                   OpenAiTextClient openAiTextClient,
+                                   LlmGatewayService llmGatewayService,
                                    ObjectMapper objectMapper,
                                    @Value("${rag.enabled:true}") boolean ragEnabled,
                                    @Value("${rag.collection.schema-table:schema_table}") String schemaTableCollection,
@@ -100,8 +98,7 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         this.qdrantClientService = qdrantClientService;
         this.ragEmbeddingService = ragEmbeddingService;
         this.connectionService = connectionService;
-        this.aiConfigService = aiConfigService;
-        this.openAiTextClient = openAiTextClient;
+        this.llmGatewayService = llmGatewayService;
         this.objectMapper = objectMapper;
         this.ragEnabled = ragEnabled;
         this.sqlFragmentEnabled = sqlFragmentEnabled;
@@ -496,50 +493,18 @@ public class RagIngestionServiceImpl implements RagIngestionService {
 
     private String callSemanticLlm(String userPrompt) {
         try {
-            AiConfigVO config = aiConfigService.getConfig();
-            List<AiModelOptionVO> options = config.getModelOptions() == null ? List.of() : config.getModelOptions();
-            AiModelOptionVO openAiOption = null;
-            for (AiModelOptionVO option : options) {
-                if (option == null) {
-                    continue;
-                }
-                if ("OPENAI".equalsIgnoreCase(safeText(option.getProviderType())) && !safeText(option.getOpenaiApiKey()).isBlank()) {
-                    openAiOption = option;
-                    break;
-                }
-            }
-            if (openAiOption == null) {
-                return "";
-            }
-            String model = resolveOpenAiModel(openAiOption.getOpenaiModel());
-            OpenAiTextClient.OpenAiTextResult result = openAiTextClient.requestText(
-                openAiOption.getOpenaiApiKey(),
-                openAiOption.getOpenaiBaseUrl(),
-                model,
-                SQL_HISTORY_SEMANTIC_SYSTEM_PROMPT,
-                safeText(userPrompt),
-                Duration.ofSeconds(20),
-                0.1D
-            );
-            return safeText(result.content());
+            LlmGatewayRequest request = new LlmGatewayRequest();
+            request.setSystemPrompt(SQL_HISTORY_SEMANTIC_SYSTEM_PROMPT);
+            request.setUserPrompt(safeText(userPrompt));
+            request.setTaskLabel("SQL历史语义标注");
+            request.setTimeout(Duration.ofSeconds(20));
+            request.setTemperature(0.1D);
+            LlmGatewayResult result = llmGatewayService.call(request);
+            return safeText(result.getContent());
         } catch (Exception ex) {
             log.warn("SQL 历史语义 LLM 调用失败，降级规则生成, reason={}", ex.getMessage());
             return "";
         }
-    }
-
-    private String resolveOpenAiModel(String raw) {
-        String value = safeText(raw);
-        if (value.isBlank()) {
-            return "gpt-4.1-mini";
-        }
-        for (String token : value.split("[,\\n\\r\\t]")) {
-            String model = token.trim();
-            if (!model.isBlank()) {
-                return model;
-            }
-        }
-        return "gpt-4.1-mini";
     }
 
     private SqlSemanticEnrichment parseSemanticEnrichment(String rawContent) {

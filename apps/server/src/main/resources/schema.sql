@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS query_history (
     chart_config_json TEXT,
     chart_image_cache_key TEXT,
     structured_context_json TEXT,
+    trace_json TEXT,
     token_estimate INTEGER,
     memory_enabled INTEGER,
     execution_ms INTEGER,
@@ -86,6 +87,7 @@ CREATE TABLE IF NOT EXISTS ai_provider_config (
     model_options_json TEXT,
     conversation_memory_enabled INTEGER DEFAULT 1,
     conversation_memory_window_size INTEGER DEFAULT 12,
+    detail_output_enabled INTEGER DEFAULT 0,
     updated_at INTEGER NOT NULL
 );
 

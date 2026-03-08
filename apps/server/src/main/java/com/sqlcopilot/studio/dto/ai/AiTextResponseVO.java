@@ -23,4 +23,6 @@ public class AiTextResponseVO {
 
     /** 粗略总 token。 */
     private Integer totalTokens;
+
+    private AiTraceVO trace;
 }

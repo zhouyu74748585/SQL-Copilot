@@ -1873,6 +1873,87 @@ body {
   color: #5a6f8f;
 }
 
+.query-chat-trace-block {
+  margin-bottom: 8px;
+  border: 1px solid #d9e3f2;
+  border-radius: 8px;
+  background: #f9fbff;
+}
+
+.query-chat-trace-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 0;
+  background: transparent;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #35537a;
+  cursor: pointer;
+  text-align: left;
+}
+
+.query-chat-trace-panel {
+  padding: 0 10px 10px;
+}
+
+.query-chat-trace-stage + .query-chat-trace-stage {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed #d9e3f2;
+}
+
+.query-chat-trace-stage-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #45617f;
+}
+
+.query-chat-trace-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.query-chat-trace-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #45617f;
+}
+
+.query-chat-trace-field pre {
+  margin: 0;
+  border-radius: 6px;
+  border: 1px solid #dfe7f3;
+  background: #fff;
+  padding: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'JetBrains Mono', 'Menlo', monospace;
+  color: #24374f;
+}
+
+.query-chat-trace-llm {
+  margin-top: 8px;
+}
+
+.query-chat-trace-llm-meta {
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #547090;
+}
+
 .query-chat-thinking-icon {
   color: #4f78d9;
   animation: query-chat-thinking-spin 1s linear infinite;
@@ -2807,6 +2888,23 @@ body {
 .studio-root .query-chat-text {
   border: 1px solid var(--line-soft);
   background: color-mix(in srgb, var(--surface-1) 90%, transparent);
+}
+
+.studio-root .query-chat-trace-block,
+.studio-root .query-chat-trace-field pre {
+  border: 1px solid var(--line-soft);
+  background: color-mix(in srgb, var(--surface-1) 92%, transparent);
+}
+
+.studio-root .query-chat-trace-toggle,
+.studio-root .query-chat-trace-stage-head,
+.studio-root .query-chat-trace-field,
+.studio-root .query-chat-trace-llm-meta {
+  color: var(--text-2);
+}
+
+.studio-root .query-chat-trace-stage + .query-chat-trace-stage {
+  border-top: 1px dashed var(--line-soft);
 }
 
 .studio-root .query-chat-text.is-thinking {
