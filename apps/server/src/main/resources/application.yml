@@ -65,11 +65,11 @@ rag:
     metric-term-limit: 6
     example-sql-limit: 6
   rerank:
-    enabled: false
+    enabled: true
     alpha: 0.65
     beta: 0.30
     gamma: 0.05
-    model-file-name: rerank.onnx
+    model-file-name: model.onnx
     feature-size: 6
     execution-provider: AUTO
     cuda-device-id: 0

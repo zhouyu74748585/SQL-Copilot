@@ -136,3 +136,26 @@
 
 ### Note
 - `npm run -w @sqlcopilot/desktop type-check` currently fails on an existing frontend typing error at `src/modules/studio/components/StudioShell.vue` about `tokenEstimate` vs `lastTokenEstimate`; this was not introduced by the rerank trace change.
+
+### 2026-03-08 22:45:00
+
+## Additional Record: prefer example-sql when prompt includes sql samples
+
+### Scope
+- When the user prompt already contains SQL examples, increase `example_sql` retrieval weight and place example SQL earlier in the generated RAG context.
+
+### Backend
+- Updated `RagRetrievalServiceImpl` to detect SQL-example signals in the prompt.
+- Increased `example_sql` search limit when SQL-example signals are present.
+- Added extra rerank rule bonus for the `example_sql` bucket when the prompt contains SQL examples, so example SQL is preferred over generic history hits.
+- Moved example SQL context to the front of the assembled RAG prompt when SQL-example signals are detected, so the model sees and follows sample SQL earlier.
+- Added a shared helper for appending example SQL context with stable ASCII labels to avoid prompt corruption from existing source-encoding issues.
+
+### Validation
+- Backend compile: `mvn -f apps/server/pom.xml clean compile -DskipTests` passed.
+- Backend startup: `mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18391` passed health check at `http://127.0.0.1:18391/api/health` and returned `{"code":0,"message":"success","data":"ok"}`.
+- Frontend clean build: `npm run -w @sqlcopilot/desktop build -- --emptyOutDir` passed.
+- Frontend preview: `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 14391 --strictPort` returned HTTP 200.
+
+### Note
+- This change was limited to the backend retrieval and prompt-assembly path. The known frontend `type-check` failure in `StudioShell.vue` remains unrelated.

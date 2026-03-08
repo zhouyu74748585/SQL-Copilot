@@ -46,34 +46,26 @@ public class AiServiceImpl implements AiService {
 
     private static final Pattern SQL_FENCE_PATTERN = Pattern.compile("(?is)```(?:sql)?\\s*(.*?)```");
     private static final Pattern CTE_NAME_PATTERN = Pattern.compile("(?is)(?:^|,|\\s)([a-zA-Z_][a-zA-Z0-9_]*)\\s+as\\s*\\(");
-    private static final Pattern COMMAND_TOKEN_PATTERN = Pattern.compile("\"([^\"]*)\"|'([^']*)'|(\\S+)");
     private static final Pattern SQL_KEYWORD_PATTERN = Pattern.compile("(?is)\\b(select|with|update|delete|insert)\\b");
     private static final Pattern AGGREGATE_FUNCTION_PATTERN = Pattern.compile("(?i)\\b(count|sum|avg|min|max)\\s*\\(");
     private static final Pattern GROUP_BY_PATTERN = Pattern.compile("(?i)\\bgroup\\s+by\\b");
     private static final Pattern ORDER_BY_PATTERN = Pattern.compile("(?i)\\border\\s+by\\b");
     private static final Pattern WHERE_PATTERN = Pattern.compile("(?i)\\bwhere\\b");
     private static final Pattern JOIN_PATTERN = Pattern.compile("(?i)\\bjoin\\b");
-    private static final Pattern ANSI_ESCAPE_PATTERN = Pattern.compile("\\u001B\\[[;\\d]*[ -/]*[@-~]");
-    private static final Pattern TOKEN_USAGE_VALUE_PATTERN = Pattern.compile("^[0-9][0-9,]*$");
-    private static final Pattern TOKEN_USAGE_KV_PATTERN =
-        Pattern.compile("(?i)\\b(input|prompt|output|completion|total)\\b[^0-9]*([0-9][0-9,]*)");
-    private static final Pattern TOKEN_USAGE_NUMBER_PATTERN = Pattern.compile("([0-9][0-9,]*)");
     private static final int RELATED_TABLE_META_LIMIT = 8;
     private static final int DEFAULT_MEMORY_WINDOW_SIZE = 12;
     private static final int RELATED_INDEX_COLUMN_LIMIT = 12;
-    private static final Set<String> CODEX_SUBCOMMANDS = Set.of(
-        "exec", "e", "review", "login", "logout", "mcp", "mcp-server",
-        "app-server", "app", "completion", "sandbox", "debug", "apply",
-        "a", "resume", "fork", "cloud", "features", "help"
-    );
-    private static final long CLI_TIMEOUT_SECONDS = 45L;
     private static final int ANALYZE_EXPLAIN_PLAN_ROW_LIMIT = 200;
     private static final int ANALYZE_EXPLAIN_PLAN_TEXT_LIMIT = 6000;
     private static final double AUTO_INTENT_MIN_CONFIDENCE = 0.70D;
+    private static final int MEMORY_SUMMARY_LIMIT = 8;
+    private static final int GLOBAL_HISTORY_RECALL_LIMIT = 10;
+    private static final int SESSION_HISTORY_RECALL_LIMIT = 8;
+    private static final int SQL_UNDERSTAND_TABLE_LIMIT = 8;
+    private static final ThreadLocal<Map<String, String>> REQUEST_LLM_CACHE = ThreadLocal.withInitial(ConcurrentHashMap::new);
+    private static final ThreadLocal<Integer> REQUEST_LLM_CACHE_DEPTH = ThreadLocal.withInitial(() -> 0);
     private static final String AUTO_INTENT_CLARIFY_CONTENT =
         "未能准确识别你的需求，请将需求描述得更清晰（例如：生成SQL/解释SQL/分析SQL/生成图表，也可以补充关键表、字段与筛选条件）。";
-    private static final String OPENAI_SYSTEM_PROMPT = "你是数据库 SQL 专家。基于提供的 RAG 上下文生成 SQL。仅返回可执行 SQL，不要输出解释。";
-
     private static final String INTENT_CLASSIFY_LIGHT_SYSTEM_PROMPT = """
         你是数据库助手的轻量意图预判器。输入是“用户输入 + 最近几轮对话摘要”。
         请输出严格 JSON，不要输出任何额外文本：
@@ -122,12 +114,12 @@ public class AiServiceImpl implements AiService {
         3) 不要编造不存在的信息；
         4) 输出纯文本，控制在 400 中文字以内。
         """;
-    private static final int MEMORY_SUMMARY_LIMIT = 8;
-    private static final int GLOBAL_HISTORY_RECALL_LIMIT = 10;
-    private static final int SESSION_HISTORY_RECALL_LIMIT = 8;
-    private static final int SQL_UNDERSTAND_TABLE_LIMIT = 8;
-    private static final ThreadLocal<Map<String, String>> REQUEST_LLM_CACHE = ThreadLocal.withInitial(ConcurrentHashMap::new);
-    private static final ThreadLocal<Integer> REQUEST_LLM_CACHE_DEPTH = ThreadLocal.withInitial(() -> 0);
+    private static final String OPENAI_SYSTEM_PROMPT = """
+        你是数据库 SQL 专家。基于提供的上下文生成 SQL。仅返回可执行 SQL，不要输出解释。
+        约束：
+        1）如果存在样例SQL，则优先参考样例SQL
+        2) SQL 必须可执行，不要使用 markdown 代码块。
+        """;
     private static final String GENERATE_CHART_SYSTEM_PROMPT = """
         你是数据库图表方案助手。请基于用户需求和数据库上下文，输出严格 JSON，不要输出任何额外文本。
         JSON 格式：
@@ -147,10 +139,11 @@ public class AiServiceImpl implements AiService {
           "configSummary": "配置摘要"
         }
         约束：
-        1) chartType=LINE/BAR/TREND 时必须提供 xField + yFields(至少1项)；
-        2) chartType=PIE 时必须提供 categoryField + valueField；
-        3) chartType=SCATTER 时必须提供 xField + yFields(仅1项)；
-        4) SQL 必须可执行，不要使用 markdown 代码块。
+        1）如果存在样例SQL，则优先参考样例SQL
+        2) chartType=LINE/BAR/TREND 时必须提供 xField + yFields(至少1项)；
+        3) chartType=PIE 时必须提供 categoryField + valueField；
+        4) chartType=SCATTER 时必须提供 xField + yFields(仅1项)；
+        5) SQL 必须可执行，不要使用 markdown 代码块。
         """;
     private static final String EXPLAIN_SQL_SYSTEM_PROMPT = """
         你是数据库讲解助手。请用中文解释 SQL 的业务含义。
@@ -427,6 +420,7 @@ public class AiServiceImpl implements AiService {
             safe(req.getModelName()),
             safe(req.getPrompt()).length()
         );
+        //TODO 要先做意图识别，得到关键信息，再做向量化检索，不能直接将用户输入当作入参仅向量化检索
         // 关键操作：先将用户需求向量化并做 Qdrant 分层检索，构造 Prompt 上下文。
         boolean detailOutputEnabled = resolveDetailOutputEnabled(req);
         List<AiTraceStageVO> traceStages = detailOutputEnabled ? new ArrayList<>() : List.of();
