@@ -15,7 +15,7 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 1440,
     height: 900,
-    minWidth: 1200,
+    minWidth: 1250,
     minHeight: 760,
     title: 'SQL Copilot',
     autoHideMenuBar: true,
