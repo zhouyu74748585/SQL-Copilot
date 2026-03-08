@@ -23,6 +23,7 @@ description: Bootstrap project-local skill setup for new repositories. Use when 
 5. 除非用户明确要求，否则不兼容旧数据。
 6. 生成或维护 `AGENTS.md` 时默认使用中文。
 7. 与用户交互时默认使用中文回复，除非用户明确要求其他语言。
+8. 前后端工程都需要进行合理的模块划分，禁止将所有代码都写在一个文件中。
 
 ## 脚本
 执行 `scripts/bootstrap_project_skills.sh` 自动完成初始化：
