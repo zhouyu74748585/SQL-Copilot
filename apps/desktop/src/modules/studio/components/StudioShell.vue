@@ -1064,7 +1064,8 @@
               @keydown="handleChatComposerKeydown($event, activeQueryTab)"
             />
             <div class="query-chat-composer-row">
-              <div class="query-chat-model-box">
+              <div class="query-chat-composer-meta">
+                <div class="query-chat-model-box">
                 <span>模型</span>
                 <a-select
                   v-model:value="activeQueryTab.selectedAiModel"
@@ -1072,8 +1073,78 @@
                   style="min-width: 190px"
                   :options="aiModelOptions"
                 />
-                <span class="query-chat-auto-label">Auto</span>
-                <a-switch v-model:checked="activeQueryTab.autoMode" size="small" />
+                <a-dropdown placement="topLeft" :trigger="['click']">
+                  <button type="button" class="query-chat-model-pill query-chat-model-trigger">
+                    <span class="query-chat-model-pill-text">
+                      {{ aiModelOptions.find((item) => item.value === activeQueryTab?.selectedAiModel)?.label || '未选择模型' }}
+                    </span>
+                  </button>
+                  <template #overlay>
+                    <a-menu
+                      :selectedKeys="activeQueryTab?.selectedAiModel ? [activeQueryTab.selectedAiModel] : []"
+                      @click="({ key }) => activeQueryTab && (activeQueryTab.selectedAiModel = String(key))"
+                    >
+                      <a-menu-item v-for="item in aiModelOptions" :key="String(item.value)">
+                        {{ item.label }}
+                      </a-menu-item>
+                    </a-menu>
+                  </template>
+                </a-dropdown>
+                </div>
+                <span class="query-chat-mode-pill" :class="{ 'is-active': activeQueryTab?.autoMode }">
+                  {{ activeQueryTab?.autoMode ? 'Auto' : 'Manual' }}
+                </span>
+                <span class="query-chat-token-pill">≈Token: {{ activeQueryTab.lastTokenEstimate || 0 }}</span>
+                <a-popover placement="topRight" trigger="click" overlay-class-name="query-chat-settings-popover">
+                  <template #content>
+                    <div class="query-chat-settings-panel">
+                      <div class="query-chat-settings-item">
+                        <div class="query-chat-settings-copy">
+                          <span class="query-chat-settings-title">Auto 模式</span>
+                          <span class="query-chat-settings-desc">自动判断生成、解释、分析等动作</span>
+                        </div>
+                        <a-switch v-model:checked="activeQueryTab.autoMode" size="small" />
+                      </div>
+                      <div class="query-chat-settings-item is-column">
+                        <div class="query-chat-settings-copy">
+                          <span class="query-chat-settings-title">详情输出</span>
+                          <span class="query-chat-settings-desc">控制回复详细程度，默认跟随全局配置</span>
+                        </div>
+                        <a-select
+                          v-model:value="activeQueryTab.detailOutputOverride"
+                          size="small"
+                          style="width: 100%"
+                          :options="[
+                            { label: '详情: 跟随全局', value: null },
+                            { label: '详情: 开', value: true },
+                            { label: '详情: 关', value: false },
+                          ]"
+                        />
+                      </div>
+                      <div class="query-chat-settings-item">
+                        <div class="query-chat-settings-copy">
+                          <a-tooltip title="开启后会记忆并利用更长的对话上下文，适合连续追问与复杂任务。">
+                            <span class="query-chat-settings-title is-help">长对话</span>
+                          </a-tooltip>
+                          <span class="query-chat-settings-desc">支持连续追问</span>
+                        </div>
+                        <a-switch v-model:checked="activeQueryTab.memoryEnabled" size="small" />
+                      </div>
+                      <div v-if="activeQueryTab.autoMode" class="query-chat-settings-item">
+                        <div class="query-chat-settings-copy">
+                          <span class="query-chat-settings-title">自动执行</span>
+                          <span class="query-chat-settings-desc">生成 SQL 后直接执行</span>
+                        </div>
+                        <a-switch v-model:checked="activeQueryTab.autoExecute" size="small" />
+                      </div>
+                    </div>
+                  </template>
+                  <a-tooltip title="对话设置">
+                    <a-button size="small" class="sql-action-icon-btn query-chat-settings-trigger">
+                      <template #icon><setting-outlined /></template>
+                    </a-button>
+                  </a-tooltip>
+                </a-popover>
                 <a-select
                   v-model:value="activeQueryTab.detailOutputOverride"
                   size="small"
