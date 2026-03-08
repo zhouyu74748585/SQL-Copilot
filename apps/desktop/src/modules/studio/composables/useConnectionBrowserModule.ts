@@ -39,6 +39,7 @@ export function useConnectionBrowserModule(
   deps: ConnectionBrowserDeps,
 ): ConnectionBrowserModule {
   function activateBrowserTab() {
+    runtime.browserNavMode.value = 'connections';
     runtime.activeWorkbenchTab.value = runtime.browserTabKey;
   }
 

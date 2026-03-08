@@ -88,7 +88,7 @@ export function useUiShellModule(runtime: StudioRuntime): UiShellModule {
   }
 
   function startResizeBrowserPane(event: MouseEvent) {
-    if (runtime.activeWorkbenchTab.value !== runtime.browserTabKey) {
+    if (runtime.activeWorkbenchTab.value !== runtime.browserTabKey && !runtime.activeKnowledgeTab.value) {
       return;
     }
     event.preventDefault();

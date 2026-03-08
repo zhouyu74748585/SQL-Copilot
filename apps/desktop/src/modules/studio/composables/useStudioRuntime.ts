@@ -221,6 +221,16 @@ interface QueryWorkspaceTab {
   lastTokenEstimate: number;
 }
 
+interface SqlEditorContext {
+  connectionId: number;
+  databaseName: string;
+}
+
+interface SqlEditorMountOptions {
+  getContext?: () => SqlEditorContext | null;
+  enableSelectionActions?: boolean;
+}
+
 interface ErWorkspaceTab {
   key: string;
   title: string;
@@ -287,6 +297,14 @@ interface TableEditorWorkspaceTab {
   dirty: boolean;
   loading: boolean;
   saved: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface KnowledgeWorkspaceTab {
+  key: string;
+  node: 'example-sql' | 'terms';
+  title: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -399,6 +417,8 @@ const queryTabs = ref<QueryWorkspaceTab[]>([]);
 const erTabs = ref<ErWorkspaceTab[]>([]);
 
 const tableEditorTabs = ref<TableEditorWorkspaceTab[]>([]);
+
+const knowledgeTabs = ref<KnowledgeWorkspaceTab[]>([]);
 
 const erTableSelectModalOpen = ref(false);
 
@@ -635,6 +655,8 @@ let activeSqlEditorInstance: MonacoApi.editor.IStandaloneCodeEditor | null = nul
 
 const pendingTableNameLoads = new Map<string, Promise<string[]>>();
 
+const sqlEditorContextResolverMap = new Map<string, () => SqlEditorContext | null>();
+
 const tableStatsPollingTimers = new Map<string, number>();
 
 const sessionTitleOverridesStorageKey = 'sqlcopilot.session-title-overrides.v1';
@@ -661,6 +683,10 @@ const activeErTab = computed(() =>
 
 const activeTableEditorTab = computed(() =>
   tableEditorTabs.value.find((item) => item.key === activeWorkbenchTab.value) ?? null,
+);
+
+const activeKnowledgeTab = computed(() =>
+  knowledgeTabs.value.find((item) => item.key === activeWorkbenchTab.value) ?? null,
 );
 
 const activeErConfidenceThreshold = computed(() => {
@@ -1069,7 +1095,7 @@ const workbenchStyle = computed(() => {
   if (viewportWidth.value < 1200) {
     return {};
   }
-  if (activeWorkbenchTab.value === browserTabKey) {
+  if (activeWorkbenchTab.value === browserTabKey || activeKnowledgeTab.value) {
     return {
       gridTemplateColumns: `${leftPaneWidth.value}px 4px minmax(460px, 1fr) 4px ${browserRightPaneWidth.value}px`,
     };
@@ -1725,6 +1751,7 @@ function hasWorkbenchTab(tabKey: string) {
   }
   return queryTabs.value.some((item) => item.key === tabKey)
     || erTabs.value.some((item) => item.key === tabKey)
+    || knowledgeTabs.value.some((item) => item.key === tabKey)
     || tableEditorTabs.value.some((item) => item.key === tabKey);
 }
 
@@ -1734,6 +1761,7 @@ function ensureActiveWorkbenchTab() {
   }
   activeWorkbenchTab.value = queryTabs.value[0]?.key
     ?? erTabs.value[0]?.key
+    ?? knowledgeTabs.value[0]?.key
     ?? tableEditorTabs.value[0]?.key
     ?? browserTabKey;
 }
@@ -3026,10 +3054,50 @@ function hasTableSuggestion(names: string[], prefix: string) {
   return names.some((name) => name.toLowerCase().includes(keyword));
 }
 
-function shouldAutoTriggerSuggest(tab: QueryWorkspaceTab, prefix: string) {
+function resolveSqlEditorContextForModel(model: MonacoApi.editor.ITextModel | null) {
+  if (!model) {
+    return null;
+  }
+  return sqlEditorContextResolverMap.get(model.uri.toString())?.() ?? null;
+}
+
+function registerSqlEditorContext(
+  editor: MonacoApi.editor.IStandaloneCodeEditor,
+  getContext: () => SqlEditorContext | null,
+) {
+  let currentModel: MonacoApi.editor.ITextModel | null = null;
+
+  const syncModelContext = () => {
+    if (currentModel) {
+      sqlEditorContextResolverMap.delete(currentModel.uri.toString());
+    }
+    currentModel = editor.getModel();
+    if (currentModel) {
+      sqlEditorContextResolverMap.set(currentModel.uri.toString(), getContext);
+    }
+  };
+
+  syncModelContext();
+  const changeDisposable = editor.onDidChangeModel(() => {
+    syncModelContext();
+  });
+  editor.onDidDispose(() => {
+    changeDisposable.dispose();
+    if (currentModel) {
+      sqlEditorContextResolverMap.delete(currentModel.uri.toString());
+      currentModel = null;
+    }
+  });
+}
+
+function shouldAutoTriggerSuggestByContext(context: SqlEditorContext | null, prefix: string) {
   if (hasKeywordSuggestion(prefix)) {
     return true;
   }
+  if (!context?.connectionId) {
+    return false;
+  }
+  const tab = context as QueryWorkspaceTab;
   const databaseName = resolveQueryDatabaseName(tab);
   if (!databaseName || databaseName === '未发现数据库') {
     return false;
@@ -3044,6 +3112,13 @@ function shouldAutoTriggerSuggest(tab: QueryWorkspaceTab, prefix: string) {
   return hasTableSuggestion(tableNames, prefix);
 }
 
+function shouldAutoTriggerSuggest(tab: QueryWorkspaceTab, prefix: string) {
+  return shouldAutoTriggerSuggestByContext({
+    connectionId: tab.connectionId,
+    databaseName: resolveQueryDatabaseName(tab),
+  }, prefix);
+}
+
 function registerSqlCompletionProvider(monaco: typeof MonacoApi) {
   if (sqlCompletionProviderDisposable) {
     return;
@@ -3051,15 +3126,22 @@ function registerSqlCompletionProvider(monaco: typeof MonacoApi) {
   sqlCompletionProviderDisposable = monaco.languages.registerCompletionItemProvider('sql', {
     triggerCharacters: ['.', '`'],
     provideCompletionItems: async (model, position) => {
-      const tab = activeQueryTab.value;
-      if (!tab) {
-        return undefined;
-      }
       const word = model.getWordUntilPosition(position);
       const wordPrefix = (word.word || '').trim();
       if (!wordPrefix) {
         return undefined;
       }
+      const context = resolveSqlEditorContextForModel(model)
+        ?? (() => {
+          const tab = activeQueryTab.value;
+          if (!tab) {
+            return null;
+          }
+          return {
+            connectionId: tab.connectionId,
+            databaseName: resolveQueryDatabaseName(tab),
+          };
+        })();
       const range = {
         startLineNumber: position.lineNumber,
         endLineNumber: position.lineNumber,
@@ -3067,6 +3149,10 @@ function registerSqlCompletionProvider(monaco: typeof MonacoApi) {
         endColumn: word.endColumn,
       };
       const keywordSuggestions = sqlKeywordSuggestions(monaco, range, wordPrefix);
+      if (!context?.connectionId) {
+        return keywordSuggestions.length ? { suggestions: keywordSuggestions } : undefined;
+      }
+      const tab = context as QueryWorkspaceTab;
       const databaseName = resolveQueryDatabaseName(tab);
       if (!databaseName || databaseName === '未发现数据库') {
         return keywordSuggestions.length ? { suggestions: keywordSuggestions } : undefined;
@@ -3084,7 +3170,10 @@ function registerSqlCompletionProvider(monaco: typeof MonacoApi) {
   });
 }
 
-function registerSqlAutoSuggest(editor: MonacoApi.editor.IStandaloneCodeEditor) {
+function registerSqlAutoSuggest(
+  editor: MonacoApi.editor.IStandaloneCodeEditor,
+  getContext: () => SqlEditorContext | null,
+) {
   sqlEditorTypeDisposable?.dispose();
   sqlEditorTypeDisposable = editor.onDidChangeModelContent((event) => {
     if (event.isFlush || !event.changes.length) {
@@ -3107,8 +3196,7 @@ function registerSqlAutoSuggest(editor: MonacoApi.editor.IStandaloneCodeEditor) 
     if (!currentWord) {
       return;
     }
-    const tab = activeQueryTab.value;
-    if (!tab || !shouldAutoTriggerSuggest(tab, currentWord)) {
+    if (!shouldAutoTriggerSuggestByContext(getContext(), currentWord)) {
       return;
     }
     if (sqlAutoSuggestTimer !== null) {
@@ -3218,10 +3306,34 @@ async function warmupTableSuggestions(tab: QueryWorkspaceTab | null) {
   await ensureTableNamesLoaded(tab.connectionId, databaseName);
 }
 
+async function warmupTableSuggestionsForContext(context: SqlEditorContext | null) {
+  if (!context?.connectionId) {
+    return;
+  }
+  const databaseName = (context.databaseName || '').trim();
+  if (!databaseName || databaseName === '鏈彂鐜版暟鎹簱') {
+    return;
+  }
+  await ensureTableNamesLoaded(context.connectionId, databaseName);
+}
+
 function handleSqlEditorMount(
   editor: MonacoApi.editor.IStandaloneCodeEditor,
   monaco: typeof MonacoApi,
+  options?: SqlEditorMountOptions,
 ) {
+  const getContext = options?.getContext ?? (() => {
+    const tab = activeQueryTab.value;
+    if (!tab) {
+      return null;
+    }
+    return {
+      connectionId: tab.connectionId,
+      databaseName: resolveQueryDatabaseName(tab),
+    };
+  });
+  const enableSelectionActions = options?.enableSelectionActions !== false;
+
   activeSqlEditorInstance = editor;
   monaco.editor.remeasureFonts();
   editor.layout();
@@ -3230,12 +3342,25 @@ function handleSqlEditorMount(
     editor.layout();
   });
   registerSqlCompletionProvider(monaco);
-  registerSqlAutoSuggest(editor);
-  registerSqlSelectionTracker(editor);
-  registerSqlSelectionPopoverTrigger(editor);
-  registerSqlScrollTracker(editor);
-  syncSelectedSqlForActiveTab(false);
-  void warmupTableSuggestions(activeQueryTab.value);
+  registerSqlEditorContext(editor, getContext);
+  registerSqlAutoSuggest(editor, getContext);
+  if (enableSelectionActions) {
+    registerSqlSelectionTracker(editor);
+    registerSqlSelectionPopoverTrigger(editor);
+    registerSqlScrollTracker(editor);
+    syncSelectedSqlForActiveTab(false);
+  } else {
+    sqlEditorSelectionDisposable?.dispose();
+    sqlEditorSelectionDisposable = null;
+    sqlEditorScrollDisposable?.dispose();
+    sqlEditorScrollDisposable = null;
+    sqlEditorMouseDownDisposable?.dispose();
+    sqlEditorMouseDownDisposable = null;
+    sqlEditorMouseUpDisposable?.dispose();
+    sqlEditorMouseUpDisposable = null;
+    hideSqlSelectionPopover();
+  }
+  void warmupTableSuggestionsForContext(getContext());
 }
 
 async function loadObjectNames(connectionId: number, databaseName: string, objectType: string) {
@@ -5225,6 +5350,7 @@ onBeforeUnmount(() => {
   sqlEditorMouseUpDisposable = null;
   sqlCompletionProviderDisposable?.dispose();
   sqlCompletionProviderDisposable = null;
+  sqlEditorContextResolverMap.clear();
   activeSqlEditorInstance = null;
   queryChatMessageElementMap.clear();
   queryChatScrollRef.value = null;
@@ -5938,6 +6064,7 @@ function resetConnectionModalState() {
     queryTabs,
     erTabs,
     tableEditorTabs,
+    knowledgeTabs,
     erTableSelectModalOpen,
     erTableSelectSubmitting,
     erSelectConnectionId,
@@ -6028,6 +6155,7 @@ function resetConnectionModalState() {
     activeQueryTab,
     activeErTab,
     activeTableEditorTab,
+    activeKnowledgeTab,
     activeErConfidenceThreshold,
     activeErAiRelationTotal,
     activeErDisplayGraph,

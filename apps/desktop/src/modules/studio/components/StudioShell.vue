@@ -22,6 +22,16 @@
             <span>对象浏览</span>
           </button>
           <button
+            v-for="tab in knowledgeTabs"
+            :key="tab.key"
+            class="workspace-tab"
+            :class="{ 'is-active': activeWorkbenchTab === tab.key }"
+            @click="activeWorkbenchTab = tab.key"
+          >
+            <span>{{ tab.title }}</span>
+            <close-outlined class="tab-close" @click.stop="closeKnowledgeTab(tab.key)" />
+          </button>
+          <button
             v-for="tab in queryTabs"
             :key="tab.key"
             class="workspace-tab"
@@ -224,6 +234,7 @@
         'workbench-table-editor': !!activeTableEditorTab,
         'workbench-er': !!activeErTab,
         'workbench-browser': activeWorkbenchTab === browserTabKey,
+        'workbench-knowledge': !!activeKnowledgeTab,
       }"
       :style="workbenchStyle"
     >
@@ -288,10 +299,9 @@
             </a-tree>
           </a-collapse-panel>
           <a-collapse-panel key="knowledge" header="知识中心">
-            <div class="knowledge-nav-context">当前上下文：{{ knowledgeContextText }}</div>
             <button
               class="knowledge-nav-item"
-              :class="{ 'is-active': browserNavMode === 'knowledge' && knowledgeActiveNode === 'example-sql' }"
+              :class="{ 'is-active': activeKnowledgeTab?.node === 'example-sql' }"
               @click="openKnowledgeNode('example-sql')"
             >
               <span>样例SQL</span>
@@ -299,7 +309,7 @@
             </button>
             <button
               class="knowledge-nav-item"
-              :class="{ 'is-active': browserNavMode === 'knowledge' && knowledgeActiveNode === 'terms' }"
+              :class="{ 'is-active': activeKnowledgeTab?.node === 'terms' }"
               @click="openKnowledgeNode('terms')"
             >
               <span>术语管理</span>
@@ -319,7 +329,6 @@
       <div class="pane-splitter pane-splitter-left" @mousedown="startResizeLeftPane" />
 
       <template v-if="activeWorkbenchTab === browserTabKey">
-        <template v-if="browserNavMode === 'connections'">
           <section class="pane pane-center">
             <div class="pane-title">对象浏览</div>
             <div class="center-toolbar">
@@ -469,68 +478,82 @@
             </div>
             <div v-else class="empty-pane">对象详情加载中...</div>
           </aside>
-        </template>
+      </template>
 
-        <template v-else>
-          <section class="pane pane-center">
-            <div class="pane-title">知识中心 · {{ knowledgeActiveNode === 'terms' ? '术语管理' : '样例SQL' }}</div>
-            <div class="center-toolbar">
-              <div class="center-toolbar-left">
-                <a-button size="small" type="primary" @click="knowledgeActiveNode === 'terms' ? resetKnowledgeTermForm() : resetKnowledgeExampleForm()">
-                  <template #icon><plus-outlined /></template>
-                  新建{{ knowledgeActiveNode === 'terms' ? '术语' : '样例' }}
-                </a-button>
-                <a-button size="small" :loading="knowledgeRebuildLoading" @click="rebuildKnowledgeVectors">
-                  <template #icon><sync-outlined /></template>
-                  手动重建向量
-                </a-button>
-              </div>
-              <div class="center-toolbar-right">
-                <a-input v-model:value="knowledgeKeyword" size="small" placeholder="搜索知识内容" allow-clear>
-                  <template #prefix><search-outlined /></template>
-                </a-input>
-                <a-button size="small" :loading="knowledgeLoading" @click="loadKnowledgeData">
-                  <reload-outlined />
-                </a-button>
-              </div>
+      <template v-else-if="activeKnowledgeTab">
+        <StudioConnectionContextBar
+          :connection-id="knowledgeConnectionId"
+          :database-name="knowledgeDatabaseName"
+          :connection-options="knowledgeConnectionOptions"
+          :database-options="knowledgeDatabaseOptions"
+          :database-disabled="!knowledgeConnectionId"
+          @connection-change="handleKnowledgeConnectionSelectorChange"
+          @database-change="handleKnowledgeDatabaseSelectorChange"
+        />
+
+        <section class="pane pane-center">
+          <div class="pane-title">知识中心 · {{ knowledgeActiveNode === 'terms' ? '术语管理' : '样例SQL' }}</div>
+          <div class="center-toolbar">
+            <div class="center-toolbar-left">
+              <a-button size="small" type="primary" @click="knowledgeActiveNode === 'terms' ? resetKnowledgeTermForm() : resetKnowledgeExampleForm()">
+                <template #icon><plus-outlined /></template>
+                新建{{ knowledgeActiveNode === 'terms' ? '术语' : '样例' }}
+              </a-button>
+              <a-button size="small" :loading="knowledgeRebuildLoading" @click="rebuildKnowledgeVectors">
+                <template #icon><sync-outlined /></template>
+                手动重建向量
+              </a-button>
             </div>
+            <div class="center-toolbar-right">
+              <a-input v-model:value="knowledgeKeyword" size="small" placeholder="搜索知识内容" allow-clear>
+                <template #prefix><search-outlined /></template>
+              </a-input>
+              <a-button size="small" :loading="knowledgeLoading" @click="loadKnowledgeData">
+                <reload-outlined />
+              </a-button>
+            </div>
+          </div>
 
-            <a-spin :spinning="knowledgeLoading">
-              <div v-if="knowledgeActiveNode === 'terms'" class="knowledge-list">
-                <button v-for="item in filteredKnowledgeTermItems" :key="item.id" class="knowledge-card" @click="selectKnowledgeTerm(item)">
-                  <div class="knowledge-card-head">
-                    <strong>{{ item.term }}</strong>
-                    <a-tag :color="knowledgeScopeColor(item.scope)">{{ knowledgeScopeLabel(item.scope) }}</a-tag>
-                  </div>
-                  <div class="knowledge-card-desc">{{ item.description || '暂无说明' }}</div>
-                  <div class="knowledge-card-meta">{{ formatTime(item.updatedAt) }}</div>
-                </button>
-                <div v-if="!filteredKnowledgeTermItems.length" class="empty-pane">暂无术语数据</div>
-              </div>
-              <div v-else class="knowledge-list">
-                <button v-for="item in filteredKnowledgeExampleItems" :key="item.id" class="knowledge-card" @click="selectKnowledgeExample(item)">
-                  <div class="knowledge-card-head">
-                    <strong>{{ item.description || item.sqlText.slice(0, 24) || '未命名样例' }}</strong>
-                    <a-tag :color="knowledgeScopeColor(item.scope)">{{ knowledgeScopeLabel(item.scope) }}</a-tag>
-                  </div>
-                  <div class="knowledge-card-desc">{{ item.sqlText }}</div>
-                  <div class="knowledge-card-meta">关联术语 {{ item.termIds?.length || 0 }} · {{ formatTime(item.updatedAt) }}</div>
-                </button>
-                <div v-if="!filteredKnowledgeExampleItems.length" class="empty-pane">暂无样例 SQL 数据</div>
-              </div>
-            </a-spin>
-          </section>
+          <a-spin :spinning="knowledgeLoading">
+            <div v-if="knowledgeActiveNode === 'terms'" class="knowledge-list">
+              <button v-for="item in filteredKnowledgeTermItems" :key="item.id" class="knowledge-card" @click="selectKnowledgeTerm(item)">
+                <div class="knowledge-card-head">
+                  <strong>{{ item.term }}</strong>
+                  <a-tag :color="knowledgeScopeColor(item.scope)">{{ knowledgeScopeLabel(item.scope) }}</a-tag>
+                </div>
+                <div class="knowledge-card-desc">{{ item.description || '暂无说明' }}</div>
+                <div class="knowledge-card-meta">{{ formatTime(item.updatedAt) }}</div>
+              </button>
+              <div v-if="!filteredKnowledgeTermItems.length" class="empty-pane">暂无术语数据</div>
+            </div>
+            <div v-else class="knowledge-list">
+              <button v-for="item in filteredKnowledgeExampleItems" :key="item.id" class="knowledge-card" @click="selectKnowledgeExample(item)">
+                <div class="knowledge-card-head">
+                  <strong>{{ item.description || item.sqlText.slice(0, 24) || '未命名样例' }}</strong>
+                  <a-tag :color="knowledgeScopeColor(item.scope)">{{ knowledgeScopeLabel(item.scope) }}</a-tag>
+                </div>
+                <div class="knowledge-card-desc">{{ item.sqlText }}</div>
+                <div class="knowledge-card-meta">关联术语 {{ item.termIds?.length || 0 }} · {{ formatTime(item.updatedAt) }}</div>
+              </button>
+              <div v-if="!filteredKnowledgeExampleItems.length" class="empty-pane">暂无样例 SQL 数据</div>
+            </div>
+          </a-spin>
+        </section>
 
-          <div class="pane-splitter pane-splitter-right" @mousedown="startResizeBrowserPane" />
+        <div class="pane-splitter pane-splitter-right" @mousedown="startResizeBrowserPane" />
 
-          <aside class="pane pane-right detail-pane">
-            <div class="pane-title">{{ knowledgeActiveNode === 'terms' ? '术语详情' : '样例详情' }}</div>
-            <div class="detail-wrapper">
+        <aside class="pane pane-right detail-pane">
+          <div class="pane-title">{{ knowledgeActiveNode === 'terms' ? '术语详情' : '样例详情' }}</div>
+          <div class="detail-wrapper">
+            <div v-if="knowledgeActiveNode === 'terms'">
               <div class="detail-summary">
-                <div class="detail-row"><span>当前上下文</span><strong>{{ knowledgeContextText }}</strong></div>
+                <div class="detail-row"><span>术语</span><strong>{{ knowledgeTermForm.term || '未命名术语' }}</strong></div>
+                <div class="detail-row"><span>作用域</span><strong>{{ knowledgeScopeLabel(knowledgeTermForm.scope) }}</strong></div>
+                <div class="detail-row"><span>连接</span><strong>{{ queryTabConnectionNameById(knowledgeConnectionId) || '-' }}</strong></div>
+                <div class="detail-row"><span>数据库</span><strong>{{ knowledgeDatabaseName || '-' }}</strong></div>
+                <div class="detail-row detail-row-description"><span>说明</span><strong>{{ knowledgeTermForm.description || '-' }}</strong></div>
               </div>
-
-              <div v-if="knowledgeActiveNode === 'terms'" class="knowledge-form">
+              <div class="detail-form-panel knowledge-form">
                 <a-form layout="vertical" size="small">
                   <a-form-item label="作用域">
                     <a-select v-model:value="knowledgeTermForm.scope" :options="knowledgeScopeOptions" />
@@ -542,14 +565,24 @@
                     <a-textarea v-model:value="knowledgeTermForm.description" :rows="5" />
                   </a-form-item>
                 </a-form>
-                <a-space>
+                <a-space class="detail-form-actions">
                   <a-button type="primary" size="small" :loading="knowledgeSaving" @click="saveKnowledgeTerm">保存</a-button>
                   <a-button size="small" @click="resetKnowledgeTermForm">重置</a-button>
                   <a-button v-if="knowledgeTermForm.id" danger size="small" :loading="knowledgeSaving" @click="removeKnowledgeTerm">删除</a-button>
                 </a-space>
               </div>
+            </div>
 
-              <div v-else class="knowledge-form">
+            <div v-else>
+              <div class="detail-summary">
+                <div class="detail-row"><span>样例</span><strong>{{ knowledgeExampleForm.description || '未命名样例' }}</strong></div>
+                <div class="detail-row"><span>作用域</span><strong>{{ knowledgeScopeLabel(knowledgeExampleForm.scope) }}</strong></div>
+                <div class="detail-row"><span>连接</span><strong>{{ queryTabConnectionNameById(knowledgeConnectionId) || '-' }}</strong></div>
+                <div class="detail-row"><span>数据库</span><strong>{{ knowledgeDatabaseName || '-' }}</strong></div>
+                <div class="detail-row"><span>关联术语</span><strong>{{ knowledgeExampleForm.termIds.length }}</strong></div>
+                <div class="detail-row detail-row-description"><span>说明</span><strong>{{ knowledgeExampleForm.description || '-' }}</strong></div>
+              </div>
+              <div class="detail-form-panel knowledge-form">
                 <a-form layout="vertical" size="small">
                   <a-form-item label="作用域">
                     <a-select v-model:value="knowledgeExampleForm.scope" :options="knowledgeScopeOptions" />
@@ -565,18 +598,32 @@
                     <a-textarea v-model:value="knowledgeExampleForm.description" :rows="3" />
                   </a-form-item>
                   <a-form-item label="SQL 正文">
-                    <a-textarea v-model:value="knowledgeExampleForm.sqlText" :rows="10" />
+                    <div class="knowledge-editor-group">
+                      <MonacoEditor
+                        v-model:value="knowledgeExampleForm.sqlText"
+                        language="sql"
+                        width="100%"
+                        height="240px"
+                        :theme="monacoTheme"
+                        :options="sqlEditorOptions"
+                        class="sql-editor knowledge-sql-editor"
+                        @mount="handleKnowledgeExampleSqlEditorMount"
+                      >
+                        <template #default>编辑器加载中...</template>
+                        <template #failure>编辑器加载失败，请刷新页面重试</template>
+                      </MonacoEditor>
+                    </div>
                   </a-form-item>
                 </a-form>
-                <a-space>
+                <a-space class="detail-form-actions">
                   <a-button type="primary" size="small" :loading="knowledgeSaving" @click="saveKnowledgeExample">保存</a-button>
                   <a-button size="small" @click="resetKnowledgeExampleForm">重置</a-button>
                   <a-button v-if="knowledgeExampleForm.id" danger size="small" :loading="knowledgeSaving" @click="removeKnowledgeExample">删除</a-button>
                 </a-space>
               </div>
             </div>
-          </aside>
-        </template>
+          </div>
+        </aside>
       </template>
 
       <template v-else-if="activeErTab">
@@ -793,30 +840,17 @@
       </template>
 
       <template v-else-if="activeTableEditorTab">
-        <div class="query-shared-meta table-editor-shared-meta">
-          <div class="query-meta-item">
-            <span>连接</span>
-            <a-select
-              v-model:value="activeTableEditorTab.connectionId"
-              size="small"
-              style="min-width: 156px"
-              :options="connectionSelectOptions"
-              :disabled="activeTableEditorTab.mode === 'edit'"
-              @change="handleTableEditorConnectionChange(activeTableEditorTab)"
-            />
-          </div>
-          <div class="query-meta-item">
-            <span>数据库</span>
-            <a-select
-              v-model:value="activeTableEditorTab.databaseName"
-              size="small"
-              style="min-width: 166px"
-              :options="databaseOptionsForTableEditorTab(activeTableEditorTab)"
-              :disabled="activeTableEditorTab.mode === 'edit'"
-              @change="handleTableEditorDatabaseChange(activeTableEditorTab)"
-            />
-          </div>
-        </div>
+        <StudioConnectionContextBar
+          class="table-editor-shared-meta"
+          :connection-id="activeTableEditorTab.connectionId"
+          :database-name="activeTableEditorTab.databaseName"
+          :connection-options="connectionSelectOptions"
+          :database-options="databaseOptionsForTableEditorTab(activeTableEditorTab)"
+          :connection-disabled="activeTableEditorTab.mode === 'edit'"
+          :database-disabled="activeTableEditorTab.mode === 'edit'"
+          @connection-change="handleTableEditorConnectionSelectorChange(activeTableEditorTab, $event)"
+          @database-change="handleTableEditorDatabaseSelectorChange(activeTableEditorTab, $event)"
+        />
 
         <section class="pane pane-center table-editor-structure-pane">
           <div class="pane-title">表结构编辑 · {{ activeTableEditorTab.title }}</div>
@@ -854,28 +888,15 @@
       </template>
 
       <template v-else>
-        <div v-if="activeQueryTab" class="query-shared-meta">
-          <div class="query-meta-item">
-            <span>连接</span>
-            <a-select
-              v-model:value="activeQueryTab.connectionId"
-              size="small"
-              style="min-width: 156px"
-              :options="connectionSelectOptions"
-              @change="handleQueryConnectionChange(activeQueryTab)"
-            />
-          </div>
-          <div class="query-meta-item">
-            <span>数据库</span>
-            <a-select
-              v-model:value="activeQueryTab.databaseName"
-              size="small"
-              style="min-width: 166px"
-              :options="databaseOptionsForTab(activeQueryTab)"
-              @change="handleQueryDatabaseChange(activeQueryTab)"
-            />
-          </div>
-        </div>
+        <StudioConnectionContextBar
+          v-if="activeQueryTab"
+          :connection-id="activeQueryTab.connectionId"
+          :database-name="activeQueryTab.databaseName"
+          :connection-options="connectionSelectOptions"
+          :database-options="databaseOptionsForTab(activeQueryTab)"
+          @connection-change="handleQueryConnectionSelectorChange(activeQueryTab, $event)"
+          @database-change="handleQueryDatabaseSelectorChange(activeQueryTab, $event)"
+        />
 
         <section v-if="activeQueryTab" class="pane pane-center query-chat-pane">
           <div class="pane-title">{{ activeQueryTab.title }} · 对话</div>
@@ -1187,6 +1208,11 @@
               <a-tooltip title="保存查询">
                 <a-button size="small" class="sql-action-icon-btn" @click="openSaveQueryModal(activeQueryTab)">
                   <template #icon><save-outlined /></template>
+                </a-button>
+              </a-tooltip>
+              <a-tooltip title="保存为样例 SQL">
+                <a-button size="small" class="sql-action-icon-btn" @click="openSaveQueryAsExampleModal(activeQueryTab)">
+                  <template #icon><hdd-outlined /></template>
                 </a-button>
               </a-tooltip>
               <a-tooltip v-if="activeQueryTab.selectedSqlText" title="所选 SQL 加入对话">
@@ -1837,6 +1863,29 @@
     </a-modal>
 
     <a-modal
+      v-model:open="saveQueryAsExampleModalOpen"
+      title="保存为样例 SQL"
+      width="520px"
+      ok-text="保存"
+      :confirm-loading="saveQueryAsExampleSubmitting"
+      @ok="confirmSaveQueryAsExample"
+      @cancel="saveQueryAsExampleModalOpen = false"
+    >
+      <a-form layout="vertical">
+        <a-form-item label="保存位置">
+          <div class="save-query-context">{{ saveQueryAsExampleContextText }}</div>
+        </a-form-item>
+        <a-form-item label="说明">
+          <a-textarea
+            v-model:value="saveQueryAsExampleDescription"
+            :rows="4"
+            placeholder="补充这段样例 SQL 的用途、适用场景或注意事项"
+          />
+        </a-form-item>
+      </a-form>
+    </a-modal>
+
+    <a-modal
       v-model:open="vectorizeOverviewModalOpen"
       title="向量化数据概览"
       width="680px"
@@ -1972,9 +2021,11 @@ import {
   UnorderedListOutlined,
 } from '@ant-design/icons-vue';
 import {Editor as MonacoEditor} from '@guolao/vue-monaco-editor';
+import type * as MonacoApi from 'monaco-editor';
 import QueryChartPanel from '../../../components/QueryChartPanel.vue';
 import ErDiagramPanel from '../../../components/ErDiagramPanel.vue';
 import TableEditor from '../../../components/TableEditor.vue';
+import StudioConnectionContextBar from './StudioConnectionContextBar.vue';
 import type {StudioController} from '../composables/useStudioController';
 
 const props = defineProps<{ controller: StudioController }>();
@@ -1999,7 +2050,6 @@ const {
     connectionRefreshing,
     connectionKeyword,
     tableKeyword,
-    browserNavMode,
     selectedTreeKeys,
     expandedTreeKeys,
     tableNameCache,
@@ -2033,6 +2083,7 @@ const {
     queryTabs,
     erTabs,
     tableEditorTabs,
+    knowledgeTabs,
     erTableSelectModalOpen,
     erTableSelectSubmitting,
     erSelectConnectionId,
@@ -2123,6 +2174,7 @@ const {
     activeQueryTab,
     activeErTab,
     activeTableEditorTab,
+    activeKnowledgeTab,
     activeErConfidenceThreshold,
     activeErAiRelationTotal,
     activeErDisplayGraph,
@@ -2432,6 +2484,10 @@ const {
     knowledgeSaving,
     knowledgeRebuildLoading,
     knowledgeKeyword,
+    knowledgeConnectionId,
+    knowledgeDatabaseName,
+    knowledgeConnectionOptions,
+    knowledgeDatabaseOptions,
     knowledgeTermItems,
     knowledgeExampleItems,
     filteredKnowledgeTermItems,
@@ -2439,8 +2495,10 @@ const {
     knowledgeTermForm,
     knowledgeExampleForm,
     knowledgeScopeOptions,
-    knowledgeContextText,
     openKnowledgeNode,
+    closeKnowledgeTab,
+    handleKnowledgeConnectionChange,
+    handleKnowledgeDatabaseChange,
     resetKnowledgeTermForm,
     resetKnowledgeExampleForm,
     selectKnowledgeTerm,
@@ -2449,6 +2507,12 @@ const {
     removeKnowledgeTerm,
     saveKnowledgeExample,
     removeKnowledgeExample,
+    saveQueryAsExampleModalOpen,
+    saveQueryAsExampleSubmitting,
+    saveQueryAsExampleDescription,
+    saveQueryAsExampleContextText,
+    openSaveQueryAsExampleModal,
+    confirmSaveQueryAsExample,
     rebuildKnowledgeVectors,
     loadKnowledgeData,
     knowledgeScopeLabel,
@@ -2514,4 +2578,59 @@ const {
     fillRagConfigForm,
     resetConnectionModalState
 } = props.controller;
+
+function handleKnowledgeExampleSqlEditorMount(
+  editor: MonacoApi.editor.IStandaloneCodeEditor,
+  monaco: typeof MonacoApi,
+) {
+  handleSqlEditorMount(editor, monaco, {
+    getContext: () => ({
+      connectionId: knowledgeConnectionId.value,
+      databaseName: knowledgeDatabaseName.value,
+    }),
+    enableSelectionActions: false,
+  });
+}
+
+function handleKnowledgeConnectionSelectorChange(value: string | number) {
+  knowledgeConnectionId.value = Number(value);
+  void handleKnowledgeConnectionChange();
+}
+
+function handleKnowledgeDatabaseSelectorChange(value: string) {
+  knowledgeDatabaseName.value = value;
+  void handleKnowledgeDatabaseChange();
+}
+
+function handleQueryConnectionSelectorChange(
+  tab: (typeof queryTabs.value)[number],
+  value: string | number,
+) {
+  tab.connectionId = Number(value);
+  void handleQueryConnectionChange(tab);
+}
+
+function handleQueryDatabaseSelectorChange(
+  tab: (typeof queryTabs.value)[number],
+  value: string,
+) {
+  tab.databaseName = value;
+  handleQueryDatabaseChange(tab);
+}
+
+function handleTableEditorConnectionSelectorChange(
+  tab: (typeof tableEditorTabs.value)[number],
+  value: string | number,
+) {
+  tab.connectionId = Number(value);
+  void handleTableEditorConnectionChange(tab);
+}
+
+function handleTableEditorDatabaseSelectorChange(
+  tab: (typeof tableEditorTabs.value)[number],
+  value: string,
+) {
+  tab.databaseName = value;
+  handleTableEditorDatabaseChange(tab);
+}
 </script>
