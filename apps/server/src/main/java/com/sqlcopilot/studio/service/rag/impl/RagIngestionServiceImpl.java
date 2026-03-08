@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sqlcopilot.studio.dto.ai.AiConfigVO;
 import com.sqlcopilot.studio.dto.ai.AiModelOptionVO;
 import com.sqlcopilot.studio.entity.ConnectionEntity;
+import com.sqlcopilot.studio.entity.KnowledgeExampleSqlEntity;
+import com.sqlcopilot.studio.entity.KnowledgeTermEntity;
 import com.sqlcopilot.studio.entity.QueryHistoryEntity;
 import com.sqlcopilot.studio.entity.SchemaColumnCacheEntity;
 import com.sqlcopilot.studio.entity.SchemaTableCacheEntity;
@@ -15,6 +17,7 @@ import com.sqlcopilot.studio.service.rag.QdrantClientService;
 import com.sqlcopilot.studio.service.rag.RagEmbeddingService;
 import com.sqlcopilot.studio.service.rag.RagIngestionService;
 import com.sqlcopilot.studio.service.rag.model.QdrantPoint;
+import com.sqlcopilot.studio.service.rag.model.QdrantPayloadFilter;
 import com.sqlcopilot.studio.service.rag.model.RagCollectionNames;
 import com.sqlcopilot.studio.service.rag.model.SqlFeatureMeta;
 import jakarta.annotation.PreDestroy;
@@ -196,6 +199,110 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         }
         QueryHistoryEntity snapshot = copyHistoryEntity(historyEntity);
         sqlHistoryExecutor.submit(() -> ingestSqlHistoryInternal(snapshot));
+    }
+
+    @Override
+    public void ingestKnowledgeTerm(KnowledgeTermEntity entity) {
+        if (!ragEnabled || entity == null || entity.getId() == null || isBlank(entity.getTerm())) {
+            return;
+        }
+        PointEmbeddingTask task = new PointEmbeddingTask(
+            stablePointId("metric_term", entity.getId()),
+            buildKnowledgeTermDocumentText(entity),
+            sanitizeMetadata(buildKnowledgeTermPayload(entity))
+        );
+        writePoints(collectionNames.getMetricTerm(), buildQdrantPoints(List.of(task)));
+    }
+
+    @Override
+    public void removeKnowledgeTerm(KnowledgeTermEntity entity) {
+        if (!ragEnabled || entity == null || entity.getId() == null) {
+            return;
+        }
+        qdrantClientService.deletePointsByFilters(collectionNames.getMetricTerm(), List.of(
+            new QdrantPayloadFilter("knowledge_id", entity.getId())
+        ));
+    }
+
+    @Override
+    public void ingestKnowledgeExample(KnowledgeExampleSqlEntity entity) {
+        if (!ragEnabled || entity == null || entity.getId() == null || isBlank(entity.getSqlText())) {
+            return;
+        }
+        PointEmbeddingTask task = new PointEmbeddingTask(
+            stablePointId("example_sql", entity.getId()),
+            buildKnowledgeExampleDocumentText(entity),
+            sanitizeMetadata(buildKnowledgeExamplePayload(entity))
+        );
+        writePoints(collectionNames.getExampleSql(), buildQdrantPoints(List.of(task)));
+    }
+
+    @Override
+    public void removeKnowledgeExample(KnowledgeExampleSqlEntity entity) {
+        if (!ragEnabled || entity == null || entity.getId() == null) {
+            return;
+        }
+        qdrantClientService.deletePointsByFilters(collectionNames.getExampleSql(), List.of(
+            new QdrantPayloadFilter("knowledge_id", entity.getId())
+        ));
+    }
+
+    @Override
+    public void rebuildKnowledgeVectors(List<KnowledgeTermEntity> terms, List<KnowledgeExampleSqlEntity> examples) {
+        if (!ragEnabled) {
+            return;
+        }
+        int vectorSize = resolveKnowledgeVectorSize();
+        qdrantClientService.recreateCollection(collectionNames.getMetricTerm(), vectorSize);
+        qdrantClientService.recreateCollection(collectionNames.getExampleSql(), vectorSize);
+
+        List<KnowledgeTermEntity> safeTerms = terms == null ? List.of() : terms;
+        if (!safeTerms.isEmpty()) {
+            List<PointEmbeddingTask> tasks = new ArrayList<>();
+            for (KnowledgeTermEntity entity : safeTerms) {
+                if (entity == null || entity.getId() == null || isBlank(entity.getTerm())) {
+                    continue;
+                }
+                tasks.add(new PointEmbeddingTask(
+                    stablePointId("metric_term", entity.getId()),
+                    buildKnowledgeTermDocumentText(entity),
+                    sanitizeMetadata(buildKnowledgeTermPayload(entity))
+                ));
+            }
+            writePoints(collectionNames.getMetricTerm(), buildQdrantPoints(tasks));
+        }
+
+        List<KnowledgeExampleSqlEntity> safeExamples = examples == null ? List.of() : examples;
+        if (!safeExamples.isEmpty()) {
+            List<PointEmbeddingTask> tasks = new ArrayList<>();
+            for (KnowledgeExampleSqlEntity entity : safeExamples) {
+                if (entity == null || entity.getId() == null || isBlank(entity.getSqlText())) {
+                    continue;
+                }
+                tasks.add(new PointEmbeddingTask(
+                    stablePointId("example_sql", entity.getId()),
+                    buildKnowledgeExampleDocumentText(entity),
+                    sanitizeMetadata(buildKnowledgeExamplePayload(entity))
+                ));
+            }
+            writePoints(collectionNames.getExampleSql(), buildQdrantPoints(tasks));
+        }
+    }
+
+    @Override
+    public void removeSchemaTable(Long connectionId, String databaseName, String tableName) {
+        if (!ragEnabled || connectionId == null || isBlank(tableName)) {
+            return;
+        }
+        String normalizedDatabaseName = normalizeDatabaseName(databaseName);
+        List<QdrantPayloadFilter> filters = new ArrayList<>();
+        filters.add(new QdrantPayloadFilter("connection_id", connectionId));
+        if (!normalizedDatabaseName.isBlank() && !"__default__".equals(normalizedDatabaseName)) {
+            filters.add(new QdrantPayloadFilter("database_name", normalizedDatabaseName));
+        }
+        filters.add(new QdrantPayloadFilter("table_name", safeText(tableName)));
+        qdrantClientService.deletePointsByFilters(collectionNames.getSchemaTable(), filters);
+        qdrantClientService.deletePointsByFilters(collectionNames.getSchemaColumn(), filters);
     }
 
     private void ingestSqlHistoryInternal(QueryHistoryEntity historyEntity) {
@@ -690,6 +797,22 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             + "业务标签: " + payload.getBusinessTags();
     }
 
+    private String buildKnowledgeTermDocumentText(KnowledgeTermEntity entity) {
+        return "知识类型: 术语\n"
+            + "作用域: " + safeText(entity.getScope()) + "\n"
+            + "数据库: " + safeText(entity.getDatabaseName()) + "\n"
+            + "术语: " + safeText(entity.getTerm()) + "\n"
+            + "说明: " + safeText(entity.getDescription());
+    }
+
+    private String buildKnowledgeExampleDocumentText(KnowledgeExampleSqlEntity entity) {
+        return "知识类型: SQL样例\n"
+            + "作用域: " + safeText(entity.getScope()) + "\n"
+            + "数据库: " + safeText(entity.getDatabaseName()) + "\n"
+            + "说明: " + safeText(entity.getDescription()) + "\n"
+            + "SQL: " + safeText(entity.getSqlText());
+    }
+
 
 
     private String buildSqlFragmentDocumentText(SqlFragmentPayload fragment) {
@@ -886,6 +1009,14 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         return value.isBlank() ? "__default__" : value;
     }
 
+    private int resolveKnowledgeVectorSize() {
+        List<Float> vector = ragEmbeddingService.embedText("knowledge-vector-probe");
+        if (vector == null || vector.isEmpty()) {
+            throw new IllegalStateException("知识向量维度解析失败");
+        }
+        return vector.size();
+    }
+
     private boolean isBlank(String value) {
         return value == null || value.trim().isEmpty();
     }
@@ -909,6 +1040,29 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             }
         }
         return result;
+    }
+
+    private Map<String, Object> buildKnowledgeTermPayload(KnowledgeTermEntity entity) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("knowledge_id", entity.getId());
+        payload.put("scope", safeText(entity.getScope()));
+        payload.put("connection_id", entity.getConnectionId() == null ? 0L : entity.getConnectionId());
+        payload.put("database_name", safeText(entity.getDatabaseName()));
+        payload.put("term", safeText(entity.getTerm()));
+        payload.put("definition", safeText(entity.getDescription()));
+        return payload;
+    }
+
+    private Map<String, Object> buildKnowledgeExamplePayload(KnowledgeExampleSqlEntity entity) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("knowledge_id", entity.getId());
+        payload.put("scope", safeText(entity.getScope()));
+        payload.put("connection_id", entity.getConnectionId() == null ? 0L : entity.getConnectionId());
+        payload.put("database_name", safeText(entity.getDatabaseName()));
+        payload.put("sql_text", safeText(entity.getSqlText()));
+        payload.put("sql_semantic", safeText(entity.getDescription()));
+        payload.put("term_ids_json", safeText(entity.getTermIdsJson()));
+        return payload;
     }
 
     private Object sanitizeMetadataValue(Object value) {

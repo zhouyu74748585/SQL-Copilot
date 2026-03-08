@@ -24,6 +24,10 @@ public interface EditorService {
 
     void saveHistory(SaveQueryHistoryReq req);
 
+    SavedQueryVO saveSavedQuery(SavedQuerySaveReq req);
+
+    List<SavedQueryVO> listSavedQueries(Long connectionId, String databaseName);
+
     void saveErGraphSnapshot(ErGraphSnapshotSaveReq req);
 
     ChartCacheSaveVO saveChartCache(ChartCacheSaveReq req);

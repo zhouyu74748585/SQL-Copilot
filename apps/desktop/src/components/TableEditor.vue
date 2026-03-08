@@ -65,15 +65,17 @@
           <div class="detail-content">
             <div class="detail-row">
               <span class="detail-label">可空</span>
-              <a-checkbox v-model:checked="selectedColumn.nullable" size="small" />
+              <a-checkbox v-model:checked="selectedColumn.nullable" size="small">允许空值</a-checkbox>
             </div>
             <div class="detail-row">
               <span class="detail-label">主键</span>
-              <a-checkbox v-model:checked="selectedColumn.primaryKey" size="small" />
+              <a-checkbox v-model:checked="selectedColumn.primaryKey" size="small">
+                <span class="detail-checkbox-label"><key-outlined class="pk-icon" />主键字段</span>
+              </a-checkbox>
             </div>
             <div class="detail-row">
               <span class="detail-label">自增</span>
-              <a-checkbox v-model:checked="selectedColumn.autoIncrement" size="small" :disabled="!selectedColumn.primaryKey" />
+              <a-checkbox v-model:checked="selectedColumn.autoIncrement" size="small" :disabled="!selectedColumn.primaryKey">自动递增</a-checkbox>
             </div>
             <div class="detail-row">
               <span class="detail-label">默认值</span>
@@ -530,6 +532,7 @@ watch(() => [tableName.value, tableComment.value, columns.value, indexes.value],
 .detail-content { display: flex; flex-wrap: wrap; gap: 12px; }
 .detail-row { display: flex; align-items: center; gap: 6px; }
 .detail-label { color: #666; min-width: 48px; }
+.detail-checkbox-label { display: inline-flex; align-items: center; gap: 4px; }
 .time-extra { flex-basis: 100%; }
 .time-checkboxes { display: flex; flex-direction: column; gap: 2px; }
 @media (max-width: 1400px) { .table-editor-toolbar { flex-direction: column; } }

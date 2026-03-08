@@ -12,6 +12,7 @@ import com.sqlcopilot.studio.service.rag.QdrantClientService;
 import com.sqlcopilot.studio.service.rag.RagEmbeddingService;
 import com.sqlcopilot.studio.service.rag.RagIngestionService;
 import com.sqlcopilot.studio.service.rag.model.QdrantCollectionMetric;
+import com.sqlcopilot.studio.service.rag.model.QdrantPayloadFilter;
 import com.sqlcopilot.studio.service.rag.model.RagCollectionNames;
 import com.sqlcopilot.studio.util.BusinessException;
 import jakarta.annotation.PostConstruct;
@@ -31,6 +32,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
 
     private static final Logger log = LoggerFactory.getLogger(RagVectorizeQueueServiceImpl.class);
+    private static final long GLOBAL_SCOPE_CONNECTION_ID = 0L;
 
     private final SchemaService schemaService;
     private final RagVectorizeStatusMapper ragVectorizeStatusMapper;
@@ -147,6 +149,7 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
         // 关键操作：单表手动向量化只处理指定表，避免触发整库 Schema 同步。
         String actualTableName = normalizedTableName;
 
+        schemaService.refreshSchemaCache(connectionId, normalizedDatabaseName);
         TableDetailVO detail = schemaService.getTableDetail(connectionId, normalizedDatabaseName, actualTableName);
         if (detail == null || detail.getColumns() == null || detail.getColumns().isEmpty()) {
             throw new BusinessException(400, "未读取到目标表字段信息，无法向量化");
@@ -368,11 +371,66 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
             connectionId,
             normalizedDatabaseName
         );
+        QdrantCollectionMetric metricTermDatabaseMetric = qdrantClientService.queryCollectionMetricByFilters(
+            collectionNames.getMetricTerm(),
+            List.of(
+                new QdrantPayloadFilter("connection_id", connectionId),
+                new QdrantPayloadFilter("database_name", normalizedDatabaseName)
+            )
+        );
+        QdrantCollectionMetric exampleSqlDatabaseMetric = qdrantClientService.queryCollectionMetricByFilters(
+            collectionNames.getExampleSql(),
+            List.of(
+                new QdrantPayloadFilter("connection_id", connectionId),
+                new QdrantPayloadFilter("database_name", normalizedDatabaseName)
+            )
+        );
+        QdrantCollectionMetric metricTermConnectionMetric = qdrantClientService.queryCollectionMetricByFilters(
+            collectionNames.getMetricTerm(),
+            List.of(
+                new QdrantPayloadFilter("connection_id", connectionId),
+                new QdrantPayloadFilter("database_name", "")
+            )
+        );
+        QdrantCollectionMetric exampleSqlConnectionMetric = qdrantClientService.queryCollectionMetricByFilters(
+            collectionNames.getExampleSql(),
+            List.of(
+                new QdrantPayloadFilter("connection_id", connectionId),
+                new QdrantPayloadFilter("database_name", "")
+            )
+        );
+        QdrantCollectionMetric metricTermGlobalMetric = qdrantClientService.queryCollectionMetricByFilters(
+            collectionNames.getMetricTerm(),
+            List.of(
+                new QdrantPayloadFilter("connection_id", GLOBAL_SCOPE_CONNECTION_ID),
+                new QdrantPayloadFilter("database_name", "")
+            )
+        );
+        QdrantCollectionMetric exampleSqlGlobalMetric = qdrantClientService.queryCollectionMetricByFilters(
+            collectionNames.getExampleSql(),
+            List.of(
+                new QdrantPayloadFilter("connection_id", GLOBAL_SCOPE_CONNECTION_ID),
+                new QdrantPayloadFilter("database_name", "")
+            )
+        );
+
+        long metricTermApplicableCount = mergeKnowledgeApplicableCount(
+            metricTermDatabaseMetric,
+            metricTermConnectionMetric,
+            metricTermGlobalMetric
+        );
+        long exampleSqlApplicableCount = mergeKnowledgeApplicableCount(
+            exampleSqlDatabaseMetric,
+            exampleSqlConnectionMetric,
+            exampleSqlGlobalMetric
+        );
 
         long totalCount = safeCount(tableMetric.getPointCount())
             + safeCount(columnMetric.getPointCount())
             + safeCount(historyMetric.getPointCount())
-            + safeCount(fragmentMetric.getPointCount());
+            + safeCount(fragmentMetric.getPointCount())
+            + metricTermApplicableCount
+            + exampleSqlApplicableCount;
 
         String taskKey = buildTaskKey(connectionId, normalizedDatabaseName);
         VectorizeStatusRecord statusRecord = statusMap.get(taskKey);
@@ -400,7 +458,23 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
         vo.setSchemaColumnVectorCount(safeCount(columnMetric.getPointCount()));
         vo.setSqlHistoryVectorCount(safeCount(historyMetric.getPointCount()));
         vo.setSqlFragmentVectorCount(safeCount(fragmentMetric.getPointCount()));
-        vo.setVectorDimension(resolveVectorDimension(tableMetric, columnMetric, historyMetric, fragmentMetric));
+        vo.setMetricTermVectorCount(metricTermApplicableCount);
+        vo.setExampleSqlVectorCount(exampleSqlApplicableCount);
+        vo.setGlobalMetricTermVectorCount(safeCount(metricTermGlobalMetric.getPointCount()));
+        vo.setGlobalExampleSqlVectorCount(safeCount(exampleSqlGlobalMetric.getPointCount()));
+        vo.setGlobalVectorCount(
+            safeCount(metricTermGlobalMetric.getPointCount()) + safeCount(exampleSqlGlobalMetric.getPointCount())
+        );
+        vo.setVectorDimension(resolveVectorDimension(
+            tableMetric,
+            columnMetric,
+            historyMetric,
+            fragmentMetric,
+            metricTermConnectionMetric,
+            exampleSqlConnectionMetric,
+            metricTermGlobalMetric,
+            exampleSqlGlobalMetric
+        ));
         vo.setLastFullVectorizeDurationMs(statusRecord == null ? null : statusRecord.lastFullVectorizeDurationMs());
         vo.setLastFullVectorizeProvider(statusRecord == null ? null : statusRecord.lastFullVectorizeProvider());
         return vo;
@@ -525,6 +599,15 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
 
     private long safeCount(Long count) {
         return count == null ? 0L : Math.max(0L, count);
+    }
+
+    private long mergeKnowledgeApplicableCount(QdrantCollectionMetric databaseMetric,
+                                               QdrantCollectionMetric connectionMetric,
+                                               QdrantCollectionMetric globalMetric) {
+        long databaseCount = safeCount(databaseMetric == null ? null : databaseMetric.getPointCount());
+        long connectionOnlyCount = safeCount(connectionMetric == null ? null : connectionMetric.getPointCount());
+        long globalCount = safeCount(globalMetric == null ? null : globalMetric.getPointCount());
+        return databaseCount + connectionOnlyCount + globalCount;
     }
 
     private String resolveOverviewStatus(VectorizeStatusRecord statusRecord, long totalCount) {

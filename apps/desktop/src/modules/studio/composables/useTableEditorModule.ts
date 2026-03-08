@@ -170,6 +170,7 @@ export function useTableEditorModule(runtime: StudioRuntime): TableEditorModule 
       });
       message.success('表数据已清空');
       await refreshSchemaMetadata(connId, dbName);
+      await runtime.refreshCurrentObjects();
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       message.error(`清空失败: ${msg}`);
@@ -183,13 +184,14 @@ export function useTableEditorModule(runtime: StudioRuntime): TableEditorModule 
     runtime.dropTableModalOpen.value = false;
 
     try {
-      await postApi('/api/schema/table', {
+      await postApi('/api/schema/table/drop', {
         connectionId: connId,
         databaseName: dbName,
         tableName,
       });
       message.success('表已删除');
       await refreshSchemaMetadata(connId, dbName);
+      await runtime.refreshCurrentObjects();
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       message.error(`删除失败: ${msg}`);
@@ -224,6 +226,7 @@ export function useTableEditorModule(runtime: StudioRuntime): TableEditorModule 
         ddl,
       });
       const nextTableName = tab.draft?.tableName || tab.tableName;
+      await refreshSchemaMetadata(tab.connectionId, tab.databaseName);
       try {
         await postApi('/api/rag/table/manual', {
           connectionId: tab.connectionId,
@@ -237,7 +240,6 @@ export function useTableEditorModule(runtime: StudioRuntime): TableEditorModule 
       tab.saved = true;
       tab.dirty = false;
       tab.updatedAt = Date.now();
-      await refreshSchemaMetadata(tab.connectionId, tab.databaseName);
       await runtime.refreshCurrentObjects();
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);

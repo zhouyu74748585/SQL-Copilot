@@ -2,6 +2,7 @@
 import {useErModule} from './useErModule';
 import {useErSnapshotModule} from './useErSnapshotModule';
 import {useHistoryModule} from './useHistoryModule';
+import {useKnowledgeModule} from './useKnowledgeModule';
 import {useQueryModule} from './useQueryModule';
 import {useStudioRuntime} from './useStudioRuntime';
 import {useTableEditorModule} from './useTableEditorModule';
@@ -17,6 +18,7 @@ export function useStudioController() {
   const erModule = useErModule(runtime);
   const erSnapshotModule = useErSnapshotModule(runtime);
   const historyModule = useHistoryModule(runtime);
+  const knowledgeModule = useKnowledgeModule(runtime);
   const uiShellModule = useUiShellModule(runtime);
 
   return {
@@ -26,6 +28,7 @@ export function useStudioController() {
     ...erModule,
     ...erSnapshotModule,
     ...historyModule,
+    ...knowledgeModule,
     ...tableEditorModule,
     ...uiShellModule,
     connectionBrowserModule,
@@ -33,6 +36,7 @@ export function useStudioController() {
     erModule,
     erSnapshotModule,
     historyModule,
+    knowledgeModule,
     tableEditorModule,
     uiShellModule,
   };

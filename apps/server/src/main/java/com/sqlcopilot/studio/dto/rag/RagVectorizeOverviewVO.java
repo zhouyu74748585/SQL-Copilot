@@ -33,6 +33,21 @@ public class RagVectorizeOverviewVO {
     /** SQL 片段向量条数。 */
     private Long sqlFragmentVectorCount;
 
+    /** 当前库适用的术语向量条数。 */
+    private Long metricTermVectorCount;
+
+    /** 当前库适用的样例 SQL 向量条数。 */
+    private Long exampleSqlVectorCount;
+
+    /** 全局知识向量总条数。 */
+    private Long globalVectorCount;
+
+    /** 全局术语向量条数。 */
+    private Long globalMetricTermVectorCount;
+
+    /** 全局样例 SQL 向量条数。 */
+    private Long globalExampleSqlVectorCount;
+
     /** 向量维度。 */
     private Integer vectorDimension;
 

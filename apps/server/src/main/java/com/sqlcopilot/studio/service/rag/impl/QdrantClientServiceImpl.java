@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
 import com.sqlcopilot.studio.service.rag.model.QdrantCollectionMetric;
 import com.sqlcopilot.studio.service.rag.model.QdrantPoint;
+import com.sqlcopilot.studio.service.rag.model.QdrantPayloadFilter;
 import com.sqlcopilot.studio.service.rag.model.QdrantScoredPoint;
 import com.sqlcopilot.studio.util.BusinessException;
 import org.springframework.beans.factory.annotation.Value;
@@ -81,6 +82,20 @@ public class QdrantClientServiceImpl implements QdrantClientService {
     }
 
     @Override
+    public void recreateCollection(String collectionName, int vectorSize) {
+        if (collectionName == null || collectionName.isBlank()) {
+            return;
+        }
+        HttpResponse<String> deleteResponse = send(buildRequest("DELETE", "/collections/" + collectionName, null));
+        if (deleteResponse.statusCode() != 200 && deleteResponse.statusCode() != 202 && deleteResponse.statusCode() != 404) {
+            throw new BusinessException(500,
+                "重建 Qdrant 集合失败: HTTP " + deleteResponse.statusCode() + " - " + deleteResponse.body());
+        }
+        ensuredCollectionVectorSizeCache.remove(collectionName);
+        ensureCollection(collectionName, vectorSize);
+    }
+
+    @Override
     public void upsertPoints(String collectionName, List<QdrantPoint> points) {
         if (points == null || points.isEmpty()) {
             return;
@@ -114,11 +129,29 @@ public class QdrantClientServiceImpl implements QdrantClientService {
             return List.of();
         }
 
+        List<QdrantPayloadFilter> filters = new ArrayList<>();
+        filters.add(new QdrantPayloadFilter("connection_id", connectionId));
+        String normalizedDatabaseName = Objects.toString(databaseName, "").trim();
+        if (!normalizedDatabaseName.isBlank()) {
+            filters.add(new QdrantPayloadFilter("database_name", normalizedDatabaseName));
+        }
+        return searchPointsByFilters(collectionName, vector, limit, filters);
+    }
+
+    @Override
+    public List<QdrantScoredPoint> searchPointsByFilters(String collectionName,
+                                                         List<Float> vector,
+                                                         int limit,
+                                                         List<QdrantPayloadFilter> filters) {
+        if (vector == null || vector.isEmpty() || limit <= 0 || filters == null || filters.isEmpty()) {
+            return List.of();
+        }
+
         SearchReq req = new SearchReq();
         req.setVector(vector);
         req.setLimit(limit);
         req.setWithPayload(true);
-        req.setFilter(buildFilter(connectionId, databaseName));
+        req.setFilter(buildFilter(filters));
 
         HttpResponse<String> response = send(buildRequest("POST",
             "/collections/" + collectionName + "/points/search",
@@ -137,7 +170,25 @@ public class QdrantClientServiceImpl implements QdrantClientService {
 
     @Override
     public void deletePointsByFilter(String collectionName, Long connectionId, String databaseName, String sessionId) {
-        DeleteReq req = new DeleteReq(buildFilter(connectionId, databaseName, sessionId));
+        List<QdrantPayloadFilter> filters = new ArrayList<>();
+        filters.add(new QdrantPayloadFilter("connection_id", connectionId));
+        String normalizedDatabaseName = Objects.toString(databaseName, "").trim();
+        if (!normalizedDatabaseName.isBlank()) {
+            filters.add(new QdrantPayloadFilter("database_name", normalizedDatabaseName));
+        }
+        String normalizedSessionId = Objects.toString(sessionId, "").trim();
+        if (!normalizedSessionId.isBlank()) {
+            filters.add(new QdrantPayloadFilter("session_id", normalizedSessionId));
+        }
+        deletePointsByFilters(collectionName, filters);
+    }
+
+    @Override
+    public void deletePointsByFilters(String collectionName, List<QdrantPayloadFilter> filters) {
+        if (collectionName == null || collectionName.isBlank() || filters == null || filters.isEmpty()) {
+            return;
+        }
+        DeleteReq req = new DeleteReq(buildFilter(filters));
         HttpResponse<String> response = send(buildRequest(
             "POST",
             "/collections/" + collectionName + "/points/delete?wait=true",
@@ -159,6 +210,21 @@ public class QdrantClientServiceImpl implements QdrantClientService {
             return new QdrantCollectionMetric(collectionName, 0, 0L);
         }
 
+        List<QdrantPayloadFilter> filters = new ArrayList<>();
+        filters.add(new QdrantPayloadFilter("connection_id", connectionId));
+        String normalizedDatabaseName = Objects.toString(databaseName, "").trim();
+        if (!normalizedDatabaseName.isBlank()) {
+            filters.add(new QdrantPayloadFilter("database_name", normalizedDatabaseName));
+        }
+        return queryCollectionMetricByFilters(collectionName, filters);
+    }
+
+    @Override
+    public QdrantCollectionMetric queryCollectionMetricByFilters(String collectionName, List<QdrantPayloadFilter> filters) {
+        if (collectionName == null || collectionName.isBlank() || filters == null || filters.isEmpty()) {
+            return new QdrantCollectionMetric(collectionName, 0, 0L);
+        }
+
         HttpResponse<String> collectionResponse = send(buildRequest("GET", "/collections/" + collectionName, null));
         if (collectionResponse.statusCode() == 404) {
             return new QdrantCollectionMetric(collectionName, 0, 0L);
@@ -171,8 +237,8 @@ public class QdrantClientServiceImpl implements QdrantClientService {
 
         Integer vectorDimension = parseCollectionVectorDimension(collectionResponse.body());
 
-        // 关键操作：通过连接 + 数据库过滤统计点位数量，避免返回跨库汇总数据。
-        CountReq countReq = new CountReq(buildFilter(connectionId, databaseName), true);
+        // 关键操作：通过明确 payload 过滤条件统计点位数量，避免返回跨作用域汇总数据。
+        CountReq countReq = new CountReq(buildFilter(filters), true);
         HttpResponse<String> countResponse = send(buildRequest(
             "POST",
             "/collections/" + collectionName + "/points/count",
@@ -315,6 +381,22 @@ public class QdrantClientServiceImpl implements QdrantClientService {
         String normalizedSessionId = Objects.toString(sessionId, "").trim();
         if (!normalizedSessionId.isBlank()) {
             mustConditions.add(new FilterConditionReq("session_id", new MatchReq(normalizedSessionId)));
+        }
+        return new FilterReq(mustConditions);
+    }
+
+    private FilterReq buildFilter(List<QdrantPayloadFilter> filters) {
+        List<FilterConditionReq> mustConditions = new ArrayList<>();
+        for (QdrantPayloadFilter filter : filters) {
+            if (filter == null) {
+                continue;
+            }
+            String key = Objects.toString(filter.key(), "").trim();
+            Object value = filter.value();
+            if (key.isBlank() || value == null) {
+                continue;
+            }
+            mustConditions.add(new FilterConditionReq(key, new MatchReq(value)));
         }
         return new FilterReq(mustConditions);
     }

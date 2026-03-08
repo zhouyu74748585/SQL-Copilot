@@ -107,3 +107,40 @@ CREATE TABLE IF NOT EXISTS rag_vectorize_status (
     last_full_vectorize_provider TEXT,
     PRIMARY KEY(connection_id, database_name)
 );
+
+CREATE TABLE IF NOT EXISTS saved_query (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    connection_id INTEGER NOT NULL,
+    database_name TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL,
+    sql_text TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(connection_id, database_name, title)
+);
+
+CREATE INDEX IF NOT EXISTS idx_saved_query_conn_db_updated
+ON saved_query(connection_id, database_name, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS knowledge_term (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope TEXT NOT NULL,
+    connection_id INTEGER NOT NULL DEFAULT 0,
+    database_name TEXT NOT NULL DEFAULT '',
+    term TEXT NOT NULL,
+    description TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_example_sql (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope TEXT NOT NULL,
+    connection_id INTEGER NOT NULL DEFAULT 0,
+    database_name TEXT NOT NULL DEFAULT '',
+    sql_text TEXT NOT NULL,
+    description TEXT,
+    term_ids_json TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);

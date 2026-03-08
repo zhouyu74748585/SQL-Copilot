@@ -513,6 +513,52 @@ body {
   color: #184fcb;
 }
 
+.left-nav-collapse {
+  background: transparent;
+}
+
+.left-nav-collapse .ant-collapse-item {
+  border-bottom: 1px solid var(--line);
+}
+
+.left-nav-collapse .ant-collapse-header {
+  padding: 10px 6px !important;
+  font-weight: 600;
+}
+
+.left-nav-panel-actions {
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.knowledge-nav-context {
+  margin-bottom: 8px;
+  color: #6f809f;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.knowledge-nav-item {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: all .2s ease;
+}
+
+.knowledge-nav-item:hover,
+.knowledge-nav-item.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
 .tree-title-row {
   display: flex;
   align-items: center;
@@ -1303,6 +1349,64 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+.knowledge-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: calc(100vh - 260px);
+  overflow: auto;
+}
+
+.knowledge-card {
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-1);
+  color: inherit;
+  padding: 12px;
+  cursor: pointer;
+  transition: all .2s ease;
+}
+
+.knowledge-card:hover {
+  border-color: var(--accent);
+}
+
+.knowledge-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.knowledge-card-desc {
+  color: #6f809f;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.knowledge-card-meta {
+  margin-top: 8px;
+  color: #8ea0be;
+  font-size: 12px;
+}
+
+.knowledge-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.save-query-context {
+  color: #6f809f;
+  font-size: 12px;
 }
 
 .empty-pane {
@@ -2205,6 +2309,12 @@ body {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+.vectorize-overview-section-title {
+  margin: 16px 0 10px;
+  font-weight: 600;
+  color: #1f3350;
 }
 
 .vectorize-overview-item {

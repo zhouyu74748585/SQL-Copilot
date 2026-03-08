@@ -228,65 +228,85 @@
       :style="workbenchStyle"
     >
       <aside class="pane pane-left">
-        <div class="pane-title pane-title-with-action">
-          <span>我的连接</span>
-          <div class="pane-title-actions">
-            <a-button size="small" type="text" @click="openCreateModal" title="新建连接">
-              <template #icon>
-                <link-outlined />
-              </template>
-              新建链接
-            </a-button>
-            <a-button size="small" type="text" :loading="connectionRefreshing" @click="refreshConnections" title="刷新连接列表">
-              <template #icon>
-                <reload-outlined />
-              </template>
-            </a-button>
-          </div>
-        </div>
-        <div class="pane-search">
-          <a-input v-model:value="connectionKeyword" size="small" placeholder="搜索连接" allow-clear>
-            <template #prefix>
-              <search-outlined />
-            </template>
-          </a-input>
-        </div>
-
-        <a-tree
-          class="connection-tree"
-          :tree-data="connectionTreeData"
-          :selected-keys="selectedTreeKeys"
-          :expanded-keys="expandedTreeKeys"
-          block-node
-          @expand="handleTreeExpand"
-          @select="handleTreeSelect"
-          @rightClick="handleTreeRightClick"
-        >
-          <template #title="{ title, dataRef }">
-            <div class="tree-title-row">
-              <img v-if="dataRef.nodeType === 'connection'" class="tree-icon-img" :src="dbIconUrl(dataRef.dbType)" alt="db" />
-              <component v-else :is="nodeIconComponent(dataRef)" class="tree-icon-font" />
-              <span class="tree-title-text">{{ title }}</span>
-              <span
-                v-if="dataRef.nodeType === 'connection'"
-                class="tree-env-tag"
-                :class="envTagClass(dataRef.env)"
-              >
-                <component :is="envTagIcon(dataRef.env)" class="tree-env-tag-icon" />
-                {{ envTagText(dataRef.env) }}
-              </span>
-              <span
-                v-if="dataRef.nodeType === 'database'"
-                class="db-vectorize-status"
-                :class="databaseStatusClass(dataRef.vectorizeStatus)"
-              >
-                <a-tooltip :title="databaseStatusLabel(dataRef.vectorizeStatus)">
-                  <component :is="databaseStatusIcon(dataRef.vectorizeStatus)" class="db-vectorize-status-icon" />
-                </a-tooltip>
-              </span>
+        <a-collapse class="left-nav-collapse" :default-active-key="['connections', 'knowledge']" :bordered="false">
+          <a-collapse-panel key="connections" header="我的连接">
+            <div class="pane-title-actions left-nav-panel-actions">
+              <a-button size="small" type="text" @click="openCreateModal" title="新建连接">
+                <template #icon>
+                  <link-outlined />
+                </template>
+                新建链接
+              </a-button>
+              <a-button size="small" type="text" :loading="connectionRefreshing" @click="refreshConnections" title="刷新连接列表">
+                <template #icon>
+                  <reload-outlined />
+                </template>
+              </a-button>
             </div>
-          </template>
-        </a-tree>
+            <div class="pane-search">
+              <a-input v-model:value="connectionKeyword" size="small" placeholder="搜索连接" allow-clear>
+                <template #prefix>
+                  <search-outlined />
+                </template>
+              </a-input>
+            </div>
+
+            <a-tree
+              class="connection-tree"
+              :tree-data="connectionTreeData"
+              :selected-keys="selectedTreeKeys"
+              :expanded-keys="expandedTreeKeys"
+              block-node
+              @expand="handleTreeExpand"
+              @select="handleTreeSelect"
+              @rightClick="handleTreeRightClick"
+            >
+              <template #title="{ title, dataRef }">
+                <div class="tree-title-row">
+                  <img v-if="dataRef.nodeType === 'connection'" class="tree-icon-img" :src="dbIconUrl(dataRef.dbType)" alt="db" />
+                  <component v-else :is="nodeIconComponent(dataRef)" class="tree-icon-font" />
+                  <span class="tree-title-text">{{ title }}</span>
+                  <span
+                    v-if="dataRef.nodeType === 'connection'"
+                    class="tree-env-tag"
+                    :class="envTagClass(dataRef.env)"
+                  >
+                    <component :is="envTagIcon(dataRef.env)" class="tree-env-tag-icon" />
+                    {{ envTagText(dataRef.env) }}
+                  </span>
+                  <span
+                    v-if="dataRef.nodeType === 'database'"
+                    class="db-vectorize-status"
+                    :class="databaseStatusClass(dataRef.vectorizeStatus)"
+                  >
+                    <a-tooltip :title="databaseStatusLabel(dataRef.vectorizeStatus)">
+                      <component :is="databaseStatusIcon(dataRef.vectorizeStatus)" class="db-vectorize-status-icon" />
+                    </a-tooltip>
+                  </span>
+                </div>
+              </template>
+            </a-tree>
+          </a-collapse-panel>
+          <a-collapse-panel key="knowledge" header="知识中心">
+            <div class="knowledge-nav-context">当前上下文：{{ knowledgeContextText }}</div>
+            <button
+              class="knowledge-nav-item"
+              :class="{ 'is-active': browserNavMode === 'knowledge' && knowledgeActiveNode === 'example-sql' }"
+              @click="openKnowledgeNode('example-sql')"
+            >
+              <span>样例SQL</span>
+              <span>{{ knowledgeExampleItems.length }}</span>
+            </button>
+            <button
+              class="knowledge-nav-item"
+              :class="{ 'is-active': browserNavMode === 'knowledge' && knowledgeActiveNode === 'terms' }"
+              @click="openKnowledgeNode('terms')"
+            >
+              <span>术语管理</span>
+              <span>{{ knowledgeTermItems.length }}</span>
+            </button>
+          </a-collapse-panel>
+        </a-collapse>
 
         <div class="pane-footer">
           <div class="selected-name">{{ selectedConnection?.name ?? '未选择连接' }}</div>
@@ -299,172 +319,264 @@
       <div class="pane-splitter pane-splitter-left" @mousedown="startResizeLeftPane" />
 
       <template v-if="activeWorkbenchTab === browserTabKey">
-        <section class="pane pane-center">
-          <div class="pane-title">对象浏览</div>
-          <div class="center-toolbar">
-            <div v-if="currentObjectType === 'tables'" class="center-toolbar-left">
-              <a-button
-                size="small"
-                type="primary"
-                :disabled="!canCreateTable"
-                @click="openNewTableEditor()"
-              >
-                <template #icon><plus-outlined /></template>
-                新建表
-              </a-button>
-              <a-tooltip :title="browserErEntryTooltip">
-                <a-button
-                  size="small"
-                  :disabled="!canOpenBrowserErFeature"
-                  @click="openErTableSelectModal()"
-                >
-                  <template #icon><apartment-outlined /></template>
-                  智能ER图
+        <template v-if="browserNavMode === 'connections'">
+          <section class="pane pane-center">
+            <div class="pane-title">对象浏览</div>
+            <div class="center-toolbar">
+              <div v-if="currentObjectType === 'tables'" class="center-toolbar-left">
+                <a-button size="small" type="primary" :disabled="!canCreateTable" @click="openNewTableEditor()">
+                  <template #icon><plus-outlined /></template>
+                  新建表
                 </a-button>
-              </a-tooltip>
-            </div>
-            <div class="center-toolbar-right">
-              <a-input v-model:value="tableKeyword" size="small" placeholder="搜索表名" allow-clear>
-                <template #prefix>
-                  <search-outlined />
-                </template>
-              </a-input>
-              <a-button size="small" @click="refreshCurrentObjects" title="刷新当前对象">
-                <reload-outlined />
-              </a-button>
-              <a-radio-group v-model:value="objectViewMode" size="small">
-                <a-radio-button value="row">
-                  <unordered-list-outlined />
-                </a-radio-button>
-                <a-radio-button value="grid">
-                  <appstore-outlined />
-                </a-radio-button>
-              </a-radio-group>
-            </div>
-          </div>
-
-          <a-table
-            v-if="objectViewMode === 'row'"
-            size="small"
-            :pagination="false"
-            :columns="objectColumns"
-            :data-source="filteredObjectRows"
-            row-key="objectName"
-            :scroll="{ y: tableScrollY }"
-            :custom-row="onObjectRow"
-          >
-            <template #bodyCell="{ column, record }">
-              <template v-if="column.key === 'objectName'">
-                <div
-                  class="table-name-cell"
-                  :class="{ 'is-active': selectedObjectName === record.objectName, 'is-queryable': record.objectType === 'tables' }"
-                  @dblclick.stop="openQueryTabByObject(record)"
-                >
-                  <database-outlined />
-                  <span>{{ record.objectName }}</span>
-                </div>
-              </template>
-              <template v-else-if="column.key === 'description'">
-                <span class="object-desc-ellipsis">{{ record.description || '-' }}</span>
-              </template>
-              <template v-else-if="column.key === 'vectorizeStatus'">
-                <a-tooltip
-                  :title="record.vectorizeMessage
-                    ? `${databaseStatusLabel(record.vectorizeStatus)} | ${record.vectorizeMessage}`
-                    : databaseStatusLabel(record.vectorizeStatus)"
-                >
-                  <span class="object-vectorize-cell" :class="databaseStatusClass(record.vectorizeStatus)">
-                    <component :is="databaseStatusIcon(record.vectorizeStatus)" class="object-vectorize-icon" />
-                    <span>{{ databaseStatusLabel(record.vectorizeStatus) }}</span>
-                  </span>
-                </a-tooltip>
-              </template>
-            </template>
-          </a-table>
-
-          <div v-else class="object-grid">
-            <div
-              v-for="item in filteredObjectRows"
-              :key="item.objectName"
-              class="object-card"
-              :class="{ 'is-active': selectedObjectName === item.objectName }"
-              @click="onObjectRow(item).onClick()"
-              @dblclick="onObjectRow(item).onDblclick()"
-              @contextmenu.prevent.stop="onObjectRow(item).onContextmenu($event)"
-            >
-              <div class="object-card-title">{{ item.objectName }}</div>
-              <div class="object-card-meta">{{ objectTypeLabel(item.objectType) }}</div>
-              <div class="object-card-vectorize" :class="databaseStatusClass(item.vectorizeStatus)">
-                <component :is="databaseStatusIcon(item.vectorizeStatus)" class="object-vectorize-icon" />
-                <span>{{ databaseStatusLabel(item.vectorizeStatus) }}</span>
-              </div>
-              <div class="object-card-desc">{{ item.description || '-' }}</div>
-            </div>
-          </div>
-
-          <div class="center-status">
-            <span>对象: {{ filteredObjectRows.length }}</span>
-            <span>类型: {{ objectTypeLabel(currentObjectType) }}</span>
-            <span>字段: {{ schemaOverview?.columnCount ?? 0 }}</span>
-          </div>
-        </section>
-
-        <div class="pane-splitter pane-splitter-right" @mousedown="startResizeBrowserPane" />
-
-        <aside class="pane pane-right detail-pane">
-          <div class="pane-title">对象详情</div>
-          <div v-if="!selectedObjectRecord && !selectedTreeDetail" class="empty-pane">请从对象浏览中选择连接、数据库或对象</div>
-          <div v-else-if="selectedObjectRecord" class="detail-wrapper">
-            <div class="detail-summary">
-              <div class="detail-row"><span>对象</span><strong>{{ selectedObjectRecord.objectName }}</strong></div>
-              <div class="detail-row"><span>类型</span><strong>{{ objectTypeLabel(selectedObjectRecord.objectType) }}</strong></div>
-              <div class="detail-row detail-row-description"><span>说明</span><strong>{{ selectedObjectRecord.description || '-' }}</strong></div>
-              <div class="detail-row"><span>向量化</span><strong>{{ databaseStatusLabel(selectedObjectRecord.vectorizeStatus) }}</strong></div>
-              <div class="detail-row"><span>连接</span><strong>{{ selectedConnection?.name ?? '-' }}</strong></div>
-              <div class="detail-row"><span>数据库</span><strong>{{ getActiveDatabaseName(workflow.connectionId) || '-' }}</strong></div>
-            </div>
-
-            <div v-if="selectedObjectRecord.objectType === 'tables'" class="detail-table-panel">
-              <a-spin :spinning="tableDetailLoading">
-                <div class="detail-code-head">
-                  <span>建表语句</span>
-                  <a-button size="small" type="text" @click="copyCreateTableSql">
-                    <template #icon><copy-outlined /></template>
-                    复制
+                <a-tooltip :title="browserErEntryTooltip">
+                  <a-button size="small" :disabled="!canOpenBrowserErFeature" @click="openErTableSelectModal()">
+                    <template #icon><apartment-outlined /></template>
+                    智能ER图
                   </a-button>
-                </div>
-                <pre class="detail-code-block"><code v-html="createTableSqlHighlighted"></code></pre>
-              </a-spin>
+                </a-tooltip>
+              </div>
+              <div class="center-toolbar-right">
+                <a-input v-model:value="tableKeyword" size="small" :placeholder="currentObjectType === 'queries' ? '搜索保存查询' : '搜索表名'" allow-clear>
+                  <template #prefix><search-outlined /></template>
+                </a-input>
+                <a-button size="small" @click="refreshCurrentObjects" title="刷新当前对象">
+                  <reload-outlined />
+                </a-button>
+                <a-radio-group v-model:value="objectViewMode" size="small">
+                  <a-radio-button value="row"><unordered-list-outlined /></a-radio-button>
+                  <a-radio-button value="grid"><appstore-outlined /></a-radio-button>
+                </a-radio-group>
+              </div>
             </div>
 
-            <div v-else class="detail-note">当前对象类型暂无结构详情，仅展示基本信息</div>
-          </div>
-          <div v-else-if="selectedTreeDetail?.kind === 'connection'" class="detail-wrapper">
-            <div class="detail-summary">
-              <div class="detail-row"><span>连接</span><strong>{{ selectedTreeConnection?.name ?? '-' }}</strong></div>
-              <div class="detail-row"><span>数据库类型</span><strong>{{ selectedTreeConnection?.dbType ?? '-' }}</strong></div>
-              <div class="detail-row"><span>所属环境</span><strong>{{ envTagText(selectedTreeConnection?.env) }}</strong></div>
-              <div class="detail-row"><span>主机</span><strong>{{ selectedTreeConnection?.host || '本地连接' }}</strong></div>
-              <div class="detail-row"><span>端口</span><strong>{{ selectedTreeConnection?.port ?? '-' }}</strong></div>
-              <div class="detail-row"><span>用户</span><strong>{{ selectedTreeConnection?.username || '-' }}</strong></div>
-              <div class="detail-row"><span>默认库</span><strong>{{ selectedTreeConnection?.databaseName || '未指定库' }}</strong></div>
-              <div class="detail-row"><span>只读</span><strong>{{ selectedTreeConnection?.readOnly ? '是' : '否' }}</strong></div>
-              <div class="detail-row"><span>SSH 隧道</span><strong>{{ selectedTreeConnection?.sshEnabled ? '已启用' : '未启用' }}</strong></div>
+            <a-table
+              v-if="objectViewMode === 'row'"
+              size="small"
+              :pagination="false"
+              :columns="objectColumns"
+              :data-source="filteredObjectRows"
+              row-key="objectName"
+              :scroll="{ y: tableScrollY }"
+              :custom-row="onObjectRow"
+            >
+              <template #bodyCell="{ column, record }">
+                <template v-if="column.key === 'objectName'">
+                  <div class="table-name-cell" :class="{ 'is-active': selectedObjectName === record.objectName, 'is-queryable': record.objectType === 'tables' || record.objectType === 'queries' }" @dblclick.stop="openQueryTabByObject(record)">
+                    <database-outlined />
+                    <span>{{ record.objectName }}</span>
+                  </div>
+                </template>
+                <template v-else-if="column.key === 'description'">
+                  <span class="object-desc-ellipsis">{{ record.description || '-' }}</span>
+                </template>
+                <template v-else-if="column.key === 'vectorizeStatus'">
+                  <a-tooltip :title="record.vectorizeMessage ? `${databaseStatusLabel(record.vectorizeStatus)} | ${record.vectorizeMessage}` : databaseStatusLabel(record.vectorizeStatus)">
+                    <span class="object-vectorize-cell" :class="databaseStatusClass(record.vectorizeStatus)">
+                      <component :is="databaseStatusIcon(record.vectorizeStatus)" class="object-vectorize-icon" />
+                      <span>{{ databaseStatusLabel(record.vectorizeStatus) }}</span>
+                    </span>
+                  </a-tooltip>
+                </template>
+              </template>
+            </a-table>
+
+            <div v-else class="object-grid">
+              <div
+                v-for="item in filteredObjectRows"
+                :key="item.objectName"
+                class="object-card"
+                :class="{ 'is-active': selectedObjectName === item.objectName }"
+                @click="onObjectRow(item).onClick()"
+                @dblclick="onObjectRow(item).onDblclick()"
+                @contextmenu.prevent.stop="onObjectRow(item).onContextmenu($event)"
+              >
+                <div class="object-card-title">{{ item.objectName }}</div>
+                <div class="object-card-meta">{{ currentObjectType === 'queries' ? '保存查询' : objectTypeLabel(item.objectType) }}</div>
+                <div v-if="currentObjectType !== 'queries'" class="object-card-vectorize" :class="databaseStatusClass(item.vectorizeStatus)">
+                  <component :is="databaseStatusIcon(item.vectorizeStatus)" class="object-vectorize-icon" />
+                  <span>{{ databaseStatusLabel(item.vectorizeStatus) }}</span>
+                </div>
+                <div class="object-card-desc">{{ item.description || '-' }}</div>
+              </div>
             </div>
-          </div>
-          <div v-else-if="selectedTreeDetail?.kind === 'database' || selectedTreeDetail?.kind === 'category'" class="detail-wrapper">
-            <div class="detail-summary">
-              <div class="detail-row"><span>数据库</span><strong>{{ selectedTreeDetail.databaseName || '-' }}</strong></div>
-              <div class="detail-row"><span>连接</span><strong>{{ selectedTreeConnection?.name ?? '-' }}</strong></div>
-              <div class="detail-row"><span>数据库类型</span><strong>{{ selectedTreeConnection?.dbType ?? '-' }}</strong></div>
-              <div class="detail-row"><span>所属环境</span><strong>{{ envTagText(selectedTreeConnection?.env) }}</strong></div>
-              <div class="detail-row"><span>向量化</span><strong>{{ selectedTreeDatabaseStatusLabel }}</strong></div>
-              <div class="detail-row"><span>表数量</span><strong>{{ selectedTreeDatabaseTableCount }}</strong></div>
-              <div class="detail-row"><span>字段数</span><strong>{{ selectedTreeDatabaseColumnCount }}</strong></div>
+
+            <div class="center-status">
+              <span>对象: {{ filteredObjectRows.length }}</span>
+              <span>类型: {{ currentObjectType === 'queries' ? '保存查询' : objectTypeLabel(currentObjectType) }}</span>
+              <span>字段: {{ schemaOverview?.columnCount ?? 0 }}</span>
             </div>
-          </div>
-          <div v-else class="empty-pane">对象详情加载中...</div>
-        </aside>
+          </section>
+
+          <div class="pane-splitter pane-splitter-right" @mousedown="startResizeBrowserPane" />
+
+          <aside class="pane pane-right detail-pane">
+            <div class="pane-title">对象详情</div>
+            <div v-if="!selectedObjectRecord && !selectedTreeDetail" class="empty-pane">请从对象浏览中选择连接、数据库或对象</div>
+            <div v-else-if="selectedObjectRecord" class="detail-wrapper">
+              <div class="detail-summary">
+                <div class="detail-row"><span>对象</span><strong>{{ selectedObjectRecord.objectName }}</strong></div>
+                <div class="detail-row"><span>类型</span><strong>{{ currentObjectType === 'queries' ? '保存查询' : objectTypeLabel(selectedObjectRecord.objectType) }}</strong></div>
+                <div class="detail-row detail-row-description"><span>说明</span><strong>{{ selectedObjectRecord.description || '-' }}</strong></div>
+                <div class="detail-row"><span>连接</span><strong>{{ selectedConnection?.name ?? '-' }}</strong></div>
+                <div class="detail-row"><span>数据库</span><strong>{{ getActiveDatabaseName(workflow.connectionId) || '-' }}</strong></div>
+              </div>
+
+              <div v-if="selectedObjectRecord.objectType === 'tables'" class="detail-table-panel">
+                <a-spin :spinning="tableDetailLoading">
+                  <div class="detail-code-head">
+                    <span>建表语句</span>
+                    <a-button size="small" type="text" @click="copyCreateTableSql">
+                      <template #icon><copy-outlined /></template>
+                      复制
+                    </a-button>
+                  </div>
+                  <pre class="detail-code-block"><code v-html="createTableSqlHighlighted"></code></pre>
+                </a-spin>
+              </div>
+
+              <div v-else-if="selectedObjectRecord.objectType === 'queries'" class="detail-table-panel">
+                <div class="detail-code-head">
+                  <span>保存的 SQL</span>
+                </div>
+                <pre class="detail-code-block"><code>{{ selectedObjectRecord.sqlText || '' }}</code></pre>
+              </div>
+
+              <div v-else class="detail-note">当前对象类型暂无结构详情，仅展示基本信息</div>
+            </div>
+            <div v-else-if="selectedTreeDetail?.kind === 'connection'" class="detail-wrapper">
+              <div class="detail-summary">
+                <div class="detail-row"><span>连接</span><strong>{{ selectedTreeConnection?.name ?? '-' }}</strong></div>
+                <div class="detail-row"><span>数据库类型</span><strong>{{ selectedTreeConnection?.dbType ?? '-' }}</strong></div>
+                <div class="detail-row"><span>所属环境</span><strong>{{ envTagText(selectedTreeConnection?.env) }}</strong></div>
+                <div class="detail-row"><span>主机</span><strong>{{ selectedTreeConnection?.host || '本地连接' }}</strong></div>
+                <div class="detail-row"><span>端口</span><strong>{{ selectedTreeConnection?.port ?? '-' }}</strong></div>
+                <div class="detail-row"><span>用户</span><strong>{{ selectedTreeConnection?.username || '-' }}</strong></div>
+                <div class="detail-row"><span>默认库</span><strong>{{ selectedTreeConnection?.databaseName || '未指定库' }}</strong></div>
+                <div class="detail-row"><span>只读</span><strong>{{ selectedTreeConnection?.readOnly ? '是' : '否' }}</strong></div>
+                <div class="detail-row"><span>SSH 隧道</span><strong>{{ selectedTreeConnection?.sshEnabled ? '已启用' : '未启用' }}</strong></div>
+              </div>
+            </div>
+            <div v-else-if="selectedTreeDetail?.kind === 'database' || selectedTreeDetail?.kind === 'category'" class="detail-wrapper">
+              <div class="detail-summary">
+                <div class="detail-row"><span>数据库</span><strong>{{ selectedTreeDetail.databaseName || '-' }}</strong></div>
+                <div class="detail-row"><span>连接</span><strong>{{ selectedTreeConnection?.name ?? '-' }}</strong></div>
+                <div class="detail-row"><span>数据库类型</span><strong>{{ selectedTreeConnection?.dbType ?? '-' }}</strong></div>
+                <div class="detail-row"><span>所属环境</span><strong>{{ envTagText(selectedTreeConnection?.env) }}</strong></div>
+                <div class="detail-row"><span>向量化</span><strong>{{ selectedTreeDatabaseStatusLabel }}</strong></div>
+                <div class="detail-row"><span>表数量</span><strong>{{ selectedTreeDatabaseTableCount }}</strong></div>
+                <div class="detail-row"><span>字段数</span><strong>{{ selectedTreeDatabaseColumnCount }}</strong></div>
+              </div>
+            </div>
+            <div v-else class="empty-pane">对象详情加载中...</div>
+          </aside>
+        </template>
+
+        <template v-else>
+          <section class="pane pane-center">
+            <div class="pane-title">知识中心 · {{ knowledgeActiveNode === 'terms' ? '术语管理' : '样例SQL' }}</div>
+            <div class="center-toolbar">
+              <div class="center-toolbar-left">
+                <a-button size="small" type="primary" @click="knowledgeActiveNode === 'terms' ? resetKnowledgeTermForm() : resetKnowledgeExampleForm()">
+                  <template #icon><plus-outlined /></template>
+                  新建{{ knowledgeActiveNode === 'terms' ? '术语' : '样例' }}
+                </a-button>
+                <a-button size="small" :loading="knowledgeRebuildLoading" @click="rebuildKnowledgeVectors">
+                  <template #icon><sync-outlined /></template>
+                  手动重建向量
+                </a-button>
+              </div>
+              <div class="center-toolbar-right">
+                <a-input v-model:value="knowledgeKeyword" size="small" placeholder="搜索知识内容" allow-clear>
+                  <template #prefix><search-outlined /></template>
+                </a-input>
+                <a-button size="small" :loading="knowledgeLoading" @click="loadKnowledgeData">
+                  <reload-outlined />
+                </a-button>
+              </div>
+            </div>
+
+            <a-spin :spinning="knowledgeLoading">
+              <div v-if="knowledgeActiveNode === 'terms'" class="knowledge-list">
+                <button v-for="item in filteredKnowledgeTermItems" :key="item.id" class="knowledge-card" @click="selectKnowledgeTerm(item)">
+                  <div class="knowledge-card-head">
+                    <strong>{{ item.term }}</strong>
+                    <a-tag :color="knowledgeScopeColor(item.scope)">{{ knowledgeScopeLabel(item.scope) }}</a-tag>
+                  </div>
+                  <div class="knowledge-card-desc">{{ item.description || '暂无说明' }}</div>
+                  <div class="knowledge-card-meta">{{ formatTime(item.updatedAt) }}</div>
+                </button>
+                <div v-if="!filteredKnowledgeTermItems.length" class="empty-pane">暂无术语数据</div>
+              </div>
+              <div v-else class="knowledge-list">
+                <button v-for="item in filteredKnowledgeExampleItems" :key="item.id" class="knowledge-card" @click="selectKnowledgeExample(item)">
+                  <div class="knowledge-card-head">
+                    <strong>{{ item.description || item.sqlText.slice(0, 24) || '未命名样例' }}</strong>
+                    <a-tag :color="knowledgeScopeColor(item.scope)">{{ knowledgeScopeLabel(item.scope) }}</a-tag>
+                  </div>
+                  <div class="knowledge-card-desc">{{ item.sqlText }}</div>
+                  <div class="knowledge-card-meta">关联术语 {{ item.termIds?.length || 0 }} · {{ formatTime(item.updatedAt) }}</div>
+                </button>
+                <div v-if="!filteredKnowledgeExampleItems.length" class="empty-pane">暂无样例 SQL 数据</div>
+              </div>
+            </a-spin>
+          </section>
+
+          <div class="pane-splitter pane-splitter-right" @mousedown="startResizeBrowserPane" />
+
+          <aside class="pane pane-right detail-pane">
+            <div class="pane-title">{{ knowledgeActiveNode === 'terms' ? '术语详情' : '样例详情' }}</div>
+            <div class="detail-wrapper">
+              <div class="detail-summary">
+                <div class="detail-row"><span>当前上下文</span><strong>{{ knowledgeContextText }}</strong></div>
+              </div>
+
+              <div v-if="knowledgeActiveNode === 'terms'" class="knowledge-form">
+                <a-form layout="vertical" size="small">
+                  <a-form-item label="作用域">
+                    <a-select v-model:value="knowledgeTermForm.scope" :options="knowledgeScopeOptions" />
+                  </a-form-item>
+                  <a-form-item label="术语">
+                    <a-input v-model:value="knowledgeTermForm.term" maxlength="120" />
+                  </a-form-item>
+                  <a-form-item label="说明">
+                    <a-textarea v-model:value="knowledgeTermForm.description" :rows="5" />
+                  </a-form-item>
+                </a-form>
+                <a-space>
+                  <a-button type="primary" size="small" :loading="knowledgeSaving" @click="saveKnowledgeTerm">保存</a-button>
+                  <a-button size="small" @click="resetKnowledgeTermForm">重置</a-button>
+                  <a-button v-if="knowledgeTermForm.id" danger size="small" :loading="knowledgeSaving" @click="removeKnowledgeTerm">删除</a-button>
+                </a-space>
+              </div>
+
+              <div v-else class="knowledge-form">
+                <a-form layout="vertical" size="small">
+                  <a-form-item label="作用域">
+                    <a-select v-model:value="knowledgeExampleForm.scope" :options="knowledgeScopeOptions" />
+                  </a-form-item>
+                  <a-form-item label="关联术语">
+                    <a-select
+                      v-model:value="knowledgeExampleForm.termIds"
+                      mode="multiple"
+                      :options="knowledgeTermItems.map((item) => ({ label: item.term, value: item.id }))"
+                    />
+                  </a-form-item>
+                  <a-form-item label="说明">
+                    <a-textarea v-model:value="knowledgeExampleForm.description" :rows="3" />
+                  </a-form-item>
+                  <a-form-item label="SQL 正文">
+                    <a-textarea v-model:value="knowledgeExampleForm.sqlText" :rows="10" />
+                  </a-form-item>
+                </a-form>
+                <a-space>
+                  <a-button type="primary" size="small" :loading="knowledgeSaving" @click="saveKnowledgeExample">保存</a-button>
+                  <a-button size="small" @click="resetKnowledgeExampleForm">重置</a-button>
+                  <a-button v-if="knowledgeExampleForm.id" danger size="small" :loading="knowledgeSaving" @click="removeKnowledgeExample">删除</a-button>
+                </a-space>
+              </div>
+            </div>
+          </aside>
+        </template>
       </template>
 
       <template v-else-if="activeErTab">
@@ -1070,6 +1182,11 @@
               <a-tooltip title="导出结果（CSV）">
                 <a-button size="small" class="sql-action-icon-btn" @click="exportCsvForTab(activeQueryTab)">
                   <template #icon><download-outlined /></template>
+                </a-button>
+              </a-tooltip>
+              <a-tooltip title="保存查询">
+                <a-button size="small" class="sql-action-icon-btn" @click="openSaveQueryModal(activeQueryTab)">
+                  <template #icon><save-outlined /></template>
                 </a-button>
               </a-tooltip>
               <a-tooltip v-if="activeQueryTab.selectedSqlText" title="所选 SQL 加入对话">
@@ -1701,6 +1818,25 @@
     </a-modal>
 
     <a-modal
+      v-model:open="saveQueryModalOpen"
+      title="保存查询"
+      width="480px"
+      ok-text="保存"
+      :confirm-loading="saveQuerySubmitting"
+      @ok="activeQueryTab && saveCurrentQuery(activeQueryTab)"
+      @cancel="saveQueryModalOpen = false"
+    >
+      <a-form layout="vertical">
+        <a-form-item label="名称" required>
+          <a-input v-model:value="saveQueryTitle" maxlength="80" show-count placeholder="请输入保存查询名称" />
+        </a-form-item>
+        <a-form-item label="保存位置">
+          <div class="save-query-context">{{ activeQueryTab ? queryTabConnectionName(activeQueryTab) : '-' }} / {{ activeQueryTab?.databaseName || '未指定库' }}</div>
+        </a-form-item>
+      </a-form>
+    </a-modal>
+
+    <a-modal
       v-model:open="vectorizeOverviewModalOpen"
       title="向量化数据概览"
       width="680px"
@@ -1718,8 +1854,12 @@
 
           <div class="vectorize-overview-kpis">
             <div class="vectorize-overview-kpi-card">
-              <span>向量规模</span>
+              <span>当前库适用总量</span>
               <strong>{{ formatCompactCount(vectorizeOverviewData.totalVectorCount) }}</strong>
+            </div>
+            <div class="vectorize-overview-kpi-card">
+              <span>全局知识总量</span>
+              <strong>{{ formatCompactCount(vectorizeOverviewData.globalVectorCount) }}</strong>
             </div>
             <div class="vectorize-overview-kpi-card">
               <span>向量维度</span>
@@ -1739,6 +1879,7 @@
             </div>
           </div>
 
+          <div class="vectorize-overview-section-title">当前库适用统计</div>
           <div class="vectorize-overview-breakdown">
             <div class="vectorize-overview-item">
               <span>表向量</span>
@@ -1755,6 +1896,26 @@
             <div class="vectorize-overview-item">
               <span>SQL 片段</span>
               <strong>{{ formatCompactCount(vectorizeOverviewData.sqlFragmentVectorCount) }}</strong>
+            </div>
+            <div class="vectorize-overview-item">
+              <span>术语知识</span>
+              <strong>{{ formatCompactCount(vectorizeOverviewData.metricTermVectorCount) }}</strong>
+            </div>
+            <div class="vectorize-overview-item">
+              <span>样例 SQL</span>
+              <strong>{{ formatCompactCount(vectorizeOverviewData.exampleSqlVectorCount) }}</strong>
+            </div>
+          </div>
+
+          <div class="vectorize-overview-section-title">全局统计</div>
+          <div class="vectorize-overview-breakdown">
+            <div class="vectorize-overview-item">
+              <span>全局术语</span>
+              <strong>{{ formatCompactCount(vectorizeOverviewData.globalMetricTermVectorCount) }}</strong>
+            </div>
+            <div class="vectorize-overview-item">
+              <span>全局样例</span>
+              <strong>{{ formatCompactCount(vectorizeOverviewData.globalExampleSqlVectorCount) }}</strong>
             </div>
           </div>
 
@@ -1800,6 +1961,7 @@ import {
   PlusOutlined,
   ReadOutlined,
   ReloadOutlined,
+  SaveOutlined,
   SearchOutlined,
   SendOutlined,
   SettingOutlined,
@@ -1837,11 +1999,13 @@ const {
     connectionRefreshing,
     connectionKeyword,
     tableKeyword,
+    browserNavMode,
     selectedTreeKeys,
     expandedTreeKeys,
     tableNameCache,
     tableNameLoadedCache,
     objectNameCache,
+    savedQueryCache,
     tableStatsCache,
     tableStatsLoadingState,
     tableStatsLastRequestAt,
@@ -1854,6 +2018,9 @@ const {
     vectorizeOverviewModalOpen,
     vectorizeOverviewLoading,
     vectorizeOverviewData,
+    saveQueryModalOpen,
+    saveQuerySubmitting,
+    saveQueryTitle,
     truncateTableModalOpen,
     truncateTableName,
     dropTableModalOpen,
@@ -2036,6 +2203,8 @@ const {
     openCreateModal,
     openEditModal,
     openAiQueryTab,
+    openSaveQueryModal,
+    saveCurrentQuery,
     closeQueryTab,
     touchErTab,
     normalizeErRelationDirection,
@@ -2258,6 +2427,32 @@ const {
     cacheChartImageWithRetry,
     downloadImage,
     generateChartPlanForTab,
+    knowledgeActiveNode,
+    knowledgeLoading,
+    knowledgeSaving,
+    knowledgeRebuildLoading,
+    knowledgeKeyword,
+    knowledgeTermItems,
+    knowledgeExampleItems,
+    filteredKnowledgeTermItems,
+    filteredKnowledgeExampleItems,
+    knowledgeTermForm,
+    knowledgeExampleForm,
+    knowledgeScopeOptions,
+    knowledgeContextText,
+    openKnowledgeNode,
+    resetKnowledgeTermForm,
+    resetKnowledgeExampleForm,
+    selectKnowledgeTerm,
+    selectKnowledgeExample,
+    saveKnowledgeTerm,
+    removeKnowledgeTerm,
+    saveKnowledgeExample,
+    removeKnowledgeExample,
+    rebuildKnowledgeVectors,
+    loadKnowledgeData,
+    knowledgeScopeLabel,
+    knowledgeScopeColor,
     generateChartFromMessage,
     generateManualChartForTab,
     downloadActiveChart,

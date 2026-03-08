@@ -6,6 +6,7 @@ import com.sqlcopilot.studio.service.rag.QdrantClientService;
 import com.sqlcopilot.studio.service.rag.RagEmbeddingService;
 import com.sqlcopilot.studio.service.rag.RagRerankService;
 import com.sqlcopilot.studio.service.rag.RagRetrievalService;
+import com.sqlcopilot.studio.service.rag.model.QdrantPayloadFilter;
 import com.sqlcopilot.studio.service.rag.model.QdrantScoredPoint;
 import com.sqlcopilot.studio.service.rag.model.RagCollectionNames;
 import com.sqlcopilot.studio.service.rag.model.RagPromptContext;
@@ -21,6 +22,7 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
 
     private static final Logger log = LoggerFactory.getLogger(RagRetrievalServiceImpl.class);
     private static final long RAG_CONFIG_CACHE_TTL_MS = 10_000L;
+    private static final long GLOBAL_SCOPE_CONNECTION_ID = 0L;
 
     private final boolean ragEnabled;
     private final boolean defaultRerankEnabled;
@@ -157,14 +159,14 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             connectionId,
             normalizedDatabaseName
         );
-        List<QdrantScoredPoint> metricTermHits = safeSearch(
+        List<QdrantScoredPoint> metricTermHits = searchKnowledgeAcrossScopes(
             collectionNames.getMetricTerm(),
             inputVector,
             metricTermLimit,
             connectionId,
             normalizedDatabaseName
         );
-        List<QdrantScoredPoint> exampleSqlHits = safeSearch(
+        List<QdrantScoredPoint> exampleSqlHits = searchKnowledgeAcrossScopes(
             collectionNames.getExampleSql(),
             inputVector,
             exampleSqlLimit,
@@ -357,6 +359,64 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         }
     }
 
+    private List<QdrantScoredPoint> searchKnowledgeAcrossScopes(String collectionName,
+                                                                List<Float> vector,
+                                                                int limit,
+                                                                Long connectionId,
+                                                                String databaseName) {
+        Map<String, QdrantScoredPoint> merged = new LinkedHashMap<>();
+        if (connectionId != null) {
+            mergeHits(merged, safeSearchByFilters(collectionName, vector, limit, List.of(
+                new QdrantPayloadFilter("connection_id", connectionId),
+                new QdrantPayloadFilter("database_name", normalizeDatabaseName(databaseName))
+            )));
+            mergeHits(merged, safeSearchByFilters(collectionName, vector, limit, List.of(
+                new QdrantPayloadFilter("connection_id", connectionId),
+                new QdrantPayloadFilter("database_name", "")
+            )));
+        }
+        mergeHits(merged, safeSearchByFilters(collectionName, vector, limit, List.of(
+            new QdrantPayloadFilter("connection_id", GLOBAL_SCOPE_CONNECTION_ID),
+            new QdrantPayloadFilter("database_name", "")
+        )));
+        return merged.values().stream()
+            .sorted(Comparator.comparingDouble(QdrantScoredPoint::getScore).reversed())
+            .limit(Math.max(limit * 2L, limit))
+            .toList();
+    }
+
+    private void mergeHits(Map<String, QdrantScoredPoint> target, List<QdrantScoredPoint> hits) {
+        if (hits == null || hits.isEmpty()) {
+            return;
+        }
+        for (QdrantScoredPoint hit : hits) {
+            if (hit == null) {
+                continue;
+            }
+            QdrantScoredPoint current = target.get(hit.getId());
+            if (current == null || hit.getScore() > current.getScore()) {
+                target.put(hit.getId(), hit);
+            }
+        }
+    }
+
+    private List<QdrantScoredPoint> safeSearchByFilters(String collectionName,
+                                                        List<Float> vector,
+                                                        int limit,
+                                                        List<QdrantPayloadFilter> filters) {
+        try {
+            return qdrantClientService.searchPointsByFilters(collectionName, vector, limit, filters);
+        } catch (Exception ex) {
+            log.warn(
+                "RAG 知识向量检索失败，自动降级, collection={}, filters={}, reason={}",
+                collectionName,
+                filters,
+                ex.getMessage()
+            );
+            return List.of();
+        }
+    }
+
     private Set<String> collectConstraintTables(List<QdrantScoredPoint> tableHits) {
         Set<String> constraints = new LinkedHashSet<>();
         if (tableHits == null || tableHits.isEmpty()) {
@@ -409,10 +469,13 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         return hits.stream()
             .filter(hit -> {
                 String tableName = normalizeTableName(payloadString(hit.getPayload(), "table_name"));
+                List<String> tables = payloadStringList(hit.getPayload(), "tables");
+                if (tableName.isBlank() && tables.isEmpty()) {
+                    return true;
+                }
                 if (!tableName.isBlank() && constraints.contains(tableName)) {
                     return true;
                 }
-                List<String> tables = payloadStringList(hit.getPayload(), "tables");
                 for (String table : tables) {
                     if (constraints.contains(normalizeTableName(table))) {
                         return true;

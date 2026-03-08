@@ -234,6 +234,74 @@ export interface QueryHistoryVO {
   createdAt?: number;
 }
 
+export interface SavedQueryVO {
+  id: number;
+  connectionId: number;
+  databaseName?: string;
+  title: string;
+  sqlText: string;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface SavedQuerySaveReq {
+  connectionId: number;
+  databaseName?: string;
+  title: string;
+  sqlText: string;
+}
+
+export type KnowledgeScope = 'GLOBAL' | 'CONNECTION' | 'DATABASE';
+
+export interface KnowledgeTermVO {
+  id: number;
+  scope: KnowledgeScope;
+  connectionId?: number;
+  databaseName?: string;
+  term: string;
+  description?: string;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface KnowledgeTermSaveReq {
+  id?: number;
+  scope: KnowledgeScope;
+  connectionId?: number;
+  databaseName?: string;
+  term: string;
+  description?: string;
+}
+
+export interface KnowledgeExampleSqlVO {
+  id: number;
+  scope: KnowledgeScope;
+  connectionId?: number;
+  databaseName?: string;
+  sqlText: string;
+  description?: string;
+  termIds: number[];
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface KnowledgeExampleSqlSaveReq {
+  id?: number;
+  scope: KnowledgeScope;
+  connectionId?: number;
+  databaseName?: string;
+  sqlText: string;
+  description?: string;
+  termIds: number[];
+}
+
+export interface KnowledgeVectorRebuildVO {
+  termCount: number;
+  exampleCount: number;
+  rebuiltAt?: number;
+  message?: string;
+}
+
 export interface ChartCacheSaveReq {
   connectionId: number;
   sessionId: string;
@@ -422,6 +490,11 @@ export interface RagVectorizeOverviewVO {
   schemaColumnVectorCount: number;
   sqlHistoryVectorCount: number;
   sqlFragmentVectorCount: number;
+  metricTermVectorCount: number;
+  exampleSqlVectorCount: number;
+  globalVectorCount: number;
+  globalMetricTermVectorCount: number;
+  globalExampleSqlVectorCount: number;
   vectorDimension?: number;
   lastFullVectorizeDurationMs?: number;
   lastFullVectorizeProvider?: string;

@@ -87,6 +87,8 @@ import type {
   RagVectorizeOverviewVO,
   RagVectorizeTableVO,
   RiskEvaluateVO,
+  SavedQuerySaveReq,
+  SavedQueryVO,
   SchemaDatabaseVO,
   SchemaOverviewVO,
   SchemaTableStatsVO,
@@ -123,6 +125,8 @@ interface ObjectRow {
   vectorizeStatus: string;
   vectorizeMessage?: string;
   vectorizeUpdatedAt?: number;
+  sqlText?: string;
+  updatedAt?: number;
 }
 
 type QueryActionType =
@@ -327,6 +331,8 @@ const connectionKeyword = ref('');
 
 const tableKeyword = ref('');
 
+const browserNavMode = ref<'connections' | 'knowledge'>('connections');
+
 const selectedTreeKeys = ref<string[]>([]);
 
 const expandedTreeKeys = ref<string[]>([]);
@@ -336,6 +342,14 @@ const tableNameCache = ref<Record<string, string[]>>({});
 const tableNameLoadedCache = ref<Record<string, boolean>>({});
 
 const objectNameCache = ref<Record<string, string[]>>({});
+
+const savedQueryCache = ref<Record<string, SavedQueryVO[]>>({});
+
+const saveQueryModalOpen = ref(false);
+
+const saveQuerySubmitting = ref(false);
+
+const saveQueryTitle = ref('');
 
 const tableStatsCache = ref<Record<string, Record<string, { rowEstimate: number; tableSizeBytes: number }>>>({});
 
@@ -877,6 +891,21 @@ const objectRows = computed<ObjectRow[]>(() => {
     }));
   }
 
+  if (currentObjectType.value === 'queries') {
+    return savedQueriesByDatabase(workflow.connectionId, databaseName).map((item) => ({
+      objectName: item.title,
+      objectType: 'queries',
+      rowEstimate: 0,
+      tableSize: formatTime(item.updatedAt) || '-',
+      description: item.sqlText.replace(/\s+/g, ' ').trim().slice(0, 120) || '已保存查询',
+      vectorizeStatus: 'SUCCESS',
+      vectorizeMessage: '点击后恢复为新查询页签',
+      vectorizeUpdatedAt: item.updatedAt,
+      sqlText: item.sqlText,
+      updatedAt: item.updatedAt,
+    }));
+  }
+
   const names = objectNameCache.value[objectCacheKey(workflow.connectionId, databaseName, currentObjectType.value)] ?? [];
   return names.map((name) => ({
     objectName: name,
@@ -1009,6 +1038,13 @@ const objectColumns = computed(() => {
       { title: '数据大小', dataIndex: 'tableSize', key: 'tableSize', width: 120 },
       { title: '向量状态', dataIndex: 'vectorizeStatus', key: 'vectorizeStatus', width: 150 },
       { title: '说明', dataIndex: 'description', key: 'description', width: 300, ellipsis: true },
+    ];
+  }
+  if (currentObjectType.value === 'queries') {
+    return [
+      { title: '名称', dataIndex: 'objectName', key: 'objectName', width: 260, ellipsis: true },
+      { title: '最近更新', dataIndex: 'tableSize', key: 'tableSize', width: 160 },
+      { title: 'SQL 摘要', dataIndex: 'description', key: 'description', width: 420, ellipsis: true },
     ];
   }
   return [
@@ -1257,6 +1293,15 @@ function buildCategoryChildren(connectionId: number, databaseName: string) {
 }
 
 function getCategoryChildren(connectionId: number, databaseName: string, category: string) {
+  if (category === 'queries') {
+    return savedQueriesByDatabase(connectionId, databaseName).map((item) => ({
+      key: buildObjectNodeKey(connectionId, databaseName, category, item.title),
+      title: item.title,
+      nodeType: category,
+      objectType: category,
+      objectName: item.title,
+    }));
+  }
   const names = category === 'tables'
     ? tableNameCache.value[tableCacheKey(connectionId, databaseName)] ?? []
     : objectNameCache.value[objectCacheKey(connectionId, databaseName, category)] ?? [];
@@ -1469,18 +1514,32 @@ function getActiveDatabaseName(connectionId: number) {
 }
 
 function openAiQueryTab(initialPrompt = '') {
+  return createQueryTab({
+    prompt: initialPrompt,
+    sqlText: workflow.sqlText,
+  });
+}
+
+function createQueryTab(options?: {
+  title?: string;
+  connectionId?: number;
+  databaseName?: string;
+  prompt?: string;
+  sqlText?: string;
+}) {
   ensureConnection();
+  const connectionId = options?.connectionId ?? workflow.connectionId;
   const now = Date.now();
-  const databaseName = getActiveDatabaseName(workflow.connectionId);
+  const databaseName = options?.databaseName ?? getActiveDatabaseName(connectionId);
   const models = aiModelOptions.value.map((item) => String(item.value)).filter((item) => !!item);
   const tab: QueryWorkspaceTab = {
     key: `query-${now}-${Math.round(Math.random() * 1000)}`,
-    title: '新的查询',
-    connectionId: workflow.connectionId,
+    title: options?.title || '新的查询',
+    connectionId,
     databaseName,
     sessionId: `session-${now}`,
-    prompt: initialPrompt,
-    sqlText: workflow.sqlText,
+    prompt: options?.prompt ?? '',
+    sqlText: options?.sqlText ?? workflow.sqlText,
     riskAckToken: '',
     riskInfo: null,
     executeResult: null,
@@ -1506,6 +1565,13 @@ function openAiQueryTab(initialPrompt = '') {
     memoryEnabled: true,
     lastTokenEstimate: 0,
   };
+  if (options?.title?.trim()) {
+    sessionTitleOverrides.value = {
+      ...sessionTitleOverrides.value,
+      [sessionTitleOverrideKey(tab)]: options.title.trim(),
+    };
+    persistSessionTitleOverrides();
+  }
   applySessionTitle(tab);
   queryTabs.value = [...queryTabs.value, tab];
   activeWorkbenchTab.value = tab.key;
@@ -1515,6 +1581,104 @@ function openAiQueryTab(initialPrompt = '') {
     await warmupTableSuggestions(tab);
   });
   return tab;
+}
+
+function savedQueryCacheKey(connectionId: number, databaseName?: string) {
+  return `${connectionId}|${databaseName || ''}`;
+}
+
+function savedQueriesByDatabase(connectionId: number, databaseName?: string) {
+  return savedQueryCache.value[savedQueryCacheKey(connectionId, databaseName)] ?? [];
+}
+
+async function loadSavedQueries(connectionId: number, databaseName: string) {
+  const normalizedDatabaseName = databaseName || '';
+  const list = await getApi<SavedQueryVO[]>(
+    `/api/editor/saved-query/list?connectionId=${connectionId}&databaseName=${encodeURIComponent(normalizedDatabaseName)}`,
+  );
+  savedQueryCache.value = {
+    ...savedQueryCache.value,
+    [savedQueryCacheKey(connectionId, normalizedDatabaseName)]: list,
+  };
+  return list;
+}
+
+function openSaveQueryModal(tab: QueryWorkspaceTab) {
+  if (!tab.sqlText.trim()) {
+    message.warning('请先输入要保存的 SQL');
+    return;
+  }
+  saveQueryTitle.value = tab.title.includes('新的查询') ? '' : tab.title;
+  saveQueryModalOpen.value = true;
+}
+
+async function saveCurrentQuery(tab: QueryWorkspaceTab) {
+  const title = saveQueryTitle.value.trim();
+  if (!title) {
+    message.warning('保存查询名称不能为空');
+    return null;
+  }
+  const sqlText = tab.sqlText.trim();
+  if (!sqlText) {
+    message.warning('请先输入要保存的 SQL');
+    return null;
+  }
+  saveQuerySubmitting.value = true;
+  try {
+    const payload: SavedQuerySaveReq = {
+      connectionId: tab.connectionId,
+      databaseName: tab.databaseName || '',
+      title,
+      sqlText,
+    };
+    const saved = await postApi<SavedQueryVO>('/api/editor/saved-query/save', payload);
+    sessionTitleOverrides.value = {
+      ...sessionTitleOverrides.value,
+      [sessionTitleOverrideKey(tab)]: title,
+    };
+    persistSessionTitleOverrides();
+    tab.title = title;
+    saveQueryModalOpen.value = false;
+    await loadSavedQueries(tab.connectionId, tab.databaseName || '');
+    message.success('查询已保存');
+    return saved;
+  } finally {
+    saveQuerySubmitting.value = false;
+  }
+}
+
+async function openSavedQueryTab(savedQuery: SavedQueryVO) {
+  const normalizedDatabaseName = savedQuery.databaseName || '';
+  workflow.connectionId = savedQuery.connectionId;
+  activeDatabaseMap.value = {
+    ...activeDatabaseMap.value,
+    [savedQuery.connectionId]: normalizedDatabaseName,
+  };
+  const tab = createQueryTab({
+    title: savedQuery.title,
+    connectionId: savedQuery.connectionId,
+    databaseName: normalizedDatabaseName,
+    prompt: '',
+    sqlText: savedQuery.sqlText,
+  });
+  await runSafely(async () => {
+    await prepareConnectionTreeData(savedQuery.connectionId);
+    await warmupTableSuggestions(tab);
+  });
+  browserNavMode.value = 'connections';
+  return tab;
+}
+
+async function openSavedQueryTabByTitle(connectionId: number, databaseName: string, title: string) {
+  const queries = savedQueriesByDatabase(connectionId, databaseName).length
+    ? savedQueriesByDatabase(connectionId, databaseName)
+    : await loadSavedQueries(connectionId, databaseName);
+  const target = queries.find((item) => item.title === title);
+  if (!target) {
+    message.warning('未找到对应的保存查询');
+    return null;
+  }
+  return openSavedQueryTab(target);
 }
 
 function closeQueryTab(tabKey: string) {
@@ -3091,14 +3255,24 @@ async function refreshCurrentObjects() {
       await loadOverview();
       return;
     }
+    if (currentObjectType.value === 'queries') {
+      await loadSavedQueries(workflow.connectionId, databaseName);
+      return;
+    }
     await loadObjectNames(workflow.connectionId, databaseName, currentObjectType.value);
   });
 }
 
 async function loadCategoryObjects(connectionId: number, databaseName: string, category: string) {
   currentObjectType.value = toObjectType(category);
+  browserNavMode.value = 'connections';
   if (currentObjectType.value === 'tables') {
     await loadOverview();
+    return;
+  }
+  if (currentObjectType.value === 'queries') {
+    await loadSavedQueries(connectionId, databaseName);
+    expandCategoryNode(connectionId, databaseName, currentObjectType.value);
     return;
   }
   await runSafely(async () => {
@@ -3139,6 +3313,10 @@ async function loadTreeChildrenByKey(nodeKey: string) {
     await ensureTableNamesLoaded(connectionId, databaseName);
     return;
   }
+  if (category === 'queries') {
+    await loadSavedQueries(connectionId, databaseName);
+    return;
+  }
   await loadObjectNames(connectionId, databaseName, category);
 }
 
@@ -3147,6 +3325,7 @@ async function handleTreeSelect(keys: (string | number)[]) {
     return;
   }
   closeContextMenu();
+  browserNavMode.value = 'connections';
   const value = String(keys[0]);
   selectedTreeKeys.value = [value];
   activeWorkbenchTab.value = browserTabKey;
@@ -3430,6 +3609,10 @@ async function interruptDatabaseVectorize(connectionId: number, databaseName: st
 
 async function selectObject(connectionId: number, databaseName: string, objectType: ObjectRow['objectType'], objectName: string) {
   selectedObjectName.value = objectName;
+  if (objectType === 'queries') {
+    await openSavedQueryTabByTitle(connectionId, databaseName, objectName);
+    return;
+  }
   workflow.prompt = `查询 ${objectName} 最近数据`;
   if (objectType === 'tables' || objectType === 'views') {
     workflow.sqlText = `SELECT * FROM ${objectName} LIMIT 100`;
@@ -5721,11 +5904,13 @@ function resetConnectionModalState() {
     connectionRefreshing,
     connectionKeyword,
     tableKeyword,
+    browserNavMode,
     selectedTreeKeys,
     expandedTreeKeys,
     tableNameCache,
     tableNameLoadedCache,
     objectNameCache,
+    savedQueryCache,
     tableStatsCache,
     tableStatsLoadingState,
     tableStatsLastRequestAt,
@@ -5738,6 +5923,9 @@ function resetConnectionModalState() {
     vectorizeOverviewModalOpen,
     vectorizeOverviewLoading,
     vectorizeOverviewData,
+    saveQueryModalOpen,
+    saveQuerySubmitting,
+    saveQueryTitle,
     truncateTableModalOpen,
     truncateTableName,
     dropTableModalOpen,
@@ -6006,6 +6194,7 @@ function resetConnectionModalState() {
     handleTreeExpand,
     handleTreeRightClick,
     closeContextMenu,
+    loadSavedQueries,
     openVectorizeOverview,
     enqueueDatabaseRevectorize,
     vectorizeSingleTable,
@@ -6014,6 +6203,10 @@ function resetConnectionModalState() {
     loadObjectDetail,
     clearObjectDetail,
     openQueryTabByObject,
+    openSaveQueryModal,
+    saveCurrentQuery,
+    openSavedQueryTab,
+    openSavedQueryTabByTitle,
     getDesktopBridge,
     pickRagEmbeddingModelDir,
     pickRagRerankModelDir,

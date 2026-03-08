@@ -8,8 +8,10 @@ import com.sqlcopilot.studio.dto.sql.QueryCellVO;
 import com.sqlcopilot.studio.dto.sql.QueryRowVO;
 import com.sqlcopilot.studio.entity.ErGraphSnapshotEntity;
 import com.sqlcopilot.studio.entity.QueryHistoryEntity;
+import com.sqlcopilot.studio.entity.SavedQueryEntity;
 import com.sqlcopilot.studio.mapper.ErGraphSnapshotMapper;
 import com.sqlcopilot.studio.mapper.QueryHistoryMapper;
+import com.sqlcopilot.studio.mapper.SavedQueryMapper;
 import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.EditorService;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
@@ -35,6 +37,7 @@ public class EditorServiceImpl implements EditorService {
     private static final long MAX_CHART_IMAGE_BYTES = 8L * 1024L * 1024L;
 
     private final QueryHistoryMapper queryHistoryMapper;
+    private final SavedQueryMapper savedQueryMapper;
     private final ErGraphSnapshotMapper erGraphSnapshotMapper;
     private final ConnectionService connectionService;
     private final ObjectMapper objectMapper;
@@ -42,12 +45,14 @@ public class EditorServiceImpl implements EditorService {
     private final String sqlHistoryCollectionName;
 
     public EditorServiceImpl(QueryHistoryMapper queryHistoryMapper,
+                             SavedQueryMapper savedQueryMapper,
                              ErGraphSnapshotMapper erGraphSnapshotMapper,
                              ConnectionService connectionService,
                              ObjectMapper objectMapper,
                              QdrantClientService qdrantClientService,
                              @org.springframework.beans.factory.annotation.Value("${rag.collection.sql-history:sql_history}") String sqlHistoryCollectionName) {
         this.queryHistoryMapper = queryHistoryMapper;
+        this.savedQueryMapper = savedQueryMapper;
         this.erGraphSnapshotMapper = erGraphSnapshotMapper;
         this.connectionService = connectionService;
         this.objectMapper = objectMapper;
@@ -197,6 +202,47 @@ public class EditorServiceImpl implements EditorService {
         entity.setSuccessFlag(Boolean.TRUE.equals(req.getSuccess()) ? 1 : 0);
         entity.setCreatedAt(System.currentTimeMillis());
         queryHistoryMapper.insert(entity);
+    }
+
+    @Override
+    public SavedQueryVO saveSavedQuery(SavedQuerySaveReq req) {
+        Long connectionId = req.getConnectionId();
+        if (connectionId == null) {
+            throw new BusinessException(400, "connectionId 不能为空");
+        }
+        String databaseName = safe(req.getDatabaseName());
+        String title = normalizeOneLine(req.getTitle(), 80);
+        if (title.isBlank()) {
+            throw new BusinessException(400, "保存查询名称不能为空");
+        }
+        String sqlText = safe(req.getSqlText());
+        if (sqlText.isBlank()) {
+            throw new BusinessException(400, "SQL 内容不能为空");
+        }
+        if (savedQueryMapper.findByUniqueKey(connectionId, databaseName, title) != null) {
+            throw new BusinessException(400, "当前库下已存在同名保存查询");
+        }
+
+        long now = System.currentTimeMillis();
+        SavedQueryEntity entity = new SavedQueryEntity();
+        entity.setConnectionId(connectionId);
+        entity.setDatabaseName(databaseName);
+        entity.setTitle(title);
+        entity.setSqlText(sqlText);
+        entity.setCreatedAt(now);
+        entity.setUpdatedAt(now);
+        savedQueryMapper.insert(entity);
+        return toSavedQueryVO(entity);
+    }
+
+    @Override
+    public List<SavedQueryVO> listSavedQueries(Long connectionId, String databaseName) {
+        if (connectionId == null) {
+            throw new BusinessException(400, "connectionId 不能为空");
+        }
+        return savedQueryMapper.listByDatabase(connectionId, safe(databaseName)).stream()
+            .map(this::toSavedQueryVO)
+            .toList();
     }
 
     @Override
@@ -438,6 +484,18 @@ public class EditorServiceImpl implements EditorService {
         return vo;
     }
 
+    private SavedQueryVO toSavedQueryVO(SavedQueryEntity entity) {
+        SavedQueryVO vo = new SavedQueryVO();
+        vo.setId(entity.getId());
+        vo.setConnectionId(entity.getConnectionId());
+        vo.setDatabaseName(safe(entity.getDatabaseName()));
+        vo.setTitle(safe(entity.getTitle()));
+        vo.setSqlText(safe(entity.getSqlText()));
+        vo.setCreatedAt(entity.getCreatedAt());
+        vo.setUpdatedAt(entity.getUpdatedAt());
+        return vo;
+    }
+
     private QueryHistorySessionVO normalizeSessionTitle(QueryHistorySessionVO item) {
         String title = Objects.toString(item.getTitle(), "").trim();
         if (title.isBlank()) {
@@ -459,6 +517,14 @@ public class EditorServiceImpl implements EditorService {
         } catch (Exception ex) {
             return null;
         }
+    }
+
+    private String normalizeOneLine(String value, int maxLength) {
+        String normalized = safe(value).replaceAll("\\s+", " ").trim();
+        if (normalized.length() <= maxLength) {
+            return normalized;
+        }
+        return normalized.substring(0, maxLength);
     }
 
     private ErGraphSnapshotSummaryVO toSnapshotSummaryVO(ErGraphSnapshotEntity entity) {

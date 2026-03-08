@@ -111,28 +111,28 @@ public class SchemaController {
         return ApiResponse.success(schemaService.alterTable(req));
     }
 
-    @DeleteMapping("/table")
-    public ApiResponse<TableOperationVO> dropTable(@RequestParam("connectionId") Long connectionId,
-                                                   @RequestParam("databaseName") String databaseName,
-                                                   @RequestParam("tableName") String tableName) {
-        TableOperationVO result = schemaService.dropTable(connectionId, databaseName, tableName);
+    @PostMapping("/table/drop")
+    public ApiResponse<TableOperationVO> dropTable(@Valid @RequestBody TableDropReq req) {
+        TableOperationVO result = schemaService.dropTable(req.getConnectionId(), req.getDatabaseName(), req.getTableName());
         if (result.isSuccess()) {
-            schemaService.refreshSchemaCache(connectionId, databaseName);
+            schemaService.refreshSchemaCache(req.getConnectionId(), req.getDatabaseName());
+            ragVectorizeQueueService.enqueue(req.getConnectionId(), req.getDatabaseName());
         }
         return ApiResponse.success(result);
     }
 
-    @DeleteMapping("/table/truncate")
-    public ApiResponse<TableOperationVO> truncateTable(@RequestParam("connectionId") Long connectionId,
-                                                      @RequestParam("databaseName") String databaseName,
-                                                      @RequestParam("tableName") String tableName) {
-        return ApiResponse.success(schemaService.truncateTable(connectionId, databaseName, tableName));
+    @PostMapping("/table/truncate")
+    public ApiResponse<TableOperationVO> truncateTable(@Valid @RequestBody TableTruncateReq req) {
+        TableOperationVO result = schemaService.truncateTable(req.getConnectionId(), req.getDatabaseName(), req.getTableName());
+        if (result.isSuccess()) {
+            schemaService.refreshSchemaCache(req.getConnectionId(), req.getDatabaseName());
+        }
+        return ApiResponse.success(result);
     }
 
     @PostMapping("/cache/refresh")
-    public ApiResponse<Void> refreshCache(@RequestParam("connectionId") Long connectionId,
-                                          @RequestParam(value = "databaseName", required = false) String databaseName) {
-        schemaService.refreshSchemaCache(connectionId, databaseName);
+    public ApiResponse<Void> refreshCache(@Valid @RequestBody SchemaCacheRefreshReq req) {
+        schemaService.refreshSchemaCache(req.getConnectionId(), req.getDatabaseName());
         return ApiResponse.success(null);
     }
 

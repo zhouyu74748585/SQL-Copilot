@@ -70,6 +70,17 @@ public class EditorController {
         return ApiResponse.success(Boolean.TRUE);
     }
 
+    @PostMapping("/saved-query/save")
+    public ApiResponse<SavedQueryVO> saveSavedQuery(@Valid @RequestBody SavedQuerySaveReq req) {
+        return ApiResponse.success(editorService.saveSavedQuery(req));
+    }
+
+    @GetMapping("/saved-query/list")
+    public ApiResponse<List<SavedQueryVO>> listSavedQueries(@RequestParam("connectionId") Long connectionId,
+                                                            @RequestParam(value = "databaseName", required = false) String databaseName) {
+        return ApiResponse.success(editorService.listSavedQueries(connectionId, databaseName));
+    }
+
     @PostMapping("/er/snapshot/save")
     public ApiResponse<Boolean> saveErSnapshot(@Valid @RequestBody ErGraphSnapshotSaveReq req) {
         editorService.saveErGraphSnapshot(req);
