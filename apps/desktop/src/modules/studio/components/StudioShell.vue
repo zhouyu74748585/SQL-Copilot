@@ -243,6 +243,7 @@
         'workbench-query': !!activeQueryTab,
         'workbench-table-editor': !!activeTableEditorTab,
         'workbench-table-data': !!activeTableDataTab,
+        'is-table-data-detail-collapsed': !!activeTableDataTab?.detailCollapsed,
         'workbench-er': !!activeErTab,
         'workbench-browser': activeWorkbenchTab === browserTabKey,
         'workbench-knowledge': !!activeKnowledgeTab,
@@ -906,14 +907,25 @@
         />
 
         <section class="pane pane-center table-data-center-pane">
-          <div class="pane-title">数据浏览 · {{ activeTableDataTab.tableName }}</div>
-
-          <div class="table-data-filter-toggle-row">
-            <a-tooltip :title="activeTableDataTab.filterPanelVisible ? '收起筛选与排序' : '展开筛选与排序'">
-              <a-button size="small" type="text" class="table-data-icon-btn" @click="toggleTableDataFilterPanel(activeTableDataTab)">
-                <template #icon><filter-outlined /></template>
-              </a-button>
-            </a-tooltip>
+          <div class="pane-title pane-title-with-action">
+            <div class="table-data-title-main">
+              <span>数据浏览 · {{ activeTableDataTab.tableName }}</span>
+              <a-tooltip :title="activeTableDataTab.filterPanelVisible ? '收起筛选与排序' : '展开筛选与排序'">
+                <a-button size="small" type="text" class="table-data-icon-btn" @click.stop="toggleTableDataFilterPanel(activeTableDataTab)">
+                  <template #icon><filter-outlined /></template>
+                </a-button>
+              </a-tooltip>
+            </div>
+            <div class="pane-title-actions">
+              <a-tooltip :title="activeTableDataTab.detailCollapsed ? '展开数据详情' : '收起数据详情'">
+                <a-button size="small" type="text" class="table-data-icon-btn" @click.stop="toggleTableDataDetailCollapsed(activeTableDataTab)">
+                  <template #icon>
+                    <menu-fold-outlined v-if="!activeTableDataTab.detailCollapsed" />
+                    <menu-unfold-outlined v-else />
+                  </template>
+                </a-button>
+              </a-tooltip>
+            </div>
           </div>
 
           <div v-show="activeTableDataTab.filterPanelVisible" class="table-data-filter-panel">
@@ -1000,69 +1012,20 @@
 
           <div class="table-data-grid-wrap">
             <a-spin :spinning="activeTableDataTab.loading && !activeTableDataTab.rows.length">
-              <a-table
-                size="small"
-                class="table-data-grid"
-                :pagination="false"
+              <TableDataVirtualGrid
+                :tab="activeTableDataTab!"
                 :columns="tableDataDisplayColumns(activeTableDataTab!)"
-                :data-source="tableDataDisplayRows(activeTableDataTab!)"
-                row-key="__rowKey"
-                :scroll="{ x: tableDataScrollX(activeTableDataTab!), y: queryResultScrollY }"
-                :row-class-name="(record: any) => record.__rowKey === activeTableDataTab!.selectedRowKey ? 'table-data-row-selected' : ''"
-                :custom-row="(record: any) => ({ onClick: () => selectTableDataRow(activeTableDataTab!, record.__rowKey) })"
-              >
-                <template #bodyCell="{ column, record }">
-                  <div
-                    class="table-data-cell"
-                    :class="{ 'is-readonly': !activeTableDataTab!.editable || isTableDataPrimaryKeyColumn(activeTableDataTab!, String(column.dataIndex || '')) }"
-                    @dblclick.stop="startTableDataCellEdit(activeTableDataTab!, record.__rowKey, String(column.dataIndex || ''))"
-                  >
-                    <template v-if="isTableDataCellEditing(activeTableDataTab!, record.__rowKey, String(column.dataIndex || ''))">
-                      <a-date-picker
-                        v-if="tableDataColumnEditorType(activeTableDataTab!, String(column.dataIndex || '')) === 'date'"
-                        size="small"
-                        style="width: 100%"
-                        value-format="YYYY-MM-DD"
-                        :value="record[String(column.dataIndex || '')] || undefined"
-                        @update:value="(value: string | null) => { updateTableDataCell(activeTableDataTab!, record.__rowKey, String(column.dataIndex || ''), value ? String(value) : null); stopTableDataCellEdit(activeTableDataTab!); }"
-                        @blur="stopTableDataCellEdit(activeTableDataTab!)"
-                      />
-                      <a-date-picker
-                        v-else-if="tableDataColumnEditorType(activeTableDataTab!, String(column.dataIndex || '')) === 'datetime'"
-                        size="small"
-                        style="width: 100%"
-                        show-time
-                        format="YYYY-MM-DD HH:mm:ss"
-                        value-format="YYYY-MM-DD HH:mm:ss"
-                        :value="record[String(column.dataIndex || '')] || undefined"
-                        @update:value="(value: string | null) => { updateTableDataCell(activeTableDataTab!, record.__rowKey, String(column.dataIndex || ''), value ? String(value) : null); stopTableDataCellEdit(activeTableDataTab!); }"
-                        @blur="stopTableDataCellEdit(activeTableDataTab!)"
-                      />
-                      <a-time-picker
-                        v-else-if="tableDataColumnEditorType(activeTableDataTab!, String(column.dataIndex || '')) === 'time'"
-                        size="small"
-                        style="width: 100%"
-                        format="HH:mm:ss"
-                        value-format="HH:mm:ss"
-                        :value="record[String(column.dataIndex || '')] || undefined"
-                        @update:value="(value: string | null) => { updateTableDataCell(activeTableDataTab!, record.__rowKey, String(column.dataIndex || ''), value ? String(value) : null); stopTableDataCellEdit(activeTableDataTab!); }"
-                        @blur="stopTableDataCellEdit(activeTableDataTab!)"
-                      />
-                      <a-input
-                        v-else
-                        size="small"
-                        :value="record[String(column.dataIndex || '')] ?? ''"
-                        @update:value="(value: any) => updateTableDataCell(activeTableDataTab!, record.__rowKey, String(column.dataIndex || ''), value === '' ? null : String(value))"
-                        @pressEnter="stopTableDataCellEdit(activeTableDataTab!)"
-                        @blur="stopTableDataCellEdit(activeTableDataTab!)"
-                      />
-                    </template>
-                    <template v-else>
-                      {{ record[String(column.dataIndex || '')] ?? '' }}
-                    </template>
-                  </div>
-                </template>
-              </a-table>
+                :rows="tableDataDisplayRows(activeTableDataTab!)"
+                :scroll-x="tableDataScrollX(activeTableDataTab!)"
+                :scroll-y="queryResultScrollY"
+                :reset-key="`${activeTableDataTab!.key}:${activeTableDataTab!.connectionId}:${activeTableDataTab!.databaseName}:${activeTableDataTab!.tableName}:${activeTableDataTab!.pageNo}:${activeTableDataTab!.pageSize}`"
+                :is-primary-key-column="(columnName: string) => isTableDataPrimaryKeyColumn(activeTableDataTab!, columnName)"
+                :column-editor-type="(columnName: string) => tableDataColumnEditorType(activeTableDataTab!, columnName)"
+                @select-row="(rowKey: string) => selectTableDataRow(activeTableDataTab!, rowKey)"
+                @start-edit="(rowKey: string, columnName: string) => startTableDataCellEdit(activeTableDataTab!, rowKey, columnName)"
+                @stop-edit="() => stopTableDataCellEdit(activeTableDataTab!)"
+                @update-cell="(rowKey: string, columnName: string, value: string | null) => updateTableDataCell(activeTableDataTab!, rowKey, columnName, value)"
+              />
             </a-spin>
           </div>
 
@@ -1121,9 +1084,13 @@
           </div>
         </section>
 
-        <div class="pane-splitter pane-splitter-right table-data-pane-splitter" @mousedown="startResizeQueryPane" />
+        <div
+          v-if="!activeTableDataTab.detailCollapsed"
+          class="pane-splitter pane-splitter-right table-data-pane-splitter"
+          @mousedown="startResizeQueryPane"
+        />
 
-        <aside class="pane pane-right table-data-detail-pane">
+        <aside v-if="!activeTableDataTab.detailCollapsed" class="pane pane-right table-data-detail-pane">
           <div class="pane-title">数据详情</div>
           <div v-if="!selectedTableDataRow(activeTableDataTab)" class="empty-pane">请选择一行数据查看详情</div>
           <div v-else class="table-data-detail-form">
@@ -1132,9 +1099,11 @@
               :key="column.columnName"
               class="table-data-detail-item"
             >
-              <label>
-                {{ column.columnName }}
-                <span v-if="column.columnComment">（{{ column.columnComment }}）</span>
+              <label class="table-data-detail-label">
+                <span class="table-data-detail-label-name">{{ column.columnName }}</span>
+                <a-tooltip v-if="column.columnComment" :title="column.columnComment">
+                  <span class="table-data-detail-label-comment">（{{ column.columnComment }}）</span>
+                </a-tooltip>
               </label>
               <a-date-picker
                 v-if="tableDataColumnEditorType(activeTableDataTab!, column.columnName) === 'date'"
@@ -2458,6 +2427,8 @@ import {
   HistoryOutlined,
   LinkOutlined,
   LoadingOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
   MessageOutlined,
   MinusOutlined,
   MinusCircleOutlined,
@@ -2481,6 +2452,7 @@ import QueryChartPanel from '../../../components/QueryChartPanel.vue';
 import ErDiagramPanel from '../../../components/ErDiagramPanel.vue';
 import TableEditor from '../../../components/TableEditor.vue';
 import StudioConnectionContextBar from './StudioConnectionContextBar.vue';
+import TableDataVirtualGrid from './TableDataVirtualGrid.vue';
 import type {StudioController} from '../composables/useStudioController';
 
 const props = defineProps<{ controller: StudioController }>();
@@ -2905,6 +2877,7 @@ const {
     tableDataSortDirectionOptions,
     reloadTableDataForTab,
     toggleTableDataFilterPanel,
+    toggleTableDataDetailCollapsed,
     addTableDataFilter,
     removeTableDataFilter,
     addTableDataSort,
@@ -2916,7 +2889,6 @@ const {
     selectTableDataRow,
     startTableDataCellEdit,
     stopTableDataCellEdit,
-    isTableDataCellEditing,
     updateTableDataCell,
     tableDataColumnEditorType,
     selectedTableDataRow,

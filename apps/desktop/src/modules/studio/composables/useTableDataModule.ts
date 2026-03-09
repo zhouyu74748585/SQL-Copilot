@@ -37,6 +37,7 @@ export interface TableDataModule {
   ) => Promise<void>;
   reloadTableDataForTab: (tab: TableDataTab) => Promise<void>;
   toggleTableDataFilterPanel: (tab: TableDataTab) => void;
+  toggleTableDataDetailCollapsed: (tab: TableDataTab) => void;
   addTableDataFilter: (tab: TableDataTab) => void;
   removeTableDataFilter: (tab: TableDataTab, filterKey: string) => void;
   addTableDataSort: (tab: TableDataTab) => void;
@@ -145,6 +146,7 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
       deletedRows: [],
       selectedRowKey: '',
       editingCellKey: '',
+      detailCollapsed: false,
       filterPanelVisible: false,
       filters: [],
       sorts: [],
@@ -176,6 +178,11 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
 
   function toggleTableDataFilterPanel(tab: TableDataTab) {
     tab.filterPanelVisible = !tab.filterPanelVisible;
+    touchTableDataTab(tab);
+  }
+
+  function toggleTableDataDetailCollapsed(tab: TableDataTab) {
+    tab.detailCollapsed = !tab.detailCollapsed;
     touchTableDataTab(tab);
   }
 
@@ -746,6 +753,7 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
     openTableDataTabByObject,
     reloadTableDataForTab,
     toggleTableDataFilterPanel,
+    toggleTableDataDetailCollapsed,
     addTableDataFilter,
     removeTableDataFilter,
     addTableDataSort,

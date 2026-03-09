@@ -364,6 +364,7 @@ interface TableDataWorkspaceTab {
   deletedRows: TableDataDeleteDraft[];
   selectedRowKey: string;
   editingCellKey: string;
+  detailCollapsed: boolean;
   filterPanelVisible: boolean;
   filters: TableDataFilterDraft[];
   sorts: TableDataSortDraft[];

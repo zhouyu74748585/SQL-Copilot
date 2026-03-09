@@ -279,3 +279,120 @@
 ## 验证
 - `npm run -w @sqlcopilot/desktop type-check` 通过。
 - `npm run -w @sqlcopilot/desktop build -- --emptyOutDir` 通过。
+
+
+### 2026-03-09 22:10:31
+
+## 追加优化：数据浏览大分页切页/切页签卡顿
+- 目标
+  - 缓解数据浏览页在单页约 1000 行时，翻页或切换页签导致的明显卡顿。
+
+## 改动
+- `apps/desktop/src/modules/studio/components/TableDataVirtualGrid.vue`
+  - 新增独立的数据浏览虚拟滚动表格组件。
+  - 使用固定行高 + 可视区裁剪 + overscan，只渲染当前视窗附近的行，避免整页 1000 行同时挂载。
+  - 保留横向滚动、行选中、双击单元格编辑、日期/时间编辑器切换等现有交互。
+- `apps/desktop/src/modules/studio/components/StudioShell.vue`
+  - 数据浏览中心表格从原 `a-table` 整表渲染切换为 `TableDataVirtualGrid`。
+  - 保持现有分页、提交、撤销、详情表单等周边行为不变。
+- `apps/desktop/src/modules/studio/styles/table-data.css`
+  - 新增虚拟表格头部、行层、空状态、选中态和滚动容器样式。
+  - 移除仅适用于旧 `a-table` 数据浏览表格的样式依赖。
+
+## 说明
+- 本次没有重新启用 `a-table` 的内建虚拟能力，而是采用独立虚拟表格组件，原因是此前该路径在当前复杂单元格编辑场景下出现过“接口已返回但表格持续 loading”的不稳定问题。
+- 当前方案把虚拟滚动控制收敛在本地组件内，降低了整表重挂载带来的切页和切页签成本，同时避开了之前的不稳定组合。
+
+## 验证结果
+- `npm run -w @sqlcopilot/desktop type-check` 通过。
+- `npm run -w @sqlcopilot/desktop build -- --emptyOutDir` 通过。
+- 后端 clean 启动验证通过：
+  - `mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18081`
+  - `http://127.0.0.1:18081/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`
+- 前端预览验证通过：
+  - `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4173 --strictPort`
+  - `http://127.0.0.1:4173` 返回 `HTTP 200`
+
+
+### 2026-03-09 23:04:49
+
+## 追加微调：漏斗图标跟随表名，底部工具栏垂直居中
+- 目标
+  - 将筛选漏斗图标移动到表名后面，放在同一标题组内。
+  - 让底部工具栏在底栏高度内保持垂直居中。
+
+## 改动
+- `apps/desktop/src/modules/studio/components/StudioShell.vue`
+  - 标题栏拆成“左侧标题组 + 右侧详情收起按钮”。
+  - 漏斗图标从右侧 action 区移动到表名后面。
+- `apps/desktop/src/modules/studio/styles/table-data.css`
+  - 新增 `table-data-title-main` 标题组样式。
+  - 将底部工具栏改为固定最小高度并使用对称内边距，保证按钮组在底栏区域内垂直居中。
+
+## 验证结果
+- `npm run -w @sqlcopilot/desktop type-check` 通过。
+- `npm run -w @sqlcopilot/desktop build -- --emptyOutDir` 通过。
+- 后端 clean 启动验证通过：
+  - `mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18081`
+  - `http://127.0.0.1:18081/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`
+- 前端预览验证通过：
+  - `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4173 --strictPort`
+  - `http://127.0.0.1:4173` 返回 `HTTP 200`
+
+
+### 2026-03-09 23:00:47
+
+## 追加微调：收起图标、底部工具栏留白、详情注释省略展示
+- 目标
+  - 提升数据浏览页右侧详情收起按钮的图标语义。
+  - 让底部工具栏与底边界保持更舒适的留白，并缩小图标尺寸。
+  - 让右侧数据详情中的列注释保持单行显示，超长时省略并支持 hover 查看完整内容。
+
+## 改动
+- `apps/desktop/src/modules/studio/components/StudioShell.vue`
+  - 将数据详情收起/展开图标从左右箭头改为 `menu-fold/menu-unfold`。
+  - 右侧详情标签改为“列名 + 注释 tooltip”结构。
+- `apps/desktop/src/modules/studio/styles/table-data.css`
+  - 调整底部工具栏的上下内边距与按钮高度。
+  - 缩小底部工具栏图标尺寸。
+  - 为详情标签新增单行省略样式，注释超长时直接截断并保持不换行。
+
+## 验证结果
+- `npm run -w @sqlcopilot/desktop type-check` 通过。
+- `npm run -w @sqlcopilot/desktop build -- --emptyOutDir` 通过。
+- 后端 clean 启动验证通过：
+  - `mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18081`
+  - `http://127.0.0.1:18081/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`
+- 前端预览验证通过：
+  - `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4173 --strictPort`
+  - `http://127.0.0.1:4173` 返回 `HTTP 200`
+
+
+### 2026-03-09 22:57:18
+
+## 追加优化：数据浏览右侧详情可收起
+- 目标
+  - 允许收起数据浏览页右侧“数据详情”面板。
+  - 收起后让中间表格区域占满中间与右侧空间。
+
+## 改动
+- `apps/desktop/src/modules/studio/composables/useStudioRuntime.ts`
+  - 为 `TableDataWorkspaceTab` 增加 `detailCollapsed` 状态。
+- `apps/desktop/src/modules/studio/composables/useTableDataModule.ts`
+  - 新增 `toggleTableDataDetailCollapsed`，用于切换数据详情面板显隐。
+  - 新打开的数据浏览页签默认保持详情展开。
+- `apps/desktop/src/modules/studio/components/StudioShell.vue`
+  - 数据浏览标题栏新增“展开/收起数据详情”按钮。
+  - 收起时隐藏右侧详情面板与分隔条。
+- `apps/desktop/src/modules/studio/styles/shell.css`
+  - 新增收起态布局规则：数据浏览中间区域跨到第 5 列，占满原中间区与右侧详情区。
+
+## 验证结果
+- `npm run -w @sqlcopilot/desktop type-check` 通过。
+- `npm run -w @sqlcopilot/desktop build -- --emptyOutDir` 通过。
+- 后端 clean 启动验证通过：
+  - `mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18081`
+  - `http://127.0.0.1:18081/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`
+- 前端预览验证通过：
+  - `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4173 --strictPort`
+  - `http://127.0.0.1:4173` 返回 `HTTP 200`

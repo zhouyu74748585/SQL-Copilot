@@ -2287,6 +2287,11 @@ body {
   border-right: none;
 }
 
+.workbench.workbench-table-data.is-table-data-detail-collapsed .table-data-center-pane {
+  grid-column: 3 / 6;
+  border-right: none;
+}
+
 .workbench.workbench-knowledge .pane-center {
   grid-column: 3;
   grid-row: 2;
