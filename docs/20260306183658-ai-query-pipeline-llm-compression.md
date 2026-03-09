@@ -159,3 +159,25 @@
 
 ### Note
 - This change was limited to the backend retrieval and prompt-assembly path. The known frontend `type-check` failure in `StudioShell.vue` remains unrelated.
+
+### 2026-03-09 12:37:00
+
+## Additional Record: generateSql 先意图识别再向量检索
+
+### Scope
+- 实现 `AiServiceImpl.generateSql` 的检索前置意图识别，避免仅使用用户原始输入直接做向量检索。
+
+### Backend
+- 在 `generateSql` 中新增“检索意图识别”阶段：先调用轻量意图识别得到 `query/focusTables/reason/intentType/confidence`。
+- 基于意图识别结果新增 `buildIntentAwareRetrievalInputForRag`，将检索关键词、重点表和识别依据组合为检索入参，再进入 RAG 检索。
+- 新增 `identifyRetrievalIntentForSql` 降级逻辑：意图识别异常时自动回退默认检索参数，不中断 SQL 生成主流程。
+- 移除原 TODO 注释，并在 `detailOutputEnabled=true` 时补充 `identify_retrieval_intent` trace 阶段输出。
+
+### Validation
+- 后端构建：`mvn clean verify` 成功。
+- 后端 clean 启动验证：
+  - `mvn clean spring-boot:run` 在当前环境因 `18080` 端口占用失败（非代码问题）。
+  - `mvn clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18081` 成功启动并正常停止。
+- 前端 clean 预览验证：
+  - `npm run -w @sqlcopilot/desktop build` 成功（Vite clean build）。
+  - `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4173 --strictPort` 成功启动并可预览，随后手动停止。

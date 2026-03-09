@@ -117,7 +117,7 @@ public class AiServiceImpl implements AiService {
     private static final String OPENAI_SYSTEM_PROMPT = """
         你是数据库 SQL 专家。基于提供的上下文生成 SQL。仅返回可执行 SQL，不要输出解释。
         约束：
-        1）如果存在样例SQL，则优先参考样例SQL
+        1）重要!!如果存在样例SQL，则优先参考样例SQL
         2) SQL 必须可执行，不要使用 markdown 代码块。
         """;
     private static final String GENERATE_CHART_SYSTEM_PROMPT = """
@@ -139,7 +139,7 @@ public class AiServiceImpl implements AiService {
           "configSummary": "配置摘要"
         }
         约束：
-        1）如果存在样例SQL，则优先参考样例SQL
+        1）重要!!如果存在样例SQL，则优先参考样例SQL
         2) chartType=LINE/BAR/TREND 时必须提供 xField + yFields(至少1项)；
         3) chartType=PIE 时必须提供 categoryField + valueField；
         4) chartType=SCATTER 时必须提供 xField + yFields(仅1项)；
@@ -420,12 +420,33 @@ public class AiServiceImpl implements AiService {
             safe(req.getModelName()),
             safe(req.getPrompt()).length()
         );
-        //TODO 要先做意图识别，得到关键信息，再做向量化检索，不能直接将用户输入当作入参仅向量化检索
-        // 关键操作：先将用户需求向量化并做 Qdrant 分层检索，构造 Prompt 上下文。
         boolean detailOutputEnabled = resolveDetailOutputEnabled(req);
         List<AiTraceStageVO> traceStages = detailOutputEnabled ? new ArrayList<>() : List.of();
-        String retrievalInput = buildRetrievalInputForRag(req);
+        ParsedIntentResponse retrievalIntent = identifyRetrievalIntentForSql(req);
+        timer.mark("identify_retrieval_intent");
+        String retrievalInput = buildIntentAwareRetrievalInputForRag(req, retrievalIntent);
         timer.mark("build_retrieval_input");
+        if (detailOutputEnabled) {
+            IntentRetrievalParams params = retrievalIntent == null || retrievalIntent.retrievalParams() == null
+                ? IntentRetrievalParams.defaultValue()
+                : retrievalIntent.retrievalParams();
+            traceStages.add(buildTraceStage(
+                "identify_retrieval_intent",
+                "检索意图识别",
+                "pipeline",
+                "success",
+                0L,
+                List.of(buildTraceField("prompt", "userPrompt", req.getPrompt())),
+                List.of(
+                    buildTraceField("intentType", "intentType", retrievalIntent != null && retrievalIntent.intentType() != null ? retrievalIntent.intentType().name() : ""),
+                    buildTraceField("confidence", "confidence", retrievalIntent == null ? 0D : normalizeIntentConfidence(retrievalIntent.confidence())),
+                    buildTraceField("reason", "reason", retrievalIntent == null ? "" : safe(retrievalIntent.reason())),
+                    buildTraceField("query", "query", safe(params.query())),
+                    buildTraceField("focusTables", "focusTables", params.focusTables() == null ? List.of() : params.focusTables())
+                ),
+                null
+            ));
+        }
         long ragStageStart = System.currentTimeMillis();
         RagPromptContext ragPromptContext = ragRetrievalService.retrievePromptContext(
             req.getConnectionId(),
@@ -1601,6 +1622,40 @@ public class AiServiceImpl implements AiService {
             throw new BusinessException(400, "意图识别失败，请补充更明确的目标");
         }
         return parsed;
+    }
+
+    private ParsedIntentResponse identifyRetrievalIntentForSql(AiGenerateSqlReq req) {
+        try {
+            AiConfigVO aiConfig = aiConfigService.getConfig();
+            boolean memoryEnabled = resolveMemoryEnabled(req, aiConfig);
+            String recentDialogContext = "";
+            if (memoryEnabled) {
+                List<QueryHistoryEntity> chatHistory = queryHistoryMapper.listBySession(
+                    req.getConnectionId(),
+                    safe(req.getSessionId()),
+                    200
+                );
+                List<QueryHistoryEntity> windowRecords = pickWindowRecords(chatHistory, MEMORY_SUMMARY_LIMIT);
+                recentDialogContext = buildIntentRecentDialogContext(windowRecords);
+            }
+            return identifyIntentLight(req, recentDialogContext);
+        } catch (Exception ex) {
+            log.warn(
+                "[AI-GENERATE-RETRIEVAL-INTENT-FAILED] connectionId={}, sessionId={}, databaseName={}, modelName={}, reason={}",
+                req.getConnectionId(),
+                safe(req.getSessionId()),
+                safe(req.getDatabaseName()),
+                safe(req.getModelName()),
+                safe(ex.getMessage())
+            );
+            return new ParsedIntentResponse(
+                IntentType.GENERATE_SQL,
+                0D,
+                "检索意图识别失败，已降级为默认检索",
+                false,
+                IntentRetrievalParams.defaultValue()
+            );
+        }
     }
 
     private IntentRetrievalParams parseIntentRetrievalParams(JsonNode retrievalNode) {
@@ -2918,6 +2973,45 @@ public class AiServiceImpl implements AiService {
 
     private String buildRetrievalInputForRag(AiGenerateSqlReq req) {
         return buildRetrievalInputForRag(req, "");
+    }
+
+    private String buildIntentAwareRetrievalInputForRag(AiGenerateSqlReq req, ParsedIntentResponse parsedIntent) {
+        ParsedIntentResponse resolvedIntent = parsedIntent == null
+            ? new ParsedIntentResponse(IntentType.GENERATE_SQL, 0D, "", false, IntentRetrievalParams.defaultValue())
+            : parsedIntent;
+        IntentRetrievalParams params = resolvedIntent.retrievalParams() == null
+            ? IntentRetrievalParams.defaultValue()
+            : resolvedIntent.retrievalParams();
+        String retrievalQuery = safe(params.query());
+        if (retrievalQuery.isBlank()) {
+            retrievalQuery = safe(req.getPrompt());
+        }
+        List<String> focusTables = new ArrayList<>();
+        if (params.focusTables() != null) {
+            for (String table : params.focusTables()) {
+                String normalized = normalizeRelatedTableName(table);
+                if (!normalized.isBlank() && !focusTables.contains(normalized)) {
+                    focusTables.add(normalized);
+                }
+            }
+        }
+        StringBuilder keyInfoBuilder = new StringBuilder();
+        keyInfoBuilder.append("检索关键词: ").append(retrievalQuery);
+        if (!focusTables.isEmpty()) {
+            keyInfoBuilder.append("\n重点表: ").append(String.join(",", focusTables));
+        }
+        if (!safe(resolvedIntent.reason()).isBlank()) {
+            keyInfoBuilder.append("\n意图依据: ").append(safe(resolvedIntent.reason()));
+        }
+        if (resolvedIntent.intentType() != null) {
+            keyInfoBuilder.append("\n意图类型: ").append(resolvedIntent.intentType().name());
+        }
+        double confidence = normalizeIntentConfidence(resolvedIntent.confidence());
+        if (confidence > 0D) {
+            keyInfoBuilder.append("\n意图置信度: ").append(String.format(Locale.ROOT, "%.2f", confidence));
+        }
+        String intentAwareBaseInput = buildRetrievalInput(retrievalQuery, keyInfoBuilder.toString());
+        return buildRetrievalInputForRag(req, intentAwareBaseInput);
     }
 
     private String buildRetrievalInputForRag(AiGenerateSqlReq req, String extraContext) {
