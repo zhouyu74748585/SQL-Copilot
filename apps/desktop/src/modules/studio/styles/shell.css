@@ -2218,6 +2218,7 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow: hidden;
 }
 
 .workbench.workbench-query .query-editor-pane {
@@ -2276,6 +2277,7 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .query-result-error {
@@ -2420,6 +2422,19 @@ body {
 .query-result-panel .ant-table-wrapper {
   flex: 1;
   min-height: 0;
+}
+
+.query-result-footer {
+  height: 28px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 10px;
+  border-top: 1px solid var(--line);
+  background: #fbfdff;
+  font-size: 12px;
+  color: #60708f;
 }
 
 .query-pane-right {

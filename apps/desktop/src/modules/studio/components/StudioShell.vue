@@ -1496,6 +1496,7 @@
                 </div>
               </div>
             </template>
+            <div class="query-result-footer">共 {{ activeResultRows.length }} 行</div>
           </div>
         </aside>
       </template>

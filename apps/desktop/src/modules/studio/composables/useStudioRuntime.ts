@@ -524,6 +524,14 @@ const sqlSelectionPopover = reactive({
 
 const viewportWidth = ref(typeof window === 'undefined' ? 1440 : window.innerWidth);
 
+function syncViewportSize() {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  viewportHeight.value = window.innerHeight;
+  viewportWidth.value = window.innerWidth;
+}
+
 const leftPaneWidth = ref(270);
 
 const leftPaneResizeState = reactive({
@@ -1084,9 +1092,9 @@ const objectColumns = computed(() => {
   ];
 });
 
-const tableScrollY = computed(() => Math.max(360, viewportHeight.value));
+const tableScrollY = computed(() => Math.max(260, viewportHeight.value - 240));
 
-const queryResultScrollY = computed(() => Math.max(200, viewportHeight.value));
+const queryResultScrollY = computed(() => Math.max(180, viewportHeight.value - 560));
 
 const aiModelOptions = computed(() =>
   (aiConfigForm.modelOptions ?? []).map((item) => ({
@@ -5401,6 +5409,8 @@ function formatVectorizeProvider(provider?: string) {
 }
 
 onMounted(async () => {
+  syncViewportSize();
+  window.addEventListener('resize', syncViewportSize);
   loadSessionTitleOverrides();
   startVectorizeStatusPolling();
   await loadConnections();
@@ -5413,6 +5423,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  window.removeEventListener('resize', syncViewportSize);
   stopVectorizeStatusPolling();
   clearAllTableStatsPollingTimers();
   sqlEditorTypeDisposable?.dispose();
