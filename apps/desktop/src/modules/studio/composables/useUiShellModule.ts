@@ -148,7 +148,7 @@ export function useUiShellModule(runtime: StudioRuntime): UiShellModule {
   }
 
   function startResizeQueryPane(event: MouseEvent) {
-    if ((!runtime.activeQueryTab.value && !runtime.activeTableEditorTab.value) || runtime.viewportWidth.value < 1200) {
+    if ((!runtime.activeQueryTab.value && !runtime.activeTableEditorTab.value && !runtime.activeTableDataTab.value) || runtime.viewportWidth.value < 1200) {
       return;
     }
     event.preventDefault();

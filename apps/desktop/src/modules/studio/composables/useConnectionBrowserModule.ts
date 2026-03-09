@@ -11,7 +11,8 @@ type ContextAction =
   | 'revectorize'
   | 'interruptVectorize'
   | 'viewVectorizedData'
-  | 'queryData'
+  | 'querySql'
+  | 'browseData'
   | 'vectorizeTable'
   | 'editTable'
   | 'dropTable'
@@ -32,6 +33,10 @@ export interface ConnectionBrowserModule {
 
 interface ConnectionBrowserDeps {
   openEditTableEditor: (connectionId: number, databaseName: string, tableName: string) => Promise<void>;
+  openTableDataTabByObject: (
+    record: ObjectRow,
+    options?: { connectionId?: number; databaseName?: string },
+  ) => Promise<void>;
 }
 
 export function useConnectionBrowserModule(
@@ -106,8 +111,8 @@ export function useConnectionBrowserModule(
       await runtime.removeConnection(id);
       return;
     }
-    if (action === 'queryData') {
-      if (targetType !== 'object' || !objectName || (objectType !== 'tables' && objectType !== 'views')) {
+    if (action === 'querySql') {
+      if (targetType !== 'object' || !objectName || objectType !== 'tables') {
         return;
       }
       const rowVectorizeRecord = runtime.getDatabaseVectorizeStatusRecord(id, databaseName || '');
@@ -120,7 +125,27 @@ export function useConnectionBrowserModule(
         vectorizeStatus: rowVectorizeRecord?.status || 'NOT_VECTORIZED',
         vectorizeMessage: rowVectorizeRecord?.message,
         vectorizeUpdatedAt: rowVectorizeRecord?.updatedAt,
-      }, true);
+      }, false);
+      return;
+    }
+    if (action === 'browseData') {
+      if (targetType !== 'object' || !objectName || objectType !== 'tables') {
+        return;
+      }
+      const rowVectorizeRecord = runtime.getDatabaseVectorizeStatusRecord(id, databaseName || '');
+      await deps.openTableDataTabByObject({
+        objectName,
+        objectType,
+        rowEstimate: 0,
+        tableSize: '-',
+        description: '',
+        vectorizeStatus: rowVectorizeRecord?.status || 'NOT_VECTORIZED',
+        vectorizeMessage: rowVectorizeRecord?.message,
+        vectorizeUpdatedAt: rowVectorizeRecord?.updatedAt,
+      }, {
+        connectionId: id,
+        databaseName: databaseName || runtime.getActiveDatabaseName(id),
+      });
       return;
     }
     if (action === 'vectorizeTable') {
@@ -189,6 +214,13 @@ export function useConnectionBrowserModule(
         });
       },
       onDblclick: () => {
+        if (record.objectType === 'tables') {
+          void deps.openTableDataTabByObject(record, {
+            connectionId: runtime.workflow.connectionId,
+            databaseName: runtime.getActiveDatabaseName(runtime.workflow.connectionId),
+          });
+          return;
+        }
         runtime.openQueryTabByObject(record);
       },
       onContextmenu: (event: MouseEvent) => {

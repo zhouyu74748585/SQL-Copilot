@@ -305,6 +305,91 @@ interface TableEditorWorkspaceTab {
   updatedAt: number;
 }
 
+type TableDataFilterOperator =
+  | 'EQ'
+  | 'NE'
+  | 'GT'
+  | 'GTE'
+  | 'LT'
+  | 'LTE'
+  | 'LIKE'
+  | 'IS_NULL'
+  | 'IS_NOT_NULL';
+
+interface TableDataFilterDraft {
+  key: string;
+  columnName: string;
+  operator: TableDataFilterOperator;
+  value: string;
+}
+
+interface TableDataSortDraft {
+  key: string;
+  columnName: string;
+  direction: 'ASC' | 'DESC';
+}
+
+interface TableDataRowDraft {
+  rowKey: string;
+  values: Record<string, string | null>;
+  originalValues: Record<string, string | null>;
+  rowState: 'clean' | 'new' | 'updated';
+}
+
+interface TableDataDeleteDraft {
+  rowKey: string;
+  values: Record<string, string | null>;
+}
+
+interface TableDataWorkspaceTab {
+  key: string;
+  title: string;
+  connectionId: number;
+  databaseName: string;
+  tableName: string;
+  dbType: string;
+  loading: boolean;
+  submitting: boolean;
+  editable: boolean;
+  readOnlyReason: string;
+  columns: Array<{
+    columnName: string;
+    columnType?: string;
+    columnComment?: string;
+    nullable?: boolean;
+    primaryKey?: boolean;
+  }>;
+  primaryKeyColumns: string[];
+  rows: TableDataRowDraft[];
+  deletedRows: TableDataDeleteDraft[];
+  selectedRowKey: string;
+  editingCellKey: string;
+  filterPanelVisible: boolean;
+  filters: TableDataFilterDraft[];
+  sorts: TableDataSortDraft[];
+  pageNo: number;
+  pageSize: number;
+  hasNextPage: boolean;
+  rowDataVersion: number;
+  schemaVersion: number;
+  displayRowsCacheVersion: number;
+  displayRowsCache: Array<Record<string, string | null> & { __rowKey: string; __rowState: string }>;
+  displayColumnsCacheVersion: number;
+  displayColumnsCache: Array<{
+    title: string;
+    dataIndex: string;
+    key: string;
+    width: number;
+    ellipsis: boolean;
+    columnType?: string;
+    columnComment?: string;
+  }>;
+  errorMessage: string;
+  dirty: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
 interface KnowledgeWorkspaceTab {
   key: string;
   node: 'example-sql' | 'terms';
@@ -421,6 +506,8 @@ const queryTabs = ref<QueryWorkspaceTab[]>([]);
 const erTabs = ref<ErWorkspaceTab[]>([]);
 
 const tableEditorTabs = ref<TableEditorWorkspaceTab[]>([]);
+
+const tableDataTabs = ref<TableDataWorkspaceTab[]>([]);
 
 const knowledgeTabs = ref<KnowledgeWorkspaceTab[]>([]);
 
@@ -687,6 +774,10 @@ const activeErTab = computed(() =>
 
 const activeTableEditorTab = computed(() =>
   tableEditorTabs.value.find((item) => item.key === activeWorkbenchTab.value) ?? null,
+);
+
+const activeTableDataTab = computed(() =>
+  tableDataTabs.value.find((item) => item.key === activeWorkbenchTab.value) ?? null,
 );
 
 const activeKnowledgeTab = computed(() =>
@@ -1758,7 +1849,8 @@ function hasWorkbenchTab(tabKey: string) {
   return queryTabs.value.some((item) => item.key === tabKey)
     || erTabs.value.some((item) => item.key === tabKey)
     || knowledgeTabs.value.some((item) => item.key === tabKey)
-    || tableEditorTabs.value.some((item) => item.key === tabKey);
+    || tableEditorTabs.value.some((item) => item.key === tabKey)
+    || tableDataTabs.value.some((item) => item.key === tabKey);
 }
 
 function ensureActiveWorkbenchTab() {
@@ -1769,6 +1861,7 @@ function ensureActiveWorkbenchTab() {
     ?? erTabs.value[0]?.key
     ?? knowledgeTabs.value[0]?.key
     ?? tableEditorTabs.value[0]?.key
+    ?? tableDataTabs.value[0]?.key
     ?? browserTabKey;
 }
 
@@ -2589,6 +2682,16 @@ async function loadConnections() {
         tab.databaseName = '';
       }
     });
+    tableDataTabs.value.forEach((tab) => {
+      const connection = list.find((item) => item.id === tab.connectionId);
+      if (!connection || !isMultiDatabaseType(connection.dbType)) {
+        return;
+      }
+      const visibleNames = visibleDatabasesForConnection(connection);
+      if (tab.databaseName && visibleNames.length && !visibleNames.includes(tab.databaseName)) {
+        tab.databaseName = '';
+      }
+    });
     pruneVectorizeStatusMap(list.map((item) => item.id));
     if (!list.length) {
       workflow.connectionId = 0;
@@ -2601,6 +2704,7 @@ async function loadConnections() {
       schemaOverview.value = null;
       queryTabs.value = [];
       erTabs.value = [];
+      tableDataTabs.value = [];
       activeWorkbenchTab.value = browserTabKey;
       historySessionConnectionId.value = 0;
       historySessionItems.value = [];
@@ -2776,6 +2880,7 @@ async function removeConnection(id: number) {
     queryTabs.value = queryTabs.value.filter((item) => item.connectionId !== id);
     erTabs.value = erTabs.value.filter((item) => item.connectionId !== id);
     tableEditorTabs.value = tableEditorTabs.value.filter((item) => item.connectionId !== id);
+    tableDataTabs.value = tableDataTabs.value.filter((item) => item.connectionId !== id);
     if (erSnapshotConnectionId.value === id) {
       erSnapshotConnectionId.value = 0;
       erSnapshotItems.value = [];
@@ -3952,6 +4057,19 @@ function databaseOptionsForTab(tab: QueryWorkspaceTab) {
 }
 
 function databaseOptionsForTableEditorTab(tab: TableEditorWorkspaceTab) {
+  const connection = connections.value.find((item) => item.id === tab.connectionId);
+  const cached = connection ? visibleDatabasesForConnection(connection) : [];
+  if (cached.length) {
+    return cached.map((item) => ({ label: item, value: item }));
+  }
+  const fallback = tab.databaseName || getActiveDatabaseName(tab.connectionId);
+  if (!fallback) {
+    return [];
+  }
+  return [{ label: fallback, value: fallback }];
+}
+
+function databaseOptionsForTableDataTab(tab: TableDataWorkspaceTab) {
   const connection = connections.value.find((item) => item.id === tab.connectionId);
   const cached = connection ? visibleDatabasesForConnection(connection) : [];
   if (cached.length) {
@@ -6143,6 +6261,7 @@ function resetConnectionModalState() {
     queryTabs,
     erTabs,
     tableEditorTabs,
+    tableDataTabs,
     knowledgeTabs,
     erTableSelectModalOpen,
     erTableSelectSubmitting,
@@ -6234,6 +6353,7 @@ function resetConnectionModalState() {
     activeQueryTab,
     activeErTab,
     activeTableEditorTab,
+    activeTableDataTab,
     activeKnowledgeTab,
     activeErConfidenceThreshold,
     activeErAiRelationTotal,
@@ -6423,6 +6543,7 @@ function resetConnectionModalState() {
     saveAiConfig,
     databaseOptionsForTab,
     databaseOptionsForTableEditorTab,
+    databaseOptionsForTableDataTab,
     queryTabConnectionName,
     handleQueryConnectionChange,
     handleQueryDatabaseChange,

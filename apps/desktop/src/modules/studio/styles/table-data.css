@@ -1,0 +1,239 @@
+.table-data-center-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.table-data-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.table-data-filter-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  margin-bottom: 6px;
+}
+
+.table-data-filter-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border: 1px solid #d9e2f1;
+  border-radius: 8px;
+  background: #f9fbff;
+}
+
+.table-data-filter-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.table-data-filter-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #4f6385;
+}
+
+.table-data-filter-head > span {
+  font-weight: 600;
+}
+
+.table-data-filter-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.table-data-filter-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.table-data-icon-btn.ant-btn {
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.table-data-rule-add-btn.ant-btn {
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.table-data-readonly-tip {
+  margin-bottom: 8px;
+  color: #8a6d3b;
+  background: #fff8e1;
+  border: 1px solid #ffe58f;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.table-data-error-tip {
+  margin-bottom: 8px;
+  color: #a8071a;
+  background: #fff1f0;
+  border: 1px solid #ffa39e;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.table-data-grid {
+  min-height: 0;
+}
+
+.table-data-grid-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.table-data-grid.ant-table-wrapper {
+  height: 100%;
+}
+
+.table-data-grid .ant-spin-nested-loading,
+.table-data-grid .ant-spin-container,
+.table-data-grid .ant-table,
+.table-data-grid .ant-table-container {
+  height: 100%;
+  min-height: 0;
+}
+
+.table-data-grid .ant-table-body {
+  overflow-x: auto !important;
+}
+
+.table-data-grid .ant-table-content {
+  min-width: max-content;
+}
+
+.table-data-row-selected td {
+  background: rgba(24, 144, 255, 0.12) !important;
+}
+
+.table-data-cell {
+  min-height: 20px;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.table-data-cell.is-readonly {
+  cursor: default;
+}
+
+.table-data-cell:not(.is-readonly) {
+  cursor: text;
+}
+
+.table-data-bottom-bar {
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.table-data-bottom-left .ant-btn,
+.table-data-bottom-right .ant-btn,
+.table-data-bottom-right .ant-input-number {
+  height: 24px;
+}
+
+.table-data-bottom-right .ant-input-number {
+  width: 92px;
+}
+
+.table-data-page-label {
+  font-size: 12px;
+  color: var(--text-sub);
+}
+
+.table-data-detail-pane {
+  padding: 0 10px 10px;
+}
+
+.table-data-detail-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+}
+
+.table-data-detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.table-data-detail-item > label {
+  font-size: 12px;
+  color: var(--ant-color-text-secondary);
+}
+
+.table-data-grid .ant-table-cell,
+.table-data-grid .ant-table-thead > tr > th,
+.query-result-table .ant-table-cell,
+.query-result-table .ant-table-thead > tr > th {
+  font-size: 11px;
+  line-height: 1.2;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.table-data-grid .ant-table-thead > tr > th,
+.query-result-table .ant-table-thead > tr > th {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.table-data-grid .ant-table-tbody > tr > td,
+.query-result-table .ant-table-tbody > tr > td {
+  white-space: nowrap;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.table-data-grid .ant-table-tbody > tr,
+.query-result-table .ant-table-tbody > tr {
+  height: 28px;
+}
+
+.query-result-table .ant-table-body {
+  overflow-x: auto !important;
+}
+
+@media (max-width: 1199px) {
+  .table-data-toolbar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .table-data-filter-item {
+    width: 100%;
+  }
+
+  .table-data-bottom-bar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

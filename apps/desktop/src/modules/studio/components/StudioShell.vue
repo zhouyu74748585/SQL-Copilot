@@ -61,6 +61,16 @@
             <span>{{ tab.title }}</span>
             <close-outlined class="tab-close" @click.stop="closeTableEditorTab(tab.key)" />
           </button>
+          <button
+            v-for="tab in tableDataTabs"
+            :key="tab.key"
+            class="workspace-tab"
+            :class="{ 'is-active': activeWorkbenchTab === tab.key }"
+            @click="activeWorkbenchTab = tab.key"
+          >
+            <span>{{ tab.title }}</span>
+            <close-outlined class="tab-close" @click.stop="closeTableDataTab(tab.key)" />
+          </button>
           <a-tooltip title="新建 AI 查询页签">
             <button class="top-chrome-tab-add" @click="openAiQueryTab()">
               <plus-outlined />
@@ -232,6 +242,7 @@
       :class="{
         'workbench-query': !!activeQueryTab,
         'workbench-table-editor': !!activeTableEditorTab,
+        'workbench-table-data': !!activeTableDataTab,
         'workbench-er': !!activeErTab,
         'workbench-browser': activeWorkbenchTab === browserTabKey,
         'workbench-knowledge': !!activeKnowledgeTab,
@@ -365,7 +376,7 @@
               >
                 <template #bodyCell="{ column, record }">
                   <template v-if="column.key === 'objectName'">
-                    <div class="table-name-cell" :class="{ 'is-active': selectedObjectName === record.objectName, 'is-queryable': record.objectType === 'tables' || record.objectType === 'queries' }" @dblclick.stop="openQueryTabByObject(record)">
+                    <div class="table-name-cell" :class="{ 'is-active': selectedObjectName === record.objectName, 'is-queryable': record.objectType === 'tables' || record.objectType === 'queries' }" @dblclick.stop="onObjectRow(record).onDblclick()">
                       <database-outlined />
                       <span>{{ record.objectName }}</span>
                     </div>
@@ -880,6 +891,290 @@
             </a-space>
           </div>
           <pre class="detail-code-block"><code v-html="tableEditorSqlHighlighted"></code></pre>
+        </aside>
+      </template>
+
+      <template v-else-if="activeTableDataTab">
+        <StudioConnectionContextBar
+          class="table-data-shared-meta"
+          :connection-id="activeTableDataTab.connectionId"
+          :database-name="activeTableDataTab.databaseName"
+          :connection-options="connectionSelectOptions"
+          :database-options="databaseOptionsForTableDataTab(activeTableDataTab)"
+          @connection-change="handleTableDataConnectionSelectorChange(activeTableDataTab, Number($event))"
+          @database-change="handleTableDataDatabaseSelectorChange(activeTableDataTab, String($event))"
+        />
+
+        <section class="pane pane-center table-data-center-pane">
+          <div class="pane-title">数据浏览 · {{ activeTableDataTab.tableName }}</div>
+
+          <div class="table-data-filter-toggle-row">
+            <a-tooltip :title="activeTableDataTab.filterPanelVisible ? '收起筛选与排序' : '展开筛选与排序'">
+              <a-button size="small" type="text" class="table-data-icon-btn" @click="toggleTableDataFilterPanel(activeTableDataTab)">
+                <template #icon><filter-outlined /></template>
+              </a-button>
+            </a-tooltip>
+          </div>
+
+          <div v-show="activeTableDataTab.filterPanelVisible" class="table-data-filter-panel">
+            <div class="table-data-filter-block">
+              <div class="table-data-filter-head">
+                <span>筛选</span>
+                <a-button size="small" type="text" class="table-data-rule-add-btn" @click="addTableDataFilter(activeTableDataTab)">
+                  <template #icon><plus-outlined /></template>
+                </a-button>
+              </div>
+              <div
+                v-for="filter in activeTableDataTab.filters"
+                :key="filter.key"
+                class="table-data-filter-item"
+              >
+                <a-select
+                  v-model:value="filter.columnName"
+                  size="small"
+                  style="width: 150px"
+                  :options="activeTableDataTab.columns.map((item) => ({ label: item.columnName, value: item.columnName }))"
+                />
+                <a-select
+                  v-model:value="filter.operator"
+                  size="small"
+                  style="width: 130px"
+                  :options="tableDataFilterOperatorOptions"
+                />
+                <a-input
+                  v-model:value="filter.value"
+                  size="small"
+                  style="width: 200px"
+                  :disabled="filter.operator === 'IS_NULL' || filter.operator === 'IS_NOT_NULL'"
+                  placeholder="过滤值"
+                />
+                <a-button size="small" type="text" danger class="table-data-icon-btn" @click="removeTableDataFilter(activeTableDataTab, filter.key)">
+                  <template #icon><delete-outlined /></template>
+                </a-button>
+              </div>
+            </div>
+
+            <div class="table-data-filter-block">
+              <div class="table-data-filter-head">
+                <span>排序方式</span>
+                <a-button size="small" type="text" class="table-data-rule-add-btn" @click="addTableDataSort(activeTableDataTab)">
+                  <template #icon><plus-outlined /></template>
+                </a-button>
+              </div>
+              <div
+                v-for="sort in activeTableDataTab.sorts"
+                :key="sort.key"
+                class="table-data-filter-item"
+              >
+                <a-select
+                  v-model:value="sort.columnName"
+                  size="small"
+                  style="width: 150px"
+                  :options="activeTableDataTab.columns.map((item) => ({ label: item.columnName, value: item.columnName }))"
+                />
+                <a-select
+                  v-model:value="sort.direction"
+                  size="small"
+                  style="width: 130px"
+                  :options="tableDataSortDirectionOptions"
+                />
+                <a-button size="small" type="text" danger class="table-data-icon-btn" @click="removeTableDataSort(activeTableDataTab, sort.key)">
+                  <template #icon><delete-outlined /></template>
+                </a-button>
+              </div>
+            </div>
+
+            <div class="table-data-filter-actions">
+              <a-button size="small" type="primary" :disabled="activeTableDataTab.loading" @click="applyTableDataFilters(activeTableDataTab)">
+                应用筛选 & 排序
+              </a-button>
+            </div>
+          </div>
+
+          <div v-if="activeTableDataTab.readOnlyReason" class="table-data-readonly-tip">
+            {{ activeTableDataTab.readOnlyReason }}
+          </div>
+          <div v-if="activeTableDataTab.errorMessage" class="table-data-error-tip">
+            {{ activeTableDataTab.errorMessage }}
+          </div>
+
+          <div class="table-data-grid-wrap">
+            <a-spin :spinning="activeTableDataTab.loading && !activeTableDataTab.rows.length">
+              <a-table
+                size="small"
+                class="table-data-grid"
+                :pagination="false"
+                :columns="tableDataDisplayColumns(activeTableDataTab!)"
+                :data-source="tableDataDisplayRows(activeTableDataTab!)"
+                row-key="__rowKey"
+                :scroll="{ x: tableDataScrollX(activeTableDataTab!), y: queryResultScrollY }"
+                :row-class-name="(record: any) => record.__rowKey === activeTableDataTab!.selectedRowKey ? 'table-data-row-selected' : ''"
+                :custom-row="(record: any) => ({ onClick: () => selectTableDataRow(activeTableDataTab!, record.__rowKey) })"
+              >
+                <template #bodyCell="{ column, record }">
+                  <div
+                    class="table-data-cell"
+                    :class="{ 'is-readonly': !activeTableDataTab!.editable || isTableDataPrimaryKeyColumn(activeTableDataTab!, String(column.dataIndex || '')) }"
+                    @dblclick.stop="startTableDataCellEdit(activeTableDataTab!, record.__rowKey, String(column.dataIndex || ''))"
+                  >
+                    <template v-if="isTableDataCellEditing(activeTableDataTab!, record.__rowKey, String(column.dataIndex || ''))">
+                      <a-date-picker
+                        v-if="tableDataColumnEditorType(activeTableDataTab!, String(column.dataIndex || '')) === 'date'"
+                        size="small"
+                        style="width: 100%"
+                        value-format="YYYY-MM-DD"
+                        :value="record[String(column.dataIndex || '')] || undefined"
+                        @update:value="(value: string | null) => { updateTableDataCell(activeTableDataTab!, record.__rowKey, String(column.dataIndex || ''), value ? String(value) : null); stopTableDataCellEdit(activeTableDataTab!); }"
+                        @blur="stopTableDataCellEdit(activeTableDataTab!)"
+                      />
+                      <a-date-picker
+                        v-else-if="tableDataColumnEditorType(activeTableDataTab!, String(column.dataIndex || '')) === 'datetime'"
+                        size="small"
+                        style="width: 100%"
+                        show-time
+                        format="YYYY-MM-DD HH:mm:ss"
+                        value-format="YYYY-MM-DD HH:mm:ss"
+                        :value="record[String(column.dataIndex || '')] || undefined"
+                        @update:value="(value: string | null) => { updateTableDataCell(activeTableDataTab!, record.__rowKey, String(column.dataIndex || ''), value ? String(value) : null); stopTableDataCellEdit(activeTableDataTab!); }"
+                        @blur="stopTableDataCellEdit(activeTableDataTab!)"
+                      />
+                      <a-time-picker
+                        v-else-if="tableDataColumnEditorType(activeTableDataTab!, String(column.dataIndex || '')) === 'time'"
+                        size="small"
+                        style="width: 100%"
+                        format="HH:mm:ss"
+                        value-format="HH:mm:ss"
+                        :value="record[String(column.dataIndex || '')] || undefined"
+                        @update:value="(value: string | null) => { updateTableDataCell(activeTableDataTab!, record.__rowKey, String(column.dataIndex || ''), value ? String(value) : null); stopTableDataCellEdit(activeTableDataTab!); }"
+                        @blur="stopTableDataCellEdit(activeTableDataTab!)"
+                      />
+                      <a-input
+                        v-else
+                        size="small"
+                        :value="record[String(column.dataIndex || '')] ?? ''"
+                        @update:value="(value: any) => updateTableDataCell(activeTableDataTab!, record.__rowKey, String(column.dataIndex || ''), value === '' ? null : String(value))"
+                        @pressEnter="stopTableDataCellEdit(activeTableDataTab!)"
+                        @blur="stopTableDataCellEdit(activeTableDataTab!)"
+                      />
+                    </template>
+                    <template v-else>
+                      {{ record[String(column.dataIndex || '')] ?? '' }}
+                    </template>
+                  </div>
+                </template>
+              </a-table>
+            </a-spin>
+          </div>
+
+          <div class="table-data-bottom-bar">
+            <div class="table-data-bottom-left">
+              <a-space size="small">
+                <a-button size="small" type="text" class="table-data-icon-btn" :disabled="!activeTableDataTab.editable" @click="addTableDataRow(activeTableDataTab)">
+                  <template #icon><plus-outlined /></template>
+                </a-button>
+                <a-button size="small" type="text" class="table-data-icon-btn" danger :disabled="!activeTableDataTab.editable || !activeTableDataTab.selectedRowKey" @click="deleteSelectedTableDataRow(activeTableDataTab)">
+                  <template #icon><minus-outlined /></template>
+                </a-button>
+                <a-button
+                  size="small"
+                  type="text"
+                  class="table-data-icon-btn"
+                  :loading="activeTableDataTab.submitting"
+                  :disabled="!activeTableDataTab.editable || !activeTableDataTab.dirty"
+                  @click="submitTableDataChanges(activeTableDataTab)"
+                >
+                  <template #icon><check-outlined /></template>
+                </a-button>
+                <a-button
+                  size="small"
+                  type="text"
+                  class="table-data-icon-btn"
+                  :disabled="!activeTableDataTab.dirty"
+                  @click="discardTableDataChanges(activeTableDataTab)"
+                >
+                  <template #icon><close-outlined /></template>
+                </a-button>
+                <a-button size="small" type="text" class="table-data-icon-btn" :disabled="activeTableDataTab.loading" @click="reloadTableDataForTab(activeTableDataTab)">
+                  <template #icon><reload-outlined /></template>
+                </a-button>
+              </a-space>
+            </div>
+            <div class="table-data-bottom-right">
+              <a-space size="small">
+                <a-button size="small" type="text" class="table-data-icon-btn" :disabled="activeTableDataTab.pageNo <= 1" @click="prevTableDataPage(activeTableDataTab)">
+                  <template #icon><arrow-left-outlined /></template>
+                </a-button>
+                <span class="table-data-page-label">第 {{ activeTableDataTab.pageNo }} 页</span>
+                <a-button size="small" type="text" class="table-data-icon-btn" :disabled="!activeTableDataTab.hasNextPage" @click="nextTableDataPage(activeTableDataTab)">
+                  <template #icon><arrow-right-outlined /></template>
+                </a-button>
+                <span class="table-data-page-label">每页</span>
+                <a-input-number
+                  size="small"
+                  :min="1"
+                  :step="100"
+                  :value="activeTableDataTab.pageSize"
+                  @change="(value: number | null) => value && updateTableDataPageSize(activeTableDataTab!, value)"
+                />
+              </a-space>
+            </div>
+          </div>
+        </section>
+
+        <div class="pane-splitter pane-splitter-right table-data-pane-splitter" @mousedown="startResizeQueryPane" />
+
+        <aside class="pane pane-right table-data-detail-pane">
+          <div class="pane-title">数据详情</div>
+          <div v-if="!selectedTableDataRow(activeTableDataTab)" class="empty-pane">请选择一行数据查看详情</div>
+          <div v-else class="table-data-detail-form">
+            <div
+              v-for="column in activeTableDataTab.columns"
+              :key="column.columnName"
+              class="table-data-detail-item"
+            >
+              <label>
+                {{ column.columnName }}
+                <span v-if="column.columnComment">（{{ column.columnComment }}）</span>
+              </label>
+              <a-date-picker
+                v-if="tableDataColumnEditorType(activeTableDataTab!, column.columnName) === 'date'"
+                size="small"
+                style="width: 100%"
+                value-format="YYYY-MM-DD"
+                :value="selectedTableDataRow(activeTableDataTab!)?.values[column.columnName] || undefined"
+                :disabled="!activeTableDataTab!.editable || isTableDataPrimaryKeyColumn(activeTableDataTab!, column.columnName)"
+                @update:value="(value: string | null) => selectedTableDataRow(activeTableDataTab!) && updateTableDataCell(activeTableDataTab!, selectedTableDataRow(activeTableDataTab!)?.rowKey || '', column.columnName, value ? String(value) : null)"
+              />
+              <a-date-picker
+                v-else-if="tableDataColumnEditorType(activeTableDataTab!, column.columnName) === 'datetime'"
+                size="small"
+                style="width: 100%"
+                show-time
+                format="YYYY-MM-DD HH:mm:ss"
+                value-format="YYYY-MM-DD HH:mm:ss"
+                :value="selectedTableDataRow(activeTableDataTab!)?.values[column.columnName] || undefined"
+                :disabled="!activeTableDataTab!.editable || isTableDataPrimaryKeyColumn(activeTableDataTab!, column.columnName)"
+                @update:value="(value: string | null) => selectedTableDataRow(activeTableDataTab!) && updateTableDataCell(activeTableDataTab!, selectedTableDataRow(activeTableDataTab!)?.rowKey || '', column.columnName, value ? String(value) : null)"
+              />
+              <a-time-picker
+                v-else-if="tableDataColumnEditorType(activeTableDataTab!, column.columnName) === 'time'"
+                size="small"
+                style="width: 100%"
+                format="HH:mm:ss"
+                value-format="HH:mm:ss"
+                :value="selectedTableDataRow(activeTableDataTab!)?.values[column.columnName] || undefined"
+                :disabled="!activeTableDataTab!.editable || isTableDataPrimaryKeyColumn(activeTableDataTab!, column.columnName)"
+                @update:value="(value: string | null) => selectedTableDataRow(activeTableDataTab!) && updateTableDataCell(activeTableDataTab!, selectedTableDataRow(activeTableDataTab!)?.rowKey || '', column.columnName, value ? String(value) : null)"
+              />
+              <a-input
+                v-else
+                size="small"
+                :value="selectedTableDataRow(activeTableDataTab!)?.values[column.columnName] ?? ''"
+                :disabled="!activeTableDataTab!.editable || isTableDataPrimaryKeyColumn(activeTableDataTab!, column.columnName)"
+                @update:value="(value: any) => selectedTableDataRow(activeTableDataTab!) && updateTableDataCell(activeTableDataTab!, selectedTableDataRow(activeTableDataTab!)?.rowKey || '', column.columnName, value === '' ? null : String(value))"
+              />
+            </div>
+          </div>
         </aside>
       </template>
 
@@ -1403,6 +1698,7 @@
             <template v-if="activeQueryTab.resultViewMode === 'table'">
               <a-table
                 size="small"
+                class="query-result-table"
                 :pagination="false"
                 :columns="activeResultColumns"
                 :data-source="activeResultRows"
@@ -1932,10 +2228,17 @@
         </button>
         <button
           class="context-menu-item"
-          :disabled="contextMenu.objectType !== 'tables' && contextMenu.objectType !== 'views'"
-          @click="triggerContextAction('queryData')"
+          :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
+          @click="triggerContextAction('querySql')"
         >
-          查询数据
+          查询SQL
+        </button>
+        <button
+          class="context-menu-item"
+          :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
+          @click="triggerContextAction('browseData')"
+        >
+          数据浏览
         </button>
         <button
           class="context-menu-item"
@@ -2132,8 +2435,10 @@ import {
   AppstoreOutlined,
   AreaChartOutlined,
   ArrowLeftOutlined,
+  ArrowRightOutlined,
   BulbFilled,
   BulbOutlined,
+  CheckOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
   CloseCircleOutlined,
@@ -2146,12 +2451,14 @@ import {
   EditOutlined,
   ExperimentOutlined,
   EyeOutlined,
+  FilterOutlined,
   FolderOpenOutlined,
   HddOutlined,
   HistoryOutlined,
   LinkOutlined,
   LoadingOutlined,
   MessageOutlined,
+  MinusOutlined,
   MinusCircleOutlined,
   PlayCircleOutlined,
   PlusOutlined,
@@ -2230,6 +2537,7 @@ const {
     queryTabs,
     erTabs,
     tableEditorTabs,
+    tableDataTabs,
     knowledgeTabs,
     erTableSelectModalOpen,
     erTableSelectSubmitting,
@@ -2321,6 +2629,7 @@ const {
     activeQueryTab,
     activeErTab,
     activeTableEditorTab,
+    activeTableDataTab,
     activeKnowledgeTab,
     activeErConfidenceThreshold,
     activeErAiRelationTotal,
@@ -2418,8 +2727,10 @@ const {
     removeErAiRelation,
     closeErTab,
     closeTableEditorTab,
+    closeTableDataTab,
     openNewTableEditor,
     openEditTableEditor,
+    openTableDataTabByObject,
     handleTableEditorChange,
     handleTableEditorSave,
     tableEditorSaving,
@@ -2581,11 +2892,41 @@ const {
     saveAiConfig,
     databaseOptionsForTab,
     databaseOptionsForTableEditorTab,
+    databaseOptionsForTableDataTab,
     queryTabConnectionName,
     handleQueryConnectionChange,
     handleQueryDatabaseChange,
     handleTableEditorConnectionChange,
     handleTableEditorDatabaseChange,
+    handleTableDataConnectionSelectorChange,
+    handleTableDataDatabaseSelectorChange,
+    tableDataFilterOperatorOptions,
+    tableDataSortDirectionOptions,
+    reloadTableDataForTab,
+    toggleTableDataFilterPanel,
+    addTableDataFilter,
+    removeTableDataFilter,
+    addTableDataSort,
+    removeTableDataSort,
+    applyTableDataFilters,
+    prevTableDataPage,
+    nextTableDataPage,
+    updateTableDataPageSize,
+    selectTableDataRow,
+    startTableDataCellEdit,
+    stopTableDataCellEdit,
+    isTableDataCellEditing,
+    updateTableDataCell,
+    tableDataColumnEditorType,
+    selectedTableDataRow,
+    addTableDataRow,
+    deleteSelectedTableDataRow,
+    submitTableDataChanges,
+    discardTableDataChanges,
+    tableDataDisplayRows,
+    tableDataDisplayColumns,
+    tableDataScrollX,
+    isTableDataPrimaryKeyColumn,
     resolveSqlForAction,
     resolveSelectedSqlSnippet,
     saveConversationHistory,
