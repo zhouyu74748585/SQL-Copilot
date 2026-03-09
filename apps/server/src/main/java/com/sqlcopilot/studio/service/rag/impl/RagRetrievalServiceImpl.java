@@ -1,7 +1,10 @@
 package com.sqlcopilot.studio.service.rag.impl;
 
 import com.sqlcopilot.studio.dto.rag.RagConfigVO;
+import com.sqlcopilot.studio.dto.schema.SchemaOverviewVO;
+import com.sqlcopilot.studio.dto.schema.TableDetailVO;
 import com.sqlcopilot.studio.service.RagConfigService;
+import com.sqlcopilot.studio.service.SchemaService;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
 import com.sqlcopilot.studio.service.rag.RagEmbeddingService;
 import com.sqlcopilot.studio.service.rag.RagRerankService;
@@ -16,6 +19,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Service
 public class RagRetrievalServiceImpl implements RagRetrievalService {
@@ -23,10 +28,15 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
     private static final Logger log = LoggerFactory.getLogger(RagRetrievalServiceImpl.class);
     private static final long RAG_CONFIG_CACHE_TTL_MS = 10_000L;
     private static final long GLOBAL_SCOPE_CONNECTION_ID = 0L;
+    private static final int SUPPLEMENT_TABLE_COLUMNS_PREVIEW_LIMIT = 30;
+    private static final int SUPPLEMENT_COLUMN_PER_TABLE_LIMIT = 12;
+    private static final double SUPPLEMENT_SCORE_STEP = 0.001D;
+    private static final Pattern TABLE_PATTERN = Pattern.compile("(?i)\\b(?:from|join|update|into|table)\\s+([a-zA-Z0-9_$.`\"]+)");
 
     private final boolean ragEnabled;
     private final boolean defaultRerankEnabled;
     private final RagConfigService ragConfigService;
+    private final SchemaService schemaService;
     private final RagEmbeddingService ragEmbeddingService;
     private final QdrantClientService qdrantClientService;
     private final RagRerankService ragRerankService;
@@ -60,6 +70,7 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
                                    @Value("${rag.rerank.beta:0.30}") double betaOnnxScore,
                                    @Value("${rag.rerank.gamma:0.05}") double gammaRuleBonus,
                                    RagConfigService ragConfigService,
+                                   SchemaService schemaService,
                                    RagEmbeddingService ragEmbeddingService,
                                    QdrantClientService qdrantClientService,
                                    RagRerankService ragRerankService) {
@@ -82,6 +93,7 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         this.betaOnnxScore = betaOnnxScore;
         this.gammaRuleBonus = gammaRuleBonus;
         this.ragConfigService = ragConfigService;
+        this.schemaService = schemaService;
         this.ragEmbeddingService = ragEmbeddingService;
         this.qdrantClientService = qdrantClientService;
         this.ragRerankService = ragRerankService;
@@ -179,13 +191,11 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             int columnBefore = columnHits.size();
             int historyBefore = historyHits.size();
             int metricBefore = metricTermHits.size();
-            int exampleBefore = exampleSqlHits.size();
             columnHits = filterColumnHitsByTables(columnHits, tableConstraints);
             historyHits = filterHistoryHitsByTables(historyHits, tableConstraints);
             metricTermHits = filterHitsByTables(metricTermHits, tableConstraints);
-            exampleSqlHits = filterHitsByTables(exampleSqlHits, tableConstraints);
             log.info(
-                "[RAG-RETRIEVE-TABLE-CONSTRAINT] connectionId={}, databaseName={}, tableConstraintCount={}, columnBefore={}, columnAfter={}, historyBefore={}, historyAfter={}, metricBefore={}, metricAfter={}, exampleBefore={}, exampleAfter={}",
+                "[RAG-RETRIEVE-TABLE-CONSTRAINT] connectionId={}, databaseName={}, tableConstraintCount={}, columnBefore={}, columnAfter={}, historyBefore={}, historyAfter={}, metricBefore={}, metricAfter={}, exampleCount={}",
                 connectionId,
                 normalizedDatabaseName,
                 tableConstraints.size(),
@@ -195,7 +205,6 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
                 historyHits.size(),
                 metricBefore,
                 metricTermHits.size(),
-                exampleBefore,
                 exampleSqlHits.size()
             );
         }
@@ -216,6 +225,26 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         RerankResult exampleRerank = rerankHits(userInput, "example_sql", exampleSqlHits, rerankEnabled, rerankProvider);
         exampleSqlHits = exampleRerank.hits();
         rerankDetails.add(exampleRerank.traceDetail());
+        ExampleSqlSupplementResult supplementResult = supplementSchemaHitsByExampleSql(
+            connectionId,
+            normalizedDatabaseName,
+            exampleSqlHits,
+            tableHits,
+            columnHits
+        );
+        tableHits = supplementResult.tableHits();
+        columnHits = supplementResult.columnHits();
+        if (supplementResult.supplementedTableCount() > 0 || supplementResult.supplementedColumnCount() > 0) {
+            log.info(
+                "[RAG-RETRIEVE-EXAMPLE-SUPPLEMENT] connectionId={}, databaseName={}, supplementedTableCount={}, supplementedColumnCount={}, tableHitCount={}, columnHitCount={}",
+                connectionId,
+                normalizedDatabaseName,
+                supplementResult.supplementedTableCount(),
+                supplementResult.supplementedColumnCount(),
+                tableHits.size(),
+                columnHits.size()
+            );
+        }
 
         Set<String> relatedTables = new LinkedHashSet<>();
         Set<String> relatedColumns = new LinkedHashSet<>();
@@ -501,6 +530,257 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             .toList();
     }
 
+    private ExampleSqlSupplementResult supplementSchemaHitsByExampleSql(Long connectionId,
+                                                                        String databaseName,
+                                                                        List<QdrantScoredPoint> exampleSqlHits,
+                                                                        List<QdrantScoredPoint> tableHits,
+                                                                        List<QdrantScoredPoint> columnHits) {
+        if (connectionId == null || exampleSqlHits == null || exampleSqlHits.isEmpty()) {
+            return new ExampleSqlSupplementResult(
+                tableHits == null ? List.of() : tableHits,
+                columnHits == null ? List.of() : columnHits,
+                0,
+                0
+            );
+        }
+
+        LinkedHashSet<String> exampleTables = collectExampleSqlRelatedTables(exampleSqlHits);
+        if (exampleTables.isEmpty()) {
+            return new ExampleSqlSupplementResult(
+                tableHits == null ? List.of() : tableHits,
+                columnHits == null ? List.of() : columnHits,
+                0,
+                0
+            );
+        }
+
+        Set<String> existingTableNames = collectConstraintTables(tableHits);
+        List<String> missingTables = exampleTables.stream()
+            .filter(table -> !existingTableNames.contains(table))
+            .toList();
+        if (missingTables.isEmpty()) {
+            return new ExampleSqlSupplementResult(
+                tableHits == null ? List.of() : tableHits,
+                columnHits == null ? List.of() : columnHits,
+                0,
+                0
+            );
+        }
+
+        Map<String, SchemaOverviewVO.TableSummaryVO> tableSummaryMap = loadTableSummaryMap(connectionId, databaseName);
+        if (tableSummaryMap.isEmpty()) {
+            return new ExampleSqlSupplementResult(
+                tableHits == null ? List.of() : tableHits,
+                columnHits == null ? List.of() : columnHits,
+                0,
+                0
+            );
+        }
+
+        List<QdrantScoredPoint> mergedTableHits = new ArrayList<>(tableHits == null ? List.of() : tableHits);
+        List<QdrantScoredPoint> mergedColumnHits = new ArrayList<>(columnHits == null ? List.of() : columnHits);
+        Set<String> existingColumnKeys = collectColumnKeys(mergedColumnHits);
+        double tableBoostScore = resolveBoostScore(mergedTableHits);
+        double columnBoostScore = resolveBoostScore(mergedColumnHits);
+        int supplementedTableCount = 0;
+        int supplementedColumnCount = 0;
+        int tableOrder = 0;
+
+        for (String missingTable : missingTables) {
+            SchemaOverviewVO.TableSummaryVO summary = tableSummaryMap.get(missingTable);
+            if (summary == null) {
+                continue;
+            }
+            String canonicalTableName = trimText(summary.getTableName());
+            if (canonicalTableName.isBlank()) {
+                continue;
+            }
+            TableDetailVO tableDetail;
+            try {
+                tableDetail = schemaService.getTableDetail(connectionId, databaseName, canonicalTableName);
+            } catch (Exception ex) {
+                log.debug(
+                    "样例 SQL 关联表补全失败，忽略当前表, connectionId={}, databaseName={}, tableName={}, reason={}",
+                    connectionId,
+                    databaseName,
+                    canonicalTableName,
+                    ex.getMessage()
+                );
+                continue;
+            }
+            List<TableDetailVO.ColumnDetailVO> columns = tableDetail == null || tableDetail.getColumns() == null
+                ? List.of()
+                : tableDetail.getColumns();
+            Map<String, Object> tablePayload = buildSupplementTablePayload(canonicalTableName, summary, tableDetail, columns);
+            double tableScore = tableBoostScore - tableOrder * SUPPLEMENT_SCORE_STEP;
+            tableOrder++;
+            mergedTableHits.add(new QdrantScoredPoint(
+                "example_sql_supplement_table:" + normalizeTableName(canonicalTableName),
+                tableScore,
+                tablePayload
+            ));
+            supplementedTableCount++;
+
+            int perTableColumnCount = 0;
+            for (TableDetailVO.ColumnDetailVO column : columns) {
+                if (perTableColumnCount >= SUPPLEMENT_COLUMN_PER_TABLE_LIMIT) {
+                    break;
+                }
+                String columnName = column == null ? "" : trimText(column.getColumnName());
+                if (columnName.isBlank()) {
+                    continue;
+                }
+                String columnKey = normalizeTableName(canonicalTableName) + "." + normalizeColumnName(columnName);
+                if (existingColumnKeys.contains(columnKey)) {
+                    continue;
+                }
+                double columnScore = columnBoostScore - supplementedColumnCount * SUPPLEMENT_SCORE_STEP;
+                mergedColumnHits.add(new QdrantScoredPoint(
+                    "example_sql_supplement_column:" + columnKey,
+                    columnScore,
+                    buildSupplementColumnPayload(canonicalTableName, column)
+                ));
+                existingColumnKeys.add(columnKey);
+                supplementedColumnCount++;
+                perTableColumnCount++;
+            }
+        }
+
+        mergedTableHits.sort(Comparator.comparingDouble(this::safeScore).reversed());
+        mergedColumnHits.sort(Comparator.comparingDouble(this::safeScore).reversed());
+        return new ExampleSqlSupplementResult(mergedTableHits, mergedColumnHits, supplementedTableCount, supplementedColumnCount);
+    }
+
+    private LinkedHashSet<String> collectExampleSqlRelatedTables(List<QdrantScoredPoint> exampleSqlHits) {
+        LinkedHashSet<String> relatedTables = new LinkedHashSet<>();
+        for (QdrantScoredPoint hit : exampleSqlHits) {
+            if (hit == null) {
+                continue;
+            }
+            Map<String, Object> payload = hit.getPayload();
+            List<String> payloadTables = payloadStringList(payload, "tables");
+            for (String table : payloadTables) {
+                String normalized = normalizeTableName(table);
+                if (!normalized.isBlank()) {
+                    relatedTables.add(normalized);
+                }
+            }
+            if (!payloadTables.isEmpty()) {
+                continue;
+            }
+            String sqlText = payloadString(payload, "sql_text");
+            Matcher tableMatcher = TABLE_PATTERN.matcher(sqlText);
+            while (tableMatcher.find()) {
+                String normalized = normalizeTableName(tableMatcher.group(1));
+                if (!normalized.isBlank()) {
+                    relatedTables.add(normalized);
+                }
+            }
+        }
+        return relatedTables;
+    }
+
+    private Map<String, SchemaOverviewVO.TableSummaryVO> loadTableSummaryMap(Long connectionId, String databaseName) {
+        try {
+            SchemaOverviewVO overview = schemaService.getOverview(connectionId, databaseName);
+            if (overview == null || overview.getTableSummaries() == null || overview.getTableSummaries().isEmpty()) {
+                return Map.of();
+            }
+            Map<String, SchemaOverviewVO.TableSummaryVO> mapping = new LinkedHashMap<>();
+            for (SchemaOverviewVO.TableSummaryVO summary : overview.getTableSummaries()) {
+                if (summary == null) {
+                    continue;
+                }
+                String normalized = normalizeTableName(summary.getTableName());
+                if (normalized.isBlank() || mapping.containsKey(normalized)) {
+                    continue;
+                }
+                mapping.put(normalized, summary);
+            }
+            return mapping;
+        } catch (Exception ex) {
+            log.debug(
+                "加载 Schema 表概览失败，跳过样例 SQL 表补全, connectionId={}, databaseName={}, reason={}",
+                connectionId,
+                databaseName,
+                ex.getMessage()
+            );
+            return Map.of();
+        }
+    }
+
+    private Set<String> collectColumnKeys(List<QdrantScoredPoint> columnHits) {
+        Set<String> keys = new HashSet<>();
+        if (columnHits == null || columnHits.isEmpty()) {
+            return keys;
+        }
+        for (QdrantScoredPoint hit : columnHits) {
+            if (hit == null) {
+                continue;
+            }
+            Map<String, Object> payload = hit.getPayload();
+            String tableName = normalizeTableName(payloadString(payload, "table_name"));
+            String columnName = normalizeColumnName(payloadString(payload, "column_name"));
+            if (tableName.isBlank() || columnName.isBlank()) {
+                continue;
+            }
+            keys.add(tableName + "." + columnName);
+        }
+        return keys;
+    }
+
+    private Map<String, Object> buildSupplementTablePayload(String tableName,
+                                                            SchemaOverviewVO.TableSummaryVO summary,
+                                                            TableDetailVO tableDetail,
+                                                            List<TableDetailVO.ColumnDetailVO> columns) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("table_name", tableName);
+        String tableComment = tableDetail == null ? "" : trimText(tableDetail.getTableComment());
+        if (tableComment.isBlank()) {
+            tableComment = summary == null ? "" : trimText(summary.getTableComment());
+        }
+        payload.put("table_comment", tableComment);
+        List<String> columnNames = columns.stream()
+            .filter(Objects::nonNull)
+            .map(TableDetailVO.ColumnDetailVO::getColumnName)
+            .filter(Objects::nonNull)
+            .map(String::trim)
+            .filter(name -> !name.isBlank())
+            .limit(SUPPLEMENT_TABLE_COLUMNS_PREVIEW_LIMIT)
+            .toList();
+        payload.put("columns", columnNames);
+        return payload;
+    }
+
+    private Map<String, Object> buildSupplementColumnPayload(String tableName, TableDetailVO.ColumnDetailVO column) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("table_name", tableName);
+        payload.put("column_name", column == null ? "" : Objects.toString(column.getColumnName(), "").trim());
+        payload.put("data_type", column == null ? "" : Objects.toString(column.getDataType(), "").trim());
+        payload.put("column_comment", column == null ? "" : Objects.toString(column.getColumnComment(), "").trim());
+        payload.put("indexed", column != null && Boolean.TRUE.equals(column.getIndexed()));
+        payload.put("primary_key", column != null && Boolean.TRUE.equals(column.getPrimaryKey()));
+        payload.put("nullable", column == null || Boolean.TRUE.equals(column.getNullable()));
+        return payload;
+    }
+
+    private double resolveBoostScore(List<QdrantScoredPoint> hits) {
+        double maxScore = 0D;
+        if (hits != null) {
+            for (QdrantScoredPoint hit : hits) {
+                maxScore = Math.max(maxScore, safeScore(hit));
+            }
+        }
+        return Math.max(1.2D, maxScore + 0.05D);
+    }
+
+    private double safeScore(QdrantScoredPoint hit) {
+        if (hit == null || hit.getScore() == null) {
+            return 0D;
+        }
+        return hit.getScore();
+    }
+
     private RerankResult rerankHits(String userInput,
                                     String bucket,
                                     List<QdrantScoredPoint> hits,
@@ -693,6 +973,12 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
     private record RerankResult(List<QdrantScoredPoint> hits, Map<String, Object> traceDetail) {
     }
 
+    private record ExampleSqlSupplementResult(List<QdrantScoredPoint> tableHits,
+                                              List<QdrantScoredPoint> columnHits,
+                                              int supplementedTableCount,
+                                              int supplementedColumnCount) {
+    }
+
     private RagPromptContext emptyContext(boolean rerankEnabled, String rerankProvider) {
         RagPromptContext context = new RagPromptContext();
         context.setPromptContext("");
@@ -731,6 +1017,10 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         return Objects.toString(payload.get(key), "").trim();
     }
 
+    private String trimText(String value) {
+        return Objects.toString(value, "").trim();
+    }
+
     private String normalizeDatabaseName(String databaseName) {
         String value = Objects.toString(databaseName, "").trim();
         return value.isBlank() ? "" : value;
@@ -747,6 +1037,14 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             value = segments[segments.length - 1];
         }
         return value;
+    }
+
+    private String normalizeColumnName(String columnName) {
+        return Objects.toString(columnName, "")
+            .trim()
+            .replace("`", "")
+            .replace("\"", "")
+            .toLowerCase(Locale.ROOT);
     }
 
     private boolean isBlank(String value) {

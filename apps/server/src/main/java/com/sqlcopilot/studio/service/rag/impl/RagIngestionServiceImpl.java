@@ -1019,12 +1019,14 @@ public class RagIngestionServiceImpl implements RagIngestionService {
     }
 
     private Map<String, Object> buildKnowledgeExamplePayload(KnowledgeExampleSqlEntity entity) {
+        SqlFeatureMeta featureMeta = extractSqlFeatureMeta(entity.getSqlText());
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("knowledge_id", entity.getId());
         payload.put("scope", safeText(entity.getScope()));
         payload.put("connection_id", entity.getConnectionId() == null ? 0L : entity.getConnectionId());
         payload.put("database_name", safeText(entity.getDatabaseName()));
         payload.put("sql_text", safeText(entity.getSqlText()));
+        payload.put("tables", featureMeta.getTables());
         payload.put("sql_semantic", safeText(entity.getDescription()));
         payload.put("term_ids_json", safeText(entity.getTermIdsJson()));
         return payload;
