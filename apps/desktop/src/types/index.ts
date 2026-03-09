@@ -128,6 +128,96 @@ export interface TableDetailVO {
   }>;
 }
 
+export type TableDataFilterOperator =
+  | 'EQ'
+  | 'NE'
+  | 'GT'
+  | 'GTE'
+  | 'LT'
+  | 'LTE'
+  | 'LIKE'
+  | 'IS_NULL'
+  | 'IS_NOT_NULL';
+
+export type TableDataSortDirection = 'ASC' | 'DESC';
+
+export interface TableDataPageReq {
+  connectionId: number;
+  databaseName: string;
+  tableName: string;
+  pageNo: number;
+  pageSize: number;
+  filters: Array<{
+    columnName: string;
+    operator: TableDataFilterOperator;
+    value?: string;
+  }>;
+  sorts: Array<{
+    columnName: string;
+    direction: TableDataSortDirection;
+  }>;
+}
+
+export interface TableDataPageVO {
+  tableName: string;
+  editable: boolean;
+  readOnlyReason?: string;
+  columns: Array<{
+    columnName: string;
+    columnType?: string;
+    columnComment?: string;
+    nullable?: boolean;
+    primaryKey?: boolean;
+  }>;
+  primaryKeyColumns: string[];
+  rows: Array<{
+    rowKey: string;
+    cells: Array<{
+      columnName: string;
+      cellValue: string | null;
+    }>;
+  }>;
+  pageNo: number;
+  pageSize: number;
+  hasNext: boolean;
+}
+
+export interface TableDataCommitReq {
+  connectionId: number;
+  databaseName: string;
+  tableName: string;
+  inserts: Array<{
+    cells: Array<{
+      columnName: string;
+      cellValue: string | null;
+    }>;
+  }>;
+  updates: Array<{
+    primaryKeyValues: Array<{
+      columnName: string;
+      cellValue: string | null;
+    }>;
+    cells: Array<{
+      columnName: string;
+      cellValue: string | null;
+    }>;
+  }>;
+  deletes: Array<{
+    primaryKeyValues: Array<{
+      columnName: string;
+      cellValue: string | null;
+    }>;
+  }>;
+}
+
+export interface TableDataCommitVO {
+  success: boolean;
+  message: string;
+  insertedCount: number;
+  updatedCount: number;
+  deletedCount: number;
+}
+
 export interface ErGraphReq {
   connectionId: number;
   databaseName: string;

@@ -6,13 +6,16 @@ import {useKnowledgeModule} from './useKnowledgeModule';
 import {useQueryModule} from './useQueryModule';
 import {useStudioRuntime} from './useStudioRuntime';
 import {useTableEditorModule} from './useTableEditorModule';
+import {useTableDataModule} from './useTableDataModule';
 import {useUiShellModule} from './useUiShellModule';
 
 export function useStudioController() {
   const runtime = useStudioRuntime();
   const tableEditorModule = useTableEditorModule(runtime);
+  const tableDataModule = useTableDataModule(runtime);
   const connectionBrowserModule = useConnectionBrowserModule(runtime, {
     openEditTableEditor: tableEditorModule.openEditTableEditor,
+    openTableDataTabByObject: tableDataModule.openTableDataTabByObject,
   });
   const queryModule = useQueryModule(runtime);
   const erModule = useErModule(runtime);
@@ -30,6 +33,7 @@ export function useStudioController() {
     ...historyModule,
     ...knowledgeModule,
     ...tableEditorModule,
+    ...tableDataModule,
     ...uiShellModule,
     connectionBrowserModule,
     queryModule,
@@ -38,6 +42,7 @@ export function useStudioController() {
     historyModule,
     knowledgeModule,
     tableEditorModule,
+    tableDataModule,
     uiShellModule,
   };
 }
