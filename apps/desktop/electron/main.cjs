@@ -5,6 +5,7 @@ const http = require('http');
 const path = require('path');
 
 let qdrantProcess = null;
+let backendProcess = null;
 const MAX_CHART_CACHE_BYTES = 20 * 1024 * 1024;
 
 function createWindow() {
@@ -294,6 +295,116 @@ function waitForQdrantReady(baseUrl, timeoutMs = 20_000) {
   });
 }
 
+function parseBackendUrl() {
+  const raw = process.env.SQLCOPILOT_BACKEND_URL || 'http://127.0.0.1:18080';
+  const parsed = new URL(raw);
+  const protocol = parsed.protocol || 'http:';
+  const host = parsed.hostname || '127.0.0.1';
+  const port = Number(parsed.port || 18080);
+  return {
+    baseUrl: `${protocol}//${host}:${port}`,
+  };
+}
+
+function waitForBackendReady(baseUrl, timeoutMs = 40_000) {
+  const startedAt = Date.now();
+  return new Promise((resolve, reject) => {
+    const probe = () => {
+      const req = http.get(`${baseUrl}/api/health`, (res) => {
+        if (res.statusCode && res.statusCode >= 200 && res.statusCode < 500) {
+          resolve();
+          return;
+        }
+        retry();
+      });
+      req.on('error', retry);
+    };
+
+    const retry = () => {
+      if (Date.now() - startedAt > timeoutMs) {
+        reject(new Error('Backend startup timeout'));
+        return;
+      }
+      setTimeout(probe, 300);
+    };
+
+    probe();
+  });
+}
+
+async function isBackendReady(baseUrl, timeoutMs = 1200) {
+  try {
+    await waitForBackendReady(baseUrl, timeoutMs);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveBackendRuntimeDir() {
+  const envDir = process.env.SQLCOPILOT_BACKEND_DIR;
+  if (envDir && envDir.trim()) {
+    return envDir.trim();
+  }
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'backend')
+    : path.join(__dirname, '../resources/backend');
+}
+
+function resolveDefaultBackendProfile(runtimeDir) {
+  const envProfile = process.env.SQLCOPILOT_BACKEND_PROFILE;
+  if (envProfile && envProfile.trim()) {
+    return envProfile.trim();
+  }
+  try {
+    const variantFile = path.join(runtimeDir, 'variant');
+    if (fs.existsSync(variantFile)) {
+      const profile = fs.readFileSync(variantFile, 'utf8').trim();
+      if (profile) {
+        return profile;
+      }
+    }
+  } catch (error) {
+    console.warn(`[backend] failed to read variant marker: ${error.message}`);
+  }
+  return 'medium';
+}
+
+function resolveBackendLaunchSpec(runtimeDir, profile) {
+  const runCmd = path.join(runtimeDir, 'run.cmd');
+  const runSh = path.join(runtimeDir, 'run.sh');
+  const nativeName = process.platform === 'win32' ? 'sql-copilot-server.exe' : 'sql-copilot-server';
+  const nativePath = path.join(runtimeDir, nativeName);
+
+  if (process.platform === 'win32' && fs.existsSync(runCmd)) {
+    return { command: 'cmd', args: ['/c', runCmd, profile] };
+  }
+
+  if (process.platform !== 'win32' && fs.existsSync(runSh)) {
+    ensureExecutable(runSh);
+    return { command: '/bin/bash', args: [runSh, profile] };
+  }
+
+  if (fs.existsSync(nativePath)) {
+    ensureExecutable(nativePath);
+    return { command: nativePath, args: [`--spring.profiles.active=${profile}`] };
+  }
+
+  const jars = fs.existsSync(runtimeDir)
+    ? fs.readdirSync(runtimeDir)
+        .filter((item) => item.endsWith('.jar'))
+        .sort()
+    : [];
+  if (jars.length > 0) {
+    return {
+      command: process.env.JAVA_BIN || 'java',
+      args: ['-jar', path.join(runtimeDir, jars[0]), `--spring.profiles.active=${profile}`],
+    };
+  }
+
+  throw new Error(`Backend runtime not found in ${runtimeDir}`);
+}
+
 async function startQdrant() {
   const qdrantPath = resolveQdrantBinaryPath();
   ensureExecutable(qdrantPath);
@@ -361,8 +472,71 @@ function stopQdrant() {
   }, 3000);
 }
 
-app.on('before-quit', stopQdrant);
-app.on('will-quit', stopQdrant);
+async function startBackend() {
+  const { baseUrl } = parseBackendUrl();
+  if (await isBackendReady(baseUrl)) {
+    console.log(`[backend] detected existing service at ${baseUrl}`);
+    return;
+  }
+
+  const runtimeDir = resolveBackendRuntimeDir();
+  const profile = resolveDefaultBackendProfile(runtimeDir);
+  const launchSpec = resolveBackendLaunchSpec(runtimeDir, profile);
+
+  backendProcess = spawn(launchSpec.command, launchSpec.args, {
+    cwd: runtimeDir,
+    env: process.env,
+    stdio: 'pipe',
+  });
+
+  backendProcess.stdout?.on('data', (chunk) => {
+    process.stdout.write(`[backend] ${chunk}`);
+  });
+  backendProcess.stderr?.on('data', (chunk) => {
+    process.stderr.write(`[backend] ${chunk}`);
+  });
+  backendProcess.on('exit', (code, signal) => {
+    console.log(`[backend] exited code=${code}, signal=${signal}`);
+    backendProcess = null;
+  });
+
+  await waitForBackendReady(baseUrl);
+  console.log(`[backend] ready at ${baseUrl}, profile=${profile}`);
+}
+
+function stopBackend() {
+  if (!backendProcess) {
+    return;
+  }
+
+  const proc = backendProcess;
+  backendProcess = null;
+
+  try {
+    proc.kill('SIGTERM');
+  } catch (error) {
+    console.warn(`[backend] failed to send SIGTERM: ${error.message}`);
+  }
+
+  setTimeout(() => {
+    if (!proc.killed) {
+      try {
+        proc.kill('SIGKILL');
+      } catch (error) {
+        console.warn(`[backend] failed to send SIGKILL: ${error.message}`);
+      }
+    }
+  }, 3000);
+}
+
+app.on('before-quit', () => {
+  stopBackend();
+  stopQdrant();
+});
+app.on('will-quit', () => {
+  stopBackend();
+  stopQdrant();
+});
 
 app.whenReady().then(async () => {
   registerIpcHandlers();
@@ -370,6 +544,12 @@ app.whenReady().then(async () => {
     await startQdrant();
   } catch (error) {
     console.error(`[qdrant] startup failed: ${error.message}`);
+  }
+  try {
+    await startBackend();
+  } catch (error) {
+    console.error(`[backend] startup failed: ${error.message}`);
+    dialog.showErrorBox('后端启动失败', `内置后端启动失败：${error.message}`);
   }
   createWindow();
 });

@@ -1,6 +1,12 @@
 server:
   port: 18080
 
+sqlcopilot:
+  packaging:
+    variant: medium
+  rag:
+    local-onnx-enabled: true
+
 spring:
   datasource:
     driver-class-name: org.sqlite.JDBC

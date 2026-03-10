@@ -1,0 +1,14 @@
+sqlcopilot:
+  packaging:
+    variant: full
+  rag:
+    local-onnx-enabled: true
+
+rag:
+  embedding:
+    provider-type: LOCAL_ONNX
+    model-dir: ./models/bge-m3
+  rerank:
+    enabled: true
+    provider-type: LOCAL_ONNX
+    model-dir: ./models/bge-reranker

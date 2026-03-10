@@ -9,11 +9,13 @@ import ai.onnxruntime.OrtSession;
 import ai.onnxruntime.providers.CoreMLFlags;
 import com.sqlcopilot.studio.dto.rag.RagConfigVO;
 import com.sqlcopilot.studio.service.RagConfigService;
-import com.sqlcopilot.studio.service.rag.RagEmbeddingService;
+import com.sqlcopilot.studio.service.rag.LocalRagEmbeddingService;
 import com.sqlcopilot.studio.util.BusinessException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 import java.nio.LongBuffer;
@@ -25,7 +27,9 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 @Service
-public class OnnxBgeM3EmbeddingServiceImpl implements RagEmbeddingService {
+@ConditionalOnClass(name = "ai.onnxruntime.OrtEnvironment")
+@ConditionalOnProperty(value = "sqlcopilot.rag.local-onnx-enabled", havingValue = "true", matchIfMissing = true)
+public class OnnxBgeM3EmbeddingServiceImpl implements LocalRagEmbeddingService {
 
     private static final Logger log = LoggerFactory.getLogger(OnnxBgeM3EmbeddingServiceImpl.class);
     private static final long RAG_CONFIG_CACHE_TTL_MS = 10_000L;

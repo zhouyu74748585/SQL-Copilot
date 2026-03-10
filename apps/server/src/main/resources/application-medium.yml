@@ -1,0 +1,14 @@
+sqlcopilot:
+  packaging:
+    variant: medium
+  rag:
+    local-onnx-enabled: true
+
+rag:
+  embedding:
+    provider-type: ONLINE_OPENAI_COMPAT
+    model-dir: ""
+  rerank:
+    enabled: false
+    provider-type: ONLINE_OPENAI_COMPAT
+    model-dir: ""

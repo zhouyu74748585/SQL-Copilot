@@ -358,8 +358,8 @@ npm run -w @sqlcopilot/desktop debug
 ## 构建与打包
 
 ```bash
-# 后端编译
-cd apps/server && mvn clean package
+# 后端 JVM 编译
+mvn -f apps/server/pom.xml clean package
 
 # 前端类型检查
 npm run type-check
@@ -367,9 +367,41 @@ npm run type-check
 # 前端构建
 npm run build
 
-# Electron 打包 (含 Qdrant 资源)
-npm run -w @sqlcopilot/desktop dist
+# Electron 中等包打包（默认）
+npm run -w @sqlcopilot/desktop dist:medium
+
+# Electron 最小包 / 全量包
+npm run -w @sqlcopilot/desktop dist:minimal
+npm run -w @sqlcopilot/desktop dist:full
+
+# 一键产出三种桌面包（默认，仅 desktop；会执行 backend 中间构建）
+npm run package:variants
+
+# 一键同时产出三种后端+桌面包（可选）
+SQLCOPILOT_EXPORT_BACKEND=1 npm run package:variants
+
+# 仅导出后端产物（可选）
+SQLCOPILOT_INCLUDE_DESKTOP=0 SQLCOPILOT_EXPORT_BACKEND=1 npm run package:variants
+
+# Native 打包（先设置 GraalVM 17）
+export JAVA_HOME=/Users/zhouyu/Library/Java/JavaVirtualMachines/graalvm-jdk-17.0.12/Contents/Home
+export PATH="$JAVA_HOME/bin:$PATH"
+
+# 后端 Native 编译（按包型）
+mvn -f apps/server/pom.xml -Pnative,pack-minimal clean native:compile -DskipTests
+mvn -f apps/server/pom.xml -Pnative,pack-medium clean native:compile -DskipTests
+mvn -f apps/server/pom.xml -Pnative,pack-full clean native:compile -DskipTests
+
+# 统一脚本走 Native（会先执行 backend native，再按开关导出产物）
+JAVA_HOME=/Users/zhouyu/Library/Java/JavaVirtualMachines/graalvm-jdk-17.0.12/Contents/Home \
+PATH="$JAVA_HOME/bin:$PATH" \
+npm run package:variants
 ```
+
+> 如需单独验证后端 native，可手动执行：
+> `mvn -f apps/server/pom.xml -Pnative,pack-minimal clean native:compile`
+> `mvn -f apps/server/pom.xml -Pnative,pack-medium clean native:compile`
+> `mvn -f apps/server/pom.xml -Pnative,pack-full clean native:compile`
 
 **打包目标**:
 - Windows: NSIS
@@ -396,7 +428,8 @@ rag:
   qdrant:
     url: http://127.0.0.1:6333
   embedding:
-    model-file-name: model_optimized.onnx
+    provider-type: LOCAL_ONNX
+    model-dir: ./models/bge-m3
     execution-provider: AUTO  # CPU/CUDA/DirectML
 ```
 
@@ -406,6 +439,11 @@ rag:
 |------|------|--------|
 | `SQLCOPILOT_DJL_CACHE_DIR` | DJL模型缓存 | `~/.sql-copilot/djl-cache` |
 | `OPENAI_API_KEY` | OpenAI密钥 | - |
+| `VITE_PACKAGE_VARIANT` | 前端包型（minimal/medium/full） | `medium` |
+| `SQLCOPILOT_PACKAGE_VARIANT` | Electron 构建输出目录与产物命名包型 | `medium` |
+| `SQLCOPILOT_ELECTRON_DIST` | （可选）electron-builder 本地 Electron zip 目录，避免网络下载 | - |
+| `SQLCOPILOT_INCLUDE_DESKTOP` | `package:variants` 时是否导出 desktop（`1`启用） | `1` |
+| `SQLCOPILOT_EXPORT_BACKEND` | `package:variants` 时是否导出 backend（`1`启用） | `0` |
 
 ---
 
@@ -418,4 +456,4 @@ A: 系统会自动尝试 `%LOCALAPPDATA%\SQL-Copilot\djl-cache` → `~/.sql-copi
 A: 是的，需启动 Qdrant 服务。或在配置中设置 `rag.enabled: false` 禁用
 
 **Q: 支持本地向量化模型吗?**
-A: 支持，`model/` 目录下已包含 BGE-M3 的 ONNX 模型，`rag.embedding.execution-provider` 可选 CPU/CUDA/DirectML
+A: 支持，`apps/server/models` 目录下包含 ONNX 模型；`rag.embedding.execution-provider` 可选 CPU/CUDA/DirectML

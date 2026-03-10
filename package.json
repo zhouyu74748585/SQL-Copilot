@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "build": "npm run -w @sqlcopilot/desktop build",
-    "type-check": "npm run -w @sqlcopilot/desktop type-check"
+    "type-check": "npm run -w @sqlcopilot/desktop type-check",
+    "package:variants": "bash scripts/package-variants.sh"
   }
 }

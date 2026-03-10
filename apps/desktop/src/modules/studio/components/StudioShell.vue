@@ -2043,13 +2043,10 @@
                 <a-form-item label="运行模式">
                   <a-select
                     v-model:value="ragConfigForm.ragEmbeddingProviderType"
-                    :options="[
-                      { label: '本地 ONNX', value: 'LOCAL_ONNX' },
-                      { label: '在线 OpenAI 兼容', value: 'ONLINE_OPENAI_COMPAT' },
-                    ]"
+                    :options="ragProviderTypeOptions"
                   />
                 </a-form-item>
-                <template v-if="ragConfigForm.ragEmbeddingProviderType === 'LOCAL_ONNX'">
+                <template v-if="ragLocalOnnxEnabled && ragConfigForm.ragEmbeddingProviderType === 'LOCAL_ONNX'">
                   <a-form-item label="向量模型目录（推荐：填写 clone 的模型仓库目录）">
                     <div class="file-picker-row">
                       <a-input
@@ -2092,13 +2089,10 @@
                   <a-form-item label="运行模式">
                     <a-select
                       v-model:value="ragConfigForm.ragRerankProviderType"
-                      :options="[
-                        { label: '本地 ONNX', value: 'LOCAL_ONNX' },
-                        { label: '在线 OpenAI 兼容', value: 'ONLINE_OPENAI_COMPAT' },
-                      ]"
+                      :options="ragProviderTypeOptions"
                     />
                   </a-form-item>
-                  <template v-if="ragConfigForm.ragRerankProviderType === 'LOCAL_ONNX'">
+                  <template v-if="ragLocalOnnxEnabled && ragConfigForm.ragRerankProviderType === 'LOCAL_ONNX'">
                     <a-form-item label="Rerank 模型目录">
                       <div class="file-picker-row">
                         <a-input
@@ -2639,6 +2633,8 @@ const {
     connectionPreviewError,
     aiConfigForm,
     ragConfigForm,
+    ragLocalOnnxEnabled,
+    ragProviderTypeOptions,
     pickingRagModelDir,
     pickingRagRerankModelDir,
     workflow,

@@ -2,9 +2,11 @@ package com.sqlcopilot.studio.service.rag.impl;
 
 import com.sqlcopilot.studio.dto.rag.RagConfigVO;
 import com.sqlcopilot.studio.service.RagConfigService;
+import com.sqlcopilot.studio.service.rag.LocalRagEmbeddingService;
 import com.sqlcopilot.studio.service.rag.RagEmbeddingService;
 import com.sqlcopilot.studio.util.BusinessException;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 
@@ -20,17 +22,20 @@ public class RagEmbeddingRouterServiceImpl implements RagEmbeddingService {
     private static final String PROVIDER_ONLINE_OPENAI_COMPAT = "ONLINE_OPENAI_COMPAT";
 
     private final RagConfigService ragConfigService;
-    private final OnnxBgeM3EmbeddingServiceImpl onnxBgeM3EmbeddingService;
+    private final LocalRagEmbeddingService localRagEmbeddingService;
     private final OpenAiCompatEmbeddingServiceImpl openAiCompatEmbeddingService;
+    private final boolean localOnnxEnabled;
     private final String defaultProviderType;
 
     public RagEmbeddingRouterServiceImpl(RagConfigService ragConfigService,
-                                         OnnxBgeM3EmbeddingServiceImpl onnxBgeM3EmbeddingService,
+                                         ObjectProvider<LocalRagEmbeddingService> localRagEmbeddingServiceProvider,
                                          OpenAiCompatEmbeddingServiceImpl openAiCompatEmbeddingService,
-                                         @Value("${rag.embedding.provider-type:LOCAL_ONNX}") String defaultProviderType) {
+                                         @Value("${rag.embedding.provider-type:LOCAL_ONNX}") String defaultProviderType,
+                                         @Value("${sqlcopilot.rag.local-onnx-enabled:true}") boolean localOnnxEnabled) {
         this.ragConfigService = ragConfigService;
-        this.onnxBgeM3EmbeddingService = onnxBgeM3EmbeddingService;
+        this.localRagEmbeddingService = localRagEmbeddingServiceProvider.getIfAvailable();
         this.openAiCompatEmbeddingService = openAiCompatEmbeddingService;
+        this.localOnnxEnabled = localOnnxEnabled;
         this.defaultProviderType = normalizeProviderType(defaultProviderType, PROVIDER_LOCAL_ONNX);
     }
 
@@ -50,7 +55,10 @@ public class RagEmbeddingRouterServiceImpl implements RagEmbeddingService {
             return openAiCompatEmbeddingService.embedTexts(texts);
         }
         if (PROVIDER_LOCAL_ONNX.equals(providerType)) {
-            return onnxBgeM3EmbeddingService.embedTexts(texts);
+            if (localRagEmbeddingService == null) {
+                throw new BusinessException(400, "当前发布包不支持本地 ONNX 向量化，请切换到在线模式");
+            }
+            return localRagEmbeddingService.embedTexts(texts);
         }
         throw new BusinessException(400, "不支持的向量化提供方: " + providerType);
     }
@@ -61,7 +69,10 @@ public class RagEmbeddingRouterServiceImpl implements RagEmbeddingService {
         if (PROVIDER_ONLINE_OPENAI_COMPAT.equals(providerType)) {
             return openAiCompatEmbeddingService.getRuntimeProvider();
         }
-        String localProvider = safe(onnxBgeM3EmbeddingService.getRuntimeProvider()).toUpperCase(Locale.ROOT);
+        if (localRagEmbeddingService == null) {
+            return "LOCAL_ONNX_UNAVAILABLE";
+        }
+        String localProvider = safe(localRagEmbeddingService.getRuntimeProvider()).toUpperCase(Locale.ROOT);
         return "LOCAL_ONNX_" + (localProvider.isBlank() ? "UNKNOWN" : localProvider);
     }
 
@@ -75,11 +86,13 @@ public class RagEmbeddingRouterServiceImpl implements RagEmbeddingService {
         if (PROVIDER_ONLINE_OPENAI_COMPAT.equals(value)) {
             return PROVIDER_ONLINE_OPENAI_COMPAT;
         }
-        if (PROVIDER_LOCAL_ONNX.equals(value)) {
+        if (PROVIDER_LOCAL_ONNX.equals(value) && localOnnxEnabled) {
             return PROVIDER_LOCAL_ONNX;
         }
         String fallbackValue = safe(fallback).toUpperCase(Locale.ROOT);
-        if (PROVIDER_ONLINE_OPENAI_COMPAT.equals(fallbackValue)) {
+        if (PROVIDER_ONLINE_OPENAI_COMPAT.equals(fallbackValue)
+            || !localOnnxEnabled
+            || localRagEmbeddingService == null) {
             return PROVIDER_ONLINE_OPENAI_COMPAT;
         }
         return PROVIDER_LOCAL_ONNX;

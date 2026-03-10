@@ -6,12 +6,14 @@ import ai.onnxruntime.OrtProvider;
 import ai.onnxruntime.OrtSession;
 import com.sqlcopilot.studio.dto.rag.RagConfigVO;
 import com.sqlcopilot.studio.service.RagConfigService;
-import com.sqlcopilot.studio.service.rag.RagRerankService;
+import com.sqlcopilot.studio.service.rag.LocalRagRerankService;
 import com.sqlcopilot.studio.service.rag.model.QdrantScoredPoint;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 import java.nio.FloatBuffer;
@@ -22,7 +24,9 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 @Service
-public class OnnxLocalRerankServiceImpl implements RagRerankService {
+@ConditionalOnClass(name = "ai.onnxruntime.OrtEnvironment")
+@ConditionalOnProperty(value = "sqlcopilot.rag.local-onnx-enabled", havingValue = "true", matchIfMissing = true)
+public class OnnxLocalRerankServiceImpl implements LocalRagRerankService {
 
     private static final Logger log = LoggerFactory.getLogger(OnnxLocalRerankServiceImpl.class);
     private static final long RAG_CONFIG_CACHE_TTL_MS = 10_000L;

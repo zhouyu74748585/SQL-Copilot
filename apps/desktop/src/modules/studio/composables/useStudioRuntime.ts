@@ -52,6 +52,12 @@ import oracleIcon from '../../../assets/db/oracle.svg';
 import postgresqlIcon from '../../../assets/db/postgresql.svg';
 import sqliteIcon from '../../../assets/db/sqlite.svg';
 import sqlserverIcon from '../../../assets/db/sqlserver.svg';
+import {
+  minimalPackage,
+  normalizeRagProviderByPackage,
+  ragProviderOptions,
+  sqlCopilotPackageVariant,
+} from '../../../config/packageVariant';
 import type {
   AiAutoQueryVO,
   AiConfigSaveReq,
@@ -99,6 +105,9 @@ import type {
 } from '../../../types';
 
 export function useStudioRuntime() {
+const packageVariant = sqlCopilotPackageVariant;
+const ragLocalOnnxEnabled = !minimalPackage;
+const ragProviderTypeOptions = ragProviderOptions;
 interface DesktopDialogFilter {
   name: string;
   extensions: string[];
@@ -3968,6 +3977,10 @@ function getDesktopBridge(): DesktopBridge | null {
 }
 
 async function pickRagEmbeddingModelDir() {
+  if (!ragLocalOnnxEnabled) {
+    message.warning('当前包型不支持本地 ONNX 目录配置。');
+    return;
+  }
   const bridge = getDesktopBridge();
   if (!bridge || typeof bridge.pickDirectory !== 'function') {
     message.warning('Directory picker is unavailable in this runtime. Please run in desktop app.');
@@ -3992,6 +4005,10 @@ async function pickRagEmbeddingModelDir() {
 }
 
 async function pickRagRerankModelDir() {
+  if (!ragLocalOnnxEnabled) {
+    message.warning('当前包型不支持本地 ONNX 目录配置。');
+    return;
+  }
   const bridge = getDesktopBridge();
   if (!bridge || typeof bridge.pickDirectory !== 'function') {
     message.warning('Directory picker is unavailable in this runtime. Please run in desktop app.');
@@ -4052,6 +4069,12 @@ async function saveAiConfig() {
     ragConfigForm.ragRerankOnlineBaseUrl = (ragConfigForm.ragRerankOnlineBaseUrl || '').trim();
     ragConfigForm.ragRerankOnlineApiKey = (ragConfigForm.ragRerankOnlineApiKey || '').trim();
     ragConfigForm.ragRerankOnlineModel = (ragConfigForm.ragRerankOnlineModel || '').trim();
+    if (!ragLocalOnnxEnabled) {
+      ragConfigForm.ragEmbeddingProviderType = 'ONLINE_OPENAI_COMPAT';
+      ragConfigForm.ragEmbeddingModelDir = '';
+      ragConfigForm.ragRerankProviderType = 'ONLINE_OPENAI_COMPAT';
+      ragConfigForm.ragRerankModelDir = '';
+    }
     const savedAi = await postApi<AiConfigVO>('/api/ai/config/save', aiConfigForm);
     const savedRag = await postApi<RagConfigVO>('/api/rag/config/save', ragConfigForm);
     fillAiConfigForm(savedAi);
@@ -5541,7 +5564,9 @@ onMounted(async () => {
   window.addEventListener('resize', syncViewportSize);
   loadSessionTitleOverrides();
   startVectorizeStatusPolling();
-  await loadConnections();
+  await runSafely(async () => {
+    await loadConnections();
+  });
   await runSafely(async () => {
     const aiConfig = await getApi<AiConfigVO>('/api/ai/config/get');
     const ragConfig = await getApi<RagConfigVO>('/api/rag/config/get');
@@ -6204,14 +6229,15 @@ function fillAiConfigForm(config: AiConfigVO) {
 }
 
 function defaultRagConfigForm(): RagConfigSaveReq {
+  const defaultProvider = normalizeRagProviderType(undefined);
   return {
-    ragEmbeddingProviderType: 'LOCAL_ONNX',
+    ragEmbeddingProviderType: defaultProvider,
     ragEmbeddingModelDir: '',
     ragEmbeddingOnlineBaseUrl: 'https://api.openai.com/v1',
     ragEmbeddingOnlineApiKey: '',
     ragEmbeddingOnlineModel: '',
     ragRerankEnabled: false,
-    ragRerankProviderType: 'LOCAL_ONNX',
+    ragRerankProviderType: defaultProvider,
     ragRerankModelDir: '',
     ragRerankOnlineBaseUrl: 'https://api.openai.com/v1',
     ragRerankOnlineApiKey: '',
@@ -6233,13 +6259,16 @@ function fillRagConfigForm(config: RagConfigVO) {
     ragRerankOnlineApiKey: config.ragRerankOnlineApiKey || '',
     ragRerankOnlineModel: config.ragRerankOnlineModel || '',
   } satisfies RagConfigSaveReq);
+  if (!ragLocalOnnxEnabled) {
+    ragConfigForm.ragEmbeddingProviderType = 'ONLINE_OPENAI_COMPAT';
+    ragConfigForm.ragEmbeddingModelDir = '';
+    ragConfigForm.ragRerankProviderType = 'ONLINE_OPENAI_COMPAT';
+    ragConfigForm.ragRerankModelDir = '';
+  }
 }
 
 function normalizeRagProviderType(value?: string): 'LOCAL_ONNX' | 'ONLINE_OPENAI_COMPAT' {
-  if (value === 'ONLINE_OPENAI_COMPAT') {
-    return 'ONLINE_OPENAI_COMPAT';
-  }
-  return 'LOCAL_ONNX';
+  return normalizeRagProviderByPackage(value);
 }
 
 function resetConnectionModalState() {
@@ -6251,6 +6280,9 @@ function resetConnectionModalState() {
 }
 
   return {
+    packageVariant,
+    ragLocalOnnxEnabled,
+    ragProviderTypeOptions,
     browserTabKey,
     uiThemeStorageKey,
     defaultAlgorithm,

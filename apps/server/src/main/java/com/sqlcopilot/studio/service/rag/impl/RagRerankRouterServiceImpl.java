@@ -2,10 +2,12 @@ package com.sqlcopilot.studio.service.rag.impl;
 
 import com.sqlcopilot.studio.dto.rag.RagConfigVO;
 import com.sqlcopilot.studio.service.RagConfigService;
+import com.sqlcopilot.studio.service.rag.LocalRagRerankService;
 import com.sqlcopilot.studio.service.rag.RagRerankService;
 import com.sqlcopilot.studio.service.rag.model.QdrantScoredPoint;
 import com.sqlcopilot.studio.util.BusinessException;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 
@@ -21,20 +23,23 @@ public class RagRerankRouterServiceImpl implements RagRerankService {
     private static final String PROVIDER_ONLINE_OPENAI_COMPAT = "ONLINE_OPENAI_COMPAT";
 
     private final RagConfigService ragConfigService;
-    private final OnnxLocalRerankServiceImpl onnxLocalRerankService;
+    private final LocalRagRerankService localRagRerankService;
     private final OpenAiCompatRerankServiceImpl openAiCompatRerankService;
     private final boolean defaultRerankEnabled;
+    private final boolean localOnnxEnabled;
     private final String defaultProviderType;
 
     public RagRerankRouterServiceImpl(RagConfigService ragConfigService,
-                                      OnnxLocalRerankServiceImpl onnxLocalRerankService,
+                                      ObjectProvider<LocalRagRerankService> localRagRerankServiceProvider,
                                       OpenAiCompatRerankServiceImpl openAiCompatRerankService,
                                       @Value("${rag.rerank.enabled:false}") boolean defaultRerankEnabled,
-                                      @Value("${rag.rerank.provider-type:LOCAL_ONNX}") String defaultProviderType) {
+                                      @Value("${rag.rerank.provider-type:LOCAL_ONNX}") String defaultProviderType,
+                                      @Value("${sqlcopilot.rag.local-onnx-enabled:true}") boolean localOnnxEnabled) {
         this.ragConfigService = ragConfigService;
-        this.onnxLocalRerankService = onnxLocalRerankService;
+        this.localRagRerankService = localRagRerankServiceProvider.getIfAvailable();
         this.openAiCompatRerankService = openAiCompatRerankService;
         this.defaultRerankEnabled = defaultRerankEnabled;
+        this.localOnnxEnabled = localOnnxEnabled;
         this.defaultProviderType = normalizeProviderType(defaultProviderType, PROVIDER_LOCAL_ONNX);
     }
 
@@ -51,7 +56,10 @@ public class RagRerankRouterServiceImpl implements RagRerankService {
             return openAiCompatRerankService.score(query, bucket, hits);
         }
         if (PROVIDER_LOCAL_ONNX.equals(providerType)) {
-            return onnxLocalRerankService.score(query, bucket, hits);
+            if (localRagRerankService == null) {
+                throw new BusinessException(400, "当前发布包不支持本地 ONNX Rerank，请切换到在线模式");
+            }
+            return localRagRerankService.score(query, bucket, hits);
         }
         throw new BusinessException(400, "不支持的 Rerank 提供方: " + providerType);
     }
@@ -65,7 +73,10 @@ public class RagRerankRouterServiceImpl implements RagRerankService {
         if (PROVIDER_ONLINE_OPENAI_COMPAT.equals(providerType)) {
             return openAiCompatRerankService.getRuntimeProvider();
         }
-        String localProvider = safe(onnxLocalRerankService.getRuntimeProvider()).toUpperCase(Locale.ROOT);
+        if (localRagRerankService == null) {
+            return "LOCAL_ONNX_UNAVAILABLE";
+        }
+        String localProvider = safe(localRagRerankService.getRuntimeProvider()).toUpperCase(Locale.ROOT);
         return "LOCAL_ONNX_" + (localProvider.isBlank() ? "UNKNOWN" : localProvider);
     }
 
@@ -87,11 +98,13 @@ public class RagRerankRouterServiceImpl implements RagRerankService {
         if (PROVIDER_ONLINE_OPENAI_COMPAT.equals(value)) {
             return PROVIDER_ONLINE_OPENAI_COMPAT;
         }
-        if (PROVIDER_LOCAL_ONNX.equals(value)) {
+        if (PROVIDER_LOCAL_ONNX.equals(value) && localOnnxEnabled) {
             return PROVIDER_LOCAL_ONNX;
         }
         String fallbackValue = safe(fallback).toUpperCase(Locale.ROOT);
-        if (PROVIDER_ONLINE_OPENAI_COMPAT.equals(fallbackValue)) {
+        if (PROVIDER_ONLINE_OPENAI_COMPAT.equals(fallbackValue)
+            || !localOnnxEnabled
+            || localRagRerankService == null) {
             return PROVIDER_ONLINE_OPENAI_COMPAT;
         }
         return PROVIDER_LOCAL_ONNX;
