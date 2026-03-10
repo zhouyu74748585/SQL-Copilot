@@ -6,7 +6,6 @@ import ai.onnxruntime.OnnxTensor;
 import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtProvider;
 import ai.onnxruntime.OrtSession;
-import ai.onnxruntime.providers.CoreMLFlags;
 import com.sqlcopilot.studio.dto.rag.RagConfigVO;
 import com.sqlcopilot.studio.service.RagConfigService;
 import com.sqlcopilot.studio.service.rag.LocalRagEmbeddingService;
@@ -62,7 +61,7 @@ public class OnnxBgeM3EmbeddingServiceImpl implements LocalRagEmbeddingService {
     private final String configuredExecutionProvider;
     private final int cudaDeviceId;
     private final int directMlDeviceId;
-    private final EnumSet<CoreMLFlags> coreMlFlags;
+    private final Set<String> coreMlFlags;
 
     private final ReentrantReadWriteLock runtimeLock = new ReentrantReadWriteLock();
     private final Lock runtimeReadLock = runtimeLock.readLock();
@@ -572,11 +571,7 @@ public class OnnxBgeM3EmbeddingServiceImpl implements LocalRagEmbeddingService {
                 return true;
             }
             if (PROVIDER_CORE_ML.equals(provider)) {
-                if (coreMlFlags.isEmpty()) {
-                    options.addCoreML();
-                } else {
-                    options.addCoreML(coreMlFlags);
-                }
+                addCoreMlWithOptionalFlags(options);
                 return true;
             }
             return false;
@@ -1014,8 +1009,8 @@ public class OnnxBgeM3EmbeddingServiceImpl implements LocalRagEmbeddingService {
         return normalized;
     }
 
-    private EnumSet<CoreMLFlags> resolveCoreMlFlags(String configText) {
-        EnumSet<CoreMLFlags> flags = EnumSet.noneOf(CoreMLFlags.class);
+    private Set<String> resolveCoreMlFlags(String configText) {
+        Set<String> flags = new LinkedHashSet<>();
         String raw = Objects.toString(configText, "").trim();
         if (raw.isEmpty()) {
             return flags;
@@ -1028,13 +1023,48 @@ public class OnnxBgeM3EmbeddingServiceImpl implements LocalRagEmbeddingService {
             if (normalized.isEmpty()) {
                 continue;
             }
+            flags.add(normalized);
+        }
+        return Collections.unmodifiableSet(flags);
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private void addCoreMlWithOptionalFlags(OrtSession.SessionOptions options) throws Exception {
+        if (coreMlFlags.isEmpty()) {
+            options.addCoreML();
+            return;
+        }
+        Class<?> coreMlFlagsClass;
+        try {
+            coreMlFlagsClass = Class.forName("ai.onnxruntime.providers.CoreMLFlags");
+        } catch (ClassNotFoundException ex) {
+            log.info("CoreMLFlags class is unavailable in runtime, fallback to addCoreML() without flags.");
+            options.addCoreML();
+            return;
+        }
+
+        EnumSet enumSet = EnumSet.noneOf((Class<? extends Enum>) coreMlFlagsClass);
+        for (String flag : coreMlFlags) {
             try {
-                flags.add(CoreMLFlags.valueOf(normalized));
+                enumSet.add(Enum.valueOf((Class<? extends Enum>) coreMlFlagsClass, flag));
             } catch (IllegalArgumentException ex) {
-                log.warn("Unsupported CoreML flag '{}', ignored", token);
+                log.warn("Unsupported CoreML flag '{}', ignored", flag);
             }
         }
-        return flags;
+
+        if (enumSet.isEmpty()) {
+            options.addCoreML();
+            return;
+        }
+
+        try {
+            options.getClass().getMethod("addCoreML", EnumSet.class).invoke(options, enumSet);
+        } catch (NoSuchMethodException ex) {
+            options.addCoreML();
+        } catch (ReflectiveOperationException ex) {
+            log.warn("Failed to apply CoreML flags, fallback to addCoreML() without flags: {}", ex.getMessage());
+            options.addCoreML();
+        }
     }
 
     private String normalizeProviderName(String provider) {
@@ -1072,6 +1102,21 @@ public class OnnxBgeM3EmbeddingServiceImpl implements LocalRagEmbeddingService {
     private record TokenizerLoadResult(HuggingFaceTokenizer tokenizer, Path sourcePath) {
     }
 
-    private record SessionInitResult(OrtSession session, String selectedProvider) {
+    private static final class SessionInitResult {
+        private final OrtSession session;
+        private final String selectedProvider;
+
+        private SessionInitResult(OrtSession session, String selectedProvider) {
+            this.session = session;
+            this.selectedProvider = selectedProvider;
+        }
+
+        private OrtSession session() {
+            return session;
+        }
+
+        private String selectedProvider() {
+            return selectedProvider;
+        }
     }
 }

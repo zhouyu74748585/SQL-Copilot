@@ -196,3 +196,237 @@
 
 ### 验证说明
 - 本次仅文档补充，未触发新一轮编译执行。
+
+
+### 2026-03-10 14:51:52
+
+## 追加记录（完整应用按包型打包命令）
+
+### 本次目标
+- 输出并固化“完整应用（前后端一起）按包型打包”的命令，避免仅前端或仅后端的单独命令。
+
+### 关键改动
+- `scripts/package-variants.sh` 新增包型参数能力：
+  - 支持命令参数：`bash scripts/package-variants.sh minimal|medium|full`
+  - 支持环境变量：`SQLCOPILOT_VARIANTS=minimal,full`
+  - 增加包型合法性校验，非法值直接失败并提示。
+- 根 `package.json` 新增快捷命令：
+  - `package:app:minimal`
+  - `package:app:medium`
+  - `package:app:full`
+- `README.md` 构建章节重构为“完整应用打包”导向：
+  - JVM 后端完整应用打包（全量/单包型）
+  - Native 后端完整应用打包（全量/单包型）
+  - 明确 `npm run package:variants -- <variant>` 的参数用法。
+
+### 验证结果
+- 脚本语法检查通过：`bash -n scripts/package-variants.sh`
+- 包型校验生效：非法包型会报错并退出（`Invalid variant: ...`）
+- npm scripts 已注册：`package:app:minimal|medium|full`
+
+### 说明
+- 本次仅完成命令与脚本能力补齐，未执行新的完整打包编译。
+
+
+### 2026-03-10 14:59:39
+
+## 追加记录（Native IllegalAccessError 修复）
+
+### 问题现象
+- Native 编译报错：
+  - `IllegalAccessError: ... OnnxBgeM3EmbeddingServiceImpl$SessionInitResult ... cannot access class ai.onnxruntime.OrtSession ...`
+- 触发点为 `record` 组件类型包含 `OrtSession`，GraalVM 构建期在记录组件反射读取时命中模块导出限制。
+
+### 修复内容
+- 文件：`apps/server/src/main/java/com/sqlcopilot/studio/service/rag/impl/OnnxBgeM3EmbeddingServiceImpl.java`
+- 将：
+  - `private record SessionInitResult(OrtSession session, String selectedProvider)`
+- 调整为：
+  - 普通 `private static final class SessionInitResult`
+  - 保留 `session()` / `selectedProvider()` 访问方法，调用方无需改动。
+
+### 验证
+- 执行：`mvn -f apps/server/pom.xml -Ppack-minimal -DskipTests compile`
+- 结果：`BUILD SUCCESS`
+
+### 后续建议
+- 在相同 GraalVM 环境下重试：
+  - `mvn -f apps/server/pom.xml -Pnative,pack-minimal clean native:compile -DskipTests`
+
+
+### 2026-03-10 17:43:43
+
+## 2026-03-10 会话补充（full 打包失败修复）
+
+### 本次目标
+- 修复 `npm run package:app:full` 产物在 mac-arm64 启动白屏（后端 native 启动失败）问题。
+- 产出可用 `full` 桌面制品，并确认内置 backend 可健康启动。
+
+### 关键改动
+- 新增并扩展 MyBatis native hints：
+  - 文件：`apps/server/src/main/java/com/sqlcopilot/studio/config/MyBatisNativeHints.java`
+  - 增加 MyBatis 日志/SPI/Javassist/Scripting/SqlSessionFactoryBean/MapperFactoryBean 等反射注册。
+  - 为 10 个 mapper 接口注册 JDK Proxy hints，解决 native 运行期 `Proxy class ... not found`。
+  - 补充 `ArrayList/HashMap/LinkedHashMap` 构造器反射 hints，修复 MyBatis 结果集处理时集合实例化失败。
+- 调整 ONNX Embedding 服务的 CoreML flags 处理：
+  - 文件：`apps/server/src/main/java/com/sqlcopilot/studio/service/rag/impl/OnnxBgeM3EmbeddingServiceImpl.java`
+  - 移除对 `CoreMLFlags` 的强类型硬依赖，改为运行时反射可选解析；类缺失时回退 `addCoreML()`。
+  - 避免 full/native 启动时因 `CoreMLFlags` 缺失导致 Bean 初始化失败。
+
+### 验证结果
+- 后端 native 编译（clean）：
+  - `mvn -f apps/server/pom.xml -Pnative,pack-full clean native:compile -DskipTests -Dsqlcopilot.native.image.jvm.xmx=6g -Dsqlcopilot.native.image.threads=4`
+  - 结果：成功。
+- 后端启动验证（full）：
+  - `apps/server/target/sql-copilot-server --spring.profiles.active=full`
+  - `GET http://127.0.0.1:18080/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+- 完整 full 打包：
+  - `npm run package:app:full`
+  - 结果：成功，生成 DMG 与 app 目录。
+- 前端预览验证：
+  - `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4173`
+  - 结果：可访问首页 HTML。
+- 制品内置 backend 验证：
+  - `release/full/desktop/mac-arm64/SQL Copilot.app/Contents/Resources/backend/sql-copilot-server --spring.profiles.active=full`
+  - 健康检查返回成功。
+
+### 产物
+- `release/full/desktop/SQL-Copilot-full-0.1.0-mac-arm64.dmg`
+- `release/full/desktop/mac-arm64/SQL Copilot.app`
+
+
+### 2026-03-10 17:51:01
+
+## 2026-03-10 会话补充（制品瘦身：移除无用 jar）
+
+### 本次目标
+- 打包制品中不再携带无用后端 `jar`，减少桌面安装包体积。
+
+### 关键改动
+- 调整后端资源拷贝逻辑：
+  - 文件：`scripts/package-variants.sh`
+  - `prepare_backend_runtime` 在存在 native 可执行（`sql-copilot-server` 或 `sql-copilot-server.exe`）时，仅拷贝 native 可执行，不再拷贝 `apps/server/target/*.jar`。
+  - 仅在无 native 可执行时，才拷贝 `jar` 作为回退运行形态。
+
+### 验证结果
+- 脚本语法校验：`bash -n scripts/package-variants.sh` 通过。
+- 完整 full 打包：`npm run package:app:full` 成功。
+- 产物检查：
+  - `release/full/desktop/mac-arm64/SQL Copilot.app/Contents/Resources/backend` 下仅包含 native + 配置 + models，无 `*.jar`。
+- 启动验证：
+  - 打包内置 backend 启动健康检查通过：`/api/health` 返回 `ok`。
+  - 前端 `preview` 验证通过。
+
+
+### 2026-03-10 18:01:32
+
+## 2026-03-10 会话补充（Electron 白屏：file:// 资源路径修复）
+
+### 本次问题
+- 打包后的桌面应用白屏，开发者控制台报错：
+  - `GET file:///assets/*.css|*.js net::ERR_FILE_NOT_FOUND`
+
+### 根因
+- `apps/desktop/dist/index.html` 中静态资源引用为绝对路径 `/assets/...`。
+- Electron 生产环境通过 `file://.../dist/index.html` 加载页面，绝对路径会被解析成磁盘根目录 `file:///assets/...`，导致找不到资源。
+
+### 关键改动
+- 文件：`apps/desktop/vite.config.ts`
+- 改为按命令设置 `base`：
+  - build：`'./'`
+  - dev：`'/'`
+- 使构建产物 `index.html` 引用变为 `./assets/...`，兼容 Electron `file://` 场景。
+
+### 验证结果
+- 前端验证：
+  - `npm run -w @sqlcopilot/desktop type-check` 通过
+  - `npm run -w @sqlcopilot/desktop build:full` 通过
+  - `apps/desktop/dist/index.html` 中资源路径已变为 `./assets/...`
+- 完整打包验证：
+  - `npm run package:app:full` 成功
+  - 从 `release/full/desktop/mac-arm64/SQL Copilot.app/Contents/Resources/app.asar` 抽取 `dist/index.html`，确认最终制品内也是 `./assets/...`
+
+
+### 2026-03-10 18:23:50
+
+## 本次目标
+- 修复 full/native 运行时 `AiConfigMapper.findById` 报错：`No constructor found in AiProviderConfigEntity matching [...]`。
+- 重新验证 full 完整应用打包链路（backend native + desktop），确认最终制品可启动且 API 正常。
+
+## 关键改动
+- 文件：`apps/server/src/main/java/com/sqlcopilot/studio/config/MyBatisNativeHints.java`
+- 新增 mapper 实体反射注册：
+  - `AiProviderConfigEntity`
+  - `AuditLogEntity`
+  - `ConnectionEntity`
+  - `ErGraphSnapshotEntity`
+  - `KnowledgeExampleSqlEntity`
+  - `KnowledgeTermEntity`
+  - `QueryHistoryEntity`
+  - `RagEmbeddingConfigEntity`
+  - `RagVectorizeStatusEntity`
+  - `SavedQueryEntity`
+- 新增 `registerEntityType(...)`，统一注册实体在 native 下需要的构造器/方法/字段反射可见性，避免 MyBatis 在结果映射时因无法反射默认构造器而退化到构造器签名匹配并失败。
+
+## 验证结果
+- 后端 Maven 打包（clean）通过：
+  - `mvn -f apps/server/pom.xml -Ppack-full -DskipTests clean package`
+- 后端 native 编译（clean）通过：
+  - `JAVA_HOME=/Users/zhouyu/Library/Java/JavaVirtualMachines/graalvm-jdk-17.0.12/Contents/Home`
+  - `mvn -f apps/server/pom.xml -Pnative,pack-full clean native:compile -DskipTests -Dsqlcopilot.native.image.jvm.xmx=6g -Dsqlcopilot.native.image.threads=4`
+- native 启动与接口回归通过：
+  - `apps/server/target/sql-copilot-server --spring.profiles.active=full`
+  - `GET /api/health` -> 200
+  - `GET /api/ai/config/get` -> 200（不再出现 constructor 异常）
+- 前端验证通过：
+  - `npm run -w @sqlcopilot/desktop type-check`
+  - `npm run -w @sqlcopilot/desktop build -- --emptyOutDir`
+  - `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4173 --strictPort`，HTTP 200
+- full 完整应用打包回归：
+  - 显式 GraalVM 环境执行：`npm run package:app:full`
+  - 日志确认为 `backend native build`（非 jar fallback）
+  - 产物：`release/full/desktop/SQL-Copilot-full-0.1.0-mac-arm64.dmg`
+  - 制品内 backend 目录仅含 `sql-copilot-server`（无 `*.jar`）
+  - 直接启动制品内 backend：
+    - `release/full/desktop/mac-arm64/SQL Copilot.app/Contents/Resources/backend/sql-copilot-server --spring.profiles.active=full`
+    - `GET /api/health` 与 `GET /api/ai/config/get` 均 200
+
+## 说明
+- 若直接执行 `npm run package:app:full` 未设置 GraalVM 环境，脚本会 fallback 到 jar 打包；需要先设置 `JAVA_HOME`/`PATH` 才会走 native。
+
+
+### 2026-03-10 18:37:50
+
+## 本次目标
+- 修复 full/native 制品运行时报错：`未配置数据库驱动映射: MYSQL，请检查 jdbc-drivers.yml`。
+- 验证修复后完整 full 包（native backend + desktop）在制品内可复现通过。
+
+## 关键改动
+- 文件：`apps/server/src/main/java/com/sqlcopilot/studio/config/MyBatisNativeHints.java`
+- 在 `registerHints(...)` 中新增 native 资源注册：
+  - `jdbc-drivers.yml`
+  - `drivers/**`
+- 目的：保证 `JdbcDriverResolver` 与 `IsolatedJdbcConnectionManager` 在 native 运行期通过 `ClassPathResource` 能读取驱动映射与驱动包资源。
+
+## 验证结果
+- 后端 native clean 编译通过：
+  - `mvn -f apps/server/pom.xml -Pnative,pack-full clean native:compile -DskipTests -Dsqlcopilot.native.image.jvm.xmx=6g -Dsqlcopilot.native.image.threads=4`
+- native 启动验证通过：
+  - `apps/server/target/sql-copilot-server --spring.profiles.active=full`
+  - `GET /api/health` -> 200
+- 驱动映射回归：
+  - `POST /api/connection/databases/preview`（`dbType=MYSQL`）
+  - 结果不再出现 `未配置数据库驱动映射`，返回已进入驱动初始化阶段的错误（环境未连通时为初始化/连接失败），说明映射资源已生效。
+- full 完整应用打包通过（native backend）：
+  - `JAVA_HOME=...graalvm... npm run package:app:full`
+  - 生成：`release/full/desktop/SQL-Copilot-full-0.1.0-mac-arm64.dmg`
+- 制品内 backend 回归：
+  - 启动 `release/full/desktop/mac-arm64/SQL Copilot.app/Contents/Resources/backend/sql-copilot-server --spring.profiles.active=full`
+  - `GET /api/health` -> 200
+  - `POST /api/connection/databases/preview`（MYSQL）不再报“未配置数据库驱动映射”。
+- 前端预览验证：
+  - `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4173 --strictPort`
+  - `HTTP/1.1 200 OK`
+
+## 说明
+- 本次修复的是“驱动映射资源缺失”问题；若目标数据库不可达，接口仍会返回连接/驱动初始化相关错误，这是网络或运行环境层面的独立问题。

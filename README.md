@@ -367,41 +367,39 @@ npm run type-check
 # 前端构建
 npm run build
 
-# Electron 中等包打包（默认）
-npm run -w @sqlcopilot/desktop dist:medium
-
-# Electron 最小包 / 全量包
-npm run -w @sqlcopilot/desktop dist:minimal
-npm run -w @sqlcopilot/desktop dist:full
-
-# 一键产出三种桌面包（默认，仅 desktop；会执行 backend 中间构建）
+# 完整应用打包（前后端，JVM 后端；默认一次产出三种包型）
 npm run package:variants
 
-# 一键同时产出三种后端+桌面包（可选）
-SQLCOPILOT_EXPORT_BACKEND=1 npm run package:variants
+# 完整应用打包（前后端，JVM 后端；仅 minimal / medium / full 单一包型）
+npm run package:app:minimal
+npm run package:app:medium
+npm run package:app:full
 
-# 仅导出后端产物（可选）
-SQLCOPILOT_INCLUDE_DESKTOP=0 SQLCOPILOT_EXPORT_BACKEND=1 npm run package:variants
+# 完整应用打包时额外导出 backend 发布目录（可选）
+SQLCOPILOT_EXPORT_BACKEND=1 npm run package:variants
 
 # Native 打包（先设置 GraalVM 17）
 export JAVA_HOME=/Users/zhouyu/Library/Java/JavaVirtualMachines/graalvm-jdk-17.0.12/Contents/Home
 export PATH="$JAVA_HOME/bin:$PATH"
 
-# 后端 Native 编译（按包型）
-mvn -f apps/server/pom.xml -Pnative,pack-minimal clean native:compile -DskipTests
-mvn -f apps/server/pom.xml -Pnative,pack-medium clean native:compile -DskipTests
-mvn -f apps/server/pom.xml -Pnative,pack-full clean native:compile -DskipTests
-
-# 统一脚本走 Native（会先执行 backend native，再按开关导出产物）
+# 完整应用打包（前后端，Native 后端；一次产出三种包型）
 JAVA_HOME=/Users/zhouyu/Library/Java/JavaVirtualMachines/graalvm-jdk-17.0.12/Contents/Home \
 PATH="$JAVA_HOME/bin:$PATH" \
 npm run package:variants
+
+# 完整应用打包（前后端，Native 后端；仅单一包型）
+JAVA_HOME=/Users/zhouyu/Library/Java/JavaVirtualMachines/graalvm-jdk-17.0.12/Contents/Home \
+PATH="$JAVA_HOME/bin:$PATH" \
+npm run package:variants -- minimal
+JAVA_HOME=/Users/zhouyu/Library/Java/JavaVirtualMachines/graalvm-jdk-17.0.12/Contents/Home \
+PATH="$JAVA_HOME/bin:$PATH" \
+npm run package:variants -- medium
+JAVA_HOME=/Users/zhouyu/Library/Java/JavaVirtualMachines/graalvm-jdk-17.0.12/Contents/Home \
+PATH="$JAVA_HOME/bin:$PATH" \
+npm run package:variants -- full
 ```
 
-> 如需单独验证后端 native，可手动执行：
-> `mvn -f apps/server/pom.xml -Pnative,pack-minimal clean native:compile`
-> `mvn -f apps/server/pom.xml -Pnative,pack-medium clean native:compile`
-> `mvn -f apps/server/pom.xml -Pnative,pack-full clean native:compile`
+> `npm run package:variants -- <variant>` 也支持参数化：`minimal | medium | full`。
 
 **打包目标**:
 - Windows: NSIS

@@ -9,6 +9,9 @@
   "scripts": {
     "build": "npm run -w @sqlcopilot/desktop build",
     "type-check": "npm run -w @sqlcopilot/desktop type-check",
-    "package:variants": "bash scripts/package-variants.sh"
+    "package:variants": "bash scripts/package-variants.sh",
+    "package:app:minimal": "npm run package:variants -- minimal",
+    "package:app:medium": "npm run package:variants -- medium",
+    "package:app:full": "npm run package:variants -- full"
   }
 }
