@@ -165,8 +165,9 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
       updatedAt: now,
     };
     runtime.tableDataTabs.value = [...runtime.tableDataTabs.value, tab];
+    const reactiveTab = runtime.tableDataTabs.value.find((item) => item.key === tab.key) ?? tab;
     runtime.activeWorkbenchTab.value = tab.key;
-    await loadTableDataPage(tab);
+    await loadTableDataPage(reactiveTab);
   }
 
   async function reloadTableDataForTab(tab: TableDataTab) {
