@@ -2040,33 +2040,97 @@
             <div class="rag-config-grid">
               <div class="rag-config-card">
                 <div class="rag-config-card-title">向量模型配置</div>
-                <a-form-item label="向量模型目录（推荐：填写 clone 的模型仓库目录）">
-                  <div class="file-picker-row">
-                    <a-input
-                      :value="ragConfigForm.ragEmbeddingModelDir"
-                      readonly
-                      placeholder="/path/to/bge-m3-onnx-o4"
-                    />
-                    <a-button :loading="pickingRagModelDir" @click="pickRagEmbeddingModelDir">选择目录</a-button>
-                  </div>
+                <a-form-item label="运行模式">
+                  <a-select
+                    v-model:value="ragConfigForm.ragEmbeddingProviderType"
+                    :options="[
+                      { label: '本地 ONNX', value: 'LOCAL_ONNX' },
+                      { label: '在线 OpenAI 兼容', value: 'ONLINE_OPENAI_COMPAT' },
+                    ]"
+                  />
                 </a-form-item>
+                <template v-if="ragConfigForm.ragEmbeddingProviderType === 'LOCAL_ONNX'">
+                  <a-form-item label="向量模型目录（推荐：填写 clone 的模型仓库目录）">
+                    <div class="file-picker-row">
+                      <a-input
+                        :value="ragConfigForm.ragEmbeddingModelDir"
+                        readonly
+                        placeholder="/path/to/bge-m3-onnx-o4"
+                      />
+                      <a-button :loading="pickingRagModelDir" @click="pickRagEmbeddingModelDir">选择目录</a-button>
+                    </div>
+                  </a-form-item>
+                </template>
+                <template v-else>
+                  <a-form-item label="在线 Base URL">
+                    <a-input
+                      v-model:value="ragConfigForm.ragEmbeddingOnlineBaseUrl"
+                      placeholder="https://api.openai.com/v1"
+                    />
+                  </a-form-item>
+                  <a-form-item label="在线 API Key">
+                    <a-input-password
+                      v-model:value="ragConfigForm.ragEmbeddingOnlineApiKey"
+                      placeholder="sk-..."
+                    />
+                  </a-form-item>
+                  <a-form-item label="在线模型">
+                    <a-input
+                      v-model:value="ragConfigForm.ragEmbeddingOnlineModel"
+                      placeholder="text-embedding-3-small"
+                    />
+                  </a-form-item>
+                </template>
               </div>
               <div class="rag-config-card">
-                <div class="rag-config-card-title">本地 Rerank 配置</div>
-                <a-form-item label="Rerank 模型目录">
-                  <div class="file-picker-row">
-                    <a-input
-                      :value="ragConfigForm.ragRerankModelDir"
-                      readonly
-                      placeholder="/path/to/rerank-model"
-                    />
-                    <a-button :loading="pickingRagRerankModelDir" @click="pickRagRerankModelDir">选择目录</a-button>
-                  </div>
-                </a-form-item>
+                <div class="rag-config-card-title">Rerank 配置</div>
                 <a-form-item>
                   <a-switch v-model:checked="ragConfigForm.ragRerankEnabled" />
-                  <span style="margin-left: 8px;">启用本地 Rerank</span>
+                  <span style="margin-left: 8px;">启用 Rerank</span>
                 </a-form-item>
+                <template v-if="ragConfigForm.ragRerankEnabled">
+                  <a-form-item label="运行模式">
+                    <a-select
+                      v-model:value="ragConfigForm.ragRerankProviderType"
+                      :options="[
+                        { label: '本地 ONNX', value: 'LOCAL_ONNX' },
+                        { label: '在线 OpenAI 兼容', value: 'ONLINE_OPENAI_COMPAT' },
+                      ]"
+                    />
+                  </a-form-item>
+                  <template v-if="ragConfigForm.ragRerankProviderType === 'LOCAL_ONNX'">
+                    <a-form-item label="Rerank 模型目录">
+                      <div class="file-picker-row">
+                        <a-input
+                          :value="ragConfigForm.ragRerankModelDir"
+                          readonly
+                          placeholder="/path/to/rerank-model"
+                        />
+                        <a-button :loading="pickingRagRerankModelDir" @click="pickRagRerankModelDir">选择目录</a-button>
+                      </div>
+                    </a-form-item>
+                  </template>
+                  <template v-else>
+                    <a-form-item label="在线 Base URL">
+                      <a-input
+                        v-model:value="ragConfigForm.ragRerankOnlineBaseUrl"
+                        placeholder="https://api.openai.com/v1"
+                      />
+                    </a-form-item>
+                    <a-form-item label="在线 API Key">
+                      <a-input-password
+                        v-model:value="ragConfigForm.ragRerankOnlineApiKey"
+                        placeholder="sk-..."
+                      />
+                    </a-form-item>
+                    <a-form-item label="在线模型">
+                      <a-input
+                        v-model:value="ragConfigForm.ragRerankOnlineModel"
+                        placeholder="bge-reranker-v2-m3"
+                      />
+                    </a-form-item>
+                  </template>
+                </template>
               </div>
             </div>
           </a-tab-pane>

@@ -4,8 +4,8 @@ server:
 spring:
   datasource:
     driver-class-name: org.sqlite.JDBC
-    #url: jdbc:sqlite:/Users/zhouyu/IdeaProjects/SQL_Copilot/sql-copilot.db
-    url: jdbc:sqlite:D:\Ideaprojects\SQL-Copilot\sql-copilot.db
+    url: jdbc:sqlite:/Users/zhouyu/IdeaProjects/SQL_Copilot/sql-copilot.db
+    #url: jdbc:sqlite:D:\Ideaprojects\SQL-Copilot\sql-copilot.db
   sql:
     init:
       mode: always
@@ -43,6 +43,7 @@ rag:
     example-sql: example_sql
     sql-fragment: sql_fragment
   embedding:
+    provider-type: LOCAL_ONNX
     model-file-name: model_optimized.onnx
     model-data-file-name: model_optimized.onnx.data
     tokenizer-file-name: tokenizer.json
@@ -58,6 +59,10 @@ rag:
     coreml-flags: "ENABLE_ON_SUBGRAPH,ONLY_ENABLE_DEVICE_WITH_ANE"
     batch-size: 16
     parallelism: 2
+    online:
+      base-url: https://api.openai.com/v1
+      api-key: ""
+      model: ""
   retrieval:
     schema-table-limit: 10
     schema-column-limit: 20
@@ -66,6 +71,7 @@ rag:
     example-sql-limit: 6
   rerank:
     enabled: true
+    provider-type: LOCAL_ONNX
     alpha: 0.65
     beta: 0.30
     gamma: 0.05
@@ -73,6 +79,10 @@ rag:
     feature-size: 6
     execution-provider: AUTO
     cuda-device-id: 0
+    online:
+      base-url: https://api.openai.com/v1
+      api-key: ""
+      model: ""
   sql-fragment:
     enabled: true
     max-count: 8

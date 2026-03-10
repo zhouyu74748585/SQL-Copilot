@@ -557,16 +557,32 @@ export interface AiModelOption {
 }
 
 export interface RagConfigVO {
+  ragEmbeddingProviderType?: 'LOCAL_ONNX' | 'ONLINE_OPENAI_COMPAT';
   ragEmbeddingModelDir?: string;
+  ragEmbeddingOnlineBaseUrl?: string;
+  ragEmbeddingOnlineApiKey?: string;
+  ragEmbeddingOnlineModel?: string;
   ragRerankEnabled?: boolean;
+  ragRerankProviderType?: 'LOCAL_ONNX' | 'ONLINE_OPENAI_COMPAT';
   ragRerankModelDir?: string;
+  ragRerankOnlineBaseUrl?: string;
+  ragRerankOnlineApiKey?: string;
+  ragRerankOnlineModel?: string;
   updatedAt?: number;
 }
 
 export interface RagConfigSaveReq {
+  ragEmbeddingProviderType?: 'LOCAL_ONNX' | 'ONLINE_OPENAI_COMPAT';
   ragEmbeddingModelDir?: string;
+  ragEmbeddingOnlineBaseUrl?: string;
+  ragEmbeddingOnlineApiKey?: string;
+  ragEmbeddingOnlineModel?: string;
   ragRerankEnabled?: boolean;
+  ragRerankProviderType?: 'LOCAL_ONNX' | 'ONLINE_OPENAI_COMPAT';
   ragRerankModelDir?: string;
+  ragRerankOnlineBaseUrl?: string;
+  ragRerankOnlineApiKey?: string;
+  ragRerankOnlineModel?: string;
 }
 
 export interface RagVectorizeEnqueueReq {

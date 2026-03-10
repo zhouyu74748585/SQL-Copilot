@@ -686,7 +686,18 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
   }
 
   function touchTableDataTab(tab: TableDataTab) {
-    tab.updatedAt = Date.now();
+    const now = Date.now();
+    tab.updatedAt = now;
+    const index = runtime.tableDataTabs.value.findIndex((item) => item.key === tab.key);
+    if (index < 0) {
+      return;
+    }
+    const tabs = [...runtime.tableDataTabs.value];
+    tabs[index] = {
+      ...tabs[index],
+      updatedAt: now,
+    };
+    runtime.tableDataTabs.value = tabs;
   }
 
   function isRowEqual(a: Record<string, string | null>, b: Record<string, string | null>) {

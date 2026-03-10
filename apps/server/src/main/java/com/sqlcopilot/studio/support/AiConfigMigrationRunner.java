@@ -85,9 +85,17 @@ public class AiConfigMigrationRunner implements ApplicationRunner {
         statement.execute("""
             CREATE TABLE IF NOT EXISTS rag_embedding_config (
                 id INTEGER PRIMARY KEY,
+                rag_embedding_provider_type TEXT DEFAULT 'LOCAL_ONNX',
                 rag_embedding_model_dir TEXT,
+                rag_embedding_online_base_url TEXT,
+                rag_embedding_online_api_key TEXT,
+                rag_embedding_online_model TEXT,
                 rag_rerank_enabled INTEGER DEFAULT 0,
+                rag_rerank_provider_type TEXT DEFAULT 'LOCAL_ONNX',
                 rag_rerank_model_dir TEXT,
+                rag_rerank_online_base_url TEXT,
+                rag_rerank_online_api_key TEXT,
+                rag_rerank_online_model TEXT,
                 updated_at INTEGER NOT NULL
             )
             """);
@@ -110,7 +118,7 @@ public class AiConfigMigrationRunner implements ApplicationRunner {
                 statement.execute("ALTER TABLE rag_embedding_config ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0");
             }
         }
-        ensureRagRerankColumns(connection);
+        ensureRagConfigColumns(connection);
         if (!hasAnyLegacyRagConfigColumns(connection)) {
             return;
         }
@@ -118,24 +126,48 @@ public class AiConfigMigrationRunner implements ApplicationRunner {
             statement.execute("""
                 CREATE TABLE IF NOT EXISTS rag_embedding_config_new (
                     id INTEGER PRIMARY KEY,
+                    rag_embedding_provider_type TEXT DEFAULT 'LOCAL_ONNX',
                     rag_embedding_model_dir TEXT,
+                    rag_embedding_online_base_url TEXT,
+                    rag_embedding_online_api_key TEXT,
+                    rag_embedding_online_model TEXT,
                     rag_rerank_enabled INTEGER DEFAULT 0,
+                    rag_rerank_provider_type TEXT DEFAULT 'LOCAL_ONNX',
                     rag_rerank_model_dir TEXT,
+                    rag_rerank_online_base_url TEXT,
+                    rag_rerank_online_api_key TEXT,
+                    rag_rerank_online_model TEXT,
                     updated_at INTEGER NOT NULL
                 )
                 """);
             statement.execute("""
                 INSERT OR REPLACE INTO rag_embedding_config_new(
                     id,
+                    rag_embedding_provider_type,
                     rag_embedding_model_dir,
+                    rag_embedding_online_base_url,
+                    rag_embedding_online_api_key,
+                    rag_embedding_online_model,
                     rag_rerank_enabled,
+                    rag_rerank_provider_type,
                     rag_rerank_model_dir,
+                    rag_rerank_online_base_url,
+                    rag_rerank_online_api_key,
+                    rag_rerank_online_model,
                     updated_at
                 )
                 SELECT id,
+                       COALESCE(rag_embedding_provider_type, 'LOCAL_ONNX'),
                        rag_embedding_model_dir,
+                       rag_embedding_online_base_url,
+                       rag_embedding_online_api_key,
+                       rag_embedding_online_model,
                        COALESCE(rag_rerank_enabled, 0),
+                       COALESCE(rag_rerank_provider_type, 'LOCAL_ONNX'),
                        rag_rerank_model_dir,
+                       rag_rerank_online_base_url,
+                       rag_rerank_online_api_key,
+                       rag_rerank_online_model,
                        CASE
                            WHEN updated_at IS NULL OR updated_at <= 0 THEN CAST(strftime('%s', 'now') AS INTEGER) * 1000
                            ELSE updated_at
@@ -147,16 +179,40 @@ public class AiConfigMigrationRunner implements ApplicationRunner {
         }
     }
 
-    private void ensureRagRerankColumns(Connection connection) throws SQLException {
+    private void ensureRagConfigColumns(Connection connection) throws SQLException {
         if (!hasTable(connection, "rag_embedding_config")) {
             return;
         }
         try (Statement statement = connection.createStatement()) {
+            if (!hasColumn(connection, "rag_embedding_config", "rag_embedding_provider_type")) {
+                statement.execute("ALTER TABLE rag_embedding_config ADD COLUMN rag_embedding_provider_type TEXT DEFAULT 'LOCAL_ONNX'");
+            }
+            if (!hasColumn(connection, "rag_embedding_config", "rag_embedding_online_base_url")) {
+                statement.execute("ALTER TABLE rag_embedding_config ADD COLUMN rag_embedding_online_base_url TEXT");
+            }
+            if (!hasColumn(connection, "rag_embedding_config", "rag_embedding_online_api_key")) {
+                statement.execute("ALTER TABLE rag_embedding_config ADD COLUMN rag_embedding_online_api_key TEXT");
+            }
+            if (!hasColumn(connection, "rag_embedding_config", "rag_embedding_online_model")) {
+                statement.execute("ALTER TABLE rag_embedding_config ADD COLUMN rag_embedding_online_model TEXT");
+            }
             if (!hasColumn(connection, "rag_embedding_config", "rag_rerank_enabled")) {
                 statement.execute("ALTER TABLE rag_embedding_config ADD COLUMN rag_rerank_enabled INTEGER DEFAULT 0");
             }
+            if (!hasColumn(connection, "rag_embedding_config", "rag_rerank_provider_type")) {
+                statement.execute("ALTER TABLE rag_embedding_config ADD COLUMN rag_rerank_provider_type TEXT DEFAULT 'LOCAL_ONNX'");
+            }
             if (!hasColumn(connection, "rag_embedding_config", "rag_rerank_model_dir")) {
                 statement.execute("ALTER TABLE rag_embedding_config ADD COLUMN rag_rerank_model_dir TEXT");
+            }
+            if (!hasColumn(connection, "rag_embedding_config", "rag_rerank_online_base_url")) {
+                statement.execute("ALTER TABLE rag_embedding_config ADD COLUMN rag_rerank_online_base_url TEXT");
+            }
+            if (!hasColumn(connection, "rag_embedding_config", "rag_rerank_online_api_key")) {
+                statement.execute("ALTER TABLE rag_embedding_config ADD COLUMN rag_rerank_online_api_key TEXT");
+            }
+            if (!hasColumn(connection, "rag_embedding_config", "rag_rerank_online_model")) {
+                statement.execute("ALTER TABLE rag_embedding_config ADD COLUMN rag_rerank_online_model TEXT");
             }
         }
     }
@@ -232,12 +288,20 @@ public class AiConfigMigrationRunner implements ApplicationRunner {
                 String insertSql = """
                     INSERT INTO rag_embedding_config(
                         id,
+                        rag_embedding_provider_type,
                         rag_embedding_model_dir,
+                        rag_embedding_online_base_url,
+                        rag_embedding_online_api_key,
+                        rag_embedding_online_model,
                         rag_rerank_enabled,
+                        rag_rerank_provider_type,
                         rag_rerank_model_dir,
+                        rag_rerank_online_base_url,
+                        rag_rerank_online_api_key,
+                        rag_rerank_online_model,
                         updated_at
                     )
-                    VALUES(?, ?, 0, NULL, ?)
+                    VALUES(?, 'LOCAL_ONNX', ?, NULL, NULL, 0, 'LOCAL_ONNX', NULL, NULL, NULL, NULL, ?)
                     """;
                 try (PreparedStatement insert = connection.prepareStatement(insertSql)) {
                     insert.setLong(1, SINGLETON_ID);

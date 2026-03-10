@@ -396,3 +396,30 @@
 - 前端预览验证通过：
   - `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4173 --strictPort`
   - `http://127.0.0.1:4173` 返回 `HTTP 200`
+
+
+### 2026-03-10 09:58:27
+
+## 2026-03-10 数据浏览页首屏加载卡住修复
+
+### 本次目标
+- 修复“数据浏览页首次打开一直转圈，切换页签后才刷新表格”的问题。
+
+### 关键改动
+- 文件：`apps/desktop/src/modules/studio/composables/useTableDataModule.ts`
+- 调整 `touchTableDataTab(tab)`：在更新 `updatedAt` 后，额外将 `runtime.tableDataTabs` 对应索引项做一次浅拷贝回写。
+- 目的：确保无论调用链中传入的是响应式代理还是原始对象，`loading/rows/error` 的变更都能稳定触发 Vue 视图更新，避免首屏卡在 loading。
+
+### 验证结果
+- 前端构建：`npm run build`（根目录）通过。
+- 前端类型检查：`npm run type-check`（根目录）通过。
+- 后端启动验证：
+  - `apps/server` 执行 `mvn clean` 通过。
+  - `mvn spring-boot:run` 在默认 `18080` 端口受环境中已有进程占用（PortInUseException）。
+  - 使用 `mvn spring-boot:run -Dspring-boot.run.arguments=--server.port=18081` 启动成功，并正常停止。
+- 前端预览验证：
+  - `apps/desktop` 启动 `npm run preview -- --host 127.0.0.1 --port 4173 --strictPort` 成功。
+  - `curl -I http://127.0.0.1:4173/` 返回 `HTTP/1.1 200 OK`。
+
+### 备注
+- 工作区存在用户既有修改：`apps/server/src/main/resources/application.yml`，本次未改动该文件。

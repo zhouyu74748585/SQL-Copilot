@@ -181,3 +181,55 @@
 - 启动验证（clean）：
   - 后端：`mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18084` 启动成功；`http://127.0.0.1:18084/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
   - 前端：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6050`，`HTTP/1.1 200 OK`。
+## 20260310101800 追加记录
+
+### 本次目标
+- 增加向量化与 Rerank 的在线支持（OpenAI 兼容），并在配置页支持本地/在线切换。
+- 保持向量化与 Rerank 独立切换，且在线失败直接报错。
+
+### 关键改动
+- 后端 RAG 配置模型扩展：
+  - `RagConfigSaveReq/RagConfigVO/RagEmbeddingConfigEntity/RagConfigMapper/RagConfigServiceImpl` 新增并贯通以下字段：
+    - `ragEmbeddingProviderType`
+    - `ragEmbeddingOnlineBaseUrl`
+    - `ragEmbeddingOnlineApiKey`
+    - `ragEmbeddingOnlineModel`
+    - `ragRerankProviderType`
+    - `ragRerankOnlineBaseUrl`
+    - `ragRerankOnlineApiKey`
+    - `ragRerankOnlineModel`
+- 数据库与迁移：
+  - `schema.sql` 扩展 `rag_embedding_config` 在线相关列。
+  - `AiConfigMigrationRunner` 通过增量 ALTER + 规范化重建分支补齐新列，兼容已有表结构。
+- 在线能力实现：
+  - 新增 `OpenAiCompatRagHttpClient` 统一在线请求。
+  - 新增 `OpenAiCompatEmbeddingServiceImpl`（`/v1/embeddings`）支持批量输入与向量维度一致性校验。
+  - 新增 `OpenAiCompatRerankServiceImpl`（`/v1/rerank`）支持 query/documents 评分解析。
+- 运行时路由：
+  - 新增 `RagEmbeddingRouterServiceImpl`（`@Primary`），按 `ragEmbeddingProviderType` 在本地 ONNX 与在线间切换。
+  - 新增 `RagRerankRouterServiceImpl`（`@Primary`），按 `ragRerankEnabled + ragRerankProviderType` 在本地 ONNX 与在线间切换。
+- 前端配置页：
+  - `StudioShell.vue` 向量化卡片新增“运行模式”切换（本地 ONNX/在线 OpenAI 兼容）。
+  - 本地模式显示目录选择；在线模式显示 Base URL/API Key/Model。
+  - Rerank 保留启用开关，启用后可选本地/在线并显示对应配置项。
+- 前端数据模型与保存归一化：
+  - `types/index.ts`、`useStudioRuntime.ts` 新增/回填/保存在线配置字段，保存前统一 trim 与 provider 归一化。
+
+### 规范自检（backend-api-design）
+- 已按规范检查，未发现违规：
+  - 接口仍为 GET/POST；
+  - 请求/响应使用 DTO/VO，未引入 Map 作为接口载荷；
+  - SQL 仍在 Mapper 注解中，Service 未拼接 SQL；
+  - 新增 DTO 字段均补充中文注释，关键操作保留中文注释。
+
+### 验证结果
+- 后端构建（clean）：
+  - `mvn -f apps/server/pom.xml clean package -DskipTests` 通过。
+- 前端验证：
+  - `npm run -w @sqlcopilot/desktop type-check` 通过。
+  - `npm run -w @sqlcopilot/desktop build -- --emptyOutDir` 通过。
+- 启动验证（clean）：
+  - 后端：`mvn -f apps/server/pom.xml clean spring-boot:run "-Dspring-boot.run.arguments=--server.port=18088"` 启动成功。
+  - 健康检查：`curl --noproxy '*' http://127.0.0.1:18088/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+  - 前端：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 55062 --strictPort` 启动成功。
+  - 探活：`curl --noproxy '*' -I http://127.0.0.1:55062/` 返回 `HTTP/1.1 200 OK`。

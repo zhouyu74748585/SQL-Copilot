@@ -93,9 +93,17 @@ CREATE TABLE IF NOT EXISTS ai_provider_config (
 
 CREATE TABLE IF NOT EXISTS rag_embedding_config (
     id INTEGER PRIMARY KEY,
+    rag_embedding_provider_type TEXT DEFAULT 'LOCAL_ONNX',
     rag_embedding_model_dir TEXT,
+    rag_embedding_online_base_url TEXT,
+    rag_embedding_online_api_key TEXT,
+    rag_embedding_online_model TEXT,
     rag_rerank_enabled INTEGER DEFAULT 0,
+    rag_rerank_provider_type TEXT DEFAULT 'LOCAL_ONNX',
     rag_rerank_model_dir TEXT,
+    rag_rerank_online_base_url TEXT,
+    rag_rerank_online_api_key TEXT,
+    rag_rerank_online_model TEXT,
     updated_at INTEGER NOT NULL
 );
 

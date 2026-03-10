@@ -4041,8 +4041,17 @@ async function saveAiConfig() {
     aiConfigForm.conversationMemoryEnabled = aiConfigForm.conversationMemoryEnabled !== false;
     aiConfigForm.conversationMemoryWindowSize = Math.min(50, Math.max(4, Number(aiConfigForm.conversationMemoryWindowSize || 12)));
     aiConfigForm.detailOutputEnabled = aiConfigForm.detailOutputEnabled === true;
+    ragConfigForm.ragEmbeddingProviderType = normalizeRagProviderType(ragConfigForm.ragEmbeddingProviderType);
+    ragConfigForm.ragEmbeddingModelDir = (ragConfigForm.ragEmbeddingModelDir || '').trim();
+    ragConfigForm.ragEmbeddingOnlineBaseUrl = (ragConfigForm.ragEmbeddingOnlineBaseUrl || '').trim();
+    ragConfigForm.ragEmbeddingOnlineApiKey = (ragConfigForm.ragEmbeddingOnlineApiKey || '').trim();
+    ragConfigForm.ragEmbeddingOnlineModel = (ragConfigForm.ragEmbeddingOnlineModel || '').trim();
     ragConfigForm.ragRerankEnabled = ragConfigForm.ragRerankEnabled === true;
+    ragConfigForm.ragRerankProviderType = normalizeRagProviderType(ragConfigForm.ragRerankProviderType);
     ragConfigForm.ragRerankModelDir = (ragConfigForm.ragRerankModelDir || '').trim();
+    ragConfigForm.ragRerankOnlineBaseUrl = (ragConfigForm.ragRerankOnlineBaseUrl || '').trim();
+    ragConfigForm.ragRerankOnlineApiKey = (ragConfigForm.ragRerankOnlineApiKey || '').trim();
+    ragConfigForm.ragRerankOnlineModel = (ragConfigForm.ragRerankOnlineModel || '').trim();
     const savedAi = await postApi<AiConfigVO>('/api/ai/config/save', aiConfigForm);
     const savedRag = await postApi<RagConfigVO>('/api/rag/config/save', ragConfigForm);
     fillAiConfigForm(savedAi);
@@ -6196,18 +6205,41 @@ function fillAiConfigForm(config: AiConfigVO) {
 
 function defaultRagConfigForm(): RagConfigSaveReq {
   return {
+    ragEmbeddingProviderType: 'LOCAL_ONNX',
     ragEmbeddingModelDir: '',
+    ragEmbeddingOnlineBaseUrl: 'https://api.openai.com/v1',
+    ragEmbeddingOnlineApiKey: '',
+    ragEmbeddingOnlineModel: '',
     ragRerankEnabled: false,
+    ragRerankProviderType: 'LOCAL_ONNX',
     ragRerankModelDir: '',
+    ragRerankOnlineBaseUrl: 'https://api.openai.com/v1',
+    ragRerankOnlineApiKey: '',
+    ragRerankOnlineModel: '',
   };
 }
 
 function fillRagConfigForm(config: RagConfigVO) {
   Object.assign(ragConfigForm, {
+    ragEmbeddingProviderType: normalizeRagProviderType(config.ragEmbeddingProviderType),
     ragEmbeddingModelDir: config.ragEmbeddingModelDir || '',
+    ragEmbeddingOnlineBaseUrl: config.ragEmbeddingOnlineBaseUrl || 'https://api.openai.com/v1',
+    ragEmbeddingOnlineApiKey: config.ragEmbeddingOnlineApiKey || '',
+    ragEmbeddingOnlineModel: config.ragEmbeddingOnlineModel || '',
     ragRerankEnabled: config.ragRerankEnabled === true,
+    ragRerankProviderType: normalizeRagProviderType(config.ragRerankProviderType),
     ragRerankModelDir: config.ragRerankModelDir || '',
+    ragRerankOnlineBaseUrl: config.ragRerankOnlineBaseUrl || 'https://api.openai.com/v1',
+    ragRerankOnlineApiKey: config.ragRerankOnlineApiKey || '',
+    ragRerankOnlineModel: config.ragRerankOnlineModel || '',
   } satisfies RagConfigSaveReq);
+}
+
+function normalizeRagProviderType(value?: string): 'LOCAL_ONNX' | 'ONLINE_OPENAI_COMPAT' {
+  if (value === 'ONLINE_OPENAI_COMPAT') {
+    return 'ONLINE_OPENAI_COMPAT';
+  }
+  return 'LOCAL_ONNX';
 }
 
 function resetConnectionModalState() {
