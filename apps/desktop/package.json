@@ -2,6 +2,8 @@
   "name": "@sqlcopilot/desktop",
   "private": true,
   "version": "0.1.0",
+  "description": "SQL Copilot desktop application",
+  "author": "SQL Copilot",
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {

@@ -261,7 +261,7 @@ function parseQdrantUrl() {
 
 function ensureExecutable(filePath) {
   if (!fs.existsSync(filePath)) {
-    throw new Error(`Qdrant binary not found: ${filePath}`);
+    throw new Error(`Executable not found: ${filePath}`);
   }
   if (process.platform !== 'win32') {
     fs.chmodSync(filePath, 0o755);
@@ -375,6 +375,12 @@ function resolveBackendLaunchSpec(runtimeDir, profile) {
   const runSh = path.join(runtimeDir, 'run.sh');
   const nativeName = process.platform === 'win32' ? 'sql-copilot-server.exe' : 'sql-copilot-server';
   const nativePath = path.join(runtimeDir, nativeName);
+  const bundledJavaPath = path.join(
+    runtimeDir,
+    'jre',
+    'bin',
+    process.platform === 'win32' ? 'java.exe' : 'java',
+  );
 
   if (process.platform === 'win32' && fs.existsSync(runCmd)) {
     return { command: 'cmd', args: ['/c', runCmd, profile] };
@@ -395,10 +401,17 @@ function resolveBackendLaunchSpec(runtimeDir, profile) {
         .filter((item) => item.endsWith('.jar'))
         .sort()
     : [];
+  if (fs.existsSync(bundledJavaPath) && jars.length > 0) {
+    ensureExecutable(bundledJavaPath);
+    return {
+      command: bundledJavaPath,
+      args: ['-Dfile.encoding=UTF-8', '-jar', path.join(runtimeDir, jars[0]), `--spring.profiles.active=${profile}`],
+    };
+  }
   if (jars.length > 0) {
     return {
       command: process.env.JAVA_BIN || 'java',
-      args: ['-jar', path.join(runtimeDir, jars[0]), `--spring.profiles.active=${profile}`],
+      args: ['-Dfile.encoding=UTF-8', '-jar', path.join(runtimeDir, jars[0]), `--spring.profiles.active=${profile}`],
     };
   }
 

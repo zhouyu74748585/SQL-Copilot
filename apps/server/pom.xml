@@ -51,6 +51,26 @@
             <version>3.46.0.0</version>
         </dependency>
         <dependency>
+            <groupId>com.sqlcopilot.drivers</groupId>
+            <artifactId>mysql-driver-bundle</artifactId>
+            <version>8.2.0-local</version>
+        </dependency>
+        <dependency>
+            <groupId>com.sqlcopilot.drivers</groupId>
+            <artifactId>postgresql-driver-bundle</artifactId>
+            <version>42.7.3-local</version>
+        </dependency>
+        <dependency>
+            <groupId>com.sqlcopilot.drivers</groupId>
+            <artifactId>sqlserver-driver-bundle</artifactId>
+            <version>13.2.1-local</version>
+        </dependency>
+        <dependency>
+            <groupId>com.sqlcopilot.drivers</groupId>
+            <artifactId>oracle-driver-bundle</artifactId>
+            <version>11.2.0.4.0-local</version>
+        </dependency>
+        <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-core</artifactId>
             <version>${spring.ai.version}</version>
@@ -92,6 +112,11 @@
             <id>spring-milestones</id>
             <name>Spring Milestones</name>
             <url>https://repo.spring.io/milestone</url>
+        </repository>
+        <repository>
+            <id>bundled-jdbc-drivers</id>
+            <name>Bundled JDBC Drivers</name>
+            <url>file://${project.basedir}/bundled-maven-repo</url>
         </repository>
     </repositories>
     <profiles>
@@ -185,11 +210,13 @@
                 <artifactId>native-maven-plugin</artifactId>
                 <version>${graalvm.buildtools.version}</version>
                 <configuration>
+                    <mainClass>com.sqlcopilot.studio.SqlCopilotApplication</mainClass>
                     <buildArgs>
                         <arg>--no-fallback</arg>
                         <arg>-J-Xms${sqlcopilot.native.image.jvm.xms}</arg>
                         <arg>-J-Xmx${sqlcopilot.native.image.jvm.xmx}</arg>
                         <arg>-H:NumberOfThreads=${sqlcopilot.native.image.threads}</arg>
+                        <arg>--initialize-at-run-time=ai.onnxruntime,ai.onnxruntime.providers</arg>
                         <arg>-H:+AllowDeprecatedBuilderClassesOnImageClasspath</arg>
                         <arg>-H:+ReportExceptionStackTraces</arg>
                     </buildArgs>

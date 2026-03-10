@@ -10,6 +10,7 @@ import com.sqlcopilot.studio.entity.QueryHistoryEntity;
 import com.sqlcopilot.studio.entity.RagEmbeddingConfigEntity;
 import com.sqlcopilot.studio.entity.RagVectorizeStatusEntity;
 import com.sqlcopilot.studio.entity.SavedQueryEntity;
+import com.sqlcopilot.studio.support.driver.BundledJdbcDriverFactory;
 import org.apache.ibatis.mapping.DatabaseIdProvider;
 import org.apache.ibatis.logging.commons.JakartaCommonsLoggingImpl;
 import org.apache.ibatis.logging.jdk14.Jdk14LoggingImpl;
@@ -87,6 +88,9 @@ public class MyBatisNativeHints implements RuntimeHintsRegistrar {
         registerMapperProxyIfPresent(hints, classLoader, "com.sqlcopilot.studio.mapper.RagConfigMapper");
         registerMapperProxyIfPresent(hints, classLoader, "com.sqlcopilot.studio.mapper.RagVectorizeStatusMapper");
         registerMapperProxyIfPresent(hints, classLoader, "com.sqlcopilot.studio.mapper.SavedQueryMapper");
+        for (String driverClassName : BundledJdbcDriverFactory.supportedDriverClasses()) {
+            registerJdbcDriverIfPresent(hints, classLoader, driverClassName);
+        }
     }
 
     private static void registerIfPresent(RuntimeHints hints, ClassLoader classLoader, String className) {
@@ -118,6 +122,18 @@ public class MyBatisNativeHints implements RuntimeHintsRegistrar {
             return;
         }
         hints.proxies().registerJdkProxy(TypeReference.of(interfaceName));
+    }
+
+    private static void registerJdbcDriverIfPresent(RuntimeHints hints, ClassLoader classLoader, String className) {
+        if (!isClassPresent(classLoader, className)) {
+            return;
+        }
+        hints.reflection().registerType(
+            TypeReference.of(className),
+            MemberCategory.INVOKE_DECLARED_CONSTRUCTORS,
+            MemberCategory.INVOKE_PUBLIC_CONSTRUCTORS,
+            MemberCategory.INVOKE_PUBLIC_METHODS
+        );
     }
 
     /**

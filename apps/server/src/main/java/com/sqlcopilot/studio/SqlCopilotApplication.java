@@ -1,7 +1,6 @@
 package com.sqlcopilot.studio;
 
 import com.sqlcopilot.studio.config.MyBatisNativeHints;
-import com.sqlcopilot.studio.config.AotMapperFactoryBean;
 import org.mybatis.spring.annotation.MapperScan;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,7 +16,6 @@ import java.util.Objects;
 @SpringBootApplication
 @MapperScan(
     value = "com.sqlcopilot.studio.mapper",
-    factoryBean = AotMapperFactoryBean.class,
     sqlSessionTemplateRef = "sqlSessionTemplate"
 )
 @EnableScheduling

@@ -10,6 +10,6 @@ apps/server/exports
 /sql-copilot.db
 /apps/server/sql-copilot.db
 /apps/server/models/
-/model/
 /exports/
 /docs/review/
+/release/

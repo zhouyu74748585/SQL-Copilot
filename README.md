@@ -367,10 +367,16 @@ npm run type-check
 # 前端构建
 npm run build
 
-# 完整应用打包（前后端，JVM 后端；默认一次产出三种包型）
+# 完整应用打包（前后端，JVM 后端 + jlink 运行时；默认一次产出三种包型）
 npm run package:variants
 
-# 完整应用打包（前后端，JVM 后端；仅 minimal / medium / full 单一包型）
+# Windows PowerShell 也可直接执行
+powershell -ExecutionPolicy Bypass -File .\scripts\package-variants.ps1
+
+# macOS / Linux 也可直接执行
+bash ./scripts/package-variants.sh
+
+# 完整应用打包（前后端，JVM 后端 + jlink 运行时；仅 minimal / medium / full 单一包型）
 npm run package:app:minimal
 npm run package:app:medium
 npm run package:app:full
@@ -378,28 +384,26 @@ npm run package:app:full
 # 完整应用打包时额外导出 backend 发布目录（可选）
 SQLCOPILOT_EXPORT_BACKEND=1 npm run package:variants
 
-# Native 打包（先设置 GraalVM 17）
-export JAVA_HOME=/Users/zhouyu/Library/Java/JavaVirtualMachines/graalvm-jdk-17.0.12/Contents/Home
-export PATH="$JAVA_HOME/bin:$PATH"
-
-# 完整应用打包（前后端，Native 后端；一次产出三种包型）
-JAVA_HOME=/Users/zhouyu/Library/Java/JavaVirtualMachines/graalvm-jdk-17.0.12/Contents/Home \
-PATH="$JAVA_HOME/bin:$PATH" \
+# Windows PowerShell 设置环境变量示例
+$env:SQLCOPILOT_EXPORT_BACKEND="1"
 npm run package:variants
 
-# 完整应用打包（前后端，Native 后端；仅单一包型）
-JAVA_HOME=/Users/zhouyu/Library/Java/JavaVirtualMachines/graalvm-jdk-17.0.12/Contents/Home \
-PATH="$JAVA_HOME/bin:$PATH" \
-npm run package:variants -- minimal
-JAVA_HOME=/Users/zhouyu/Library/Java/JavaVirtualMachines/graalvm-jdk-17.0.12/Contents/Home \
-PATH="$JAVA_HOME/bin:$PATH" \
+# 自定义 JDK 17 / GraalVM 17 路径（jlink 依赖完整 JDK，而不是 native-image）
+export JAVA_HOME=/path/to/jdk-17
+export PATH="$JAVA_HOME/bin:$PATH"
 npm run package:variants -- medium
-JAVA_HOME=/Users/zhouyu/Library/Java/JavaVirtualMachines/graalvm-jdk-17.0.12/Contents/Home \
-PATH="$JAVA_HOME/bin:$PATH" \
+
+# Windows PowerShell jlink 打包示例
+$env:JAVA_HOME="C:\jdk-17"
+$env:Path="$env:JAVA_HOME\bin;$env:Path"
 npm run package:variants -- full
 ```
 
 > `npm run package:variants -- <variant>` 也支持参数化：`minimal | medium | full`。
+> 根脚本已改为 `node scripts/package-variants.mjs`，Windows 不再依赖 `bash` / WSL。
+> 打包脚本会先执行 `mvn clean package` 生成 Spring Boot jar，再用当前 `JAVA_HOME` 对应的 `jdeps + jlink` 生成内置运行时。
+> 打包产物中的 backend 默认通过 `run.sh` / `run.cmd` 优先使用内置 `jre/bin/java` 启动，不依赖目标机器的系统 Java。
+> 若 `jdeps` 漏掉动态依赖，可通过 `SQLCOPILOT_JLINK_EXTRA_MODULES=moduleA,moduleB` 追加 JDK 模块。
 
 **打包目标**:
 - Windows: NSIS
@@ -442,6 +446,7 @@ rag:
 | `SQLCOPILOT_ELECTRON_DIST` | （可选）electron-builder 本地 Electron zip 目录，避免网络下载 | - |
 | `SQLCOPILOT_INCLUDE_DESKTOP` | `package:variants` 时是否导出 desktop（`1`启用） | `1` |
 | `SQLCOPILOT_EXPORT_BACKEND` | `package:variants` 时是否导出 backend（`1`启用） | `0` |
+| `SQLCOPILOT_JLINK_EXTRA_MODULES` | 为 jlink 额外追加的 JDK 模块，逗号分隔 | - |
 
 ---
 
