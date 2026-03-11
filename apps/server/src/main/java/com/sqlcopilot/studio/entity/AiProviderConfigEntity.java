@@ -14,6 +14,8 @@ public class AiProviderConfigEntity {
     private String modelOptionsJson;
     private Integer conversationMemoryEnabled;
     private Integer conversationMemoryWindowSize;
+    private Integer conversationMemoryWindowTokens;
+    private Double conversationAutoCompressRatio;
     private Integer detailOutputEnabled;
     private Long updatedAt;
 }

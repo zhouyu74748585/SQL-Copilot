@@ -64,6 +64,12 @@ public class AiConfigMigrationRunner implements ApplicationRunner {
             if (!hasColumn(connection, "ai_provider_config", "conversation_memory_window_size")) {
                 statement.execute("ALTER TABLE ai_provider_config ADD COLUMN conversation_memory_window_size INTEGER DEFAULT 12");
             }
+            if (!hasColumn(connection, "ai_provider_config", "conversation_memory_window_tokens")) {
+                statement.execute("ALTER TABLE ai_provider_config ADD COLUMN conversation_memory_window_tokens INTEGER DEFAULT 6000");
+            }
+            if (!hasColumn(connection, "ai_provider_config", "conversation_auto_compress_ratio")) {
+                statement.execute("ALTER TABLE ai_provider_config ADD COLUMN conversation_auto_compress_ratio REAL DEFAULT 0.75");
+            }
         }
     }
 

@@ -417,7 +417,8 @@ public class AiServiceImpl implements AiService {
         List<AiTraceStageVO> traceStages = detailOutputEnabled ? new ArrayList<>() : List.of();
         ParsedIntentResponse retrievalIntent = identifyRetrievalIntentForSql(req);
         timer.mark("identify_retrieval_intent");
-        String retrievalInput = buildIntentAwareRetrievalInputForRag(req, retrievalIntent);
+        String retrievalPromptHint = buildIntentAwareRetrievalHint(req, retrievalIntent);
+        String retrievalInput = conversationContextManager.buildRetrievalInputForRag(req, retrievalPromptHint);
         timer.mark("build_retrieval_input");
         if (detailOutputEnabled) {
             IntentRetrievalParams params = retrievalIntent == null || retrievalIntent.retrievalParams() == null
@@ -453,7 +454,7 @@ public class AiServiceImpl implements AiService {
         long contextStageStart = System.currentTimeMillis();
         // 关键步骤：生成链路统一向上下文管理器要最终上下文，避免主流程再次拼接历史和记忆。
         AiConversationContextManager.ConversationGenerationContext generationContext =
-            conversationContextManager.buildGenerationContext(req, ragPromptContext);
+            conversationContextManager.buildGenerationContext(req, ragPromptContext, retrievalPromptHint);
         timer.mark("build_generation_context");
         if (detailOutputEnabled) {
             addTraceStage(req.getSessionId(), "generate", traceStages, buildGenerationContextTraceStage(generationContext, System.currentTimeMillis() - contextStageStart));
@@ -639,6 +640,7 @@ public class AiServiceImpl implements AiService {
 
         boolean detailOutputEnabled = resolveDetailOutputEnabled(req);
         List<AiTraceStageVO> traceStages = detailOutputEnabled ? new ArrayList<>() : List.of();
+        String retrievalPromptHint = conversationContextManager.buildRetrievalInput(req.getPrompt());
         String retrievalInput = conversationContextManager.buildRetrievalInputForRag(req);
         timer.mark("build_retrieval_input");
         long ragStageStart = System.currentTimeMillis();
@@ -654,7 +656,7 @@ public class AiServiceImpl implements AiService {
         long contextStageStart = System.currentTimeMillis();
         // 关键步骤：图表链路与 SQL 生成共用同一套上下文装配逻辑，避免后续优化分叉。
         AiConversationContextManager.ConversationGenerationContext generationContext =
-            conversationContextManager.buildGenerationContext(req, ragPromptContext);
+            conversationContextManager.buildGenerationContext(req, ragPromptContext, retrievalPromptHint);
         timer.mark("build_generation_context");
         if (detailOutputEnabled) {
             addTraceStage(req.getSessionId(), "generate-chart", traceStages, buildGenerationContextTraceStage(generationContext, System.currentTimeMillis() - contextStageStart));
@@ -924,6 +926,7 @@ public class AiServiceImpl implements AiService {
         try {
             AiGenerateSqlReq providerReq = buildRepairGenerateReq(req, sourceSql, errorMessage);
             timer.mark("build_repair_prompt");
+            String retrievalPromptHint = conversationContextManager.buildRetrievalInput(providerReq.getPrompt(), sourceSql + "\n" + errorMessage);
             String retrievalInput = conversationContextManager.buildRetrievalInputForRag(providerReq, sourceSql + "\n" + errorMessage);
             timer.mark("build_retrieval_input");
             RagPromptContext ragPromptContext = ragRetrievalService.retrievePromptContext(
@@ -937,7 +940,7 @@ public class AiServiceImpl implements AiService {
             }
             // 关键步骤：修复链路也复用同一套上下文管理，保证修复提示词与生成提示词看到同样的记忆。
             AiConversationContextManager.ConversationGenerationContext generationContext =
-                conversationContextManager.buildGenerationContext(providerReq, ragPromptContext);
+                conversationContextManager.buildGenerationContext(providerReq, ragPromptContext, retrievalPromptHint);
             timer.mark("build_generation_context");
             if (detailOutputEnabled) {
                 addTraceStage(req.getSessionId(), "repair", traceStages, buildGenerationContextTraceStage(generationContext, 0L));
@@ -2834,7 +2837,7 @@ public class AiServiceImpl implements AiService {
         return normalized.toLowerCase();
     }
 
-    private String buildIntentAwareRetrievalInputForRag(AiGenerateSqlReq req, ParsedIntentResponse parsedIntent) {
+    private String buildIntentAwareRetrievalHint(AiGenerateSqlReq req, ParsedIntentResponse parsedIntent) {
         ParsedIntentResponse resolvedIntent = parsedIntent == null
             ? new ParsedIntentResponse(IntentType.GENERATE_SQL, 0D, "", false, IntentRetrievalParams.defaultValue())
             : parsedIntent;
@@ -2869,8 +2872,7 @@ public class AiServiceImpl implements AiService {
         if (confidence > 0D) {
             keyInfoBuilder.append("\n意图置信度: ").append(String.format(Locale.ROOT, "%.2f", confidence));
         }
-        String intentAwareBaseInput = conversationContextManager.buildRetrievalInput(retrievalQuery, keyInfoBuilder.toString());
-        return conversationContextManager.buildRetrievalInputForRag(req, intentAwareBaseInput);
+        return conversationContextManager.buildRetrievalInput(retrievalQuery, keyInfoBuilder.toString());
     }
     private TokenUsageStats resolveTokenUsage(OpenAiTextClient.TokenUsage providerUsage,
                                               String promptText,

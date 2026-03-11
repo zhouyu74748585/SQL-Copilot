@@ -1162,7 +1162,24 @@
           <div class="pane-title pane-title-with-action query-chat-title-bar">
             <span>{{ activeQueryTab.title }} · 对话</span>
             <div class="pane-title-actions">
-              <span class="query-chat-title-token">≈Token: {{ activeQueryTab.lastTokenEstimate || 0 }}</span>
+              <a-tooltip placement="bottomRight" overlay-class-name="query-context-usage-tooltip">
+                <template #title>
+                  <div class="query-context-usage-tooltip-copy">
+                    <strong>窗口上下文占比</strong>
+                    <span>当前占用 {{ formatCompactCount(activeQueryContextUsage.usedTokens) }} tokens</span>
+                    <span>总窗口 {{ formatCompactCount(activeQueryContextUsage.totalTokens) }} tokens</span>
+                    <span>当前占比 {{ Math.max(0, activeQueryContextUsage.percent) }}%</span>
+                    <span v-if="!activeQueryContextUsage.enabled">对话记忆已关闭，当前为估算参考值</span>
+                  </div>
+                </template>
+                <span
+                  class="query-context-usage-ring is-compact"
+                  :class="[`is-${activeQueryContextUsage.tone}`, { 'is-disabled': !activeQueryContextUsage.enabled }]"
+                  :style="{ '--context-usage-ratio': `${activeQueryContextUsage.cappedRatio}` }"
+                >
+                  <span class="query-context-usage-ring-core"></span>
+                </span>
+              </a-tooltip>
             </div>
           </div>
           <div class="pane-title">{{ activeQueryTab.title }} · 对话</div>
@@ -1387,7 +1404,24 @@
                 <span class="query-chat-mode-pill" :class="{ 'is-active': activeQueryTab?.autoMode }">
                   {{ activeQueryTab?.autoMode ? 'Auto' : 'Manual' }}
                 </span>
-                <span class="query-chat-token-pill">≈Token: {{ activeQueryTab.lastTokenEstimate || 0 }}</span>
+                <a-tooltip placement="topRight" overlay-class-name="query-context-usage-tooltip">
+                  <template #title>
+                    <div class="query-context-usage-tooltip-copy">
+                      <strong>窗口上下文占比</strong>
+                      <span>当前占用 {{ formatCompactCount(activeQueryContextUsage.usedTokens) }} tokens</span>
+                      <span>总窗口 {{ formatCompactCount(activeQueryContextUsage.totalTokens) }} tokens</span>
+                      <span>当前占比 {{ Math.max(0, activeQueryContextUsage.percent) }}%</span>
+                      <span v-if="!activeQueryContextUsage.enabled">对话记忆已关闭，当前为估算参考值</span>
+                    </div>
+                  </template>
+                  <span
+                    class="query-context-usage-ring"
+                    :class="[`is-${activeQueryContextUsage.tone}`, { 'is-disabled': !activeQueryContextUsage.enabled }]"
+                    :style="{ '--context-usage-ratio': `${activeQueryContextUsage.cappedRatio}` }"
+                  >
+                    <span class="query-context-usage-ring-core"></span>
+                  </span>
+                </a-tooltip>
                 <a-popover placement="topRight" trigger="click" overlay-class-name="query-chat-settings-popover">
                   <template #content>
                     <div class="query-chat-settings-panel">
@@ -1964,8 +1998,32 @@
                 </a-form-item>
               </a-col>
               <a-col :span="12">
-                <a-form-item label="记忆窗口轮数">
+                <a-form-item label="最近原文最大轮数">
                   <a-input-number v-model:value="aiConfigForm.conversationMemoryWindowSize" :min="4" :max="50" style="width: 100%" />
+                </a-form-item>
+              </a-col>
+            </a-row>
+            <a-row :gutter="12">
+              <a-col :span="12">
+                <a-form-item label="记忆窗口 Token 上限">
+                  <a-input-number
+                    v-model:value="aiConfigForm.conversationMemoryWindowTokens"
+                    :min="512"
+                    :max="32000"
+                    :step="256"
+                    style="width: 100%"
+                  />
+                </a-form-item>
+              </a-col>
+              <a-col :span="12">
+                <a-form-item label="自动压缩触发比例">
+                  <a-input-number
+                    v-model:value="aiConfigForm.conversationAutoCompressRatio"
+                    :min="0.3"
+                    :max="0.95"
+                    :step="0.05"
+                    style="width: 100%"
+                  />
                 </a-form-item>
               </a-col>
             </a-row>
@@ -2676,6 +2734,7 @@ const {
     aiRequestAbortReasonMap,
     selectedConnection,
     activeQueryTab,
+    activeQueryContextUsage,
     activeErTab,
     activeTableEditorTab,
     activeTableDataTab,

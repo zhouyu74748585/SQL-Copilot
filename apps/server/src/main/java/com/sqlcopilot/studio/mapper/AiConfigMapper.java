@@ -14,6 +14,8 @@ public interface AiConfigMapper {
                model_options_json,
                conversation_memory_enabled,
                conversation_memory_window_size,
+               conversation_memory_window_tokens,
+               conversation_auto_compress_ratio,
                detail_output_enabled,
                updated_at
         FROM ai_provider_config
@@ -28,6 +30,8 @@ public interface AiConfigMapper {
             model_options_json,
             conversation_memory_enabled,
             conversation_memory_window_size,
+            conversation_memory_window_tokens,
+            conversation_auto_compress_ratio,
             detail_output_enabled,
             updated_at
         )
@@ -37,6 +41,8 @@ public interface AiConfigMapper {
             #{modelOptionsJson},
             #{conversationMemoryEnabled},
             #{conversationMemoryWindowSize},
+            #{conversationMemoryWindowTokens},
+            #{conversationAutoCompressRatio},
             #{detailOutputEnabled},
             #{updatedAt}
         )
@@ -54,6 +60,8 @@ public interface AiConfigMapper {
             model_options_json = #{modelOptionsJson},
             conversation_memory_enabled = #{conversationMemoryEnabled},
             conversation_memory_window_size = #{conversationMemoryWindowSize},
+            conversation_memory_window_tokens = #{conversationMemoryWindowTokens},
+            conversation_auto_compress_ratio = #{conversationAutoCompressRatio},
             detail_output_enabled = #{detailOutputEnabled},
             updated_at = #{updatedAt}
         WHERE id = #{id}

@@ -20,6 +20,9 @@ public class AiConfigServiceImpl implements AiConfigService {
 
     private static final long SINGLETON_ID = 1L;
     private static final Pattern OPTION_ID_SAFE_PATTERN = Pattern.compile("[^a-zA-Z0-9_\\-]+");
+    private static final int DEFAULT_CONVERSATION_MEMORY_WINDOW_SIZE = 12;
+    private static final int DEFAULT_CONVERSATION_MEMORY_WINDOW_TOKENS = 6000;
+    private static final double DEFAULT_CONVERSATION_AUTO_COMPRESS_RATIO = 0.75D;
 
     private final AiConfigMapper aiConfigMapper;
     private final ObjectMapper objectMapper;
@@ -44,6 +47,8 @@ public class AiConfigServiceImpl implements AiConfigService {
             entity.getUpdatedAt(),
             entity.getConversationMemoryEnabled(),
             entity.getConversationMemoryWindowSize(),
+            entity.getConversationMemoryWindowTokens(),
+            entity.getConversationAutoCompressRatio(),
             entity.getDetailOutputEnabled()
         );
     }
@@ -73,6 +78,8 @@ public class AiConfigServiceImpl implements AiConfigService {
         entity.setModelOptionsJson(serializeModelOptions(modelOptions));
         entity.setConversationMemoryEnabled(Boolean.FALSE.equals(req.getConversationMemoryEnabled()) ? 0 : 1);
         entity.setConversationMemoryWindowSize(normalizeConversationMemoryWindowSize(req.getConversationMemoryWindowSize()));
+        entity.setConversationMemoryWindowTokens(normalizeConversationMemoryWindowTokens(req.getConversationMemoryWindowTokens()));
+        entity.setConversationAutoCompressRatio(normalizeConversationAutoCompressRatio(req.getConversationAutoCompressRatio()));
         entity.setDetailOutputEnabled(Boolean.TRUE.equals(req.getDetailOutputEnabled()) ? 1 : 0);
         entity.setUpdatedAt(now);
 
@@ -86,18 +93,23 @@ public class AiConfigServiceImpl implements AiConfigService {
             now,
             entity.getConversationMemoryEnabled(),
             entity.getConversationMemoryWindowSize(),
+            entity.getConversationMemoryWindowTokens(),
+            entity.getConversationAutoCompressRatio(),
             entity.getDetailOutputEnabled()
         );
     }
 
     private AiConfigVO defaultConfig() {
-        return toVO(defaultModelOptions(), 0L, 1, 12, 0);
+        return toVO(defaultModelOptions(), 0L, 1, DEFAULT_CONVERSATION_MEMORY_WINDOW_SIZE, DEFAULT_CONVERSATION_MEMORY_WINDOW_TOKENS,
+            DEFAULT_CONVERSATION_AUTO_COMPRESS_RATIO, 0);
     }
 
     private AiConfigVO toVO(List<AiModelOptionVO> options,
                             Long updatedAt,
                             Integer memoryEnabled,
                             Integer memoryWindowSize,
+                            Integer memoryWindowTokens,
+                            Double autoCompressRatio,
                             Integer detailOutputEnabled) {
         AiModelOptionVO first = options.get(0);
         AiConfigVO vo = new AiConfigVO();
@@ -110,6 +122,8 @@ public class AiConfigServiceImpl implements AiConfigService {
         vo.setModelOptions(options);
         vo.setConversationMemoryEnabled(!Integer.valueOf(0).equals(memoryEnabled));
         vo.setConversationMemoryWindowSize(normalizeConversationMemoryWindowSize(memoryWindowSize));
+        vo.setConversationMemoryWindowTokens(normalizeConversationMemoryWindowTokens(memoryWindowTokens));
+        vo.setConversationAutoCompressRatio(normalizeConversationAutoCompressRatio(autoCompressRatio));
         vo.setDetailOutputEnabled(Integer.valueOf(1).equals(detailOutputEnabled));
         vo.setUpdatedAt(updatedAt == null ? 0L : updatedAt);
         return vo;
@@ -271,8 +285,19 @@ public class AiConfigServiceImpl implements AiConfigService {
 
 
     private Integer normalizeConversationMemoryWindowSize(Integer value) {
-        int size = value == null ? 12 : value;
+        int size = value == null ? DEFAULT_CONVERSATION_MEMORY_WINDOW_SIZE : value;
         return Math.max(4, Math.min(size, 50));
+    }
+
+    private Integer normalizeConversationMemoryWindowTokens(Integer value) {
+        int tokens = value == null ? DEFAULT_CONVERSATION_MEMORY_WINDOW_TOKENS : value;
+        return Math.max(512, Math.min(tokens, 32000));
+    }
+
+    private Double normalizeConversationAutoCompressRatio(Double value) {
+        double ratio = value == null ? DEFAULT_CONVERSATION_AUTO_COMPRESS_RATIO : value;
+        double normalized = Math.max(0.30D, Math.min(ratio, 0.95D));
+        return Math.round(normalized * 100.0D) / 100.0D;
     }
 
     private String safe(String input) {

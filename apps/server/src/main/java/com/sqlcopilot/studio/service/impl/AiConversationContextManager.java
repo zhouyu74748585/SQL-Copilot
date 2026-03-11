@@ -37,6 +37,16 @@ public class AiConversationContextManager {
     private static final int DEFAULT_MEMORY_WINDOW_SIZE = 12;
     private static final int MIN_MEMORY_WINDOW_SIZE = 4;
     private static final int MAX_MEMORY_WINDOW_SIZE = 50;
+    private static final int DEFAULT_MEMORY_WINDOW_TOKENS = 6000;
+    private static final int MIN_MEMORY_WINDOW_TOKENS = 512;
+    private static final int MAX_MEMORY_WINDOW_TOKENS = 32000;
+    private static final double DEFAULT_AUTO_COMPRESS_RATIO = 0.75D;
+    private static final double MIN_AUTO_COMPRESS_RATIO = 0.30D;
+    private static final double MAX_AUTO_COMPRESS_RATIO = 0.95D;
+    private static final int MIN_RAW_RECENT_TOKENS = 512;
+    private static final int DEFAULT_SESSION_MEMORY_TTL_DAYS = 30;
+    private static final long DEFAULT_SESSION_MEMORY_TTL_MS = Duration.ofDays(DEFAULT_SESSION_MEMORY_TTL_DAYS).toMillis();
+    private static final int SESSION_MEMORY_SEARCH_LIMIT = 10;
     private static final ThreadLocal<Map<String, Object>> REQUEST_CONTEXT_CACHE = ThreadLocal.withInitial(ConcurrentHashMap::new);
     private static final ThreadLocal<Integer> REQUEST_CONTEXT_CACHE_DEPTH = ThreadLocal.withInitial(() -> 0);
     private static final String CONTEXT_COMPRESS_SYSTEM_PROMPT = """
@@ -113,19 +123,26 @@ public class AiConversationContextManager {
     /**
      * 关键步骤：构建给生成链路使用的完整上下文，统一收口 RAG、Schema 和记忆三类来源。
      */
-    public ConversationGenerationContext buildGenerationContext(AiGenerateSqlReq req, RagPromptContext ragPromptContext) {
+    public ConversationGenerationContext buildGenerationContext(AiGenerateSqlReq req,
+                                                                RagPromptContext ragPromptContext,
+                                                                String retrievalHintForPrompt) {
         List<String> relatedTables = new ArrayList<>();
         if (ragPromptContext != null && ragPromptContext.getRelatedTables() != null) {
             relatedTables.addAll(ragPromptContext.getRelatedTables());
         }
         String ragContextText = safe(ragPromptContext == null ? "" : ragPromptContext.getPromptContext());
+        String promptRetrievalHint = safe(retrievalHintForPrompt);
+        if (promptRetrievalHint.isBlank()) {
+            promptRetrievalHint = buildRetrievalInput(req.getPrompt());
+        }
 
         String schemaContextText = "";
         if (ragPromptContext == null || !Boolean.TRUE.equals(ragPromptContext.getHit()) || ragContextText.isBlank()) {
             ContextBuildReq contextReq = new ContextBuildReq();
             contextReq.setConnectionId(req.getConnectionId());
             contextReq.setDatabaseName(req.getDatabaseName());
-            contextReq.setQuestion(buildRetrievalInput(req.getPrompt()));
+            // 关键步骤：Schema fallback 也复用已经整理过的检索提示，避免回退时丢失意图识别得到的重点信息。
+            contextReq.setQuestion(promptRetrievalHint);
             contextReq.setTokenBudget(1200);
             ContextBuildVO schemaContext = schemaService.buildContext(contextReq);
             if (schemaContext.getRelatedTables() != null && !schemaContext.getRelatedTables().isEmpty()) {
@@ -133,21 +150,22 @@ public class AiConversationContextManager {
             }
             schemaContextText = safe(schemaContext.getContext());
         }
-
-        String retrievalInputForPrompt = buildRetrievalInputForRag(req);
         if (!isMemoryEnabled(req)) {
             String fallbackContext = !ragContextText.isBlank() ? ragContextText : schemaContextText;
-            return new ConversationGenerationContext(fallbackContext, deduplicateTables(relatedTables), retrievalInputForPrompt);
+            return new ConversationGenerationContext(fallbackContext, deduplicateTables(relatedTables), promptRetrievalHint);
         }
 
         AiConfigVO aiConfig = aiConfigService.getConfig();
-        int memoryWindowSize = resolveMemoryWindowSize(aiConfig);
-        ConversationMemorySnapshot snapshot = loadConversationMemorySnapshot(req, memoryWindowSize);
+        ConversationMemoryPolicy memoryPolicy = resolveMemoryPolicy(aiConfig);
+        ConversationMemorySnapshot snapshot = loadConversationMemorySnapshot(req, memoryPolicy);
 
         List<String> segments = new ArrayList<>();
         // 关键步骤：先放向量召回记忆，再放滑窗摘要和结构化窗口，保证模型优先看到提炼后的长期信息。
         if (!snapshot.vectorMemoryContext().isBlank()) {
             segments.add("Conversation Memory Recall:\n" + snapshot.vectorMemoryContext());
+        }
+        if (!snapshot.windowSummary().isBlank()) {
+            segments.add("Conversation Recent Summary:\n" + snapshot.windowSummary());
         }
         if (!snapshot.slidingSummary().isBlank()) {
             segments.add("Conversation Sliding Summary:\n" + snapshot.slidingSummary());
@@ -163,7 +181,7 @@ public class AiConversationContextManager {
         return new ConversationGenerationContext(
             String.join("\n\n", segments),
             deduplicateTables(relatedTables),
-            retrievalInputForPrompt
+            promptRetrievalHint
         );
     }
 
@@ -180,11 +198,14 @@ public class AiConversationContextManager {
             return baseInput;
         }
         AiConfigVO aiConfig = aiConfigService.getConfig();
-        int memoryWindowSize = resolveMemoryWindowSize(aiConfig);
-        ConversationMemorySnapshot snapshot = loadConversationMemorySnapshot(req, memoryWindowSize);
+        ConversationMemoryPolicy memoryPolicy = resolveMemoryPolicy(aiConfig);
+        ConversationMemorySnapshot snapshot = loadConversationMemorySnapshot(req, memoryPolicy);
         List<String> memorySegments = new ArrayList<>();
         if (!snapshot.windowSummary().isBlank()) {
             memorySegments.add("会话窗口摘要:\n" + snapshot.windowSummary());
+        } else if (!snapshot.windowDialogContext().isBlank()) {
+            // 关键步骤：未达到自动压缩阈值时，优先保留最近原文，让检索继续看到真实追问细节。
+            memorySegments.add("最近会话原文:\n" + snapshot.windowDialogContext());
         }
         if (!snapshot.vectorMemoryContext().isBlank()) {
             memorySegments.add("会话向量记忆召回:\n" + snapshot.vectorMemoryContext());
@@ -211,11 +232,13 @@ public class AiConversationContextManager {
         ArrayNode rows = objectMapper.createArrayNode();
         for (QueryHistoryEntity item : windowRecords) {
             ObjectNode node = objectMapper.createObjectNode();
-            node.put("role", "user");
-            node.put("prompt", safe(item.getPromptText()));
-            node.put("sql", safe(item.getSqlText()));
-            node.put("assistant", safe(item.getAssistantContent()));
+            // 关键步骤：最近对话按“单轮记录”输出，避免把一整条含 SQL/助手回答的记录错误标成 user。
+            node.put("turnType", "chat_history_turn");
+            node.put("userPrompt", safe(item.getPromptText()));
+            node.put("assistantReply", safe(item.getAssistantContent()));
+            node.put("sqlOutput", safe(item.getSqlText()));
             node.put("actionType", safe(item.getActionType()));
+            node.put("database", safe(item.getDatabaseName()));
             rows.add(node);
         }
         return rows.toString();
@@ -254,36 +277,50 @@ public class AiConversationContextManager {
         return normalizedPrompt + "\n补充上下文:\n" + normalizedExtraContext;
     }
 
-    private ConversationMemorySnapshot loadConversationMemorySnapshot(AiGenerateSqlReq req, int memoryWindowSize) {
+    private ConversationMemorySnapshot loadConversationMemorySnapshot(AiGenerateSqlReq req, ConversationMemoryPolicy memoryPolicy) {
         String cacheKey = "conversation-memory-snapshot:"
             + req.getConnectionId() + ":"
             + safe(req.getSessionId()) + ":"
             + safe(req.getDatabaseName()) + ":"
             + resolveRequestedModelId(req) + ":"
             + safe(req.getPrompt()).hashCode() + ":"
-            + memoryWindowSize;
-        return getOrComputeRequestCache(cacheKey, () -> buildConversationMemorySnapshot(req, memoryWindowSize));
+            + memoryPolicy.windowSize() + ":"
+            + memoryPolicy.windowTokens() + ":"
+            + String.format(Locale.ROOT, "%.2f", memoryPolicy.autoCompressRatio());
+        return getOrComputeRequestCache(cacheKey, () -> buildConversationMemorySnapshot(req, memoryPolicy));
     }
 
     /**
      * 关键步骤：一次性拉平本次请求用到的记忆片段，供检索输入和最终生成上下文复用。
      */
-    private ConversationMemorySnapshot buildConversationMemorySnapshot(AiGenerateSqlReq req, int memoryWindowSize) {
+    private ConversationMemorySnapshot buildConversationMemorySnapshot(AiGenerateSqlReq req, ConversationMemoryPolicy memoryPolicy) {
         List<QueryHistoryEntity> chatHistory = queryHistoryMapper.listBySession(
             req.getConnectionId(),
             safe(req.getSessionId()),
             500
         );
-        List<QueryHistoryEntity> windowRecords = pickWindowRecords(chatHistory, memoryWindowSize);
-        String windowSummary = buildCompressedSummary(req, windowRecords);
-        String windowStructuredContext = buildStructuredContextJson(windowRecords);
+        if (chatHistory == null || chatHistory.isEmpty()) {
+            return new ConversationMemorySnapshot("", "", "[]", "", "");
+        }
+        List<QueryHistoryEntity> windowRecords = pickWindowRecordsByTokenBudget(chatHistory, memoryPolicy.windowSize(), memoryPolicy.windowTokens());
+        int windowStartIndex = Math.max(0, chatHistory.size() - windowRecords.size());
+        List<QueryHistoryEntity> olderRecords = windowStartIndex <= 0 ? List.of() : new ArrayList<>(chatHistory.subList(0, windowStartIndex));
+        int windowTokens = sumHistoryTokens(windowRecords);
+        boolean shouldCompressWindow = windowTokens >= memoryPolicy.compressTriggerTokens();
+        List<QueryHistoryEntity> rawRecentRecords = shouldCompressWindow
+            ? pickWindowRecordsByTokenBudget(windowRecords, windowRecords.size(), resolveRecentRawTokenBudget(memoryPolicy))
+            : windowRecords;
+        String windowDialogContext = buildWindowDialogContext(rawRecentRecords);
+        String windowSummary = shouldCompressWindow ? buildCompressedSummary(req, windowRecords) : "";
+        String windowStructuredContext = buildStructuredContextJson(rawRecentRecords);
         String slidingSummary = "";
-        if (chatHistory.size() > memoryWindowSize) {
-            slidingSummary = buildCompressedSummary(req, chatHistory.subList(0, Math.max(0, chatHistory.size() - memoryWindowSize)));
-            upsertSessionSummaryVector(req, slidingSummary, memoryWindowSize, chatHistory.size());
+        if (!olderRecords.isEmpty()) {
+            // 关键步骤：超出最近原文窗口的更早历史统一折叠成滑动摘要，既保留语义又避免无限堆积 token。
+            slidingSummary = buildCompressedSummary(req, olderRecords);
+            upsertSessionSummaryVector(req, slidingSummary, memoryPolicy.windowSize(), chatHistory.size());
         }
         String vectorMemoryContext = querySessionMemoryFromVectorStore(req);
-        return new ConversationMemorySnapshot(windowSummary, slidingSummary, windowStructuredContext, vectorMemoryContext);
+        return new ConversationMemorySnapshot(windowSummary, slidingSummary, windowStructuredContext, vectorMemoryContext, windowDialogContext);
     }
 
     private int resolveMemoryWindowSize(AiConfigVO config) {
@@ -294,11 +331,61 @@ public class AiConversationContextManager {
         return Math.max(MIN_MEMORY_WINDOW_SIZE, Math.min(size, MAX_MEMORY_WINDOW_SIZE));
     }
 
+    private int resolveMemoryWindowTokens(AiConfigVO config) {
+        Integer tokens = config == null ? null : config.getConversationMemoryWindowTokens();
+        if (tokens == null) {
+            return DEFAULT_MEMORY_WINDOW_TOKENS;
+        }
+        return Math.max(MIN_MEMORY_WINDOW_TOKENS, Math.min(tokens, MAX_MEMORY_WINDOW_TOKENS));
+    }
+
+    private double resolveAutoCompressRatio(AiConfigVO config) {
+        Double ratio = config == null ? null : config.getConversationAutoCompressRatio();
+        if (ratio == null) {
+            return DEFAULT_AUTO_COMPRESS_RATIO;
+        }
+        return Math.max(MIN_AUTO_COMPRESS_RATIO, Math.min(ratio, MAX_AUTO_COMPRESS_RATIO));
+    }
+
+    private ConversationMemoryPolicy resolveMemoryPolicy(AiConfigVO config) {
+        int windowSize = resolveMemoryWindowSize(config);
+        int windowTokens = resolveMemoryWindowTokens(config);
+        double autoCompressRatio = resolveAutoCompressRatio(config);
+        int compressTriggerTokens = Math.max(1, (int) Math.ceil(windowTokens * autoCompressRatio));
+        return new ConversationMemoryPolicy(windowSize, windowTokens, autoCompressRatio, compressTriggerTokens);
+    }
+
+    private int resolveRecentRawTokenBudget(ConversationMemoryPolicy memoryPolicy) {
+        int reserved = memoryPolicy.windowTokens() - memoryPolicy.compressTriggerTokens();
+        return Math.max(MIN_RAW_RECENT_TOKENS, reserved);
+    }
+
+    private List<QueryHistoryEntity> pickWindowRecordsByTokenBudget(List<QueryHistoryEntity> rows, int windowSize, int windowTokenBudget) {
+        if (rows == null || rows.isEmpty()) {
+            return List.of();
+        }
+        List<QueryHistoryEntity> selected = new ArrayList<>();
+        int usedTokens = 0;
+        for (int index = rows.size() - 1; index >= 0; index--) {
+            if (selected.size() >= Math.max(1, windowSize)) {
+                break;
+            }
+            QueryHistoryEntity item = rows.get(index);
+            int rowTokens = estimateHistoryTokens(item);
+            if (!selected.isEmpty() && usedTokens + rowTokens > Math.max(1, windowTokenBudget)) {
+                break;
+            }
+            selected.add(0, item);
+            usedTokens += rowTokens;
+        }
+        return selected;
+    }
+
     private List<QueryHistoryEntity> pickWindowRecords(List<QueryHistoryEntity> rows, int windowSize) {
         if (rows == null || rows.isEmpty()) {
             return List.of();
         }
-        int start = Math.max(0, rows.size() - windowSize);
+        int start = Math.max(0, rows.size() - Math.max(1, windowSize));
         return rows.subList(start, rows.size());
     }
 
@@ -355,6 +442,28 @@ public class AiConversationContextManager {
         return arrayNode.toString();
     }
 
+    private String buildWindowDialogContext(List<QueryHistoryEntity> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        for (QueryHistoryEntity item : rows) {
+            String prompt = safe(item.getPromptText());
+            String sql = safe(item.getSqlText());
+            String assistant = safe(item.getAssistantContent());
+            if (!prompt.isBlank()) {
+                builder.append("U: ").append(prompt).append("\n");
+            }
+            if (!sql.isBlank()) {
+                builder.append("SQL: ").append(sql).append("\n");
+            }
+            if (!assistant.isBlank()) {
+                builder.append("A: ").append(assistant).append("\n");
+            }
+        }
+        return builder.toString().trim();
+    }
+
     /**
      * 关键步骤：把旧历史压缩摘要写回向量库，作为当前会话的长期记忆锚点。
      */
@@ -377,7 +486,11 @@ public class AiConversationContextManager {
             payload.put("summary", summary);
             payload.put("window_size", windowSize);
             payload.put("total_messages", totalMessages);
-            payload.put("updated_at", System.currentTimeMillis());
+            long now = System.currentTimeMillis();
+            payload.put("updated_at", now);
+            // 关键步骤：会话记忆默认保留 30 天，超过 TTL 后不再参与召回。
+            payload.put("memory_ttl_days", DEFAULT_SESSION_MEMORY_TTL_DAYS);
+            payload.put("expires_at", now + DEFAULT_SESSION_MEMORY_TTL_MS);
             qdrantClientService.upsertPoints(
                 sqlHistoryCollectionName,
                 List.of(new QdrantPoint(
@@ -400,21 +513,26 @@ public class AiConversationContextManager {
             if (queryVector == null || queryVector.isEmpty()) {
                 return "";
             }
+            long now = System.currentTimeMillis();
             List<QdrantScoredPoint> points = qdrantClientService.searchPoints(
                 sqlHistoryCollectionName,
                 queryVector,
-                3,
+                SESSION_MEMORY_SEARCH_LIMIT,
                 req.getConnectionId(),
                 req.getDatabaseName()
             );
             StringBuilder builder = new StringBuilder();
             for (QdrantScoredPoint point : points) {
-                String sessionId = Objects.toString(point.getPayload().get("session_id"), "").trim();
-                String entryType = Objects.toString(point.getPayload().get("entry_type"), "").trim();
+                Map<String, Object> payload = point.getPayload();
+                String sessionId = Objects.toString(payload.get("session_id"), "").trim();
+                String entryType = Objects.toString(payload.get("entry_type"), "").trim();
                 if (!safe(req.getSessionId()).equals(sessionId) || !"session_summary".equals(entryType)) {
                     continue;
                 }
-                String summary = Objects.toString(point.getPayload().get("summary"), "").trim();
+                if (isExpiredSessionMemory(payload, now)) {
+                    continue;
+                }
+                String summary = Objects.toString(payload.get("summary"), "").trim();
                 if (!summary.isBlank()) {
                     builder.append("- ").append(summary).append("\n");
                 }
@@ -553,6 +671,18 @@ public class AiConversationContextManager {
         return safe(sourceText);
     }
 
+    private boolean isExpiredSessionMemory(Map<String, Object> payload, long now) {
+        long expiresAt = asLong(payload == null ? null : payload.get("expires_at"));
+        if (expiresAt > 0L) {
+            return expiresAt <= now;
+        }
+        long updatedAt = asLong(payload == null ? null : payload.get("updated_at"));
+        if (updatedAt <= 0L) {
+            updatedAt = asLong(payload == null ? null : payload.get("created_at"));
+        }
+        return updatedAt > 0L && updatedAt + DEFAULT_SESSION_MEMORY_TTL_MS <= now;
+    }
+
     @SuppressWarnings("unchecked")
     private <T> T getOrComputeRequestCache(String key, Supplier<T> supplier) {
         if (key == null || key.isBlank()) {
@@ -583,6 +713,52 @@ public class AiConversationContextManager {
             }
         }
         return values;
+    }
+
+    private long asLong(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        String text = Objects.toString(value, "").trim();
+        if (text.isBlank()) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(text);
+        } catch (Exception ignore) {
+            return 0L;
+        }
+    }
+
+    private int sumHistoryTokens(List<QueryHistoryEntity> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return 0;
+        }
+        int total = 0;
+        for (QueryHistoryEntity item : rows) {
+            total += estimateHistoryTokens(item);
+        }
+        return total;
+    }
+
+    private int estimateHistoryTokens(QueryHistoryEntity item) {
+        if (item == null) {
+            return 0;
+        }
+        Integer tokenEstimate = item.getTokenEstimate();
+        if (tokenEstimate != null && tokenEstimate > 0) {
+            return tokenEstimate;
+        }
+        String source = buildWindowDialogContext(List.of(item));
+        return estimateTokens(source);
+    }
+
+    private int estimateTokens(String text) {
+        int length = safe(text).length();
+        if (length <= 0) {
+            return 0;
+        }
+        return Math.max(1, (int) Math.ceil(length / 4.0));
     }
 
     private List<String> deduplicateTables(List<String> tables) {
@@ -628,6 +804,13 @@ public class AiConversationContextManager {
     private record ConversationMemorySnapshot(String windowSummary,
                                               String slidingSummary,
                                               String windowStructuredContext,
-                                              String vectorMemoryContext) {
+                                              String vectorMemoryContext,
+                                              String windowDialogContext) {
+    }
+
+    private record ConversationMemoryPolicy(int windowSize,
+                                            int windowTokens,
+                                            double autoCompressRatio,
+                                            int compressTriggerTokens) {
     }
 }

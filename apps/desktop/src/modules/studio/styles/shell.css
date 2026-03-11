@@ -2201,6 +2201,75 @@ body {
   color: #4f6b92;
 }
 
+.query-context-usage-ring {
+  --context-usage-ratio: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid rgba(133, 160, 202, 0.32);
+  background:
+    radial-gradient(circle at center, #ffffff 52%, transparent 53%),
+    conic-gradient(var(--context-usage-color, #5a88ff) calc(var(--context-usage-ratio) * 1turn), rgba(195, 210, 233, 0.32) 0);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.7);
+}
+
+.query-context-usage-ring.is-compact {
+  width: 24px;
+  height: 24px;
+}
+
+.query-context-usage-ring.is-idle {
+  --context-usage-color: #8ba1c3;
+}
+
+.query-context-usage-ring.is-normal {
+  --context-usage-color: #4f7cff;
+}
+
+.query-context-usage-ring.is-warning {
+  --context-usage-color: #dd9b1f;
+}
+
+.query-context-usage-ring.is-danger {
+  --context-usage-color: #d84a55;
+}
+
+.query-context-usage-ring.is-disabled {
+  opacity: 0.55;
+  filter: saturate(0.75);
+}
+
+.query-context-usage-ring-core {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--context-usage-color, #5a88ff) 72%, white);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.85);
+}
+
+.query-context-usage-ring.is-compact .query-context-usage-ring-core {
+  width: 7px;
+  height: 7px;
+}
+
+.query-context-usage-tooltip-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 190px;
+}
+
+.query-context-usage-tooltip-copy strong {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.query-context-usage-tooltip-copy span {
+  color: rgba(255, 255, 255, 0.82);
+}
+
 .query-chat-settings-trigger {
   flex: 0 0 auto;
 }

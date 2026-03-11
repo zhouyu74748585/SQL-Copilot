@@ -87,6 +87,8 @@ CREATE TABLE IF NOT EXISTS ai_provider_config (
     model_options_json TEXT,
     conversation_memory_enabled INTEGER DEFAULT 1,
     conversation_memory_window_size INTEGER DEFAULT 12,
+    conversation_memory_window_tokens INTEGER DEFAULT 6000,
+    conversation_auto_compress_ratio REAL DEFAULT 0.75,
     detail_output_enabled INTEGER DEFAULT 0,
     updated_at INTEGER NOT NULL
 );

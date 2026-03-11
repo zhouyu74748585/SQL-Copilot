@@ -572,6 +572,8 @@ export interface AiConfigVO {
   modelOptions?: AiModelOption[];
   conversationMemoryEnabled?: boolean;
   conversationMemoryWindowSize?: number;
+  conversationMemoryWindowTokens?: number;
+  conversationAutoCompressRatio?: number;
   detailOutputEnabled?: boolean;
   updatedAt?: number;
 }
@@ -586,6 +588,8 @@ export interface AiConfigSaveReq {
   modelOptions?: AiModelOption[];
   conversationMemoryEnabled?: boolean;
   conversationMemoryWindowSize?: number;
+  conversationMemoryWindowTokens?: number;
+  conversationAutoCompressRatio?: number;
   detailOutputEnabled?: boolean;
 }
 

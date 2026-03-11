@@ -241,6 +241,16 @@ interface QueryWorkspaceTab {
   lastTokenEstimate: number;
 }
 
+interface QueryContextUsage {
+  enabled: boolean;
+  usedTokens: number;
+  totalTokens: number;
+  ratio: number;
+  cappedRatio: number;
+  percent: number;
+  tone: 'idle' | 'normal' | 'warning' | 'danger';
+}
+
 interface SqlEditorContext {
   connectionId: number;
   databaseName: string;
@@ -791,6 +801,10 @@ const selectedConnection = computed(() =>
 
 const activeQueryTab = computed(() =>
   queryTabs.value.find((item) => item.key === activeWorkbenchTab.value) ?? null,
+);
+
+const activeQueryContextUsage = computed<QueryContextUsage>(() =>
+  buildQueryContextUsage(activeQueryTab.value),
 );
 
 const activeErTab = computed(() =>
@@ -2187,6 +2201,77 @@ function detailOutputEnabledForTab(tab: QueryWorkspaceTab | null | undefined) {
     return aiConfigForm.detailOutputEnabled === true;
   }
   return tab.detailOutputOverride === true;
+}
+
+function buildQueryContextUsage(tab: QueryWorkspaceTab | null | undefined): QueryContextUsage {
+  const totalTokens = Math.min(32000, Math.max(512, Number(aiConfigForm.conversationMemoryWindowTokens || 6000)));
+  const maxTurns = Math.min(50, Math.max(1, Number(aiConfigForm.conversationMemoryWindowSize || 12)));
+  const enabled = tab?.memoryEnabled ?? (aiConfigForm.conversationMemoryEnabled !== false);
+  if (!tab || !tab.chatMessages.length) {
+    return {
+      enabled,
+      usedTokens: 0,
+      totalTokens,
+      ratio: 0,
+      cappedRatio: 0,
+      percent: 0,
+      tone: enabled ? 'idle' : 'normal',
+    };
+  }
+  const selected: QueryChatMessage[] = [];
+  let usedTokens = 0;
+  let turnCount = 0;
+  for (let index = tab.chatMessages.length - 1; index >= 0; index -= 1) {
+    const item = tab.chatMessages[index];
+    const itemTokens = estimateQueryChatMessageTokens(item);
+    const nextTurnCount = turnCount + (item.role === 'user' ? 1 : 0);
+    if (selected.length > 0 && (usedTokens + itemTokens > totalTokens || nextTurnCount > maxTurns)) {
+      break;
+    }
+    selected.unshift(item);
+    usedTokens += itemTokens;
+    if (item.role === 'user') {
+      turnCount = nextTurnCount;
+    }
+  }
+  const ratio = totalTokens > 0 ? usedTokens / totalTokens : 0;
+  const cappedRatio = Math.max(0, Math.min(ratio, 1));
+  let tone: QueryContextUsage['tone'] = 'normal';
+  if (ratio >= 1) {
+    tone = 'danger';
+  } else if (ratio >= 0.85) {
+    tone = 'warning';
+  } else if (ratio <= 0.05) {
+    tone = 'idle';
+  }
+  return {
+    enabled,
+    usedTokens,
+    totalTokens,
+    ratio,
+    cappedRatio,
+    percent: Math.round(ratio * 100),
+    tone,
+  };
+}
+
+function estimateQueryChatMessageTokens(message: QueryChatMessage) {
+  if (!message) {
+    return 0;
+  }
+  return estimateTextTokens([
+    message.content || '',
+    message.sqlText || '',
+    message.chartConfigSummary || '',
+  ].filter((item) => !!item).join('\n'));
+}
+
+function estimateTextTokens(text: string) {
+  const length = (text || '').trim().length;
+  if (length <= 0) {
+    return 0;
+  }
+  return Math.max(1, Math.ceil(length / 4));
 }
 
 function toggleMessageTraceExpanded(tab: QueryWorkspaceTab, messageId: string) {
@@ -4184,6 +4269,8 @@ async function saveAiConfig() {
     aiConfigForm.cliWorkingDir = modelOptions[0].cliWorkingDir || '';
     aiConfigForm.conversationMemoryEnabled = aiConfigForm.conversationMemoryEnabled !== false;
     aiConfigForm.conversationMemoryWindowSize = Math.min(50, Math.max(4, Number(aiConfigForm.conversationMemoryWindowSize || 12)));
+    aiConfigForm.conversationMemoryWindowTokens = Math.min(32000, Math.max(512, Number(aiConfigForm.conversationMemoryWindowTokens || 6000)));
+    aiConfigForm.conversationAutoCompressRatio = Math.min(0.95, Math.max(0.3, Number(aiConfigForm.conversationAutoCompressRatio || 0.75)));
     aiConfigForm.detailOutputEnabled = aiConfigForm.detailOutputEnabled === true;
     ragConfigForm.ragEmbeddingProviderType = normalizeRagProviderType(ragConfigForm.ragEmbeddingProviderType);
     ragConfigForm.ragEmbeddingModelDir = (ragConfigForm.ragEmbeddingModelDir || '').trim();
@@ -6580,6 +6667,8 @@ function defaultAiConfigForm(): AiConfigSaveReq {
     modelOptions: [defaultOption],
     conversationMemoryEnabled: true,
     conversationMemoryWindowSize: 12,
+    conversationMemoryWindowTokens: 6000,
+    conversationAutoCompressRatio: 0.75,
     detailOutputEnabled: false,
   };
 }
@@ -6597,6 +6686,8 @@ function fillAiConfigForm(config: AiConfigVO) {
     modelOptions: options,
     conversationMemoryEnabled: config.conversationMemoryEnabled !== false,
     conversationMemoryWindowSize: config.conversationMemoryWindowSize || 12,
+    conversationMemoryWindowTokens: config.conversationMemoryWindowTokens || 6000,
+    conversationAutoCompressRatio: config.conversationAutoCompressRatio || 0.75,
     detailOutputEnabled: config.detailOutputEnabled === true,
   } satisfies AiConfigSaveReq);
   const models = options.map((item) => item.id).filter((item) => !!item);
@@ -6804,6 +6895,7 @@ function resetConnectionModalState() {
     aiRequestAbortReasonMap,
     selectedConnection,
     activeQueryTab,
+    activeQueryContextUsage,
     activeErTab,
     activeTableEditorTab,
     activeTableDataTab,

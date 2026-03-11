@@ -35,6 +35,12 @@ public class AiConfigVO {
     /** 记忆滑动窗口大小。 */
     private Integer conversationMemoryWindowSize;
 
+    /** 对话记忆窗口 token 上限。 */
+    private Integer conversationMemoryWindowTokens;
+
+    /** 自动压缩触发比例。 */
+    private Double conversationAutoCompressRatio;
+
     private Boolean detailOutputEnabled;
 
     /** 最近更新时间戳（毫秒）。 */
