@@ -31,7 +31,6 @@ import {
   SearchOutlined,
   SendOutlined,
   SettingOutlined,
-  StopOutlined,
   SyncOutlined,
   TableOutlined,
   ToolOutlined,

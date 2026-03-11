@@ -1339,7 +1339,7 @@
                           @click="activeQueryTab.sqlExecuting ? terminateSqlExecutionForTab(activeQueryTab) : executeSqlForTab(activeQueryTab, item.sqlText || '')"
                         >
                           <template #icon>
-                            <stop-outlined v-if="activeQueryTab.sqlExecuting" />
+                            <span v-if="activeQueryTab.sqlExecuting" class="stop-square-icon" aria-hidden="true" />
                             <play-circle-outlined v-else />
                           </template>
                         </a-button>
@@ -1500,7 +1500,7 @@
                     class="sql-action-icon-btn"
                     @click="terminateAiExecutionForTab(activeQueryTab)"
                   >
-                    <template #icon><stop-outlined /></template>
+                    <template #icon><span class="stop-square-icon" aria-hidden="true" /></template>
                   </a-button>
                 </a-tooltip>
               </div>
@@ -1644,7 +1644,7 @@
                   @click="activeQueryTab.sqlExecuting ? terminateSqlExecutionForTab(activeQueryTab) : executeSqlForTab(activeQueryTab)"
                 >
                   <template #icon>
-                    <stop-outlined v-if="activeQueryTab.sqlExecuting" />
+                    <span v-if="activeQueryTab.sqlExecuting" class="stop-square-icon" aria-hidden="true" />
                     <play-circle-outlined v-else />
                   </template>
                 </a-button>
@@ -2572,7 +2572,6 @@ import {
   SearchOutlined,
   SendOutlined,
   SettingOutlined,
-  StopOutlined,
   SyncOutlined,
   TableOutlined,
   ToolOutlined,

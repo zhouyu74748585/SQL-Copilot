@@ -1739,6 +1739,14 @@ body {
   box-shadow: 0 4px 12px rgba(34, 130, 84, 0.26);
 }
 
+.stop-square-icon {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: currentColor;
+  display: inline-block;
+}
+
 .query-chat-pane {
   display: flex;
   flex-direction: column;
