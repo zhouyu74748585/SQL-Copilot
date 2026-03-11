@@ -111,7 +111,8 @@ public class AiServiceImpl implements AiService {
         你是数据库 SQL 专家。基于提供的上下文生成 SQL。仅返回可执行 SQL，不要输出解释。
         约束：
         1）重要!!如果存在样例SQL，则优先参考样例SQL
-        2) SQL 必须可执行，不要使用 markdown 代码块。
+        2) SQL必须可执行，不要使用 markdown 代码块。
+        3) 输出的SQL的语法需要匹配上下文中的数据库类型 
         """;
     private static final String GENERATE_CHART_SYSTEM_PROMPT = """
         你是数据库图表方案助手。请基于用户需求和数据库上下文，输出严格 JSON，不要输出任何额外文本。
@@ -137,6 +138,7 @@ public class AiServiceImpl implements AiService {
         3) chartType=PIE 时必须提供 categoryField + valueField；
         4) chartType=SCATTER 时必须提供 xField + yFields(仅1项)；
         5) SQL 必须可执行，不要使用 markdown 代码块。
+        6) 输出的SQL的语法需要匹配上下文中的数据库类型 
         """;
     private static final String EXPLAIN_SQL_SYSTEM_PROMPT = """
         你是数据库讲解助手。请用中文解释 SQL 的业务含义。
@@ -162,6 +164,7 @@ public class AiServiceImpl implements AiService {
             - errorExplanation：使用中文简要说明 SQL 为什么失败，以及做了哪些修改
             - repairedSql：可执行的修复后 SQL
         3) 不要输出 Markdown、代码块或任何额外文本。
+        4) 输出的SQL的语法需要匹配上下文中的数据库类型 
         """;
     private static final String ER_RELATION_INFER_SYSTEM_PROMPT = """
         你是一个数据库关系推断助手。
@@ -1428,11 +1431,18 @@ public class AiServiceImpl implements AiService {
 
     private String buildRepairPrompt(String sqlText, String errorMessage) {
         return """
+            Repair the failed SQL according to the execution error.
+            Keep business intent unchanged while making it executable.
+
             Execution error:
             %s
 
             Original SQL:
             %s
+
+            Return strict JSON with keys:
+            errorExplanation
+            repairedSql
             """.formatted(safe(errorMessage), safe(sqlText));
     }
 
