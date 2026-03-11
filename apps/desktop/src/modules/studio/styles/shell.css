@@ -497,10 +497,10 @@ body {
 }
 
 .pane-title {
-  height: 40px;
+  min-height: 40px;
   display: flex;
   align-items: center;
-  padding: 0 12px;
+  padding: 8px 12px;
   font-size: 13px;
   font-weight: 700;
   border-bottom: 1px solid var(--line);
@@ -1631,6 +1631,12 @@ body {
 
 .query-memory-title-actions {
   font-size: 12px;
+  flex-shrink: 0;
+}
+
+.query-editor-header-actions {
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .query-memory-title-label {
@@ -1712,12 +1718,6 @@ body {
   border: 1px solid var(--line);
   border-radius: 8px;
   overflow: hidden;
-}
-
-.editor-actions {
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--line);
-  background: #fafcff;
 }
 
 .sql-action-icon-btn {

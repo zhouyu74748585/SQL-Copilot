@@ -323,9 +323,6 @@ public class AiServiceImpl implements AiService {
             vo.setTotalTokens(generated.getTotalTokens());
             delegatedTrace = generated.getTrace();
         } else if (intentType == IntentType.EXPLAIN_SQL) {
-            if (!hasSqlSnippet) {
-                throw new BusinessException(400, "自动识别为“解释 SQL”时，提示词中必须包含 SQL 片段");
-            }
             AiTextResponseVO explained = explainSql(req);
             timer.mark("route_explain_sql");
             vo.setContent(explained.getContent());
@@ -334,9 +331,6 @@ public class AiServiceImpl implements AiService {
             vo.setTotalTokens(explained.getTotalTokens());
             delegatedTrace = explained.getTrace();
         } else if (intentType == IntentType.ANALYZE_SQL) {
-            if (!hasSqlSnippet) {
-                throw new BusinessException(400, "自动识别为“分析 SQL”时，提示词中必须包含 SQL 片段");
-            }
             AiTextResponseVO analyzed = analyzeSql(req);
             timer.mark("route_analyze_sql");
             vo.setContent(analyzed.getContent());

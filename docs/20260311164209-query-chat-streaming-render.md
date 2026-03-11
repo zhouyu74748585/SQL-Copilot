@@ -1,0 +1,74 @@
+# 主题：query-chat-streaming-render
+
+## 记录
+
+### 2026-03-11 16:42:09
+
+## 本次目标
+- 修复 AI 对话已改为 SSE 流式后，前端消息与过程详情直到请求结束才一次性渲染的问题。
+
+## 关键改动
+- 调整 `apps/desktop/src/api/client.ts` 的 `postSseApi`：
+  - 允许 `onEvent` 返回 Promise，并在分发 SSE 事件时使用 `await`。
+  - 在持续收到流式事件时按帧主动让出主线程（优先 `requestAnimationFrame`，隐藏页面回退到 `setTimeout(0)`）。
+- 保持现有消息结构、Trace 更新逻辑和 SSE 解析协议不变，仅修正渲染时机，避免流结束后才集中刷出。
+
+## 验证结果
+- 前端类型检查：`npm run -w @sqlcopilot/desktop type-check` 通过。
+- 前端 clean 构建：删除 `apps/desktop/dist` 后执行 `npm run -w @sqlcopilot/desktop build` 通过。
+- 后端 clean 启动：`mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18092` 成功，健康检查 `http://127.0.0.1:18092/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+- 前端 clean 预览：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6048` 成功，`http://127.0.0.1:6048` 返回 `HTTP/1.1 200 OK`。
+
+## 备注
+- 当前工作区还存在用户已有未提交修改：`apps/desktop/src/modules/studio/components/StudioShell.vue`；本次未改动该文件。
+
+
+### 2026-03-11 16:52:52
+
+## 追加记录（2026-03-11 16:52）- 过程详情 Trace 增量渲染与 OpenAI 兼容流识别
+
+### 本次目标
+- 修复用户反馈的两个剩余问题：
+- 1）部分 OpenAI 兼容响应虽然请求了 stream，但后端仍按非流式一次性处理。
+- 2）过程详情面板没有随着 `llm.*.delta` 增量事件持续渲染，而是要等阶段完成后才统一更新。
+
+### 关键改动
+- 后端 `apps/server/src/main/java/com/sqlcopilot/studio/service/llm/OpenAiTextClient.java`：
+  - 新增 `Accept: text/event-stream` 请求头，提升 OpenAI 兼容网关返回 SSE 的概率。
+  - 新增 `looksLikeStreamingResponse(...)`，即使响应头未正确声明 `text/event-stream`，只要响应体前缀看起来是 SSE，就按流式逐段解析，不再直接走整包 fallback。
+- 前端 `apps/desktop/src/modules/studio/composables/useStudioRuntime.ts`：
+  - 新增 `resolveStreamingLlmStageMeta(...)` 与 `upsertStreamingTraceLlmDelta(...)`。
+  - 在 `llm.thinking.delta` / `llm.output.delta` 到达时，除了更新消息正文，也同步把增量内容写回当前 Trace 的 LLM 阶段 `llmCall.thinkingContent/fullOutput`。
+  - 若正式 LLM 阶段尚未落库到 Trace，前端先创建临时 running 阶段；后续 `stage.updated` / `trace.snapshot` 到达后再由真实阶段覆盖。
+
+### 验证结果
+- 后端构建：`mvn -f apps/server/pom.xml clean package` 通过。
+- 前端类型检查：`npm run -w @sqlcopilot/desktop type-check` 通过。
+- 前端构建：`npm run -w @sqlcopilot/desktop build` 通过。
+- 后端 clean 启动：`mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18093` 成功，`http://127.0.0.1:18093/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+- 前端 clean 预览：删除 `apps/desktop/dist` 后重新构建，并执行 `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6049`，`http://127.0.0.1:6049` 返回 `HTTP/1.1 200 OK`。
+
+### 备注
+- 用户提供的事件日志显示：此前 `llm.output.delta` 只有一条完整 SQL，且 `llmCall.streaming=false`，这正是后端误判为非流式 fallback 的直接证据。
+
+
+### 2026-03-11 17:05:25
+
+## 追加记录（2026-03-11 17:05）- 流式错误事件保留回复卡片
+
+### 本次目标
+- 修复 SSE 返回 `error` 事件或前端后续保存历史失败时，回复卡片被前端删除，表现为“后端返回数据之后，回复窗口直接消失”。
+
+### 关键改动
+- 前端 `apps/desktop/src/modules/studio/composables/useStudioRuntime.ts`：
+  - 新增 `hasRenderableAssistantPayload(...)` 与 `materializeAssistantErrorMessage(...)`。
+  - 对 explain/analyze/generate/auto/chart-plan/repair 的流式 `catch` 统一改造：
+    - 若只是空占位消息，则原位替换为助手错误文本；
+    - 若已经形成正式回复，则保留现有回复，不再因后续异常（如保存历史失败）删除消息。
+- 这意味着后端像 `{"eventType":"error","error":{"code":400,"message":"自动识别为“分析 SQL”时，提示词中必须包含 SQL 片段"}}` 这样的 SSE 错误事件，现在会在聊天区保留为可见错误回复，而不是让卡片消失。
+
+### 验证结果
+- 前端类型检查：`npm run -w @sqlcopilot/desktop type-check` 通过。
+- 前端构建：`npm run -w @sqlcopilot/desktop build` 通过。
+- 后端 clean 启动：`mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18094` 成功，`http://127.0.0.1:18094/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+- 前端预览：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6050` 成功，`http://127.0.0.1:6050` 返回 `HTTP/1.1 200 OK`。

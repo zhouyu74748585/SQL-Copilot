@@ -1563,7 +1563,69 @@
 
         <aside v-if="activeQueryTab" class="pane pane-right query-editor-pane">
           <div class="pane-title pane-title-with-action">
-            <span>SQL 编辑与执行</span>
+            <div class="pane-title-actions query-editor-header-actions">
+              <a-tooltip :title="activeQueryTab.selectedSqlText ? '计划选择的SQL' : '计划 SQL'">
+                <a-button
+                  size="small"
+                  :class="['sql-action-icon-btn', { 'is-selection-active': !!activeQueryTab.selectedSqlText }]"
+                  @click="explainSqlForTab(activeQueryTab)"
+                >
+                  <template #icon><eye-outlined /></template>
+                </a-button>
+              </a-tooltip>
+              <a-tooltip :title="activeQueryTab.sqlExecuting ? '终止执行' : (activeQueryTab.selectedSqlText ? '执行选中的SQL' : '执行 SQL')">
+                <a-button
+                  size="small"
+                  :type="activeQueryTab.sqlExecuting ? 'default' : 'primary'"
+                  :danger="activeQueryTab.sqlExecuting"
+                  :class="['sql-action-icon-btn', { 'is-selection-active': !!activeQueryTab.selectedSqlText }]"
+                  @click="activeQueryTab.sqlExecuting ? terminateSqlExecutionForTab(activeQueryTab) : executeSqlForTab(activeQueryTab)"
+                >
+                  <template #icon>
+                    <span v-if="activeQueryTab.sqlExecuting" class="stop-square-icon" aria-hidden="true" />
+                    <play-circle-outlined v-else />
+                  </template>
+                </a-button>
+              </a-tooltip>
+              <a-tooltip v-if="activeQueryTab.lastExecuteFailed" title="自动修复">
+                <a-button size="small" class="sql-action-icon-btn" @click="repairSqlForTab(activeQueryTab)">
+                  <template #icon><tool-outlined /></template>
+                </a-button>
+              </a-tooltip>
+              <a-tooltip :title="activeQueryTab.selectedSqlText ? '美化选中的SQL' : '美化 SQL'">
+                <a-button
+                  size="small"
+                  :class="['sql-action-icon-btn', { 'is-selection-active': !!activeQueryTab.selectedSqlText }]"
+                  @click="formatSqlForTab(activeQueryTab)"
+                >
+                  <template #icon><highlight-outlined /></template>
+                </a-button>
+              </a-tooltip>
+              <a-tooltip title="导出结果（CSV）">
+                <a-button size="small" class="sql-action-icon-btn" @click="exportCsvForTab(activeQueryTab)">
+                  <template #icon><download-outlined /></template>
+                </a-button>
+              </a-tooltip>
+              <a-tooltip title="保存查询">
+                <a-button size="small" class="sql-action-icon-btn" @click="openSaveQueryModal(activeQueryTab)">
+                  <template #icon><save-outlined /></template>
+                </a-button>
+              </a-tooltip>
+              <a-tooltip title="保存为样例 SQL">
+                <a-button size="small" class="sql-action-icon-btn" @click="openSaveQueryAsExampleModal(activeQueryTab)">
+                  <template #icon><hdd-outlined /></template>
+                </a-button>
+              </a-tooltip>
+              <a-tooltip v-if="activeQueryTab.selectedSqlText" title="所选 SQL 加入对话">
+                <a-button
+                  size="small"
+                  class="sql-action-icon-btn"
+                  @click="appendSelectedSqlToPrompt(activeQueryTab)"
+                >
+                  <template #icon><message-outlined /></template>
+                </a-button>
+              </a-tooltip>
+            </div>
             <div class="pane-title-actions query-memory-title-actions">
               <span class="query-memory-title-label">记忆理解</span>
               <a-switch v-model:checked="activeQueryTab.memoryEnabled" size="small" />
@@ -1622,63 +1684,6 @@
                 </a-tooltip>
               </a-space>
             </div>
-          </div>
-
-          <div class="editor-actions">
-            <a-space wrap>
-              <a-tooltip :title="activeQueryTab.selectedSqlText ? '计划选择的SQL' : '计划 SQL'">
-                <a-button
-                  size="small"
-                  :class="['sql-action-icon-btn', { 'is-selection-active': !!activeQueryTab.selectedSqlText }]"
-                  @click="explainSqlForTab(activeQueryTab)"
-                >
-                  <template #icon><eye-outlined /></template>
-                </a-button>
-              </a-tooltip>
-              <a-tooltip :title="activeQueryTab.sqlExecuting ? '终止执行' : (activeQueryTab.selectedSqlText ? '执行选中的SQL' : '执行 SQL')">
-                <a-button
-                  size="small"
-                  :type="activeQueryTab.sqlExecuting ? 'default' : 'primary'"
-                  :danger="activeQueryTab.sqlExecuting"
-                  :class="['sql-action-icon-btn', { 'is-selection-active': !!activeQueryTab.selectedSqlText }]"
-                  @click="activeQueryTab.sqlExecuting ? terminateSqlExecutionForTab(activeQueryTab) : executeSqlForTab(activeQueryTab)"
-                >
-                  <template #icon>
-                    <span v-if="activeQueryTab.sqlExecuting" class="stop-square-icon" aria-hidden="true" />
-                    <play-circle-outlined v-else />
-                  </template>
-                </a-button>
-              </a-tooltip>
-              <a-tooltip v-if="activeQueryTab.lastExecuteFailed" title="自动修复">
-                <a-button size="small" class="sql-action-icon-btn" @click="repairSqlForTab(activeQueryTab)">
-                  <template #icon><tool-outlined /></template>
-                </a-button>
-              </a-tooltip>
-              <a-tooltip title="导出结果（CSV）">
-                <a-button size="small" class="sql-action-icon-btn" @click="exportCsvForTab(activeQueryTab)">
-                  <template #icon><download-outlined /></template>
-                </a-button>
-              </a-tooltip>
-              <a-tooltip title="保存查询">
-                <a-button size="small" class="sql-action-icon-btn" @click="openSaveQueryModal(activeQueryTab)">
-                  <template #icon><save-outlined /></template>
-                </a-button>
-              </a-tooltip>
-              <a-tooltip title="保存为样例 SQL">
-                <a-button size="small" class="sql-action-icon-btn" @click="openSaveQueryAsExampleModal(activeQueryTab)">
-                  <template #icon><hdd-outlined /></template>
-                </a-button>
-              </a-tooltip>
-              <a-tooltip v-if="activeQueryTab.selectedSqlText" title="所选 SQL 加入对话">
-                <a-button
-                  size="small"
-                  class="sql-action-icon-btn"
-                  @click="appendSelectedSqlToPrompt(activeQueryTab)"
-                >
-                  <template #icon><message-outlined /></template>
-                </a-button>
-              </a-tooltip>
-            </a-space>
           </div>
 
           <div class="query-result-panel">
@@ -2321,19 +2326,19 @@
         </button>
       </template>
       <template v-else-if="contextMenu.targetType === 'object'">
+         <button
+          class="context-menu-item"
+          :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
+          @click="triggerContextAction('querySql')"
+        >
+          SQL查询
+        </button>
         <button
           class="context-menu-item"
           :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
           @click="triggerContextAction('editTable')"
         >
           编辑表结构
-        </button>
-        <button
-          class="context-menu-item"
-          :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
-          @click="triggerContextAction('querySql')"
-        >
-          查询SQL
         </button>
         <button
           class="context-menu-item"
@@ -2556,6 +2561,7 @@ import {
   FilterOutlined,
   FolderOpenOutlined,
   HddOutlined,
+  HighlightOutlined,
   HistoryOutlined,
   LinkOutlined,
   LoadingOutlined,
@@ -2575,7 +2581,6 @@ import {
   SyncOutlined,
   TableOutlined,
   ToolOutlined,
-  UnorderedListOutlined,
 } from '@ant-design/icons-vue';
 import {Editor as MonacoEditor} from '@guolao/vue-monaco-editor';
 import type * as MonacoApi from 'monaco-editor';
@@ -3122,6 +3127,7 @@ const {
     hydrateHistoryChartImages,
     editChartFromHistory,
     explainSqlForTab,
+    formatSqlForTab,
     RISK_EXECUTION_CANCELLED,
     SQL_EXECUTION_ABORTED,
     connectionEnvLabel,

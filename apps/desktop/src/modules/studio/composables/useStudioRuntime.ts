@@ -41,6 +41,7 @@ import type * as MonacoApi from 'monaco-editor';
 import type {IDisposable} from 'monaco-editor';
 import type {ConnectionVO} from '@sqlcopilot/shared-contracts';
 import {message, Modal, theme as antdTheme} from 'ant-design-vue';
+import {format as sqlFormat, type SqlLanguage} from 'sql-formatter';
 import {computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue';
 import {getApi, postApi, postSseApi} from '../../../api/client';
 import QueryChartPanel from '../../../components/QueryChartPanel.vue';
@@ -2465,6 +2466,35 @@ function removeQueryChatMessage(tab: QueryWorkspaceTab, targetMessage: QueryChat
   touchQueryTab(tab);
 }
 
+function hasRenderableAssistantPayload(messageItem: QueryChatMessage | undefined) {
+  if (!messageItem) {
+    return false;
+  }
+  return !!(
+    (messageItem.content || '').trim()
+    || (messageItem.liveOutput || '').trim()
+    || (messageItem.sqlText || '').trim()
+    || messageItem.chartConfig
+    || (messageItem.chartImageDataUrl || '').trim()
+    || messageItem.executionPreview
+  );
+}
+
+function materializeAssistantErrorMessage(
+  tab: QueryWorkspaceTab,
+  targetMessage: QueryChatMessage | undefined,
+  actionType: QueryChatMessage['actionType'],
+  errorMessage: string,
+) {
+  if (!targetMessage) {
+    return;
+  }
+  if (hasRenderableAssistantPayload(targetMessage) && !targetMessage.pending && !targetMessage.streaming) {
+    return;
+  }
+  appendAssistantTextMessage(tab, errorMessage, actionType, targetMessage.trace, targetMessage);
+}
+
 function prepareAssistantMessage(
   messageItem: QueryChatMessage,
   actionType: QueryChatMessage['actionType'],
@@ -2534,6 +2564,70 @@ function upsertStreamingTraceStage(messageItem: QueryChatMessage, stage: AiTrace
     stages[index] = stage;
   } else {
     stages.push(stage);
+  }
+  messageItem.trace = {
+    ...trace,
+    stages,
+    stageCount: stages.length,
+  };
+  if (messageItem.traceExpanded == null) {
+    messageItem.traceExpanded = false;
+  }
+}
+
+function resolveStreamingLlmStageMeta(actionType?: QueryChatMessage['actionType']) {
+  if (actionType === 'explain' || actionType === 'auto_explain') {
+    return { stageCode: 'llm_explain_sql', stageLabel: 'explain_sql' };
+  }
+  if (actionType === 'analyze' || actionType === 'auto_analyze') {
+    return { stageCode: 'llm_analyze_sql', stageLabel: 'analyze_sql' };
+  }
+  if (actionType === 'chart_auto_plan' || actionType === 'auto_chart_auto_plan') {
+    return { stageCode: 'llm_generate_chart', stageLabel: '图表生成' };
+  }
+  if (actionType === 'repair') {
+    return { stageCode: 'llm_repair_sql', stageLabel: 'repair_sql' };
+  }
+  return { stageCode: 'llm_generate_sql', stageLabel: 'SQL生成' };
+}
+
+function upsertStreamingTraceLlmDelta(
+  messageItem: QueryChatMessage,
+  actionType: QueryChatMessage['actionType'] | undefined,
+  channel: 'thinking' | 'output',
+  accumulatedText: string,
+) {
+  if (!accumulatedText) {
+    return;
+  }
+  const trace = messageItem.trace || {stageCount: 0, totalDurationMs: 0, stages: []};
+  const stages = [...(trace.stages || [])];
+  const stageMeta = resolveStreamingLlmStageMeta(actionType);
+  const stageIndex = stages.findIndex((item) => item.stageCode === stageMeta.stageCode);
+  const currentStage = stageIndex >= 0 ? stages[stageIndex] : undefined;
+  const llmCall = {
+    ...(currentStage?.llmCall || {}),
+    streaming: true,
+  };
+  if (channel === 'thinking') {
+    llmCall.thinkingContent = accumulatedText;
+  } else {
+    llmCall.fullOutput = accumulatedText;
+  }
+  const nextStage: AiTraceStageVO = {
+    stageCode: currentStage?.stageCode || stageMeta.stageCode,
+    stageLabel: currentStage?.stageLabel || stageMeta.stageLabel,
+    stageType: currentStage?.stageType || 'llm',
+    status: currentStage?.status || 'running',
+    durationMs: currentStage?.durationMs || 0,
+    inputFields: currentStage?.inputFields || [],
+    outputFields: currentStage?.outputFields || [],
+    llmCall,
+  };
+  if (stageIndex >= 0) {
+    stages[stageIndex] = nextStage;
+  } else {
+    stages.push(nextStage);
   }
   messageItem.trace = {
     ...trace,
@@ -2691,6 +2785,7 @@ async function runAiTextActionWithSql(tab: QueryWorkspaceTab, actionType: 'expla
       if (event.eventType === 'llm.thinking.delta') {
         ensureAssistantStreamingState(tab, thinkingMessage, actionType);
         thinkingMessage.thinkingContent = event.delta?.accumulatedText || thinkingMessage.thinkingContent || '';
+        upsertStreamingTraceLlmDelta(thinkingMessage, actionType, 'thinking', thinkingMessage.thinkingContent || '');
         touchQueryTab(tab);
         return;
       }
@@ -2698,6 +2793,7 @@ async function runAiTextActionWithSql(tab: QueryWorkspaceTab, actionType: 'expla
         ensureAssistantStreamingState(tab, thinkingMessage, actionType);
         thinkingMessage.liveOutput = event.delta?.accumulatedText || thinkingMessage.liveOutput || '';
         thinkingMessage.content = thinkingMessage.liveOutput || thinkingMessage.content;
+        upsertStreamingTraceLlmDelta(thinkingMessage, actionType, 'output', thinkingMessage.liveOutput || '');
         touchQueryTab(tab);
         return;
       }
@@ -2744,7 +2840,7 @@ async function runAiTextActionWithSql(tab: QueryWorkspaceTab, actionType: 'expla
       message.info('已终止对话执行');
       return;
     }
-    removeQueryChatMessage(tab, thinkingMessage);
+    materializeAssistantErrorMessage(tab, thinkingMessage, actionType, msg);
     message.error(msg);
   } finally {
     tab.aiGenerating = false;
@@ -3692,7 +3788,7 @@ async function warmupTableSuggestionsForContext(context: SqlEditorContext | null
     return;
   }
   const databaseName = (context.databaseName || '').trim();
-  if (!databaseName || databaseName === '鏈彂鐜版暟鎹簱') {
+  if (!databaseName || databaseName === '未发现数据库') {
     return;
   }
   await ensureTableNamesLoaded(context.connectionId, databaseName);
@@ -3726,6 +3822,18 @@ function handleSqlEditorMount(
   registerSqlEditorContext(editor, getContext);
   registerSqlAutoSuggest(editor, getContext);
   if (enableSelectionActions) {
+    editor.addAction({
+      id: 'sql-copilot.format-sql',
+      label: '美化 SQL',
+      contextMenuGroupId: '1_modification',
+      keybindings: [monaco.KeyMod.Alt | monaco.KeyMod.Shift | monaco.KeyCode.KeyF],
+      run: () => {
+        const tab = activeQueryTab.value;
+        if (tab) {
+          formatSqlForTab(tab);
+        }
+      },
+    });
     registerSqlSelectionTracker(editor);
     registerSqlSelectionPopoverTrigger(editor);
     registerSqlScrollTracker(editor);
@@ -4422,6 +4530,71 @@ function resolveSelectedSqlSnippet(tab: QueryWorkspaceTab, sqlOverride?: string)
   return tab.selectedSqlText.trim();
 }
 
+function queryTabDbType(tab: QueryWorkspaceTab) {
+  return connections.value.find((item) => item.id === tab.connectionId)?.dbType ?? 'MYSQL';
+}
+
+function sqlFormatterLanguage(dbTypeRaw: string): SqlLanguage {
+  const dbType = (dbTypeRaw || 'MYSQL').toUpperCase();
+  if (dbType === 'POSTGRESQL') {
+    return 'postgresql';
+  }
+  if (dbType === 'SQLITE') {
+    return 'sqlite';
+  }
+  if (dbType === 'SQLSERVER') {
+    return 'transactsql';
+  }
+  if (dbType === 'ORACLE') {
+    return 'plsql';
+  }
+  return 'mysql';
+}
+
+function formatSqlForTab(tab: QueryWorkspaceTab) {
+  const isActiveTab = activeQueryTab.value?.key === tab.key;
+  const editor = isActiveTab ? activeSqlEditorInstance : null;
+  const model = editor?.getModel() ?? null;
+  const selection = editor?.getSelection() ?? null;
+  const hasSelection = !!model && !!selection && !selection.isEmpty();
+  const sourceSql = hasSelection ? model.getValueInRange(selection).trim() : tab.sqlText.trim();
+  if (!sourceSql) {
+    message.info('请先输入 SQL');
+    return;
+  }
+
+  try {
+    const formattedSql = sqlFormat(sourceSql, {
+      language: sqlFormatterLanguage(queryTabDbType(tab)),
+      keywordCase: 'upper',
+      linesBetweenQueries: 1,
+      tabWidth: 2,
+    });
+    if (editor && model) {
+      const targetRange = hasSelection ? selection : model.getFullModelRange();
+      editor.pushUndoStop();
+      editor.executeEdits('sql-copilot.format-sql', [
+        {
+          range: targetRange,
+          text: formattedSql,
+          forceMoveMarkers: true,
+        },
+      ]);
+      editor.pushUndoStop();
+      tab.sqlText = model.getValue();
+      editor.focus();
+    } else {
+      tab.sqlText = formattedSql;
+    }
+    tab.selectedSqlText = '';
+    hideSqlSelectionPopover();
+    touchQueryTab(tab);
+    message.success(hasSelection ? '所选 SQL 已美化' : 'SQL 已美化');
+  } catch (error) {
+    message.error(`SQL 美化失败：${getErrorMessage(error)}`);
+  }
+}
+
 interface SaveConversationHistoryOptions {
   actionType?: QueryActionType;
   assistantContent?: string;
@@ -4715,6 +4888,7 @@ async function generateSqlForTab(
         if (event.eventType === 'llm.thinking.delta') {
           ensureAssistantStreamingState(tab, thinkingMessage, actionType);
           thinkingMessage.thinkingContent = event.delta?.accumulatedText || thinkingMessage.thinkingContent || '';
+          upsertStreamingTraceLlmDelta(thinkingMessage, actionType, 'thinking', thinkingMessage.thinkingContent || '');
           touchQueryTab(tab);
           return;
         }
@@ -4722,6 +4896,7 @@ async function generateSqlForTab(
           ensureAssistantStreamingState(tab, thinkingMessage, actionType);
           thinkingMessage.liveOutput = event.delta?.accumulatedText || thinkingMessage.liveOutput || '';
           thinkingMessage.content = thinkingMessage.liveOutput || thinkingMessage.content;
+          upsertStreamingTraceLlmDelta(thinkingMessage, actionType, 'output', thinkingMessage.liveOutput || '');
           touchQueryTab(tab);
           return;
         }
@@ -4788,6 +4963,7 @@ async function generateSqlForTab(
       if (event.eventType === 'llm.thinking.delta') {
         ensureAssistantStreamingState(tab, thinkingMessage, actionType);
         thinkingMessage.thinkingContent = event.delta?.accumulatedText || thinkingMessage.thinkingContent || '';
+        upsertStreamingTraceLlmDelta(thinkingMessage, actionType, 'thinking', thinkingMessage.thinkingContent || '');
         touchQueryTab(tab);
         return;
       }
@@ -4795,6 +4971,7 @@ async function generateSqlForTab(
         ensureAssistantStreamingState(tab, thinkingMessage, actionType);
         thinkingMessage.liveOutput = event.delta?.accumulatedText || thinkingMessage.liveOutput || '';
         thinkingMessage.content = thinkingMessage.liveOutput || thinkingMessage.content;
+        upsertStreamingTraceLlmDelta(thinkingMessage, actionType, 'output', thinkingMessage.liveOutput || '');
         touchQueryTab(tab);
         return;
       }
@@ -4843,7 +5020,7 @@ async function generateSqlForTab(
       message.info('Conversation was stopped.');
       return;
     }
-    removeQueryChatMessage(tab, thinkingMessage);
+    materializeAssistantErrorMessage(tab, thinkingMessage, actionType, msg);
     if (isTimeoutErrorMessage(msg)) {
       markUserMessageRetryable(tab, userMessage, retryMeta);
       message.error(timeoutRetryErrorMessage(msg));
@@ -4917,6 +5094,7 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
       if (event.eventType === 'llm.thinking.delta') {
         ensureAssistantStreamingState(tab, thinkingMessage, thinkingMessage.actionType);
         thinkingMessage.thinkingContent = event.delta?.accumulatedText || thinkingMessage.thinkingContent || '';
+        upsertStreamingTraceLlmDelta(thinkingMessage, thinkingMessage.actionType, 'thinking', thinkingMessage.thinkingContent || '');
         touchQueryTab(tab);
         return;
       }
@@ -4924,6 +5102,7 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
         ensureAssistantStreamingState(tab, thinkingMessage, thinkingMessage.actionType);
         thinkingMessage.liveOutput = event.delta?.accumulatedText || thinkingMessage.liveOutput || '';
         thinkingMessage.content = thinkingMessage.liveOutput || thinkingMessage.content;
+        upsertStreamingTraceLlmDelta(thinkingMessage, thinkingMessage.actionType, 'output', thinkingMessage.liveOutput || '');
         touchQueryTab(tab);
         return;
       }
@@ -5062,7 +5241,7 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
       message.info('Conversation was stopped.');
       return;
     }
-    removeQueryChatMessage(tab, thinkingMessage);
+    materializeAssistantErrorMessage(tab, thinkingMessage, thinkingMessage.actionType, msg);
     if (isTimeoutErrorMessage(msg)) {
       markUserMessageRetryable(tab, userMessage, retryMeta);
       message.error(timeoutRetryErrorMessage(msg));
@@ -5352,6 +5531,7 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
       if (event.eventType === 'llm.thinking.delta') {
         ensureAssistantStreamingState(tab, thinkingMessage, 'chart_auto_plan');
         thinkingMessage.thinkingContent = event.delta?.accumulatedText || thinkingMessage.thinkingContent || '';
+        upsertStreamingTraceLlmDelta(thinkingMessage, 'chart_auto_plan', 'thinking', thinkingMessage.thinkingContent || '');
         touchQueryTab(tab);
         return;
       }
@@ -5359,6 +5539,7 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
         ensureAssistantStreamingState(tab, thinkingMessage, 'chart_auto_plan');
         thinkingMessage.liveOutput = event.delta?.accumulatedText || thinkingMessage.liveOutput || '';
         thinkingMessage.content = thinkingMessage.liveOutput || thinkingMessage.content;
+        upsertStreamingTraceLlmDelta(thinkingMessage, 'chart_auto_plan', 'output', thinkingMessage.liveOutput || '');
         touchQueryTab(tab);
         return;
       }
@@ -5433,7 +5614,7 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
       message.info('Conversation was stopped.');
       return;
     }
-    removeQueryChatMessage(tab, thinkingMessage);
+    materializeAssistantErrorMessage(tab, thinkingMessage, 'chart_auto_plan', msg);
     if (isTimeoutErrorMessage(msg)) {
       markUserMessageRetryable(tab, userMessage, retryMeta);
       message.error(timeoutRetryErrorMessage(msg));
@@ -5831,6 +6012,7 @@ async function repairSqlForTab(tab: QueryWorkspaceTab) {
       if (event.eventType === 'llm.thinking.delta') {
         ensureAssistantStreamingState(tab, thinkingMessage, 'repair');
         thinkingMessage.thinkingContent = event.delta?.accumulatedText || thinkingMessage.thinkingContent || '';
+        upsertStreamingTraceLlmDelta(thinkingMessage, 'repair', 'thinking', thinkingMessage.thinkingContent || '');
         touchQueryTab(tab);
         return;
       }
@@ -5838,6 +6020,7 @@ async function repairSqlForTab(tab: QueryWorkspaceTab) {
         ensureAssistantStreamingState(tab, thinkingMessage, 'repair');
         thinkingMessage.liveOutput = event.delta?.accumulatedText || thinkingMessage.liveOutput || '';
         thinkingMessage.content = thinkingMessage.liveOutput || thinkingMessage.content;
+        upsertStreamingTraceLlmDelta(thinkingMessage, 'repair', 'output', thinkingMessage.liveOutput || '');
         touchQueryTab(tab);
         return;
       }
@@ -5894,7 +6077,7 @@ async function repairSqlForTab(tab: QueryWorkspaceTab) {
       message.info('Conversation was stopped.');
       return;
     }
-    removeQueryChatMessage(tab, thinkingMessage);
+    materializeAssistantErrorMessage(tab, thinkingMessage, 'repair', errMsg);
     message.error(errMsg);
   } finally {
     tab.aiGenerating = false;
@@ -7095,6 +7278,7 @@ function resetConnectionModalState() {
     handleTableEditorDatabaseChange,
     resolveSqlForAction,
     resolveSelectedSqlSnippet,
+    formatSqlForTab,
     extractThinkingContentFromTrace,
     saveConversationHistory,
     buildStructuredContextForTab,

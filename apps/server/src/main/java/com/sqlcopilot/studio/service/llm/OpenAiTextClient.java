@@ -8,6 +8,7 @@ import com.sqlcopilot.studio.util.BusinessException;
 import org.springframework.stereotype.Component;
 
 import java.io.BufferedReader;
+import java.io.BufferedInputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.URI;
@@ -77,6 +78,7 @@ public class OpenAiTextClient {
                 .timeout(resolveTimeout(timeout))
                 .header("Authorization", "Bearer " + safe(apiKey))
                 .header("Content-Type", "application/json")
+                .header("Accept", "text/event-stream")
                 .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(payload), StandardCharsets.UTF_8))
                 .build();
             HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
@@ -85,19 +87,16 @@ public class OpenAiTextClient {
             }
             String contentType = response.headers().firstValue("content-type").orElse("").toLowerCase();
             String providerRequestId = response.headers().firstValue("x-request-id").orElse("");
-            if (!contentType.contains("text/event-stream")) {
-                String body;
-                try (InputStream input = response.body()) {
-                    body = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+            try (BufferedInputStream input = new BufferedInputStream(response.body())) {
+                if (!looksLikeStreamingResponse(contentType, input)) {
+                    String body = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+                    OpenAiTextResult parsed = parseOpenAiResponse(body, response.headers().firstValue("content-type").orElse(""), endpoint.apiType());
+                    String text = safe(parsed.content());
+                    if (!text.isBlank() && listener != null) {
+                        listener.onOutputDelta(text, text);
+                    }
+                    return new OpenAiStreamResult(text, "", normalizeUsage(parsed.usage(), systemPrompt, userPrompt, text), providerRequestId, false);
                 }
-                OpenAiTextResult parsed = parseOpenAiResponse(body, response.headers().firstValue("content-type").orElse(""), endpoint.apiType());
-                String text = safe(parsed.content());
-                if (!text.isBlank() && listener != null) {
-                    listener.onOutputDelta(text, text);
-                }
-                return new OpenAiStreamResult(text, "", normalizeUsage(parsed.usage(), systemPrompt, userPrompt, text), providerRequestId, false);
-            }
-            try (InputStream input = response.body()) {
                 return parseStreamingResponse(input, endpoint.apiType(), listener, providerRequestId, systemPrompt, userPrompt);
             }
         } catch (BusinessException ex) {
@@ -112,6 +111,20 @@ public class OpenAiTextClient {
             return Duration.ofSeconds(30);
         }
         return timeout;
+    }
+
+    private boolean looksLikeStreamingResponse(String contentType, BufferedInputStream input) throws Exception {
+        if (safe(contentType).contains("text/event-stream")) {
+            return true;
+        }
+        input.mark(2048);
+        byte[] previewBytes = input.readNBytes(1024);
+        input.reset();
+        String preview = new String(previewBytes, StandardCharsets.UTF_8).stripLeading();
+        return preview.startsWith("event:")
+            || preview.startsWith("data:")
+            || preview.contains("\nevent:")
+            || preview.contains("\ndata:");
     }
 
     private ObjectNode buildPayload(String model,
