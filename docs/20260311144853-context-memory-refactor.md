@@ -227,3 +227,23 @@ sequenceDiagram
 
 ### 备注
 - 当前占比为前端按最近消息窗口做的估算值，目标是与后端 token 窗口策略保持近似一致，但不依赖额外接口返回。
+
+
+### 2026-03-11 15:54:38
+
+## 追加记录（2026-03-11）- 停止按钮方块化
+
+### 本次目标
+- 将会话区和 SQL 执行区的停止按钮图标由 `StopOutlined` 改为更接近 Codex 风格的中间方块停止符号。
+
+### 关键改动
+- 替换 3 处停止图标：聊天生成停止、消息内 SQL 执行停止、编辑器工具栏 SQL 执行停止，统一改为自定义 `stop-square-icon`。
+- 新增前端样式 `stop-square-icon`，使用当前文字颜色绘制小方块，保留现有按钮颜色与危险态风格，不调整停止逻辑与事件处理。
+- 清理前端中不再使用的 `StopOutlined` 图标引入。
+
+### 验证结果
+- 前端类型检查：`npm run -w @sqlcopilot/desktop type-check` 通过。
+- 前端 clean 构建：`npm run -w @sqlcopilot/desktop build -- --emptyOutDir` 通过。
+- 后端 clean 启动：`mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18087` 启动成功。
+- 后端健康检查：`http://127.0.0.1:18087/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+- 前端预览：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 18096 --strictPort` 启动成功，`curl -I http://127.0.0.1:18096` 返回 `HTTP/1.1 200 OK`。
