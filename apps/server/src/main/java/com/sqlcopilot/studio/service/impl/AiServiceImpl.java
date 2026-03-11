@@ -282,7 +282,15 @@ public class AiServiceImpl implements AiService {
             return clarifyVo;
         }
         IntentType intentType = intentResult.intentType();
+        boolean memoryEnabled = conversationContextManager.isMemoryEnabled(req, aiConfigService.getConfig());
         boolean hasSqlSnippet = hasSqlSnippetInPrompt(req.getPrompt());
+        String recentDialogContextForSqlFallback = "";
+        String conversationSqlFallback = "";
+        if (!hasSqlSnippet && memoryEnabled
+            && (intentType == IntentType.EXPLAIN_SQL || intentType == IntentType.ANALYZE_SQL)) {
+            recentDialogContextForSqlFallback = conversationContextManager.buildIntentRecentDialogContext(req, MEMORY_SUMMARY_LIMIT);
+            conversationSqlFallback = extractLatestSqlFromRecentDialogContext(recentDialogContextForSqlFallback);
+        }
         timer.mark("detect_sql_snippet");
 
         AiAutoQueryVO vo = new AiAutoQueryVO();
@@ -323,7 +331,13 @@ public class AiServiceImpl implements AiService {
             vo.setTotalTokens(generated.getTotalTokens());
             delegatedTrace = generated.getTrace();
         } else if (intentType == IntentType.EXPLAIN_SQL) {
-            AiTextResponseVO explained = explainSql(req);
+            if (!hasSqlSnippet && conversationSqlFallback.isBlank()) {
+                throw new BusinessException(400, "自动识别为“解释 SQL”时，提示词中必须包含 SQL 片段");
+            }
+            AiGenerateSqlReq explainReq = !hasSqlSnippet && !conversationSqlFallback.isBlank()
+                ? appendSqlFallbackToPrompt(req, conversationSqlFallback)
+                : req;
+            AiTextResponseVO explained = explainSql(explainReq);
             timer.mark("route_explain_sql");
             vo.setContent(explained.getContent());
             vo.setFallbackUsed(Boolean.TRUE.equals(explained.getFallbackUsed()));
@@ -331,7 +345,13 @@ public class AiServiceImpl implements AiService {
             vo.setTotalTokens(explained.getTotalTokens());
             delegatedTrace = explained.getTrace();
         } else if (intentType == IntentType.ANALYZE_SQL) {
-            AiTextResponseVO analyzed = analyzeSql(req);
+            if (!hasSqlSnippet && conversationSqlFallback.isBlank()) {
+                throw new BusinessException(400, "自动识别为“分析 SQL”时，提示词中必须包含 SQL 片段");
+            }
+            AiGenerateSqlReq analyzeReq = !hasSqlSnippet && !conversationSqlFallback.isBlank()
+                ? appendSqlFallbackToPrompt(req, conversationSqlFallback)
+                : req;
+            AiTextResponseVO analyzed = analyzeSql(analyzeReq);
             timer.mark("route_analyze_sql");
             vo.setContent(analyzed.getContent());
             vo.setFallbackUsed(Boolean.TRUE.equals(analyzed.getFallbackUsed()));
@@ -2408,6 +2428,51 @@ public class AiServiceImpl implements AiService {
             || normalized.contains("alter ")
             || normalized.contains("drop ")
             || normalized.contains("truncate ");
+    }
+
+    private String extractLatestSqlFromRecentDialogContext(String recentDialogContext) {
+        String normalized = safe(recentDialogContext);
+        if (normalized.isBlank()) {
+            return "";
+        }
+        try {
+            JsonNode root = objectMapper.readTree(normalized);
+            if (root == null || !root.isArray()) {
+                return "";
+            }
+            for (int index = root.size() - 1; index >= 0; index--) {
+                JsonNode item = root.get(index);
+                if (item == null || !item.isObject()) {
+                    continue;
+                }
+                String sqlText = safe(item.path("sqlOutput").asText(""));
+                if (!sqlText.isBlank()) {
+                    return sqlText;
+                }
+            }
+        } catch (Exception ignore) {
+            // ignore malformed recent dialog context
+        }
+        return "";
+    }
+
+    private AiGenerateSqlReq appendSqlFallbackToPrompt(AiGenerateSqlReq req, String sqlText) {
+        AiGenerateSqlReq next = new AiGenerateSqlReq();
+        next.setConnectionId(req.getConnectionId());
+        next.setSessionId(req.getSessionId());
+        next.setDatabaseName(req.getDatabaseName());
+        next.setModelId(req.getModelId());
+        next.setModelName(req.getModelName());
+        next.setMemoryEnabled(req.getMemoryEnabled());
+        next.setDetailOutputEnabled(req.getDetailOutputEnabled());
+        String prompt = safe(req.getPrompt());
+        String normalizedSql = safe(sqlText);
+        if (prompt.isBlank()) {
+            next.setPrompt("SQL:\n" + normalizedSql);
+        } else {
+            next.setPrompt(prompt + "\n\nSQL:\n" + normalizedSql);
+        }
+        return next;
     }
 
 

@@ -738,6 +738,41 @@ body {
   width: 190px;
 }
 
+.object-view-toggle {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+}
+
+.object-view-toggle .ant-radio-button-wrapper {
+  width: 30px;
+  min-width: 30px;
+  height: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.object-view-toggle-btn {
+  width: 100%;
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.object-view-toggle-btn .anticon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+  color: inherit;
+}
+
 .table-name-cell {
   display: flex;
   align-items: center;

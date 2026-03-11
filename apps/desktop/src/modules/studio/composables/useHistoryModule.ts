@@ -258,7 +258,8 @@ export function useHistoryModule(runtime: StudioRuntime): HistoryModule {
       chartReadonly: false,
       createdAt: first?.createdAt ?? Date.now(),
       updatedAt: last?.createdAt ?? Date.now(),
-      memoryEnabled: latestMemoryFlag ?? true,
+      conversationMemoryEnabled: latestMemoryFlag ?? true,
+      sqlMemoryEnabled: true,
       detailOutputOverride: null,
       lastTokenEstimate: Number(latestTokenEstimate ?? 0),
     };

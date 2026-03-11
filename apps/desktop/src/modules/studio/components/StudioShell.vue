@@ -1455,7 +1455,7 @@
                           </a-tooltip>
                           <span class="query-chat-settings-desc">支持连续追问</span>
                         </div>
-                        <a-switch v-model:checked="activeQueryTab.memoryEnabled" size="small" />
+                        <a-switch v-model:checked="activeQueryTab.conversationMemoryEnabled" size="small" />
                       </div>
                       <div v-if="activeQueryTab.autoMode" class="query-chat-settings-item">
                         <div class="query-chat-settings-copy">
@@ -1485,7 +1485,7 @@
                 <a-tooltip title="开启后会记忆并利用更长的对话上下文，适合连续追问与复杂任务。">
                   <span class="query-chat-long-dialog-label">长对话</span>
                 </a-tooltip>
-                <a-switch v-model:checked="activeQueryTab.memoryEnabled" size="small" />
+                <a-switch v-model:checked="activeQueryTab.conversationMemoryEnabled" size="small" />
                 <span style="margin-left: 12px; color: var(--ant-color-text-secondary);">≈Token: {{ activeQueryTab.lastTokenEstimate || 0 }}</span>
                 <template v-if="activeQueryTab.autoMode">
                   <span class="query-chat-auto-label">自动执行</span>
@@ -1628,7 +1628,7 @@
             </div>
             <div class="pane-title-actions query-memory-title-actions">
               <span class="query-memory-title-label">记忆理解</span>
-              <a-switch v-model:checked="activeQueryTab.memoryEnabled" size="small" />
+              <a-switch v-model:checked="activeQueryTab.sqlMemoryEnabled" size="small" />
               <a-tooltip title="开启后，执行成功的 SQL 会被理解记忆，并在后续生成与执行中参与向量召回。">
                 <span class="query-memory-title-help">说明</span>
               </a-tooltip>
@@ -2581,6 +2581,7 @@ import {
   SyncOutlined,
   TableOutlined,
   ToolOutlined,
+  UnorderedListOutlined
 } from '@ant-design/icons-vue';
 import {Editor as MonacoEditor} from '@guolao/vue-monaco-editor';
 import type * as MonacoApi from 'monaco-editor';

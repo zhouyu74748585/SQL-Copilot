@@ -236,7 +236,8 @@ interface QueryWorkspaceTab {
   chartReadonly: boolean;
   createdAt: number;
   updatedAt: number;
-  memoryEnabled: boolean;
+  conversationMemoryEnabled: boolean;
+  sqlMemoryEnabled: boolean;
   detailOutputOverride: boolean | null;
   lastTokenEstimate: number;
 }
@@ -1723,7 +1724,8 @@ function createQueryTab(options?: {
     chartReadonly: false,
     createdAt: now,
     updatedAt: now,
-    memoryEnabled: true,
+    conversationMemoryEnabled: aiConfigForm.conversationMemoryEnabled !== false,
+    sqlMemoryEnabled: true,
     detailOutputOverride: options?.detailOutputOverride ?? null,
     lastTokenEstimate: 0,
   };
@@ -2203,10 +2205,17 @@ function detailOutputEnabledForTab(tab: QueryWorkspaceTab | null | undefined) {
   return tab.detailOutputOverride === true;
 }
 
+function conversationMemoryEnabledForTab(tab: QueryWorkspaceTab | null | undefined) {
+  if (!tab) {
+    return aiConfigForm.conversationMemoryEnabled !== false;
+  }
+  return tab.conversationMemoryEnabled !== false;
+}
+
 function buildQueryContextUsage(tab: QueryWorkspaceTab | null | undefined): QueryContextUsage {
   const totalTokens = Math.min(32000, Math.max(512, Number(aiConfigForm.conversationMemoryWindowTokens || 6000)));
   const maxTurns = Math.min(50, Math.max(1, Number(aiConfigForm.conversationMemoryWindowSize || 12)));
-  const enabled = tab?.memoryEnabled ?? (aiConfigForm.conversationMemoryEnabled !== false);
+  const enabled = conversationMemoryEnabledForTab(tab);
   if (!tab || !tab.chatMessages.length) {
     return {
       enabled,
@@ -2750,7 +2759,11 @@ async function runAiTextActionWithSelectedSql(tab: QueryWorkspaceTab, actionType
   await runAiTextActionWithSql(tab, actionType, selectedSqlText);
 }
 
-async function runAiTextActionWithSql(tab: QueryWorkspaceTab, actionType: 'explain' | 'analyze', sqlText: string) {
+async function runAiTextActionWithSql(
+  tab: QueryWorkspaceTab,
+  actionType: 'explain' | 'analyze',
+  sqlText: string,
+) {
   if (tab.aiGenerating) {
     return;
   }
@@ -2774,7 +2787,7 @@ async function runAiTextActionWithSql(tab: QueryWorkspaceTab, actionType: 'expla
       prompt: mergePromptWithSqlSnippet(promptText, normalizedSqlText),
       databaseName: tab.databaseName || undefined,
       modelId: tab.selectedAiModel || undefined,
-      memoryEnabled: tab.memoryEnabled,
+      memoryEnabled: conversationMemoryEnabledForTab(tab),
       detailOutputEnabled: detailOutputEnabledForTab(tab),
     }, (event) => {
       if (event.eventType === 'stage.updated' && event.stage) {
@@ -4611,6 +4624,16 @@ interface SaveConversationHistoryOptions {
   memoryEnabled?: boolean;
 }
 
+function resolveHistoryMemoryEnabled(tab: QueryWorkspaceTab, options?: SaveConversationHistoryOptions) {
+  if (options?.memoryEnabled != null) {
+    return options.memoryEnabled;
+  }
+  if (options?.historyType === 'EXECUTE') {
+    return tab.sqlMemoryEnabled;
+  }
+  return conversationMemoryEnabledForTab(tab);
+}
+
 async function saveConversationHistory(
   tab: QueryWorkspaceTab,
   promptText: string,
@@ -4618,6 +4641,7 @@ async function saveConversationHistory(
   options?: SaveConversationHistoryOptions,
 ) {
   try {
+    const memoryEnabled = resolveHistoryMemoryEnabled(tab, options);
     await postApi<boolean>('/api/editor/history/save', {
       connectionId: tab.connectionId,
       sessionId: tab.sessionId,
@@ -4633,7 +4657,7 @@ async function saveConversationHistory(
       traceJson: options?.traceJson || (options?.trace ? JSON.stringify(options.trace) : ''),
       trace: options?.trace,
       tokenEstimate: options?.tokenEstimate,
-      memoryEnabled: options?.memoryEnabled ?? tab.memoryEnabled,
+      memoryEnabled,
       executionMs: options?.executionMs,
       success: options?.success ?? true,
     });
@@ -4667,7 +4691,7 @@ async function saveConversationHistoryOnce(
   const mergedOptions: SaveConversationHistoryOptions = {
     ...options,
     tokenEstimate: options?.tokenEstimate ?? (tab.lastTokenEstimate || Math.max(1, Math.ceil(((promptText || "").length + (sqlText || "").length) / 4))),
-    memoryEnabled: options?.memoryEnabled ?? tab.memoryEnabled,
+    memoryEnabled: resolveHistoryMemoryEnabled(tab, options),
     structuredContextJson: options?.structuredContextJson ?? buildStructuredContextForTab(tab),
     traceJson: options?.traceJson ?? (options?.trace ? JSON.stringify(options.trace) : ''),
   };
@@ -4877,7 +4901,7 @@ async function generateSqlForTab(
         prompt: finalPrompt,
         databaseName: tab.databaseName || undefined,
         modelId: tab.selectedAiModel || undefined,
-        memoryEnabled: tab.memoryEnabled,
+        memoryEnabled: conversationMemoryEnabledForTab(tab),
         detailOutputEnabled: detailOutputEnabledForTab(tab),
       }, (event) => {
         if (event.eventType === 'stage.updated' && event.stage) {
@@ -4952,7 +4976,7 @@ async function generateSqlForTab(
       prompt: finalPrompt,
       databaseName: tab.databaseName || undefined,
       modelId: tab.selectedAiModel || undefined,
-      memoryEnabled: tab.memoryEnabled,
+      memoryEnabled: conversationMemoryEnabledForTab(tab),
       detailOutputEnabled: detailOutputEnabledForTab(tab),
     }, (event) => {
       if (event.eventType === 'stage.updated' && event.stage) {
@@ -5078,7 +5102,7 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
       prompt: finalPrompt,
       databaseName: tab.databaseName || undefined,
       modelId: tab.selectedAiModel || undefined,
-      memoryEnabled: tab.memoryEnabled,
+      memoryEnabled: conversationMemoryEnabledForTab(tab),
       detailOutputEnabled: detailOutputEnabledForTab(tab),
     }, (event) => {
       if (event.eventType === 'intent.resolved' && event.intent?.intentType) {
@@ -5520,7 +5544,7 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
       prompt: finalPrompt,
       databaseName: tab.databaseName || undefined,
       modelId: tab.selectedAiModel || undefined,
-      memoryEnabled: tab.memoryEnabled,
+      memoryEnabled: conversationMemoryEnabledForTab(tab),
       detailOutputEnabled: detailOutputEnabledForTab(tab),
     }, (event) => {
       if (event.eventType === 'stage.updated' && event.stage) {
@@ -5921,7 +5945,7 @@ async function executeSqlForTab(
         sessionId: tab.sessionId,
         sqlText,
         databaseName: tab.databaseName || undefined,
-        memoryEnabled: tab.memoryEnabled,
+        memoryEnabled: tab.sqlMemoryEnabled,
         riskAckToken: riskAckToken || undefined,
         operatorName: 'desktop-user',
       }, {
