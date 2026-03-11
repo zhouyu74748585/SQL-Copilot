@@ -43,7 +43,7 @@ import type {IDisposable} from 'monaco-editor';
 import type {ConnectionVO} from '@sqlcopilot/shared-contracts';
 import {message, Modal, theme as antdTheme} from 'ant-design-vue';
 import {computed, h, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue';
-import {getApi, postApi} from '../../../api/client';
+import {getApi, postApi, postSseApi} from '../../../api/client';
 import QueryChartPanel from '../../../components/QueryChartPanel.vue';
 import ErDiagramPanel from '../../../components/ErDiagramPanel.vue';
 import TableEditor from '../../../components/TableEditor.vue';
@@ -66,8 +66,10 @@ import type {
   AiGenerateSqlVO,
   AiIntentType,
   AiModelOption,
+  AiTraceStageVO,
   AiTraceVO,
   AiRepairVO,
+  AiStreamEventVO,
   AiTextResponseVO,
   ChartCacheReadVO,
   ChartCacheSaveReq,
@@ -183,6 +185,11 @@ interface QueryChatMessage {
   role: 'user' | 'assistant';
   content: string;
   pending?: boolean;
+  streaming?: boolean;
+  finalized?: boolean;
+  thinkingContent?: string;
+  liveOutput?: string;
+  aborted?: boolean;
   sqlText?: string;
   actionType: QueryActionType;
   chartConfig?: ChartConfigVO;
@@ -2349,6 +2356,10 @@ function appendAssistantThinkingMessage(tab: QueryWorkspaceTab, actionType: Quer
     role: 'assistant',
     content: '思考中...',
     pending: true,
+    streaming: true,
+    finalized: false,
+    thinkingContent: '',
+    liveOutput: '',
     actionType,
     createdAt: now,
   };
@@ -2378,6 +2389,11 @@ function prepareAssistantMessage(
   messageItem.role = 'assistant';
   messageItem.actionType = actionType;
   messageItem.pending = false;
+  messageItem.streaming = false;
+  messageItem.finalized = true;
+  messageItem.thinkingContent = extractThinkingContentFromTrace(messageItem.trace) || messageItem.thinkingContent || '';
+  messageItem.liveOutput = '';
+  messageItem.aborted = false;
   messageItem.content = '';
   messageItem.sqlText = undefined;
   messageItem.chartConfig = undefined;
@@ -2392,6 +2408,76 @@ function prepareAssistantMessage(
   messageItem.trace = undefined;
   messageItem.traceExpanded = undefined;
   messageItem.createdAt = createdAt;
+}
+
+function extractThinkingContentFromTrace(trace?: AiTraceVO | null) {
+  if (!trace?.stages?.length) {
+    return '';
+  }
+  const values = trace.stages
+    .map((stage) => stage.llmCall?.thinkingContent || '')
+    .filter((item) => !!item.trim());
+  return values.length ? values[values.length - 1] : '';
+}
+
+function ensureAssistantStreamingState(
+  tab: QueryWorkspaceTab,
+  messageItem: QueryChatMessage,
+  actionType?: QueryChatMessage['actionType'],
+) {
+  messageItem.role = 'assistant';
+  if (actionType) {
+    messageItem.actionType = actionType;
+  }
+  messageItem.pending = false;
+  messageItem.streaming = true;
+  messageItem.finalized = false;
+  if (typeof messageItem.thinkingContent !== 'string') {
+    messageItem.thinkingContent = '';
+  }
+  if (typeof messageItem.liveOutput !== 'string') {
+    messageItem.liveOutput = '';
+  }
+  touchQueryTab(tab);
+  scrollToQueryChatMessage(tab, messageItem.id);
+}
+
+function upsertStreamingTraceStage(messageItem: QueryChatMessage, stage: AiTraceStageVO) {
+  const trace = messageItem.trace || {stageCount: 0, totalDurationMs: 0, stages: []};
+  const stages = [...(trace.stages || [])];
+  const index = stages.findIndex((item) => item.stageCode === stage.stageCode);
+  if (index >= 0) {
+    stages[index] = stage;
+  } else {
+    stages.push(stage);
+  }
+  messageItem.trace = {
+    ...trace,
+    stages,
+    stageCount: stages.length,
+  };
+  if (messageItem.traceExpanded == null) {
+    messageItem.traceExpanded = false;
+  }
+}
+
+function applyStreamTraceSnapshot(messageItem: QueryChatMessage, trace?: AiTraceVO) {
+  if (!trace) {
+    return;
+  }
+  messageItem.trace = trace;
+  messageItem.traceExpanded = messageItem.traceExpanded === true;
+  const thinkingContent = extractThinkingContentFromTrace(trace);
+  if (thinkingContent) {
+    messageItem.thinkingContent = thinkingContent;
+  }
+}
+
+function finalizeStreamingMessage(messageItem: QueryChatMessage) {
+  messageItem.pending = false;
+  messageItem.streaming = false;
+  messageItem.finalized = true;
+  messageItem.liveOutput = '';
 }
 
 function appendAssistantSqlMessage(
@@ -2502,8 +2588,9 @@ async function runAiTextActionWithSql(tab: QueryWorkspaceTab, actionType: 'expla
   tab.aiGenerating = true;
 
   try {
-    const endpoint = actionType === 'explain' ? '/api/ai/query/explain' : '/api/ai/query/analyze';
-    const result = await postAiApiWithTimeout<AiTextResponseVO>(tab, endpoint, {
+    const endpoint = actionType === 'explain' ? '/api/ai/query/explain/stream' : '/api/ai/query/analyze/stream';
+    const streamState = {result: null as AiTextResponseVO | null};
+    await postAiStreamWithTimeout(tab, endpoint, {
       connectionId: tab.connectionId,
       sessionId: tab.sessionId,
       prompt: mergePromptWithSqlSnippet(promptText, normalizedSqlText),
@@ -2511,7 +2598,42 @@ async function runAiTextActionWithSql(tab: QueryWorkspaceTab, actionType: 'expla
       modelId: tab.selectedAiModel || undefined,
       memoryEnabled: tab.memoryEnabled,
       detailOutputEnabled: detailOutputEnabledForTab(tab),
+    }, (event) => {
+      if (event.eventType === 'stage.updated' && event.stage) {
+        ensureAssistantStreamingState(tab, thinkingMessage, actionType);
+        upsertStreamingTraceStage(thinkingMessage, event.stage);
+        return;
+      }
+      if (event.eventType === 'llm.thinking.delta') {
+        ensureAssistantStreamingState(tab, thinkingMessage, actionType);
+        thinkingMessage.thinkingContent = event.delta?.accumulatedText || thinkingMessage.thinkingContent || '';
+        touchQueryTab(tab);
+        return;
+      }
+      if (event.eventType === 'llm.output.delta') {
+        ensureAssistantStreamingState(tab, thinkingMessage, actionType);
+        thinkingMessage.liveOutput = event.delta?.accumulatedText || thinkingMessage.liveOutput || '';
+        thinkingMessage.content = thinkingMessage.liveOutput || thinkingMessage.content;
+        touchQueryTab(tab);
+        return;
+      }
+      if (event.eventType === 'trace.snapshot' && event.trace) {
+        applyStreamTraceSnapshot(thinkingMessage, event.trace);
+        touchQueryTab(tab);
+        return;
+      }
+      if (event.eventType === 'result.final') {
+        streamState.result = event.finalResult?.textResponse || null;
+        return;
+      }
+      if (event.eventType === 'error') {
+        throw new Error(event.error?.message || 'AI 流式请求失败');
+      }
     });
+    const result = streamState.result;
+    if (!result) {
+      throw new Error('流式响应未返回最终结果');
+    }
     tab.lastTokenEstimate = Number(result.totalTokens || 0);
     const content = result.content || '未返回内容';
     appendAssistantTextMessage(tab, content, actionType, result.trace, thinkingMessage);
@@ -2529,7 +2651,12 @@ async function runAiTextActionWithSql(tab: QueryWorkspaceTab, actionType: 'expla
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     if (isAiRequestAbortedMessage(msg)) {
-      removeQueryChatMessage(tab, thinkingMessage);
+      thinkingMessage.pending = false;
+      thinkingMessage.streaming = false;
+      thinkingMessage.aborted = true;
+      if (!thinkingMessage.content && !thinkingMessage.liveOutput && !thinkingMessage.thinkingContent) {
+        removeQueryChatMessage(tab, thinkingMessage);
+      }
       message.info('已终止对话执行');
       return;
     }
@@ -4394,6 +4521,43 @@ async function postAiApiWithTimeout<T>(
   }
 }
 
+async function postAiStreamWithTimeout(
+  tab: QueryWorkspaceTab,
+  path: string,
+  payload: unknown,
+  onEvent: (event: AiStreamEventVO) => void,
+  timeoutMs = aiRequestTimeoutMs,
+) {
+  const controller = new AbortController();
+  aiRequestAbortControllerMap.set(tab.key, controller);
+  aiRequestAbortReasonMap.delete(tab.key);
+  const timeoutHandle = window.setTimeout(() => {
+    aiRequestAbortReasonMap.set(tab.key, 'timeout');
+    controller.abort();
+  }, timeoutMs);
+  try {
+    await postSseApi<AiStreamEventVO>(path, payload, {
+      signal: controller.signal,
+      onEvent: ({data}) => onEvent(data),
+    });
+  } catch (error) {
+    if (isAbortError(error)) {
+      const reason = aiRequestAbortReasonMap.get(tab.key);
+      if (reason === 'timeout') {
+        throw new Error(`请求超时（${Math.floor(timeoutMs / 1000)}s）`);
+      }
+      throw new Error(AI_REQUEST_ABORTED);
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutHandle);
+    if (aiRequestAbortControllerMap.get(tab.key) === controller) {
+      aiRequestAbortControllerMap.delete(tab.key);
+    }
+    aiRequestAbortReasonMap.delete(tab.key);
+  }
+}
+
 function looksLikeSqlText(text: string) {
   const normalized = text.trim().toLowerCase();
   return /^(select|with|insert|update|delete|replace|create|alter|drop|truncate|merge|show|explain)\b/.test(normalized);
@@ -4447,7 +4611,8 @@ async function generateSqlForTab(
   tab.aiGenerating = true;
   try {
     if (actionType === 'generate') {
-      const generated = await postAiApiWithTimeout<AiGenerateSqlVO>(tab, '/api/ai/query/generate', {
+      const streamState = {generated: null as AiGenerateSqlVO | null};
+      await postAiStreamWithTimeout(tab, '/api/ai/query/generate/stream', {
         connectionId: tab.connectionId,
         sessionId: tab.sessionId,
         prompt: finalPrompt,
@@ -4455,7 +4620,42 @@ async function generateSqlForTab(
         modelId: tab.selectedAiModel || undefined,
         memoryEnabled: tab.memoryEnabled,
         detailOutputEnabled: detailOutputEnabledForTab(tab),
+      }, (event) => {
+        if (event.eventType === 'stage.updated' && event.stage) {
+          ensureAssistantStreamingState(tab, thinkingMessage, actionType);
+          upsertStreamingTraceStage(thinkingMessage, event.stage);
+          return;
+        }
+        if (event.eventType === 'llm.thinking.delta') {
+          ensureAssistantStreamingState(tab, thinkingMessage, actionType);
+          thinkingMessage.thinkingContent = event.delta?.accumulatedText || thinkingMessage.thinkingContent || '';
+          touchQueryTab(tab);
+          return;
+        }
+        if (event.eventType === 'llm.output.delta') {
+          ensureAssistantStreamingState(tab, thinkingMessage, actionType);
+          thinkingMessage.liveOutput = event.delta?.accumulatedText || thinkingMessage.liveOutput || '';
+          thinkingMessage.content = thinkingMessage.liveOutput || thinkingMessage.content;
+          touchQueryTab(tab);
+          return;
+        }
+        if (event.eventType === 'trace.snapshot' && event.trace) {
+          applyStreamTraceSnapshot(thinkingMessage, event.trace);
+          touchQueryTab(tab);
+          return;
+        }
+        if (event.eventType === 'result.final') {
+          streamState.generated = event.finalResult?.generateSql || null;
+          return;
+        }
+        if (event.eventType === 'error') {
+          throw new Error(event.error?.message || 'AI 流式请求失败');
+        }
       });
+      const generated = streamState.generated;
+      if (!generated) {
+        throw new Error('流式响应未返回最终结果');
+      }
       tab.lastTokenEstimate = Number(generated.totalTokens || 0);
       const generatedText = (generated.sqlText || '').trim();
       if (looksLikeSqlText(generatedText)) {
@@ -4484,7 +4684,8 @@ async function generateSqlForTab(
     }
 
     const endpoint = actionType === 'explain' ? '/api/ai/query/explain' : '/api/ai/query/analyze';
-    const result = await postAiApiWithTimeout<AiTextResponseVO>(tab, endpoint, {
+    const streamState = {result: null as AiTextResponseVO | null};
+    await postAiStreamWithTimeout(tab, `${endpoint}/stream`, {
       connectionId: tab.connectionId,
       sessionId: tab.sessionId,
       prompt: finalPrompt,
@@ -4492,7 +4693,42 @@ async function generateSqlForTab(
       modelId: tab.selectedAiModel || undefined,
       memoryEnabled: tab.memoryEnabled,
       detailOutputEnabled: detailOutputEnabledForTab(tab),
+    }, (event) => {
+      if (event.eventType === 'stage.updated' && event.stage) {
+        ensureAssistantStreamingState(tab, thinkingMessage, actionType);
+        upsertStreamingTraceStage(thinkingMessage, event.stage);
+        return;
+      }
+      if (event.eventType === 'llm.thinking.delta') {
+        ensureAssistantStreamingState(tab, thinkingMessage, actionType);
+        thinkingMessage.thinkingContent = event.delta?.accumulatedText || thinkingMessage.thinkingContent || '';
+        touchQueryTab(tab);
+        return;
+      }
+      if (event.eventType === 'llm.output.delta') {
+        ensureAssistantStreamingState(tab, thinkingMessage, actionType);
+        thinkingMessage.liveOutput = event.delta?.accumulatedText || thinkingMessage.liveOutput || '';
+        thinkingMessage.content = thinkingMessage.liveOutput || thinkingMessage.content;
+        touchQueryTab(tab);
+        return;
+      }
+      if (event.eventType === 'trace.snapshot' && event.trace) {
+        applyStreamTraceSnapshot(thinkingMessage, event.trace);
+        touchQueryTab(tab);
+        return;
+      }
+      if (event.eventType === 'result.final') {
+        streamState.result = event.finalResult?.textResponse || null;
+        return;
+      }
+      if (event.eventType === 'error') {
+        throw new Error(event.error?.message || 'AI 流式请求失败');
+      }
     });
+    const result = streamState.result;
+    if (!result) {
+      throw new Error('流式响应未返回最终结果');
+    }
     tab.lastTokenEstimate = Number(result.totalTokens || 0);
     const content = result.content || 'No content returned.';
     appendAssistantTextMessage(tab, content, actionType, result.trace, thinkingMessage);
@@ -4511,7 +4747,12 @@ async function generateSqlForTab(
   } catch (error) {
     const msg = getErrorMessage(error);
     if (isAiRequestAbortedMessage(msg)) {
-      removeQueryChatMessage(tab, thinkingMessage);
+      thinkingMessage.pending = false;
+      thinkingMessage.streaming = false;
+      thinkingMessage.aborted = true;
+      if (!thinkingMessage.content && !thinkingMessage.liveOutput && !thinkingMessage.thinkingContent) {
+        removeQueryChatMessage(tab, thinkingMessage);
+      }
       clearUserRetryState(userMessage);
       message.info('Conversation was stopped.');
       return;
@@ -4567,7 +4808,8 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
   };
   tab.aiGenerating = true;
   try {
-    const result = await postAiApiWithTimeout<AiAutoQueryVO>(tab, '/api/ai/query/auto', {
+    const streamState = {result: null as AiAutoQueryVO | null};
+    await postAiStreamWithTimeout(tab, '/api/ai/query/auto/stream', {
       connectionId: tab.connectionId,
       sessionId: tab.sessionId,
       prompt: finalPrompt,
@@ -4575,7 +4817,47 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
       modelId: tab.selectedAiModel || undefined,
       memoryEnabled: tab.memoryEnabled,
       detailOutputEnabled: detailOutputEnabledForTab(tab),
+    }, (event) => {
+      if (event.eventType === 'intent.resolved' && event.intent?.intentType) {
+        thinkingMessage.actionType = autoActionTypeByIntent(event.intent.intentType as AiIntentType);
+        touchQueryTab(tab);
+        return;
+      }
+      if (event.eventType === 'stage.updated' && event.stage) {
+        ensureAssistantStreamingState(tab, thinkingMessage, thinkingMessage.actionType);
+        upsertStreamingTraceStage(thinkingMessage, event.stage);
+        return;
+      }
+      if (event.eventType === 'llm.thinking.delta') {
+        ensureAssistantStreamingState(tab, thinkingMessage, thinkingMessage.actionType);
+        thinkingMessage.thinkingContent = event.delta?.accumulatedText || thinkingMessage.thinkingContent || '';
+        touchQueryTab(tab);
+        return;
+      }
+      if (event.eventType === 'llm.output.delta') {
+        ensureAssistantStreamingState(tab, thinkingMessage, thinkingMessage.actionType);
+        thinkingMessage.liveOutput = event.delta?.accumulatedText || thinkingMessage.liveOutput || '';
+        thinkingMessage.content = thinkingMessage.liveOutput || thinkingMessage.content;
+        touchQueryTab(tab);
+        return;
+      }
+      if (event.eventType === 'trace.snapshot' && event.trace) {
+        applyStreamTraceSnapshot(thinkingMessage, event.trace);
+        touchQueryTab(tab);
+        return;
+      }
+      if (event.eventType === 'result.final' && event.finalResult?.autoQuery) {
+        streamState.result = event.finalResult.autoQuery;
+        return;
+      }
+      if (event.eventType === 'error') {
+        throw new Error(event.error?.message || 'AI 流式请求失败');
+      }
     });
+    const result = streamState.result;
+    if (!result) {
+      throw new Error('流式响应未返回最终结果');
+    }
     const latestTokenEstimate = result.totalTokens;
     if (latestTokenEstimate != null) {
       tab.lastTokenEstimate = Number(latestTokenEstimate || 0);
@@ -4684,7 +4966,12 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
   } catch (error) {
     const msg = getErrorMessage(error);
     if (isAiRequestAbortedMessage(msg)) {
-      removeQueryChatMessage(tab, thinkingMessage);
+      thinkingMessage.pending = false;
+      thinkingMessage.streaming = false;
+      thinkingMessage.aborted = true;
+      if (!thinkingMessage.content && !thinkingMessage.liveOutput && !thinkingMessage.thinkingContent) {
+        removeQueryChatMessage(tab, thinkingMessage);
+      }
       clearUserRetryState(userMessage);
       message.info('Conversation was stopped.');
       return;
@@ -4961,7 +5248,8 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
   };
   tab.aiGenerating = true;
   try {
-    const generated = await postAiApiWithTimeout<AiGenerateChartVO>(tab, '/api/ai/query/generate-chart', {
+    const streamState = {generated: null as AiGenerateChartVO | null};
+    await postAiStreamWithTimeout(tab, '/api/ai/query/generate-chart/stream', {
       connectionId: tab.connectionId,
       sessionId: tab.sessionId,
       prompt: finalPrompt,
@@ -4969,7 +5257,42 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
       modelId: tab.selectedAiModel || undefined,
       memoryEnabled: tab.memoryEnabled,
       detailOutputEnabled: detailOutputEnabledForTab(tab),
+    }, (event) => {
+      if (event.eventType === 'stage.updated' && event.stage) {
+        ensureAssistantStreamingState(tab, thinkingMessage, 'chart_auto_plan');
+        upsertStreamingTraceStage(thinkingMessage, event.stage);
+        return;
+      }
+      if (event.eventType === 'llm.thinking.delta') {
+        ensureAssistantStreamingState(tab, thinkingMessage, 'chart_auto_plan');
+        thinkingMessage.thinkingContent = event.delta?.accumulatedText || thinkingMessage.thinkingContent || '';
+        touchQueryTab(tab);
+        return;
+      }
+      if (event.eventType === 'llm.output.delta') {
+        ensureAssistantStreamingState(tab, thinkingMessage, 'chart_auto_plan');
+        thinkingMessage.liveOutput = event.delta?.accumulatedText || thinkingMessage.liveOutput || '';
+        thinkingMessage.content = thinkingMessage.liveOutput || thinkingMessage.content;
+        touchQueryTab(tab);
+        return;
+      }
+      if (event.eventType === 'trace.snapshot' && event.trace) {
+        applyStreamTraceSnapshot(thinkingMessage, event.trace);
+        touchQueryTab(tab);
+        return;
+      }
+      if (event.eventType === 'result.final') {
+        streamState.generated = event.finalResult?.generateChart || null;
+        return;
+      }
+      if (event.eventType === 'error') {
+        throw new Error(event.error?.message || 'AI 流式请求失败');
+      }
     });
+    const generated = streamState.generated;
+    if (!generated) {
+      throw new Error('流式响应未返回最终结果');
+    }
     tab.lastTokenEstimate = Number(generated.totalTokens || 0);
     const sqlText = (generated.sqlText || '').trim();
     const config = generated.chartConfig ? cloneChartConfig(generated.chartConfig) : null;
@@ -5014,7 +5337,12 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
   } catch (error) {
     const msg = getErrorMessage(error);
     if (isAiRequestAbortedMessage(msg)) {
-      removeQueryChatMessage(tab, thinkingMessage);
+      thinkingMessage.pending = false;
+      thinkingMessage.streaming = false;
+      thinkingMessage.aborted = true;
+      if (!thinkingMessage.content && !thinkingMessage.liveOutput && !thinkingMessage.thinkingContent) {
+        removeQueryChatMessage(tab, thinkingMessage);
+      }
       clearUserRetryState(userMessage);
       message.info('Conversation was stopped.');
       return;
@@ -5396,7 +5724,8 @@ async function repairSqlForTab(tab: QueryWorkspaceTab) {
     const promptText = `请修复以下 SQL 执行错误。\n错误信息：${errorMessage}\n\nSQL:\n${failedSql}`;
     const userMessage = appendUserChatMessage(tab, promptText, 'repair');
     thinkingMessage = appendAssistantThinkingMessage(tab, 'repair');
-    const repaired = await postApi<AiRepairVO>('/api/ai/query/repair', {
+    const streamState = {repaired: null as AiRepairVO | null};
+    await postAiStreamWithTimeout(tab, '/api/ai/query/repair/stream', {
       connectionId: tab.connectionId,
       sessionId: tab.sessionId,
       sqlText: failedSql,
@@ -5404,7 +5733,45 @@ async function repairSqlForTab(tab: QueryWorkspaceTab) {
       databaseName: tab.databaseName || undefined,
       modelId: tab.selectedAiModel || undefined,
       detailOutputEnabled: detailOutputEnabledForTab(tab),
+    }, (event) => {
+      if (!thinkingMessage) {
+        return;
+      }
+      if (event.eventType === 'stage.updated' && event.stage) {
+        ensureAssistantStreamingState(tab, thinkingMessage, 'repair');
+        upsertStreamingTraceStage(thinkingMessage, event.stage);
+        return;
+      }
+      if (event.eventType === 'llm.thinking.delta') {
+        ensureAssistantStreamingState(tab, thinkingMessage, 'repair');
+        thinkingMessage.thinkingContent = event.delta?.accumulatedText || thinkingMessage.thinkingContent || '';
+        touchQueryTab(tab);
+        return;
+      }
+      if (event.eventType === 'llm.output.delta') {
+        ensureAssistantStreamingState(tab, thinkingMessage, 'repair');
+        thinkingMessage.liveOutput = event.delta?.accumulatedText || thinkingMessage.liveOutput || '';
+        thinkingMessage.content = thinkingMessage.liveOutput || thinkingMessage.content;
+        touchQueryTab(tab);
+        return;
+      }
+      if (event.eventType === 'trace.snapshot' && event.trace) {
+        applyStreamTraceSnapshot(thinkingMessage, event.trace);
+        touchQueryTab(tab);
+        return;
+      }
+      if (event.eventType === 'result.final') {
+        streamState.repaired = event.finalResult?.repair || null;
+        return;
+      }
+      if (event.eventType === 'error') {
+        throw new Error(event.error?.message || 'AI 流式请求失败');
+      }
     });
+    const repaired = streamState.repaired;
+    if (!repaired) {
+      throw new Error('流式响应未返回最终结果');
+    }
     const repairedSql = (repaired.repairedSql || failedSql || '').trim();
     const assistantContent = (repaired.errorExplanation || repaired.repairNote || '已尝试修复 SQL').trim();
     appendAssistantSqlMessage(
@@ -5430,8 +5797,18 @@ async function repairSqlForTab(tab: QueryWorkspaceTab) {
     touchQueryTab(tab);
     message.success(repaired.repairNote || 'Repair suggestion generated.');
   } catch (error) {
-    removeQueryChatMessage(tab, thinkingMessage);
     const errMsg = error instanceof Error ? error.message : String(error);
+    if (isAiRequestAbortedMessage(errMsg) && thinkingMessage) {
+      thinkingMessage.pending = false;
+      thinkingMessage.streaming = false;
+      thinkingMessage.aborted = true;
+      if (!thinkingMessage.content && !thinkingMessage.liveOutput && !thinkingMessage.thinkingContent) {
+        removeQueryChatMessage(tab, thinkingMessage);
+      }
+      message.info('Conversation was stopped.');
+      return;
+    }
+    removeQueryChatMessage(tab, thinkingMessage);
     message.error(errMsg);
   } finally {
     tab.aiGenerating = false;
@@ -6627,6 +7004,7 @@ function resetConnectionModalState() {
     handleTableEditorDatabaseChange,
     resolveSqlForAction,
     resolveSelectedSqlSnippet,
+    extractThinkingContentFromTrace,
     saveConversationHistory,
     buildStructuredContextForTab,
     saveConversationHistoryOnce,
@@ -6641,6 +7019,7 @@ function resetConnectionModalState() {
     AI_REQUEST_ABORTED,
     isAiRequestAbortedMessage,
     postAiApiWithTimeout,
+    postAiStreamWithTimeout,
     looksLikeSqlText,
     generateSqlForTab,
     autoActionTypeByIntent,

@@ -61,3 +61,32 @@
 - 启动验证（clean）：
   - 后端：`mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18087` 启动成功；`http://127.0.0.1:18087/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
   - 前端：`rm -rf apps/desktop/dist` 后执行 `npm run build` 与 `npm run preview -- --host 127.0.0.1 --port 6046`，页面可访问。
+
+
+### 2026-03-11 11:00:34
+
+## 本次目标
+- 将 AI 会话改为 POST + SSE 流式传输，覆盖 Auto、生成 SQL、解释 SQL、分析 SQL、图表方案、SQL 修复。
+- 在对话消息中新增原始 Thinking 展示，并保留折叠式请求详情/Trace 调试面板。
+- 保持同步接口兼容，同时将桌面端默认切到流式接口。
+
+## 关键改动
+- 后端新增 6 个 SSE 流式接口：`/api/ai/query/{auto|generate|explain|analyze|generate-chart|repair}/stream`。
+- 新增流式 DTO：`AiStreamEventVO`、`AiStreamDeltaVO`、`AiStreamFinalVO`、`AiStreamErrorVO`、`AiStreamIntentVO`。
+- 新增 `AiStreamObserver` / `SseAiStreamObserver`，在 `AiServiceImpl` 内通过统一 observer 上下文复用原有业务流程，并在阶段完成时实时推送 `stage.updated`、`trace.snapshot`、`result.final`。
+- `LlmGatewayService` 改为统一走流式网关；`OpenAiTextClient` 新增 Responses API / Chat Completions SSE 解析，并透传 provider thinking、request id、streaming 标记。
+- `AiTraceLlmCallVO` / `LlmGatewayResult` 扩展了 `thinkingContent`、`providerRequestId`、`streaming`，并继续通过 `traceJson` 持久化到历史。
+- 前端新增 `postSseApi` 与 `postAiStreamWithTimeout`，默认用 `fetch + ReadableStream` 解析 POST SSE。
+- `useStudioRuntime.ts` 将 explain/analyze/generate/auto/chart-plan/repair 全部切换到流式消费；消息新增 `streaming`、`finalized`、`thinkingContent`、`liveOutput`、`aborted` 状态。
+- 查询聊天 UI 增加 Thinking 面板、流式状态标记，并在调试详情中展示 provider request id 与 thinking 内容；历史恢复时可从 trace 中回填 Thinking。
+
+## 验证结果
+- 后端构建：`mvn -f apps/server/pom.xml clean package` 通过。
+- 前端类型检查：`npm run -w @sqlcopilot/desktop type-check` 通过。
+- 前端构建：`npm run -w @sqlcopilot/desktop build` 通过。
+- 后端 clean 启动：`mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18088` 启动成功，`http://127.0.0.1:18088/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+- 前端 clean 预览：先清理 `apps/desktop/dist`，再执行 `npm run -w @sqlcopilot/desktop build` 和 `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6047`，`http://127.0.0.1:6047` 返回 `HTTP/1.1 200 OK`。
+
+## 备注
+- 当前 Thinking 严格依赖 provider 实际返回；若模型或 CLI 不提供 reasoning/thinking，界面不会伪造思考内容。
+- Vite 构建仍有大 chunk 警告，但不影响本次功能交付与启动验证。

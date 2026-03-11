@@ -14,15 +14,13 @@ import com.sqlcopilot.studio.service.AiConfigService;
 import com.sqlcopilot.studio.service.AiService;
 import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.SchemaService;
-import com.sqlcopilot.studio.service.llm.LlmGatewayRequest;
-import com.sqlcopilot.studio.service.llm.LlmGatewayResult;
-import com.sqlcopilot.studio.service.llm.LlmGatewayService;
-import com.sqlcopilot.studio.service.llm.OpenAiTextClient;
+import com.sqlcopilot.studio.service.llm.*;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
 import com.sqlcopilot.studio.service.rag.RagEmbeddingService;
 import com.sqlcopilot.studio.service.rag.RagRetrievalService;
 import com.sqlcopilot.studio.service.rag.model.RagCollectionNames;
 import com.sqlcopilot.studio.service.rag.model.RagPromptContext;
+import com.sqlcopilot.studio.service.stream.AiStreamObserver;
 import com.sqlcopilot.studio.util.BusinessException;
 import com.sqlcopilot.studio.util.ResultSetConverter;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
@@ -33,7 +31,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-import java.io.File;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -64,6 +61,8 @@ public class AiServiceImpl implements AiService {
     private static final int SQL_UNDERSTAND_TABLE_LIMIT = 8;
     private static final ThreadLocal<Map<String, String>> REQUEST_LLM_CACHE = ThreadLocal.withInitial(ConcurrentHashMap::new);
     private static final ThreadLocal<Integer> REQUEST_LLM_CACHE_DEPTH = ThreadLocal.withInitial(() -> 0);
+    private static final ThreadLocal<AiStreamObserver> STREAM_OBSERVER = new ThreadLocal<>();
+    private static final ThreadLocal<String> STREAM_ACTION_TYPE = new ThreadLocal<>();
     private static final String AUTO_INTENT_CLARIFY_CONTENT =
         "未能准确识别你的需求，请将需求描述得更清晰（例如：生成SQL/解释SQL/分析SQL/生成图表，也可以补充关键表、字段与筛选条件）。";
     private static final String INTENT_CLASSIFY_LIGHT_SYSTEM_PROMPT = """
@@ -232,6 +231,15 @@ public class AiServiceImpl implements AiService {
 
     @Override
     public AiAutoQueryVO autoQuery(AiGenerateSqlReq req) {
+        return autoQuery(req, currentStreamObserver());
+    }
+
+    @Override
+    public AiAutoQueryVO autoQuery(AiGenerateSqlReq req, AiStreamObserver observer) {
+        return executeWithStreamObserver(observer, "auto", () -> doAutoQuery(req));
+    }
+
+    private AiAutoQueryVO doAutoQuery(AiGenerateSqlReq req) {
         enterRequestLlmCache();
         try {
         long startAt = System.currentTimeMillis();
@@ -255,8 +263,7 @@ public class AiServiceImpl implements AiService {
             timer.mark("identify_intent_failed");
             AiAutoQueryVO clarifyVo = buildIntentClarifyResponse(ex);
             if (detailOutputEnabled) {
-                clarifyVo.setTrace(buildTrace(
-                    new ArrayList<>(List.of(buildTraceStage(
+                List<AiTraceStageVO> failedStages = new ArrayList<>(List.of(buildTraceStage(
                         "identify_intent",
                         "意图识别",
                         "pipeline",
@@ -265,9 +272,10 @@ public class AiServiceImpl implements AiService {
                         List.of(buildTraceField("prompt", "userPrompt", req.getPrompt())),
                         List.of(buildTraceField("error", "error", ex.getMessage())),
                         null
-                    ))),
-                    System.currentTimeMillis() - startAt
-                ));
+                    )));
+                failedStages.forEach(stage -> addTraceStage(req.getSessionId(), "auto", traceStages, stage));
+                publishTraceSnapshot(req.getSessionId(), "auto", traceStages, System.currentTimeMillis() - startAt);
+                clarifyVo.setTrace(buildTrace(traceStages, System.currentTimeMillis() - startAt));
             }
             log.warn(
                     "[AI-AUTO-INTENT-FALLBACK] connectionId={}, sessionId={}, databaseName={}, modelName={}, message={}",
@@ -298,6 +306,7 @@ public class AiServiceImpl implements AiService {
                     timer.stepsSummary(),
                     timer.totalElapsedMs()
             );
+            publishFinalResult(req.getSessionId(), "auto", buildFinalResult("auto", clarifyVo));
             return clarifyVo;
         }
         IntentType intentType = intentResult.intentType();
@@ -310,13 +319,13 @@ public class AiServiceImpl implements AiService {
         vo.setIntentConfidence(intentResult.confidence());
         AiTraceVO delegatedTrace = null;
         if (detailOutputEnabled) {
-            traceStages.add(buildTraceStage(
+            addTraceStage(req.getSessionId(), "auto", traceStages, buildTraceStage(
                 "identify_intent",
                 "意图识别",
                 "pipeline",
                 "success",
                 0L,
-                List.of(buildTraceField("prompt", "userPrompt", req.getPrompt())), 
+                List.of(buildTraceField("prompt", "userPrompt", req.getPrompt())),
                 List.of(
                     buildTraceField("intentType", "intentType", intentType.name()),
                     buildTraceField("confidence", "confidence", intentResult.confidence()),
@@ -325,6 +334,7 @@ public class AiServiceImpl implements AiService {
                 null
             ));
         }
+        emitIntentResolved(req.getSessionId(), "auto", intentType.name(), intentType.label(), intentResult.confidence(), intentResult.reason());
 
         String baseReasoning = "意图识别: " + intentType.name()
                 + "（置信度 " + String.format(Locale.ROOT, "%.2f", intentResult.confidence()) + "）";
@@ -376,6 +386,7 @@ public class AiServiceImpl implements AiService {
 
         if (detailOutputEnabled) {
             mergeTraceStages(traceStages, delegatedTrace);
+            publishTraceSnapshot(req.getSessionId(), "auto", traceStages, System.currentTimeMillis() - startAt);
             vo.setTrace(buildTrace(traceStages, System.currentTimeMillis() - startAt));
         }
 
@@ -400,6 +411,7 @@ public class AiServiceImpl implements AiService {
                 timer.stepsSummary(),
                 timer.totalElapsedMs()
         );
+        publishFinalResult(req.getSessionId(), "auto", buildFinalResult("auto", vo));
         return vo;
         } finally {
             exitRequestLlmCache();
@@ -408,6 +420,15 @@ public class AiServiceImpl implements AiService {
 
     @Override
     public AiGenerateSqlVO generateSql(AiGenerateSqlReq req) {
+        return generateSql(req, currentStreamObserver());
+    }
+
+    @Override
+    public AiGenerateSqlVO generateSql(AiGenerateSqlReq req, AiStreamObserver observer) {
+        return executeWithStreamObserver(observer, "generate", () -> doGenerateSql(req));
+    }
+
+    private AiGenerateSqlVO doGenerateSql(AiGenerateSqlReq req) {
         enterRequestLlmCache();
         try {
         long startAt = System.currentTimeMillis();
@@ -430,7 +451,7 @@ public class AiServiceImpl implements AiService {
             IntentRetrievalParams params = retrievalIntent == null || retrievalIntent.retrievalParams() == null
                 ? IntentRetrievalParams.defaultValue()
                 : retrievalIntent.retrievalParams();
-            traceStages.add(buildTraceStage(
+            addTraceStage(req.getSessionId(), "generate", traceStages, buildTraceStage(
                 "identify_retrieval_intent",
                 "检索意图识别",
                 "pipeline",
@@ -455,13 +476,13 @@ public class AiServiceImpl implements AiService {
         );
         timer.mark("rag_retrieve");
         if (detailOutputEnabled) {
-            traceStages.add(buildRagTraceStage("rag_retrieve", "向量库召回", retrievalInput, ragPromptContext, System.currentTimeMillis() - ragStageStart));
+            addTraceStage(req.getSessionId(), "generate", traceStages, buildRagTraceStage("rag_retrieve", "向量库召回", retrievalInput, ragPromptContext, System.currentTimeMillis() - ragStageStart));
         }
         long contextStageStart = System.currentTimeMillis();
         GenerationContext generationContext = buildGenerationContext(req, ragPromptContext);
         timer.mark("build_generation_context");
         if (detailOutputEnabled) {
-            traceStages.add(buildGenerationContextTraceStage(generationContext, System.currentTimeMillis() - contextStageStart));
+            addTraceStage(req.getSessionId(), "generate", traceStages, buildGenerationContextTraceStage(generationContext, System.currentTimeMillis() - contextStageStart));
         }
 
         String reasoning;
@@ -477,14 +498,14 @@ public class AiServiceImpl implements AiService {
             gatewayResult = result.gatewayResult();
             timer.mark("provider_generate_sql");
             if (detailOutputEnabled) {
-                traceStages.add(buildTraceStage(
+                addTraceStage(req.getSessionId(), "generate", traceStages, buildTraceStage(
                     "llm_generate_sql",
                     "SQL生成",
                     "llm",
                     "success",
                     0L,
                     List.of(
-                        buildTraceField("modelId", "modelId", resolveRequestedModelId(req)), 
+                        buildTraceField("modelId", "modelId", resolveRequestedModelId(req)),
                         buildTraceField("prompt", "userPrompt", req.getPrompt()),
                         buildTraceField("promptContext", "promptContext", generationContext.promptContext())
                     ),
@@ -509,14 +530,14 @@ public class AiServiceImpl implements AiService {
                 safe(ex.getMessage())
             );
             if (detailOutputEnabled) {
-                traceStages.add(buildTraceStage(
+                addTraceStage(req.getSessionId(), "generate", traceStages, buildTraceStage(
                     "llm_generate_sql",
                     "SQL生成",
                     "llm",
                     "failed",
                     0L,
                     List.of(
-                        buildTraceField("modelId", "modelId", resolveRequestedModelId(req)), 
+                        buildTraceField("modelId", "modelId", resolveRequestedModelId(req)),
                         buildTraceField("prompt", "userPrompt", req.getPrompt()),
                         buildTraceField("promptContext", "promptContext", generationContext.promptContext())
                     ),
@@ -557,7 +578,7 @@ public class AiServiceImpl implements AiService {
         }
 
         if (detailOutputEnabled) {
-            traceStages.add(buildTraceStage(
+            addTraceStage(req.getSessionId(), "generate", traceStages, buildTraceStage(
                 "sql_validate",
                 "SQL校验",
                 "pipeline",
@@ -585,6 +606,7 @@ public class AiServiceImpl implements AiService {
         vo.setCompletionTokens(tokenUsage.completionTokens());
         vo.setTotalTokens(tokenUsage.totalTokens());
         if (detailOutputEnabled) {
+            publishTraceSnapshot(req.getSessionId(), "generate", traceStages, System.currentTimeMillis() - startAt);
             vo.setTrace(buildTrace(traceStages, System.currentTimeMillis() - startAt));
         }
         timer.mark("assemble_response");
@@ -610,6 +632,7 @@ public class AiServiceImpl implements AiService {
             timer.stepsSummary(),
             timer.totalElapsedMs()
         );
+        publishFinalResult(req.getSessionId(), "generate", buildFinalResult("generate", vo));
         return vo;
         } finally {
             exitRequestLlmCache();
@@ -618,6 +641,15 @@ public class AiServiceImpl implements AiService {
 
     @Override
     public AiGenerateChartVO generateChart(AiGenerateSqlReq req) {
+        return generateChart(req, currentStreamObserver());
+    }
+
+    @Override
+    public AiGenerateChartVO generateChart(AiGenerateSqlReq req, AiStreamObserver observer) {
+        return executeWithStreamObserver(observer, "generate-chart", () -> doGenerateChart(req));
+    }
+
+    private AiGenerateChartVO doGenerateChart(AiGenerateSqlReq req) {
         enterRequestLlmCache();
         try {
         long startAt = System.currentTimeMillis();
@@ -643,13 +675,13 @@ public class AiServiceImpl implements AiService {
         );
         timer.mark("rag_retrieve");
         if (detailOutputEnabled) {
-            traceStages.add(buildRagTraceStage("rag_retrieve", "向量库召回", retrievalInput, ragPromptContext, System.currentTimeMillis() - ragStageStart));
+            addTraceStage(req.getSessionId(), "generate-chart", traceStages, buildRagTraceStage("rag_retrieve", "向量库召回", retrievalInput, ragPromptContext, System.currentTimeMillis() - ragStageStart));
         }
         long contextStageStart = System.currentTimeMillis();
         GenerationContext generationContext = buildGenerationContext(req, ragPromptContext);
         timer.mark("build_generation_context");
         if (detailOutputEnabled) {
-            traceStages.add(buildGenerationContextTraceStage(generationContext, System.currentTimeMillis() - contextStageStart));
+            addTraceStage(req.getSessionId(), "generate-chart", traceStages, buildGenerationContextTraceStage(generationContext, System.currentTimeMillis() - contextStageStart));
         }
 
         String reasoning;
@@ -670,14 +702,14 @@ public class AiServiceImpl implements AiService {
             gatewayResult = result.gatewayResult();
             timer.mark("provider_generate_chart");
             if (detailOutputEnabled) {
-                traceStages.add(buildTraceStage(
+                addTraceStage(req.getSessionId(), "generate-chart", traceStages, buildTraceStage(
                     "llm_generate_chart",
                     "图表生成",
                     "llm",
                     "success",
                     0L,
                     List.of(
-                        buildTraceField("modelId", "modelId", resolveRequestedModelId(req)), 
+                        buildTraceField("modelId", "modelId", resolveRequestedModelId(req)),
                         buildTraceField("prompt", "userPrompt", req.getPrompt()),
                         buildTraceField("promptContext", "promptContext", generationContext.promptContext())
                     ),
@@ -702,14 +734,14 @@ public class AiServiceImpl implements AiService {
                 safe(ex.getMessage())
             );
             if (detailOutputEnabled) {
-                traceStages.add(buildTraceStage(
+                addTraceStage(req.getSessionId(), "generate-chart", traceStages, buildTraceStage(
                     "llm_generate_chart",
                     "图表生成",
                     "llm",
                     "failed",
                     0L,
                     List.of(
-                        buildTraceField("modelId", "modelId", resolveRequestedModelId(req)), 
+                        buildTraceField("modelId", "modelId", resolveRequestedModelId(req)),
                         buildTraceField("prompt", "userPrompt", req.getPrompt()),
                         buildTraceField("promptContext", "promptContext", generationContext.promptContext())
                     ),
@@ -783,7 +815,7 @@ public class AiServiceImpl implements AiService {
         }
 
         if (detailOutputEnabled) {
-            traceStages.add(buildTraceStage(
+            addTraceStage(req.getSessionId(), "generate-chart", traceStages, buildTraceStage(
                 "chart_result_validate",
                 "图表结果校验",
                 "pipeline",
@@ -817,6 +849,7 @@ public class AiServiceImpl implements AiService {
         vo.setCompletionTokens(tokenUsage.completionTokens());
         vo.setTotalTokens(tokenUsage.totalTokens());
         if (detailOutputEnabled) {
+            publishTraceSnapshot(req.getSessionId(), "generate-chart", traceStages, System.currentTimeMillis() - startAt);
             vo.setTrace(buildTrace(traceStages, System.currentTimeMillis() - startAt));
         }
         timer.mark("assemble_response");
@@ -842,6 +875,7 @@ public class AiServiceImpl implements AiService {
             timer.stepsSummary(),
             timer.totalElapsedMs()
         );
+        publishFinalResult(req.getSessionId(), "generate-chart", buildFinalResult("generate-chart", vo));
         return vo;
         } finally {
             exitRequestLlmCache();
@@ -850,19 +884,216 @@ public class AiServiceImpl implements AiService {
 
     @Override
     public AiTextResponseVO explainSql(AiGenerateSqlReq req) {
-        enterRequestLlmCache();
-        try {
-            return explainSqlWithPipeline(req);
-        } finally {
-            exitRequestLlmCache();
-        }
+        return explainSql(req, currentStreamObserver());
+    }
+
+    @Override
+    public AiTextResponseVO explainSql(AiGenerateSqlReq req, AiStreamObserver observer) {
+        return executeWithStreamObserver(observer, "explain", () -> {
+            enterRequestLlmCache();
+            try {
+                return explainSqlWithPipeline(req);
+            } finally {
+                exitRequestLlmCache();
+            }
+        });
     }
 
     @Override
     public AiTextResponseVO analyzeSql(AiGenerateSqlReq req) {
+        return analyzeSql(req, currentStreamObserver());
+    }
+
+    @Override
+    public AiTextResponseVO analyzeSql(AiGenerateSqlReq req, AiStreamObserver observer) {
+        return executeWithStreamObserver(observer, "analyze", () -> {
+            enterRequestLlmCache();
+            try {
+                return analyzeSqlWithPipeline(req);
+            } finally {
+                exitRequestLlmCache();
+            }
+        });
+    }
+
+    @Override
+    public AiRepairVO repairSql(AiRepairReq req) {
+        return repairSql(req, currentStreamObserver());
+    }
+
+    @Override
+    public AiRepairVO repairSql(AiRepairReq req, AiStreamObserver observer) {
+        return executeWithStreamObserver(observer, "repair", () -> doRepairSql(req));
+    }
+
+    private AiRepairVO doRepairSql(AiRepairReq req) {
         enterRequestLlmCache();
+        long startAt = System.currentTimeMillis();
+        StepTimer timer = new StepTimer();
+        String sourceSql = safe(req.getSqlText());
+        String errorMessage = safe(req.getErrorMessage());
+        log.info(
+            "[AI-REPAIR-REQ] connectionId={}, sessionId={}, databaseName={}, modelName={}, sqlLength={}, errorLength={}",
+            req.getConnectionId(),
+            safe(req.getSessionId()),
+            safe(req.getDatabaseName()),
+            safe(req.getModelName()),
+            sourceSql.length(),
+            errorMessage.length()
+        );
+
+        boolean detailOutputEnabled = resolveDetailOutputEnabled(req);
+        List<AiTraceStageVO> traceStages = detailOutputEnabled ? new ArrayList<>() : List.of();
+        AiRepairVO vo = new AiRepairVO();
         try {
-            return analyzeSqlWithPipeline(req);
+            AiGenerateSqlReq providerReq = buildRepairGenerateReq(req, sourceSql, errorMessage);
+            timer.mark("build_repair_prompt");
+            String retrievalInput = buildRetrievalInputForRag(providerReq, sourceSql + "\n" + errorMessage);
+            timer.mark("build_retrieval_input");
+            RagPromptContext ragPromptContext = ragRetrievalService.retrievePromptContext(
+                req.getConnectionId(),
+                req.getDatabaseName(),
+                retrievalInput
+            );
+            timer.mark("rag_retrieve");
+            if (detailOutputEnabled) {
+                addTraceStage(req.getSessionId(), "repair", traceStages, buildRagTraceStage("rag_retrieve", "向量库召回", retrievalInput, ragPromptContext, 0L));
+            }
+            GenerationContext generationContext = buildGenerationContext(providerReq, ragPromptContext);
+            timer.mark("build_generation_context");
+            if (detailOutputEnabled) {
+                addTraceStage(req.getSessionId(), "repair", traceStages, buildGenerationContextTraceStage(generationContext, 0L));
+            }
+            TextProviderResult providerResult = generateTextByConfiguredProvider(
+                providerReq,
+                generationContext,
+                REPAIR_SQL_SYSTEM_PROMPT,
+                "SQL 修复"
+            );
+            timer.mark("provider_repair_sql");
+            if (detailOutputEnabled) {
+                addTraceStage(req.getSessionId(), "repair", traceStages, buildTraceStage(
+                    "llm_repair_sql",
+                    "repair_sql",
+                    "llm",
+                    "success",
+                    0L,
+                    List.of(
+                        buildTraceField("modelId", "modelId", safe(req.getModelId()).isBlank() ? req.getModelName() : req.getModelId()),
+                        buildTraceField("sourceSql", "sourceSql", sourceSql),
+                        buildTraceField("errorMessage", "errorMessage", errorMessage)
+                    ),
+                    List.of(buildTraceField("rawContent", "rawContent", providerResult.content())),
+                    buildTraceLlmCall(providerResult.gatewayResult())
+                ));
+            }
+
+            ParsedRepairResult parsed = parseRepairResult(providerResult.content(), sourceSql, errorMessage);
+            timer.mark("parse_repair_output");
+            boolean fallbackUsed = safe(parsed.repairedSql()).isBlank();
+            if (fallbackUsed) {
+                ParsedRepairResult fallback = fallbackRepairResult(sourceSql, errorMessage);
+                vo.setRepaired(Boolean.FALSE);
+                vo.setErrorExplanation(fallback.errorExplanation());
+                vo.setRepairedSql(fallback.repairedSql());
+                vo.setRepairNote("模型输出未识别到有效 SQL，已使用规则兜底");
+            } else {
+                vo.setRepaired(Boolean.TRUE);
+                vo.setErrorExplanation(parsed.errorExplanation());
+                vo.setRepairedSql(parsed.repairedSql());
+                vo.setRepairNote("Model returned a repair result.");
+            }
+            if (detailOutputEnabled) {
+                addTraceStage(req.getSessionId(), "repair", traceStages, buildTraceStage(
+                    "repair_result",
+                    "repair_result",
+                    "pipeline",
+                    fallbackUsed ? "fallback" : "success",
+                    0L,
+                    List.of(buildTraceField("rawOutput", "妯″瀷杈撳嚭", providerResult.content())),
+                    List.of(
+                        buildTraceField("repairedSql", "repairedSql", vo.getRepairedSql()),
+                        buildTraceField("errorExplanation", "errorExplanation", vo.getErrorExplanation()),
+                        buildTraceField("repairNote", "repairNote", vo.getRepairNote())
+                    ),
+                    null
+                ));
+            }
+            timer.mark("assemble_response");
+            if (detailOutputEnabled) {
+                publishTraceSnapshot(req.getSessionId(), "repair", traceStages, System.currentTimeMillis() - startAt);
+                vo.setTrace(buildTrace(traceStages, System.currentTimeMillis() - startAt));
+            }
+
+            log.info(
+                "[AI-REPAIR-RESP] connectionId={}, sessionId={}, databaseName={}, modelName={}, ragHit={}, repairedSqlLength={}, elapsedMs={}, fallbackUsed={}",
+                req.getConnectionId(),
+                safe(req.getSessionId()),
+                safe(req.getDatabaseName()),
+                safe(req.getModelName()),
+                Boolean.TRUE.equals(ragPromptContext.getHit()),
+                safe(vo.getRepairedSql()).length(),
+                System.currentTimeMillis() - startAt,
+                fallbackUsed
+            );
+            log.info(
+                "[AI-REPAIR-TIMING] connectionId={}, sessionId={}, databaseName={}, modelName={}, steps={}, totalMs={}",
+                req.getConnectionId(),
+                safe(req.getSessionId()),
+                safe(req.getDatabaseName()),
+                safe(req.getModelName()),
+                timer.stepsSummary(),
+                timer.totalElapsedMs()
+            );
+            publishFinalResult(req.getSessionId(), "repair", buildFinalResult("repair", vo));
+            return vo;
+        } catch (Exception ex) {
+            ParsedRepairResult fallback = fallbackRepairResult(sourceSql, errorMessage);
+            vo.setRepaired(Boolean.FALSE);
+            vo.setErrorExplanation(fallback.errorExplanation());
+            vo.setRepairedSql(fallback.repairedSql());
+            vo.setRepairNote("模型修复失败，已使用规则兜底: " + safe(ex.getMessage()));
+            if (detailOutputEnabled) {
+                addTraceStage(req.getSessionId(), "repair", traceStages, buildTraceStage(
+                    "repair_result",
+                    "repair_result",
+                    "pipeline",
+                    "failed",
+                    0L,
+                    List.of(
+                        buildTraceField("sourceSql", "sourceSql", sourceSql),
+                        buildTraceField("errorMessage", "errorMessage", errorMessage)
+                    ),
+                    List.of(
+                        buildTraceField("errorExplanation", "errorExplanation", vo.getErrorExplanation()),
+                        buildTraceField("repairedSql", "repairedSql", vo.getRepairedSql()),
+                        buildTraceField("repairNote", "repairNote", vo.getRepairNote())
+                    ),
+                    null
+                ));
+                publishTraceSnapshot(req.getSessionId(), "repair", traceStages, System.currentTimeMillis() - startAt);
+                vo.setTrace(buildTrace(traceStages, System.currentTimeMillis() - startAt));
+            }
+            log.warn(
+                "[AI-REPAIR-FALLBACK] connectionId={}, sessionId={}, databaseName={}, modelName={}, reason={}, elapsedMs={}",
+                req.getConnectionId(),
+                safe(req.getSessionId()),
+                safe(req.getDatabaseName()),
+                safe(req.getModelName()),
+                safe(ex.getMessage()),
+                System.currentTimeMillis() - startAt
+            );
+            log.info(
+                "[AI-REPAIR-TIMING] connectionId={}, sessionId={}, databaseName={}, modelName={}, steps={}, totalMs={}",
+                req.getConnectionId(),
+                safe(req.getSessionId()),
+                safe(req.getDatabaseName()),
+                safe(req.getModelName()),
+                timer.stepsSummary(),
+                timer.totalElapsedMs()
+            );
+            publishFinalResult(req.getSessionId(), "repair", buildFinalResult("repair", vo));
+            return vo;
         } finally {
             exitRequestLlmCache();
         }
@@ -925,176 +1156,6 @@ public class AiServiceImpl implements AiService {
         }
     }
 
-    @Override
-    public AiRepairVO repairSql(AiRepairReq req) {
-        enterRequestLlmCache();
-        long startAt = System.currentTimeMillis();
-        StepTimer timer = new StepTimer();
-        String sourceSql = safe(req.getSqlText());
-        String errorMessage = safe(req.getErrorMessage());
-        log.info(
-            "[AI-REPAIR-REQ] connectionId={}, sessionId={}, databaseName={}, modelName={}, sqlLength={}, errorLength={}",
-            req.getConnectionId(),
-            safe(req.getSessionId()),
-            safe(req.getDatabaseName()),
-            safe(req.getModelName()),
-            sourceSql.length(),
-            errorMessage.length()
-        );
-
-        boolean detailOutputEnabled = resolveDetailOutputEnabled(req);
-        List<AiTraceStageVO> traceStages = detailOutputEnabled ? new ArrayList<>() : List.of();
-        AiRepairVO vo = new AiRepairVO();
-        try {
-            AiGenerateSqlReq providerReq = buildRepairGenerateReq(req, sourceSql, errorMessage);
-            timer.mark("build_repair_prompt");
-            String retrievalInput = buildRetrievalInputForRag(providerReq, sourceSql + "\n" + errorMessage);
-            timer.mark("build_retrieval_input");
-            RagPromptContext ragPromptContext = ragRetrievalService.retrievePromptContext(
-                req.getConnectionId(),
-                req.getDatabaseName(),
-                retrievalInput
-            );
-            timer.mark("rag_retrieve");
-            if (detailOutputEnabled) {
-                traceStages.add(buildRagTraceStage("rag_retrieve", "向量库召回", retrievalInput, ragPromptContext, 0L));
-            }
-            GenerationContext generationContext = buildGenerationContext(providerReq, ragPromptContext);
-            timer.mark("build_generation_context");
-            if (detailOutputEnabled) {
-                traceStages.add(buildGenerationContextTraceStage(generationContext, 0L));
-            }
-            TextProviderResult providerResult = generateTextByConfiguredProvider(
-                providerReq,
-                generationContext,
-                REPAIR_SQL_SYSTEM_PROMPT,
-                "SQL 修复"
-            );
-            timer.mark("provider_repair_sql");
-            if (detailOutputEnabled) {
-                traceStages.add(buildTraceStage(
-                    "llm_repair_sql",
-                    "repair_sql",
-                    "llm",
-                    "success",
-                    0L,
-                    List.of(
-                        buildTraceField("modelId", "modelId", safe(req.getModelId()).isBlank() ? req.getModelName() : req.getModelId()), 
-                        buildTraceField("sourceSql", "sourceSql", sourceSql),
-                        buildTraceField("errorMessage", "errorMessage", errorMessage)
-                    ),
-                    List.of(buildTraceField("rawContent", "rawContent", providerResult.content())), 
-                    buildTraceLlmCall(providerResult.gatewayResult())
-                ));
-            }
-
-            ParsedRepairResult parsed = parseRepairResult(providerResult.content(), sourceSql, errorMessage);
-            timer.mark("parse_repair_output");
-            boolean fallbackUsed = safe(parsed.repairedSql()).isBlank();
-            if (fallbackUsed) {
-                ParsedRepairResult fallback = fallbackRepairResult(sourceSql, errorMessage);
-                vo.setRepaired(Boolean.FALSE);
-                vo.setErrorExplanation(fallback.errorExplanation());
-                vo.setRepairedSql(fallback.repairedSql());
-                vo.setRepairNote("模型输出未识别到有效 SQL，已使用规则兜底");
-            } else {
-                vo.setRepaired(Boolean.TRUE);
-                vo.setErrorExplanation(parsed.errorExplanation());
-                vo.setRepairedSql(parsed.repairedSql());
-                vo.setRepairNote("Model returned a repair result.");
-            }
-            if (detailOutputEnabled) {
-                traceStages.add(buildTraceStage(
-                    "repair_result",
-                    "repair_result",
-                    "pipeline",
-                    fallbackUsed ? "fallback" : "success",
-                    0L,
-                    List.of(buildTraceField("rawOutput", "妯″瀷杈撳嚭", providerResult.content())),
-                    List.of(
-                        buildTraceField("repairedSql", "repairedSql", vo.getRepairedSql()),
-                        buildTraceField("errorExplanation", "errorExplanation", vo.getErrorExplanation()),
-                        buildTraceField("repairNote", "repairNote", vo.getRepairNote())
-                    ),
-                    null
-                ));
-            }
-            timer.mark("assemble_response");
-            if (detailOutputEnabled) {
-                vo.setTrace(buildTrace(traceStages, System.currentTimeMillis() - startAt));
-            }
-
-            log.info(
-                "[AI-REPAIR-RESP] connectionId={}, sessionId={}, databaseName={}, modelName={}, ragHit={}, repairedSqlLength={}, elapsedMs={}, fallbackUsed={}",
-                req.getConnectionId(),
-                safe(req.getSessionId()),
-                safe(req.getDatabaseName()),
-                safe(req.getModelName()),
-                Boolean.TRUE.equals(ragPromptContext.getHit()),
-                safe(vo.getRepairedSql()).length(),
-                System.currentTimeMillis() - startAt,
-                fallbackUsed
-            );
-            log.info(
-                "[AI-REPAIR-TIMING] connectionId={}, sessionId={}, databaseName={}, modelName={}, steps={}, totalMs={}",
-                req.getConnectionId(),
-                safe(req.getSessionId()),
-                safe(req.getDatabaseName()),
-                safe(req.getModelName()),
-                timer.stepsSummary(),
-                timer.totalElapsedMs()
-            );
-            return vo;
-        } catch (Exception ex) {
-            ParsedRepairResult fallback = fallbackRepairResult(sourceSql, errorMessage);
-            vo.setRepaired(Boolean.FALSE);
-            vo.setErrorExplanation(fallback.errorExplanation());
-            vo.setRepairedSql(fallback.repairedSql());
-            vo.setRepairNote("模型修复失败，已使用规则兜底: " + safe(ex.getMessage()));
-            if (detailOutputEnabled) {
-                traceStages.add(buildTraceStage(
-                    "repair_result",
-                    "repair_result",
-                    "pipeline",
-                    "failed",
-                    0L,
-                    List.of(
-                        buildTraceField("sourceSql", "sourceSql", sourceSql),
-                        buildTraceField("errorMessage", "errorMessage", errorMessage)
-                    ),
-                    List.of(
-                        buildTraceField("errorExplanation", "errorExplanation", vo.getErrorExplanation()),
-                        buildTraceField("repairedSql", "repairedSql", vo.getRepairedSql()),
-                        buildTraceField("repairNote", "repairNote", vo.getRepairNote())
-                    ),
-                    null
-                ));
-                vo.setTrace(buildTrace(traceStages, System.currentTimeMillis() - startAt));
-            }
-            log.warn(
-                "[AI-REPAIR-FALLBACK] connectionId={}, sessionId={}, databaseName={}, modelName={}, reason={}, elapsedMs={}",
-                req.getConnectionId(),
-                safe(req.getSessionId()),
-                safe(req.getDatabaseName()),
-                safe(req.getModelName()),
-                safe(ex.getMessage()),
-                System.currentTimeMillis() - startAt
-            );
-            log.info(
-                "[AI-REPAIR-TIMING] connectionId={}, sessionId={}, databaseName={}, modelName={}, steps={}, totalMs={}",
-                req.getConnectionId(),
-                safe(req.getSessionId()),
-                safe(req.getDatabaseName()),
-                safe(req.getModelName()),
-                timer.stepsSummary(),
-                timer.totalElapsedMs()
-            );
-            return vo;
-        }
-        finally {
-            exitRequestLlmCache();
-        }
-    }
 
     private String buildErInferenceContext(ErAiInferenceReq req) {
         StringBuilder builder = new StringBuilder();
@@ -1898,6 +1959,7 @@ public class AiServiceImpl implements AiService {
     private AiTextResponseVO generateSqlUnderstandingResponse(AiGenerateSqlReq req, boolean analyzeMode) {
         String logScene = analyzeMode ? "ANALYZE-SQL" : "EXPLAIN-TEXT";
         String taskLabel = analyzeMode ? "SQL 合理性分析" : "SQL 含义解释";
+        String actionType = analyzeMode ? "analyze" : "explain";
         long startAt = System.currentTimeMillis();
         StepTimer timer = new StepTimer();
         log.info(
@@ -1915,14 +1977,14 @@ public class AiServiceImpl implements AiService {
         SqlExtractionResult extraction = extractSqlByLlm(req, safe(req.getPrompt()));
         timer.mark("extract_sql_llm");
         if (detailOutputEnabled) {
-            traceStages.add(buildTraceStage(
+            addTraceStage(req.getSessionId(), actionType, traceStages, buildTraceStage(
                 "extract_sql",
                 "extract_sql",
                 "pipeline",
                 extraction.hasSql() ? "success" : "failed",
                 0L,
-                List.of(buildTraceField("sourcePrompt", "sourcePrompt", req.getPrompt())), 
-                List.of(buildTraceField("sqlList", "sqlList", extraction.sqlList())), 
+                List.of(buildTraceField("sourcePrompt", "sourcePrompt", req.getPrompt())),
+                List.of(buildTraceField("sqlList", "sqlList", extraction.sqlList())),
                 null
             ));
         }
@@ -1935,13 +1997,13 @@ public class AiServiceImpl implements AiService {
         ExactMetadataContext metadataContext = buildExactMetadataContext(req, insights.tables(), analyzeMode);
         timer.mark("exact_metadata");
         if (detailOutputEnabled) {
-            traceStages.add(buildTraceStage(
+            addTraceStage(req.getSessionId(), actionType, traceStages, buildTraceStage(
                 "sql_understanding",
                 "sql_understanding",
                 "pipeline",
                 "success",
                 0L,
-                List.of(buildTraceField("sourceSql", "sourceSql", sourceSql)), 
+                List.of(buildTraceField("sourceSql", "sourceSql", sourceSql)),
                 List.of(
                     buildTraceField("sqlInsights", "sqlInsights", insights.summary()),
                     buildTraceField("metadataContext", "metadataContext", metadataContext.contextText())
@@ -1955,14 +2017,14 @@ public class AiServiceImpl implements AiService {
             supplementContext = buildSupplementRetrievalContext(req, sourceSql);
             timer.mark("supplement_retrieve");
             if (detailOutputEnabled) {
-                traceStages.add(buildTraceStage(
+                addTraceStage(req.getSessionId(), actionType, traceStages, buildTraceStage(
                     "supplement_retrieve",
                     "supplement_retrieve",
                     "rag",
                     "success",
                     0L,
-                    List.of(buildTraceField("sourceSql", "sourceSql", sourceSql)), 
-                    List.of(buildTraceField("supplementContext", "supplementContext", supplementContext)), 
+                    List.of(buildTraceField("sourceSql", "sourceSql", sourceSql)),
+                    List.of(buildTraceField("supplementContext", "supplementContext", supplementContext)),
                     null
                 ));
             }
@@ -2003,14 +2065,14 @@ public class AiServiceImpl implements AiService {
             gatewayResult = result.gatewayResult();
             timer.mark("provider_generate_text");
             if (detailOutputEnabled) {
-                traceStages.add(buildTraceStage(
+                addTraceStage(req.getSessionId(), actionType, traceStages, buildTraceStage(
                     analyzeMode ? "llm_analyze_sql" : "llm_explain_sql",
                     analyzeMode ? "analyze_sql" : "explain_sql",
                     "llm",
                     "success",
                     0L,
                     List.of(
-                        buildTraceField("modelId", "modelId", resolveRequestedModelId(req)), 
+                        buildTraceField("modelId", "modelId", resolveRequestedModelId(req)),
                         buildTraceField("userPrompt", "userPrompt", userPrompt.toString())
                     ),
                     List.of(
@@ -2026,17 +2088,17 @@ public class AiServiceImpl implements AiService {
             fallbackUsed = true;
             timer.mark("provider_generate_text_failed");
             if (detailOutputEnabled) {
-                traceStages.add(buildTraceStage(
+                addTraceStage(req.getSessionId(), actionType, traceStages, buildTraceStage(
                     analyzeMode ? "llm_analyze_sql" : "llm_explain_sql",
                     analyzeMode ? "analyze_sql" : "explain_sql",
                     "llm",
                     "failed",
                     0L,
                     List.of(
-                        buildTraceField("modelId", "modelId", resolveRequestedModelId(req)), 
+                        buildTraceField("modelId", "modelId", resolveRequestedModelId(req)),
                         buildTraceField("userPrompt", "userPrompt", userPrompt.toString())
                     ),
-                    List.of(buildTraceField("error", "error", ex.getMessage())), 
+                    List.of(buildTraceField("error", "error", ex.getMessage())),
                     null
                 ));
             }
@@ -2055,6 +2117,7 @@ public class AiServiceImpl implements AiService {
         vo.setCompletionTokens(tokenUsage.completionTokens());
         vo.setTotalTokens(tokenUsage.totalTokens());
         if (detailOutputEnabled) {
+            publishTraceSnapshot(req.getSessionId(), actionType, traceStages, System.currentTimeMillis() - startAt);
             vo.setTrace(buildTrace(traceStages, System.currentTimeMillis() - startAt));
         }
         timer.mark("assemble_response");
@@ -2080,6 +2143,7 @@ public class AiServiceImpl implements AiService {
             timer.stepsSummary(),
             timer.totalElapsedMs()
         );
+        publishFinalResult(req.getSessionId(), actionType, buildFinalResult(actionType, vo));
         return vo;
     }
 
@@ -2433,7 +2497,10 @@ public class AiServiceImpl implements AiService {
         gatewayRequest.setTaskLabel("生成 SQL");
         gatewayRequest.setTimeout(Duration.ofSeconds(30));
         gatewayRequest.setTemperature(0.1D);
-        LlmGatewayResult gatewayResult = llmGatewayService.call(gatewayRequest);
+        LlmGatewayResult gatewayResult = llmGatewayService.callStream(
+            gatewayRequest,
+            createLlmStreamListener(req.getSessionId(), "generate")
+        );
         String sqlText = extractSql(gatewayResult.getContent());
         if (sqlText.isBlank()) {
             return new ProviderResult(gatewayResult.getContent(), gatewayResult.getReasoning(), gatewayResult.getUsage(), gatewayResult);
@@ -2454,7 +2521,10 @@ public class AiServiceImpl implements AiService {
         gatewayRequest.setTaskLabel(taskLabel);
         gatewayRequest.setTimeout(Duration.ofSeconds(30));
         gatewayRequest.setTemperature(0.1D);
-        LlmGatewayResult gatewayResult = llmGatewayService.call(gatewayRequest);
+        LlmGatewayResult gatewayResult = llmGatewayService.callStream(
+            gatewayRequest,
+            shouldStreamTaskLabel(taskLabel) ? createLlmStreamListener(req.getSessionId(), resolveActionTypeByTaskLabel(taskLabel)) : null
+        );
         return new TextProviderResult(gatewayResult.getContent(), gatewayResult.getReasoning(), gatewayResult.getUsage(), gatewayResult);
     }
 
@@ -2470,7 +2540,10 @@ public class AiServiceImpl implements AiService {
         gatewayRequest.setTaskLabel(taskLabel);
         gatewayRequest.setTimeout(Duration.ofSeconds(30));
         gatewayRequest.setTemperature(0.1D);
-        LlmGatewayResult gatewayResult = llmGatewayService.call(gatewayRequest);
+        LlmGatewayResult gatewayResult = llmGatewayService.callStream(
+            gatewayRequest,
+            shouldStreamTaskLabel(taskLabel) ? createLlmStreamListener(req.getSessionId(), resolveActionTypeByTaskLabel(taskLabel)) : null
+        );
         return new TextProviderResult(gatewayResult.getContent(), gatewayResult.getReasoning(), gatewayResult.getUsage(), gatewayResult);
     }
 
@@ -3285,6 +3358,139 @@ public class AiServiceImpl implements AiService {
         return new TokenUsageStats(promptTokens, completionTokens, promptTokens + completionTokens);
     }
 
+    private AiStreamObserver currentStreamObserver() {
+        return STREAM_OBSERVER.get();
+    }
+
+    private <T> T executeWithStreamObserver(AiStreamObserver observer, String actionType, Supplier<T> supplier) {
+        AiStreamObserver previousObserver = STREAM_OBSERVER.get();
+        String previousActionType = STREAM_ACTION_TYPE.get();
+        if (observer != null) {
+            STREAM_OBSERVER.set(observer);
+        }
+        if (!safe(actionType).isBlank()) {
+            STREAM_ACTION_TYPE.set(actionType);
+        }
+        try {
+            return supplier.get();
+        } finally {
+            if (previousObserver != null) {
+                STREAM_OBSERVER.set(previousObserver);
+            } else {
+                STREAM_OBSERVER.remove();
+            }
+            if (previousActionType != null) {
+                STREAM_ACTION_TYPE.set(previousActionType);
+            } else {
+                STREAM_ACTION_TYPE.remove();
+            }
+        }
+    }
+
+    private void emitIntentResolved(String sessionId,
+                                    String actionType,
+                                    String intentType,
+                                    String intentLabel,
+                                    Double intentConfidence,
+                                    String reasoning) {
+        AiStreamObserver observer = currentStreamObserver();
+        if (observer == null) {
+            return;
+        }
+        observer.onIntentResolved(sessionId, actionType, intentType, intentLabel, intentConfidence, reasoning);
+    }
+
+    private void addTraceStage(String sessionId, String actionType, List<AiTraceStageVO> traceStages, AiTraceStageVO stage) {
+        if (traceStages == null || stage == null) {
+            return;
+        }
+        traceStages.add(stage);
+        AiStreamObserver observer = currentStreamObserver();
+        if (observer != null) {
+            observer.onStageUpdated(sessionId, actionType, stage);
+        }
+    }
+
+    private void publishTraceSnapshot(String sessionId, String actionType, List<AiTraceStageVO> traceStages, long totalDurationMs) {
+        AiStreamObserver observer = currentStreamObserver();
+        if (observer == null) {
+            return;
+        }
+        AiTraceVO trace = buildTrace(traceStages, totalDurationMs);
+        if (trace != null) {
+            observer.onTraceSnapshot(sessionId, actionType, trace);
+        }
+    }
+
+    private void publishFinalResult(String sessionId, String actionType, AiStreamFinalVO finalResult) {
+        AiStreamObserver observer = currentStreamObserver();
+        if (observer == null || finalResult == null) {
+            return;
+        }
+        observer.onResultFinal(sessionId, actionType, finalResult);
+    }
+
+    private AiStreamFinalVO buildFinalResult(String actionType, Object result) {
+        AiStreamFinalVO finalVO = new AiStreamFinalVO();
+        finalVO.setActionType(actionType);
+        if (result instanceof AiGenerateSqlVO generateSqlVO) {
+            finalVO.setGenerateSql(generateSqlVO);
+        } else if (result instanceof AiAutoQueryVO autoQueryVO) {
+            finalVO.setAutoQuery(autoQueryVO);
+        } else if (result instanceof AiTextResponseVO textResponseVO) {
+            finalVO.setTextResponse(textResponseVO);
+        } else if (result instanceof AiGenerateChartVO generateChartVO) {
+            finalVO.setGenerateChart(generateChartVO);
+        } else if (result instanceof AiRepairVO repairVO) {
+            finalVO.setRepair(repairVO);
+        }
+        return finalVO;
+    }
+
+    private LlmStreamListener createLlmStreamListener(String sessionId, String actionType) {
+        AiStreamObserver observer = currentStreamObserver();
+        if (observer == null) {
+            return null;
+        }
+        return new LlmStreamListener() {
+            @Override
+            public void onThinkingDelta(String deltaText, String accumulatedText) {
+                observer.onThinkingDelta(sessionId, actionType, deltaText, accumulatedText);
+            }
+
+            @Override
+            public void onOutputDelta(String deltaText, String accumulatedText) {
+                observer.onOutputDelta(sessionId, actionType, deltaText, accumulatedText);
+            }
+        };
+    }
+
+    private String resolveActionTypeByTaskLabel(String taskLabel) {
+        String normalized = safe(taskLabel);
+        if (normalized.contains("解释")) {
+            return "explain";
+        }
+        if (normalized.contains("分析")) {
+            return "analyze";
+        }
+        if (normalized.contains("图表")) {
+            return "generate-chart";
+        }
+        if (normalized.contains("修复")) {
+            return "repair";
+        }
+        return "generate";
+    }
+
+    private boolean shouldStreamTaskLabel(String taskLabel) {
+        String normalized = safe(taskLabel);
+        return "生成 SQL".equals(normalized)
+            || normalized.contains("含义解释")
+            || normalized.contains("合理性分析")
+            || normalized.contains("图表方案")
+            || normalized.contains("SQL 修复");
+    }
+
     private int estimateTokens(String text) {
         int length = safe(text).length();
         if (length <= 0) {
@@ -3397,6 +3603,9 @@ public class AiServiceImpl implements AiService {
         llmCall.setSystemPrompt(safe(result.getSystemPrompt()));
         llmCall.setUserPrompt(safe(result.getUserPrompt()));
         llmCall.setFullOutput(safe(result.getFullOutput()));
+        llmCall.setThinkingContent(safe(result.getThinkingContent()));
+        llmCall.setProviderRequestId(safe(result.getProviderRequestId()));
+        llmCall.setStreaming(Boolean.TRUE.equals(result.getStreaming()));
         OpenAiTextClient.TokenUsage usage = result.getUsage();
         if (usage != null) {
             llmCall.setPromptTokens(Math.max(0, usage.promptTokens()));
@@ -3417,14 +3626,14 @@ public class AiServiceImpl implements AiService {
             "rag",
             "success",
             durationMs,
-            List.of(buildTraceField("retrievalInput", "retrievalInput", retrievalInput)), 
+            List.of(buildTraceField("retrievalInput", "retrievalInput", retrievalInput)),
             List.of(
                 buildTraceField("hit", "hit", ragPromptContext == null ? null : ragPromptContext.getHit()),
                 buildTraceField("rerankEnabled", "rerankEnabled", ragPromptContext == null ? null : ragPromptContext.getRerankEnabled()),
                 buildTraceField("rerankProvider", "rerankProvider", ragPromptContext == null ? "" : ragPromptContext.getRerankProvider()),
                 buildTraceField("rerankDetails", "rerankDetails", ragPromptContext == null ? List.of() : ragPromptContext.getRerankDetails()),
-                buildTraceField("relatedTables", "relatedTables", ragPromptContext == null ? List.of() : ragPromptContext.getRelatedTables()), 
-                buildTraceField("relatedColumns", "relatedColumns", ragPromptContext == null ? List.of() : ragPromptContext.getRelatedColumns()), 
+                buildTraceField("relatedTables", "relatedTables", ragPromptContext == null ? List.of() : ragPromptContext.getRelatedTables()),
+                buildTraceField("relatedColumns", "relatedColumns", ragPromptContext == null ? List.of() : ragPromptContext.getRelatedColumns()),
                 buildTraceField("historySqlSamples", "historySqlSamples", ragPromptContext == null ? List.of() : ragPromptContext.getHistorySqlSamples()),
                 buildTraceField("promptContext", "promptContext", ragPromptContext == null ? "" : ragPromptContext.getPromptContext())
             ),
@@ -3441,7 +3650,7 @@ public class AiServiceImpl implements AiService {
             durationMs,
             List.of(),
             List.of(
-                buildTraceField("relatedTables", "relatedTables", context == null ? List.of() : context.relatedTables()), 
+                buildTraceField("relatedTables", "relatedTables", context == null ? List.of() : context.relatedTables()),
                 buildTraceField("promptContext", "promptContext", context == null ? "" : context.promptContext())
             ),
             null

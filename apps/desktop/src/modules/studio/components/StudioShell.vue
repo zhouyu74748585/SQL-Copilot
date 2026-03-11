@@ -1199,7 +1199,15 @@
                 <div class="query-chat-assistant-card">
                   <div class="query-chat-assistant-head">
                     <span>{{ assistantActionLabel(item.actionType) }}</span>
-                    <span>{{ formatTime(item.createdAt) }}</span>
+                    <span>
+                      {{ formatTime(item.createdAt) }}
+                      <span v-if="item.streaming"> · 流式中</span>
+                      <span v-else-if="item.aborted"> · 已中止</span>
+                    </span>
+                  </div>
+                  <div v-if="item.thinkingContent" class="query-chat-thinking-panel">
+                    <div class="query-chat-thinking-title">Thinking</div>
+                    <pre class="query-chat-thinking-content">{{ item.thinkingContent }}</pre>
                   </div>
                   <div
                     v-if="item.trace && detailOutputEnabledForTab(activeQueryTab)"
@@ -1242,6 +1250,10 @@
                           <div class="query-chat-trace-llm-meta">
                             模型 {{ stage.llmCall.modelId || '-' }} · {{ stage.llmCall.providerType || '-' }} · {{ stage.llmCall.actualModel || '-' }} · Token {{ stage.llmCall.totalTokens || 0 }}
                           </div>
+                          <div v-if="stage.llmCall.providerRequestId" class="query-chat-trace-field">
+                            <span>Provider Request ID</span>
+                            <pre>{{ stage.llmCall.providerRequestId }}</pre>
+                          </div>
                           <div v-if="stage.llmCall.systemPrompt" class="query-chat-trace-field">
                             <span>System Prompt</span>
                             <pre>{{ stage.llmCall.systemPrompt }}</pre>
@@ -1249,6 +1261,10 @@
                           <div v-if="stage.llmCall.userPrompt" class="query-chat-trace-field">
                             <span>User Prompt</span>
                             <pre>{{ stage.llmCall.userPrompt }}</pre>
+                          </div>
+                          <div v-if="stage.llmCall.thinkingContent" class="query-chat-trace-field">
+                            <span>Thinking</span>
+                            <pre>{{ stage.llmCall.thinkingContent }}</pre>
                           </div>
                           <div v-if="stage.llmCall.fullOutput" class="query-chat-trace-field">
                             <span>完整输出</span>
@@ -1258,9 +1274,9 @@
                       </div>
                     </div>
                   </div>
-                  <div v-if="item.content" class="query-chat-text" :class="{ 'is-thinking': item.pending }">
+                  <div v-if="item.content || item.liveOutput || item.pending" class="query-chat-text" :class="{ 'is-thinking': item.pending || item.streaming }">
                     <loading-outlined v-if="item.pending" class="query-chat-thinking-icon" />
-                    <span>{{ item.content }}</span>
+                    <span>{{ item.liveOutput || item.content || '思考中...' }}</span>
                   </div>
                   <div v-if="item.chartConfig" class="query-chat-chart-summary">
                     {{ item.chartConfigSummary || chartSummaryText(item.chartConfig) }}

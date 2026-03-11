@@ -90,6 +90,9 @@ export interface AiTraceLlmCallVO {
   systemPrompt?: string;
   userPrompt?: string;
   fullOutput?: string;
+  thinkingContent?: string;
+  providerRequestId?: string;
+  streaming?: boolean;
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;

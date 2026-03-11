@@ -6,6 +6,9 @@ import lombok.Data;
 @Data
 public class LlmGatewayResult {
 
+    /** 当前响应是否为流式生成。 */
+    private Boolean streaming;
+
     /** 路由命中的模型 ID。 */
     private String modelId;
 
@@ -29,6 +32,12 @@ public class LlmGatewayResult {
 
     /** 模型完整输出。 */
     private String fullOutput;
+
+    /** 模型原始思考内容。 */
+    private String thinkingContent;
+
+    /** provider 请求 ID。 */
+    private String providerRequestId;
 
     /** 网关摘要说明。 */
     private String reasoning;

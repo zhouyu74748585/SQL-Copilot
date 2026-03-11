@@ -27,6 +27,15 @@ public class AiTraceLlmCallVO {
     /** LLM 完整输出。 */
     private String fullOutput;
 
+    /** 模型原始思考内容。 */
+    private String thinkingContent;
+
+    /** provider 请求 ID。 */
+    private String providerRequestId;
+
+    /** 当前调用是否使用流式。 */
+    private Boolean streaming;
+
     /** 输入 token。 */
     private Integer promptTokens;
 

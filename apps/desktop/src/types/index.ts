@@ -288,6 +288,9 @@ export interface AiTraceLlmCallVO {
   systemPrompt?: string;
   userPrompt?: string;
   fullOutput?: string;
+  thinkingContent?: string;
+  providerRequestId?: string;
+  streaming?: boolean;
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
@@ -335,6 +338,47 @@ export interface AiRepairVO {
   repaired: boolean;
   repairNote: string;
   errorExplanation?: string;
+  trace?: AiTraceVO;
+}
+
+export interface AiStreamDeltaVO {
+  channel: 'thinking' | 'output' | string;
+  deltaText?: string;
+  accumulatedText?: string;
+}
+
+export interface AiStreamIntentVO {
+  intentType?: AiIntentType | string;
+  intentLabel?: string;
+  intentConfidence?: number;
+  reasoning?: string;
+}
+
+export interface AiStreamErrorVO {
+  code?: number;
+  message?: string;
+}
+
+export interface AiStreamFinalVO {
+  actionType?: string;
+  generateSql?: AiGenerateSqlVO;
+  autoQuery?: AiAutoQueryVO;
+  textResponse?: AiTextResponseVO;
+  generateChart?: AiGenerateChartVO;
+  repair?: AiRepairVO;
+}
+
+export interface AiStreamEventVO {
+  eventType: string;
+  sessionId?: string;
+  actionType?: string;
+  sequence?: number;
+  timestamp?: number;
+  delta?: AiStreamDeltaVO;
+  finalResult?: AiStreamFinalVO;
+  error?: AiStreamErrorVO;
+  intent?: AiStreamIntentVO;
+  stage?: AiTraceStageVO;
   trace?: AiTraceVO;
 }
 

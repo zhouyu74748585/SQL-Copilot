@@ -1848,6 +1848,32 @@ body {
   margin-bottom: 8px;
 }
 
+.query-chat-thinking-panel {
+  margin-bottom: 8px;
+  border-radius: 8px;
+  border: 1px solid #e7dcc8;
+  background: linear-gradient(135deg, #fff8eb 0%, #fff3dc 100%);
+  padding: 10px;
+}
+
+.query-chat-thinking-title {
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #8c6124;
+}
+
+.query-chat-thinking-content {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.56;
+  color: #5f4522;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .query-chat-sql {
   margin: 0 0 10px;
   border-radius: 8px;
@@ -3108,7 +3134,8 @@ body {
 
 .studio-root .query-chat-assistant-head,
 .studio-root .query-chat-sql,
-.studio-root .query-chat-text {
+.studio-root .query-chat-text,
+.studio-root .query-chat-thinking-panel {
   color: var(--text-1);
 }
 
@@ -3116,6 +3143,11 @@ body {
 .studio-root .query-chat-text {
   border: 1px solid var(--line-soft);
   background: color-mix(in srgb, var(--surface-1) 90%, transparent);
+}
+
+.studio-root .query-chat-thinking-panel {
+  border: 1px solid color-mix(in srgb, var(--line-soft) 80%, #d49f4c 20%);
+  background: color-mix(in srgb, #f4d8a5 18%, var(--surface-1) 82%);
 }
 
 .studio-root .query-chat-trace-block,
@@ -3127,7 +3159,9 @@ body {
 .studio-root .query-chat-trace-toggle,
 .studio-root .query-chat-trace-stage-head,
 .studio-root .query-chat-trace-field,
-.studio-root .query-chat-trace-llm-meta {
+.studio-root .query-chat-trace-llm-meta,
+.studio-root .query-chat-thinking-title,
+.studio-root .query-chat-thinking-content {
   color: var(--text-2);
 }
 

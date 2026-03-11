@@ -89,48 +89,39 @@ public class IsolatedJdbcConnectionManager {
     }
 
     /**
-     * 内置支持的 JDBC 驱动优先直接从应用 classpath 实例化；
-     * 只有未知扩展驱动才回退到资源 jar + 隔离类加载器。
+     * 关键逻辑：优先从配置资源路径加载驱动包，未提供驱动包时回退到应用 classpath。
      */
     private DriverSession createSession(ResolvedDriver resolved) throws SQLException {
-        ClassLoader applicationClassLoader = Thread.currentThread().getContextClassLoader();
+        ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+        URLClassLoader isolatedLoader = null;
 
-        Driver bundledDriver = BundledJdbcDriverFactory.createIfSupported(resolved.driverClass());
-        if (bundledDriver != null) {
-            return new DriverSession(resolved, bundledDriver, applicationClassLoader, null);
+        ClassPathResource resource = new ClassPathResource(resolved.resourcePath());
+        if (resource.exists()) {
+            try {
+                Path tempJar = Files.createTempFile("sql-copilot-driver-", ".jar");
+                try (InputStream in = resource.getInputStream()) {
+                    Files.copy(in, tempJar, StandardCopyOption.REPLACE_EXISTING);
+                }
+                URL url = tempJar.toUri().toURL();
+                isolatedLoader = new URLClassLoader(new URL[]{url}, ClassLoader.getPlatformClassLoader());
+                classLoader = isolatedLoader;
+            } catch (IOException ex) {
+                throw new SQLException("加载隔离驱动包失败: " + ex.getMessage(), ex);
+            }
         }
 
         try {
-            ClassPathResource resource = new ClassPathResource(resolved.resourcePath());
-            ClassLoader classLoader = applicationClassLoader;
-            URLClassLoader isolatedLoader = null;
-            if (resource.exists()) {
-                try {
-                    Path tempJar = Files.createTempFile("sql-copilot-driver-", ".jar");
-                    try (InputStream in = resource.getInputStream()) {
-                        Files.copy(in, tempJar, StandardCopyOption.REPLACE_EXISTING);
-                    }
-                    URL url = tempJar.toUri().toURL();
-                    isolatedLoader = new URLClassLoader(new URL[]{url}, ClassLoader.getPlatformClassLoader());
-                    classLoader = isolatedLoader;
-                } catch (IOException ex) {
-                    throw new SQLException("加载隔离驱动包失败: " + ex.getMessage(), ex);
-                }
+            Class<?> driverClass = Class.forName(resolved.driverClass(), true, classLoader);
+            Object instance = driverClass.getDeclaredConstructor().newInstance();
+            if (!(instance instanceof Driver driver)) {
+                throw new SQLException("驱动类未实现 java.sql.Driver: " + resolved.driverClass());
             }
-            Driver driver = instantiateDriverReflectively(resolved.driverClass(), classLoader);
             return new DriverSession(resolved, driver, classLoader, isolatedLoader);
+        } catch (SQLException ex) {
+            throw ex;
         } catch (Exception ex) {
             throw new SQLException("初始化驱动失败: " + resolved.driverClass() + "，" + ex.getMessage(), ex);
         }
-    }
-
-    private java.sql.Driver instantiateDriverReflectively(String driverClassName, ClassLoader classLoader) throws Exception {
-        Class<?> driverClass = Class.forName(driverClassName, true, classLoader);
-        Object instance = driverClass.getDeclaredConstructor().newInstance();
-        if (instance instanceof java.sql.Driver driver) {
-            return driver;
-        }
-        throw new SQLException("驱动类未实现 java.sql.Driver: " + driverClassName);
     }
 
     private record DriverSession(ResolvedDriver resolved,

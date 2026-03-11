@@ -197,10 +197,15 @@ export function useHistoryModule(runtime: StudioRuntime): HistoryModule {
       const assistantContent = normalizedPayload.assistantContent;
       const hasAssistantPayload = !!assistantContent || !!sqlText || !!item.chartConfig || !!item.chartImageCacheKey;
       if (hasAssistantPayload) {
+        const thinkingContent = runtime.extractThinkingContentFromTrace(item.trace);
         messages.push({
           id: `chat-history-assistant-${connectionId}-${encodeURIComponent(sessionId)}-${item.id ?? index}`,
           role: 'assistant',
           content: assistantContent,
+          streaming: false,
+          finalized: true,
+          thinkingContent: thinkingContent || undefined,
+          liveOutput: '',
           sqlText: sqlText || undefined,
           actionType,
           chartConfig: item.chartConfig ?? undefined,

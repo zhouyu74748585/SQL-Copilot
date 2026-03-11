@@ -6,14 +6,12 @@ import com.sqlcopilot.studio.service.AiConfigService;
 import com.sqlcopilot.studio.util.BusinessException;
 import org.springframework.stereotype.Service;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Locale;
-import java.util.Objects;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -44,15 +42,19 @@ public class LlmGatewayService {
     }
 
     public LlmGatewayResult call(LlmGatewayRequest request) {
+        return callStream(request, new BufferingLlmStreamListener());
+    }
+
+    public LlmGatewayResult callStream(LlmGatewayRequest request, LlmStreamListener listener) {
         AiConfigVO config = aiConfigService.getConfig();
         AiModelOptionVO option = resolveModelOption(request, config);
         if ("LOCAL_CLI".equalsIgnoreCase(safe(option.getProviderType()))) {
-            return callLocalCli(request, option);
+            return callLocalCli(request, option, listener);
         }
-        return callOpenAi(request, option);
+        return callOpenAi(request, option, listener);
     }
 
-    private LlmGatewayResult callOpenAi(LlmGatewayRequest request, AiModelOptionVO option) {
+    private LlmGatewayResult callOpenAi(LlmGatewayRequest request, AiModelOptionVO option, LlmStreamListener listener) {
         String apiKey = safe(option.getOpenaiApiKey());
         if (apiKey.isBlank()) {
             throw new BusinessException(400, "OpenAI API Key 未配置: " + safe(option.getName()));
@@ -62,20 +64,22 @@ public class LlmGatewayService {
         if (baseUrl.isBlank()) {
             baseUrl = "https://api.openai.com/v1";
         }
-        OpenAiTextClient.OpenAiTextResult result = openAiTextClient.requestText(
+        OpenAiTextClient.OpenAiStreamResult result = openAiTextClient.requestTextStream(
             apiKey,
             baseUrl,
             actualModel,
             safe(request.getSystemPrompt()),
             safe(request.getUserPrompt()),
             request.getTimeout() == null ? Duration.ofSeconds(30) : request.getTimeout(),
-            request.getTemperature() == null ? 0.1D : request.getTemperature()
+            request.getTemperature() == null ? 0.1D : request.getTemperature(),
+            listener
         );
         String content = safe(result.content());
         if (content.isBlank()) {
             throw new BusinessException(500, "OpenAI 返回内容为空");
         }
         LlmGatewayResult gatewayResult = new LlmGatewayResult();
+        gatewayResult.setStreaming(result.streaming());
         gatewayResult.setModelId(safe(option.getId()));
         gatewayResult.setProviderType("OPENAI");
         gatewayResult.setProviderName(safe(option.getName()));
@@ -84,12 +88,14 @@ public class LlmGatewayService {
         gatewayResult.setUserPrompt(safe(request.getUserPrompt()));
         gatewayResult.setContent(content);
         gatewayResult.setFullOutput(content);
+        gatewayResult.setThinkingContent(safe(result.thinkingContent()));
+        gatewayResult.setProviderRequestId(safe(result.providerRequestId()));
         gatewayResult.setReasoning("已通过 OpenAI API(" + safe(option.getName()) + "/" + actualModel + ")完成" + safe(request.getTaskLabel()));
         gatewayResult.setUsage(result.usage());
         return gatewayResult;
     }
 
-    private LlmGatewayResult callLocalCli(LlmGatewayRequest request, AiModelOptionVO option) {
+    private LlmGatewayResult callLocalCli(LlmGatewayRequest request, AiModelOptionVO option, LlmStreamListener listener) {
         String command = safe(option.getCliCommand());
         if (command.isBlank()) {
             throw new BusinessException(400, "本地 CLI 命令未配置: " + safe(option.getName()));
@@ -117,19 +123,37 @@ public class LlmGatewayService {
             } else {
                 process.getOutputStream().close();
             }
-            byte[] outputBytes = process.getInputStream().readAllBytes();
+            StringBuilder rawOutputBuilder = new StringBuilder();
+            StringBuilder streamedOutput = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                char[] buffer = new char[1024];
+                int read;
+                while ((read = reader.read(buffer)) >= 0) {
+                    if (read <= 0) {
+                        continue;
+                    }
+                    String chunk = new String(buffer, 0, read);
+                    rawOutputBuilder.append(chunk);
+                    String delta = ANSI_ESCAPE_PATTERN.matcher(chunk).replaceAll("");
+                    if (listener != null && !delta.isEmpty()) {
+                        streamedOutput.append(delta);
+                        listener.onOutputDelta(delta, streamedOutput.toString());
+                    }
+                }
+            }
             boolean finished = process.waitFor(CLI_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             if (!finished) {
                 process.destroyForcibly();
                 throw new BusinessException(500, "本地 CLI 执行超时");
             }
-            String rawOutput = new String(outputBytes, StandardCharsets.UTF_8);
+            String rawOutput = rawOutputBuilder.toString();
             boolean codexCli = isCodexExecutable(cliInvocation.commandLine().get(0));
             String content = extractTextFromCliOutput(rawOutput, codexCli, expectsJsonOutput(request.getSystemPrompt()));
             if (content.isBlank()) {
                 throw new BusinessException(500, "本地 CLI 输出为空");
             }
             LlmGatewayResult gatewayResult = new LlmGatewayResult();
+            gatewayResult.setStreaming(Boolean.TRUE);
             gatewayResult.setModelId(safe(option.getId()));
             gatewayResult.setProviderType("LOCAL_CLI");
             gatewayResult.setProviderName(safe(option.getName()));
@@ -138,6 +162,7 @@ public class LlmGatewayService {
             gatewayResult.setUserPrompt(safe(request.getUserPrompt()));
             gatewayResult.setContent(content);
             gatewayResult.setFullOutput(content);
+            gatewayResult.setThinkingContent("");
             gatewayResult.setReasoning("已通过本地 CLI(" + safe(option.getName()) + ")完成" + safe(request.getTaskLabel()));
             gatewayResult.setUsage(parseCliTokenUsage(rawOutput, constrainedPrompt, content, codexCli));
             return gatewayResult;
@@ -557,6 +582,17 @@ public class LlmGatewayService {
 
     private String safe(String value) {
         return Objects.toString(value, "").trim();
+    }
+
+    private static final class BufferingLlmStreamListener implements LlmStreamListener {
+
+        @Override
+        public void onThinkingDelta(String deltaText, String accumulatedText) {
+        }
+
+        @Override
+        public void onOutputDelta(String deltaText, String accumulatedText) {
+        }
     }
 
     private record CliInvocation(List<String> commandLine, boolean writePromptToStdin) {
