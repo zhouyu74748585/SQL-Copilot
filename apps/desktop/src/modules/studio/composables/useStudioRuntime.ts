@@ -2389,6 +2389,24 @@ function touchQueryTab(tab: QueryWorkspaceTab) {
   tab.updatedAt = Date.now();
 }
 
+function flushStreamingQueryTab(tab: QueryWorkspaceTab) {
+  touchQueryTab(tab);
+  return nextTick().then(() => waitForStreamingPaint());
+}
+
+function waitForStreamingPaint() {
+  if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+    return new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => {
+        window.setTimeout(resolve, 0);
+      });
+    });
+  }
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
 function isQueryChatMessage(value: unknown): value is QueryChatMessage {
   if (!value || typeof value !== 'object') {
     return false;
@@ -2579,9 +2597,7 @@ function upsertStreamingTraceStage(messageItem: QueryChatMessage, stage: AiTrace
     stages,
     stageCount: stages.length,
   };
-  if (messageItem.traceExpanded == null) {
-    messageItem.traceExpanded = false;
-  }
+  messageItem.traceExpanded = true;
 }
 
 function resolveStreamingLlmStageMeta(actionType?: QueryChatMessage['actionType']) {
@@ -2643,9 +2659,7 @@ function upsertStreamingTraceLlmDelta(
     stages,
     stageCount: stages.length,
   };
-  if (messageItem.traceExpanded == null) {
-    messageItem.traceExpanded = false;
-  }
+  messageItem.traceExpanded = true;
 }
 
 function applyStreamTraceSnapshot(messageItem: QueryChatMessage, trace?: AiTraceVO) {
@@ -2653,7 +2667,7 @@ function applyStreamTraceSnapshot(messageItem: QueryChatMessage, trace?: AiTrace
     return;
   }
   messageItem.trace = trace;
-  messageItem.traceExpanded = messageItem.traceExpanded === true;
+  messageItem.traceExpanded = true;
   const thinkingContent = extractThinkingContentFromTrace(trace);
   if (thinkingContent) {
     messageItem.thinkingContent = thinkingContent;
@@ -2793,27 +2807,24 @@ async function runAiTextActionWithSql(
       if (event.eventType === 'stage.updated' && event.stage) {
         ensureAssistantStreamingState(tab, thinkingMessage, actionType);
         upsertStreamingTraceStage(thinkingMessage, event.stage);
-        return;
+        return flushStreamingQueryTab(tab);
       }
       if (event.eventType === 'llm.thinking.delta') {
         ensureAssistantStreamingState(tab, thinkingMessage, actionType);
         thinkingMessage.thinkingContent = event.delta?.accumulatedText || thinkingMessage.thinkingContent || '';
         upsertStreamingTraceLlmDelta(thinkingMessage, actionType, 'thinking', thinkingMessage.thinkingContent || '');
-        touchQueryTab(tab);
-        return;
+        return flushStreamingQueryTab(tab);
       }
       if (event.eventType === 'llm.output.delta') {
         ensureAssistantStreamingState(tab, thinkingMessage, actionType);
         thinkingMessage.liveOutput = event.delta?.accumulatedText || thinkingMessage.liveOutput || '';
         thinkingMessage.content = thinkingMessage.liveOutput || thinkingMessage.content;
         upsertStreamingTraceLlmDelta(thinkingMessage, actionType, 'output', thinkingMessage.liveOutput || '');
-        touchQueryTab(tab);
-        return;
+        return flushStreamingQueryTab(tab);
       }
       if (event.eventType === 'trace.snapshot' && event.trace) {
         applyStreamTraceSnapshot(thinkingMessage, event.trace);
-        touchQueryTab(tab);
-        return;
+        return flushStreamingQueryTab(tab);
       }
       if (event.eventType === 'result.final') {
         streamState.result = event.finalResult?.textResponse || null;
@@ -4907,27 +4918,24 @@ async function generateSqlForTab(
         if (event.eventType === 'stage.updated' && event.stage) {
           ensureAssistantStreamingState(tab, thinkingMessage, actionType);
           upsertStreamingTraceStage(thinkingMessage, event.stage);
-          return;
+          return flushStreamingQueryTab(tab);
         }
         if (event.eventType === 'llm.thinking.delta') {
           ensureAssistantStreamingState(tab, thinkingMessage, actionType);
           thinkingMessage.thinkingContent = event.delta?.accumulatedText || thinkingMessage.thinkingContent || '';
           upsertStreamingTraceLlmDelta(thinkingMessage, actionType, 'thinking', thinkingMessage.thinkingContent || '');
-          touchQueryTab(tab);
-          return;
+          return flushStreamingQueryTab(tab);
         }
         if (event.eventType === 'llm.output.delta') {
           ensureAssistantStreamingState(tab, thinkingMessage, actionType);
           thinkingMessage.liveOutput = event.delta?.accumulatedText || thinkingMessage.liveOutput || '';
           thinkingMessage.content = thinkingMessage.liveOutput || thinkingMessage.content;
           upsertStreamingTraceLlmDelta(thinkingMessage, actionType, 'output', thinkingMessage.liveOutput || '');
-          touchQueryTab(tab);
-          return;
+          return flushStreamingQueryTab(tab);
         }
         if (event.eventType === 'trace.snapshot' && event.trace) {
           applyStreamTraceSnapshot(thinkingMessage, event.trace);
-          touchQueryTab(tab);
-          return;
+          return flushStreamingQueryTab(tab);
         }
         if (event.eventType === 'result.final') {
           streamState.generated = event.finalResult?.generateSql || null;
@@ -4982,27 +4990,24 @@ async function generateSqlForTab(
       if (event.eventType === 'stage.updated' && event.stage) {
         ensureAssistantStreamingState(tab, thinkingMessage, actionType);
         upsertStreamingTraceStage(thinkingMessage, event.stage);
-        return;
+        return flushStreamingQueryTab(tab);
       }
       if (event.eventType === 'llm.thinking.delta') {
         ensureAssistantStreamingState(tab, thinkingMessage, actionType);
         thinkingMessage.thinkingContent = event.delta?.accumulatedText || thinkingMessage.thinkingContent || '';
         upsertStreamingTraceLlmDelta(thinkingMessage, actionType, 'thinking', thinkingMessage.thinkingContent || '');
-        touchQueryTab(tab);
-        return;
+        return flushStreamingQueryTab(tab);
       }
       if (event.eventType === 'llm.output.delta') {
         ensureAssistantStreamingState(tab, thinkingMessage, actionType);
         thinkingMessage.liveOutput = event.delta?.accumulatedText || thinkingMessage.liveOutput || '';
         thinkingMessage.content = thinkingMessage.liveOutput || thinkingMessage.content;
         upsertStreamingTraceLlmDelta(thinkingMessage, actionType, 'output', thinkingMessage.liveOutput || '');
-        touchQueryTab(tab);
-        return;
+        return flushStreamingQueryTab(tab);
       }
       if (event.eventType === 'trace.snapshot' && event.trace) {
         applyStreamTraceSnapshot(thinkingMessage, event.trace);
-        touchQueryTab(tab);
-        return;
+        return flushStreamingQueryTab(tab);
       }
       if (event.eventType === 'result.final') {
         streamState.result = event.finalResult?.textResponse || null;
@@ -5107,33 +5112,29 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
     }, (event) => {
       if (event.eventType === 'intent.resolved' && event.intent?.intentType) {
         thinkingMessage.actionType = autoActionTypeByIntent(event.intent.intentType as AiIntentType);
-        touchQueryTab(tab);
-        return;
+        return flushStreamingQueryTab(tab);
       }
       if (event.eventType === 'stage.updated' && event.stage) {
         ensureAssistantStreamingState(tab, thinkingMessage, thinkingMessage.actionType);
         upsertStreamingTraceStage(thinkingMessage, event.stage);
-        return;
+        return flushStreamingQueryTab(tab);
       }
       if (event.eventType === 'llm.thinking.delta') {
         ensureAssistantStreamingState(tab, thinkingMessage, thinkingMessage.actionType);
         thinkingMessage.thinkingContent = event.delta?.accumulatedText || thinkingMessage.thinkingContent || '';
         upsertStreamingTraceLlmDelta(thinkingMessage, thinkingMessage.actionType, 'thinking', thinkingMessage.thinkingContent || '');
-        touchQueryTab(tab);
-        return;
+        return flushStreamingQueryTab(tab);
       }
       if (event.eventType === 'llm.output.delta') {
         ensureAssistantStreamingState(tab, thinkingMessage, thinkingMessage.actionType);
         thinkingMessage.liveOutput = event.delta?.accumulatedText || thinkingMessage.liveOutput || '';
         thinkingMessage.content = thinkingMessage.liveOutput || thinkingMessage.content;
         upsertStreamingTraceLlmDelta(thinkingMessage, thinkingMessage.actionType, 'output', thinkingMessage.liveOutput || '');
-        touchQueryTab(tab);
-        return;
+        return flushStreamingQueryTab(tab);
       }
       if (event.eventType === 'trace.snapshot' && event.trace) {
         applyStreamTraceSnapshot(thinkingMessage, event.trace);
-        touchQueryTab(tab);
-        return;
+        return flushStreamingQueryTab(tab);
       }
       if (event.eventType === 'result.final' && event.finalResult?.autoQuery) {
         streamState.result = event.finalResult.autoQuery;
@@ -5550,27 +5551,24 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
       if (event.eventType === 'stage.updated' && event.stage) {
         ensureAssistantStreamingState(tab, thinkingMessage, 'chart_auto_plan');
         upsertStreamingTraceStage(thinkingMessage, event.stage);
-        return;
+        return flushStreamingQueryTab(tab);
       }
       if (event.eventType === 'llm.thinking.delta') {
         ensureAssistantStreamingState(tab, thinkingMessage, 'chart_auto_plan');
         thinkingMessage.thinkingContent = event.delta?.accumulatedText || thinkingMessage.thinkingContent || '';
         upsertStreamingTraceLlmDelta(thinkingMessage, 'chart_auto_plan', 'thinking', thinkingMessage.thinkingContent || '');
-        touchQueryTab(tab);
-        return;
+        return flushStreamingQueryTab(tab);
       }
       if (event.eventType === 'llm.output.delta') {
         ensureAssistantStreamingState(tab, thinkingMessage, 'chart_auto_plan');
         thinkingMessage.liveOutput = event.delta?.accumulatedText || thinkingMessage.liveOutput || '';
         thinkingMessage.content = thinkingMessage.liveOutput || thinkingMessage.content;
         upsertStreamingTraceLlmDelta(thinkingMessage, 'chart_auto_plan', 'output', thinkingMessage.liveOutput || '');
-        touchQueryTab(tab);
-        return;
+        return flushStreamingQueryTab(tab);
       }
       if (event.eventType === 'trace.snapshot' && event.trace) {
         applyStreamTraceSnapshot(thinkingMessage, event.trace);
-        touchQueryTab(tab);
-        return;
+        return flushStreamingQueryTab(tab);
       }
       if (event.eventType === 'result.final') {
         streamState.generated = event.finalResult?.generateChart || null;
@@ -6031,27 +6029,24 @@ async function repairSqlForTab(tab: QueryWorkspaceTab) {
       if (event.eventType === 'stage.updated' && event.stage) {
         ensureAssistantStreamingState(tab, thinkingMessage, 'repair');
         upsertStreamingTraceStage(thinkingMessage, event.stage);
-        return;
+        return flushStreamingQueryTab(tab);
       }
       if (event.eventType === 'llm.thinking.delta') {
         ensureAssistantStreamingState(tab, thinkingMessage, 'repair');
         thinkingMessage.thinkingContent = event.delta?.accumulatedText || thinkingMessage.thinkingContent || '';
         upsertStreamingTraceLlmDelta(thinkingMessage, 'repair', 'thinking', thinkingMessage.thinkingContent || '');
-        touchQueryTab(tab);
-        return;
+        return flushStreamingQueryTab(tab);
       }
       if (event.eventType === 'llm.output.delta') {
         ensureAssistantStreamingState(tab, thinkingMessage, 'repair');
         thinkingMessage.liveOutput = event.delta?.accumulatedText || thinkingMessage.liveOutput || '';
         thinkingMessage.content = thinkingMessage.liveOutput || thinkingMessage.content;
         upsertStreamingTraceLlmDelta(thinkingMessage, 'repair', 'output', thinkingMessage.liveOutput || '');
-        touchQueryTab(tab);
-        return;
+        return flushStreamingQueryTab(tab);
       }
       if (event.eventType === 'trace.snapshot' && event.trace) {
         applyStreamTraceSnapshot(thinkingMessage, event.trace);
-        touchQueryTab(tab);
-        return;
+        return flushStreamingQueryTab(tab);
       }
       if (event.eventType === 'result.final') {
         streamState.repaired = event.finalResult?.repair || null;

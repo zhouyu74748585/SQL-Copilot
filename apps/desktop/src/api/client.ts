@@ -117,7 +117,12 @@ function shouldYieldAfterSseEvent(
   eventsSinceYield: number,
   lastYieldAt: number,
 ) {
-  if (hasBufferedEvent && isRenderRelevantSseEvent(eventName)) {
+  // Local SSE batches can be consumed within a single read, which prevents Vue
+  // from painting intermediate stages unless we yield immediately.
+  if (isRenderRelevantSseEvent(eventName)) {
+    return true;
+  }
+  if (hasBufferedEvent) {
     return true;
   }
   if (eventsSinceYield >= 8) {
