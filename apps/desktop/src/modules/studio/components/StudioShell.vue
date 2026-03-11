@@ -2354,6 +2354,35 @@
         >
           向量化
         </button>
+        <div
+          class="context-menu-submenu"
+          :class="{ 'is-disabled': contextMenu.objectType !== 'tables' || !contextMenu.databaseName }"
+        >
+          <button
+            class="context-menu-item context-menu-item-with-arrow"
+            :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
+            type="button"
+          >
+            复制
+            <span class="context-menu-submenu-arrow">›</span>
+          </button>
+          <div class="context-menu-submenu-panel">
+            <button
+              class="context-menu-item"
+              :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
+              @click="triggerContextAction('copyTableStructure')"
+            >
+              仅复制结构
+            </button>
+            <button
+              class="context-menu-item"
+              :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
+              @click="triggerContextAction('copyTableStructureAndData')"
+            >
+              复制结构和数据
+            </button>
+          </div>
+        </div>
         <div class="context-menu-divider" />
         <button
           class="context-menu-item danger"
@@ -2532,6 +2561,71 @@
         <div v-else class="empty-pane">暂无可展示的向量化数据概览</div>
       </a-spin>
     </a-modal>
+
+    <a-modal
+      v-model:open="tablePasteModalOpen"
+      title="跨库复制表"
+      :confirm-loading="tablePasteSubmitting"
+      ok-text="开始复制"
+      cancel-text="取消"
+      @ok="confirmTablePaste"
+      @cancel="closeTablePasteModal"
+    >
+      <a-form layout="vertical">
+        <a-form-item label="源表">
+          <div class="table-copy-summary">
+            {{ tablePasteForm.sourceConnectionId }} / {{ tablePasteForm.sourceDatabaseName || '-' }} / {{ tablePasteForm.sourceTableName }}
+          </div>
+        </a-form-item>
+        <a-form-item label="目标库">
+          <div class="table-copy-summary">
+            {{ tablePasteForm.targetConnectionId }} / {{ tablePasteForm.targetDatabaseName || '-' }}
+          </div>
+        </a-form-item>
+        <a-form-item label="目标表名">
+          <a-input
+            v-model:value="tablePasteForm.targetTableName"
+            maxlength="128"
+            placeholder="请输入目标表名"
+            @pressEnter="confirmTablePaste"
+          />
+        </a-form-item>
+        <a-form-item v-if="tablePasteForm.preferredCopyMode === 'STRUCTURE_AND_DATA'" label="复制数据">
+          <div class="table-copy-switch-row">
+            <a-switch v-model:checked="tablePasteForm.copyData" />
+            <span class="table-copy-switch-text">{{ tablePasteForm.copyData ? '复制结构和数据' : '仅复制结构' }}</span>
+          </div>
+        </a-form-item>
+      </a-form>
+    </a-modal>
+
+    <a-modal
+      v-model:open="tableCopyTaskModalOpen"
+      title="表复制进度"
+      :footer="null"
+      :mask-closable="false"
+      :closable="tableCopyTaskInfo?.status !== 'PENDING' && tableCopyTaskInfo?.status !== 'RUNNING'"
+      @cancel="closeTableCopyTaskModal"
+    >
+      <div v-if="tableCopyTaskInfo" class="table-copy-task-panel">
+        <div class="table-copy-task-summary">
+          <div><span>源表</span><strong>{{ tableCopyTaskInfo.sourceDatabaseName || '-' }} / {{ tableCopyTaskInfo.sourceTableName }}</strong></div>
+          <div><span>目标表</span><strong>{{ tableCopyTaskInfo.targetDatabaseName || '-' }} / {{ tableCopyTaskInfo.targetTableName }}</strong></div>
+          <div><span>状态</span><strong>{{ tableCopyTaskInfo.status }}</strong></div>
+          <div><span>阶段</span><strong>{{ tableCopyTaskInfo.stage }}</strong></div>
+        </div>
+        <a-progress
+          :percent="Math.max(0, tableCopyTaskInfo.progressPercent ?? 0)"
+          :status="tableCopyTaskInfo.status === 'FAILED' ? 'exception' : tableCopyTaskInfo.status === 'SUCCESS' ? 'success' : 'active'"
+        />
+        <div class="table-copy-task-message">{{ tableCopyTaskInfo.message || '-' }}</div>
+        <div class="table-copy-task-stats">
+          <span>已复制: {{ tableCopyTaskInfo.copiedRows ?? 0 }}</span>
+          <span>总行数: {{ tableCopyTaskInfo.totalRows ?? 0 }}</span>
+          <span>更新时间: {{ formatTime(tableCopyTaskInfo.updatedAt) }}</span>
+        </div>
+      </div>
+    </a-modal>
     </div>
   </a-config-provider>
 </template>
@@ -2638,6 +2732,11 @@ const {
     truncateTableName,
     dropTableModalOpen,
     dropTableName,
+    tablePasteModalOpen,
+    tablePasteSubmitting,
+    tablePasteForm,
+    tableCopyTaskModalOpen,
+    tableCopyTaskInfo,
     aiConfigModalOpen,
     aiConfigActiveTab,
     uiTheme,
@@ -2976,6 +3075,9 @@ const {
     handleTreeRightClick,
     closeContextMenu,
     triggerContextAction,
+    confirmTablePaste,
+    closeTablePasteModal,
+    closeTableCopyTaskModal,
     openVectorizeOverview,
     enqueueDatabaseRevectorize,
     vectorizeSingleTable,

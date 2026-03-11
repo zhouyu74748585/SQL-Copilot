@@ -6,6 +6,7 @@ import com.sqlcopilot.studio.dto.schema.*;
 import com.sqlcopilot.studio.service.ErDiagramService;
 import com.sqlcopilot.studio.service.RagVectorizeQueueService;
 import com.sqlcopilot.studio.service.SchemaService;
+import com.sqlcopilot.studio.service.TableCopyService;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,13 +25,16 @@ public class SchemaController {
     private final SchemaService schemaService;
     private final ErDiagramService erDiagramService;
     private final RagVectorizeQueueService ragVectorizeQueueService;
+    private final TableCopyService tableCopyService;
 
     public SchemaController(SchemaService schemaService,
                             ErDiagramService erDiagramService,
-                            RagVectorizeQueueService ragVectorizeQueueService) {
+                            RagVectorizeQueueService ragVectorizeQueueService,
+                            TableCopyService tableCopyService) {
         this.schemaService = schemaService;
         this.erDiagramService = erDiagramService;
         this.ragVectorizeQueueService = ragVectorizeQueueService;
+        this.tableCopyService = tableCopyService;
     }
 
     @PostMapping("/sync")
@@ -109,6 +113,16 @@ public class SchemaController {
     @PostMapping("/table/alter")
     public ApiResponse<TableOperationVO> alterTable(@Valid @RequestBody TableAlterReq req) {
         return ApiResponse.success(schemaService.alterTable(req));
+    }
+
+    @PostMapping("/table/copy")
+    public ApiResponse<TableCopyVO> copyTable(@Valid @RequestBody TableCopyReq req) {
+        return ApiResponse.success(tableCopyService.copyTable(req));
+    }
+
+    @GetMapping("/table/copy/task")
+    public ApiResponse<TableCopyTaskVO> copyTask(@RequestParam("taskId") String taskId) {
+        return ApiResponse.success(tableCopyService.getTask(taskId));
     }
 
     @PostMapping("/table/drop")

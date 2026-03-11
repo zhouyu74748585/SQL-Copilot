@@ -20,7 +20,11 @@ export interface UiShellModule {
   stopResizeQueryPane: () => void;
 }
 
-export function useUiShellModule(runtime: StudioRuntime): UiShellModule {
+interface UiShellDeps {
+  handleBrowserClipboardKeydown: (event: KeyboardEvent) => void;
+}
+
+export function useUiShellModule(runtime: StudioRuntime, deps: UiShellDeps): UiShellModule {
   function toggleTheme() {
     runtime.uiTheme.value = runtime.uiTheme.value === 'dark' ? 'light' : 'dark';
   }
@@ -55,6 +59,10 @@ export function useUiShellModule(runtime: StudioRuntime): UiShellModule {
   function handleWindowResize() {
     runtime.viewportHeight.value = window.innerHeight;
     runtime.viewportWidth.value = window.innerWidth;
+  }
+
+  function handleWindowKeydown(event: KeyboardEvent) {
+    deps.handleBrowserClipboardKeydown(event);
   }
 
   function startResizeLeftPane(event: MouseEvent) {
@@ -179,11 +187,13 @@ export function useUiShellModule(runtime: StudioRuntime): UiShellModule {
 
   onMounted(() => {
     window.addEventListener('resize', handleWindowResize);
+    window.addEventListener('keydown', handleWindowKeydown);
     loadUiThemePreference();
   });
 
   onBeforeUnmount(() => {
     window.removeEventListener('resize', handleWindowResize);
+    window.removeEventListener('keydown', handleWindowKeydown);
     window.removeEventListener('mousemove', handleResizeLeftPane);
     window.removeEventListener('mouseup', stopResizeLeftPane);
     window.removeEventListener('mousemove', handleResizeBrowserPane);

@@ -128,6 +128,47 @@ export interface TableDetailVO {
   }>;
 }
 
+export type TableCopyMode = 'STRUCTURE_ONLY' | 'STRUCTURE_AND_DATA';
+
+export interface TableCopyReq {
+  sourceConnectionId: number;
+  sourceDatabaseName?: string;
+  sourceTableName: string;
+  targetConnectionId: number;
+  targetDatabaseName?: string;
+  targetTableName: string;
+  copyMode: TableCopyMode;
+}
+
+export interface TableCopyVO {
+  success: boolean;
+  message: string;
+  async: boolean;
+  taskId?: string;
+  copyMode: TableCopyMode;
+  targetConnectionId: number;
+  targetDatabaseName?: string;
+  targetTableName: string;
+}
+
+export interface TableCopyTaskVO {
+  taskId: string;
+  status: 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED';
+  stage: string;
+  message: string;
+  progressPercent?: number;
+  copiedRows?: number;
+  totalRows?: number;
+  sourceConnectionId: number;
+  sourceDatabaseName?: string;
+  sourceTableName: string;
+  targetConnectionId: number;
+  targetDatabaseName?: string;
+  targetTableName: string;
+  copyMode: TableCopyMode;
+  updatedAt?: number;
+}
+
 export type TableDataFilterOperator =
   | 'EQ'
   | 'NE'

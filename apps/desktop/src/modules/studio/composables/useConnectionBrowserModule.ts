@@ -15,6 +15,8 @@ type ContextAction =
   | 'browseData'
   | 'vectorizeTable'
   | 'editTable'
+  | 'copyTableStructure'
+  | 'copyTableStructureAndData'
   | 'dropTable'
   | 'truncateTable';
 
@@ -32,6 +34,12 @@ export interface ConnectionBrowserModule {
 }
 
 interface ConnectionBrowserDeps {
+  copyTableWithinCurrentDatabase: (mode: 'STRUCTURE_ONLY' | 'STRUCTURE_AND_DATA', source?: {
+    connectionId: number;
+    databaseName: string;
+    tableName: string;
+    dbType: string;
+  } | null) => Promise<void>;
   openEditTableEditor: (connectionId: number, databaseName: string, tableName: string) => Promise<void>;
   openTableDataTabByObject: (
     record: ObjectRow,
@@ -160,6 +168,21 @@ export function useConnectionBrowserModule(
         return;
       }
       await deps.openEditTableEditor(id, databaseName, objectName);
+      return;
+    }
+    if (action === 'copyTableStructure' || action === 'copyTableStructureAndData') {
+      if (targetType !== 'object' || !objectName || objectType !== 'tables' || !databaseName) {
+        return;
+      }
+      await deps.copyTableWithinCurrentDatabase(
+        action === 'copyTableStructure' ? 'STRUCTURE_ONLY' : 'STRUCTURE_AND_DATA',
+        {
+          connectionId: id,
+          databaseName,
+          tableName: objectName,
+          dbType: runtime.connections.value.find((item) => item.id === id)?.dbType || '',
+        },
+      );
       return;
     }
     if (action === 'truncateTable') {

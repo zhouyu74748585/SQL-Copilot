@@ -2759,6 +2759,108 @@ body {
   background: #fff0f3;
 }
 
+.context-menu-divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: #e6edf9;
+}
+
+.context-menu-submenu {
+  position: relative;
+}
+
+.context-menu-submenu.is-disabled {
+  pointer-events: none;
+}
+
+.context-menu-item-with-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.context-menu-submenu-arrow {
+  color: #7d8ba1;
+  font-size: 13px;
+}
+
+.context-menu-submenu-panel {
+  position: absolute;
+  top: 0;
+  left: calc(100% + 6px);
+  min-width: 164px;
+  display: none;
+  padding: 4px;
+  border: 1px solid #dce5f4;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(17, 35, 70, 0.16);
+}
+
+.context-menu-submenu:hover .context-menu-submenu-panel {
+  display: block;
+}
+
+.table-copy-summary {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f5f8fe;
+  color: #273850;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.table-copy-switch-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.table-copy-switch-text {
+  color: #4d5f7d;
+  font-size: 12px;
+}
+
+.table-copy-task-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.table-copy-task-summary {
+  display: grid;
+  gap: 8px;
+}
+
+.table-copy-task-summary > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: #5e6f8a;
+}
+
+.table-copy-task-summary strong {
+  color: #273850;
+  text-align: right;
+}
+
+.table-copy-task-message {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f7f9fd;
+  color: #31435f;
+  font-size: 12px;
+}
+
+.table-copy-task-stats {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  color: #64748b;
+  font-size: 12px;
+}
+
 .vectorize-overview-panel {
   display: grid;
   gap: 12px;
@@ -3330,12 +3432,37 @@ body {
   background: var(--hover);
 }
 
+.studio-root .context-menu-divider {
+  background: var(--line);
+}
+
+.studio-root .context-menu-submenu-panel {
+  border-color: var(--line);
+  background: var(--panel);
+}
+
 .studio-root .context-menu-item.danger {
   color: var(--error);
 }
 
 .studio-root .context-menu-item.danger:hover {
   background: var(--error-soft);
+}
+
+.studio-root .table-copy-summary,
+.studio-root .table-copy-task-message {
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+.studio-root .table-copy-task-summary > div,
+.studio-root .table-copy-switch-text,
+.studio-root .table-copy-task-stats {
+  color: var(--text-2);
+}
+
+.studio-root .table-copy-task-summary strong {
+  color: var(--text-1);
 }
 
 .studio-root .vectorize-overview-db,
