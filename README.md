@@ -1,462 +1,228 @@
 # SQL Copilot
 
-## 产品定位
+SQL Copilot 不是一个只会“吐一段 SQL”的问答工具，而是一个已经打通了连接管理、Schema 感知、AI 对话、风险控制、结果执行、图表展示、ER 分析和知识记忆的桌面化数据库工作台。
 
-SQL Copilot 是一款基于 Spring Boot + Electron 架构开发的 AI 原生数据库管理工具。具备结构感知能力、执行闭环能力、风险控制能力和上下文记忆能力的智能数据库工作台。
+它当前的实际实现形态是：
 
----
+- Electron 桌面端，提供多标签工作台、Monaco SQL 编辑器、ER 图和数据浏览界面
+- Spring Boot 本地服务，承接连接管理、Schema 缓存、SQL 执行、AI 对话与 RAG 检索
+- SQLite 本地元数据存储，保存连接、历史、快照、知识库和配置
+- Qdrant + ONNX / OpenAI Compatible，支撑向量检索、知识召回和会话记忆
 
-## 技术架构
+## 为什么它更像“数据库副驾”
 
-### 技术栈
+- 不只是生成 SQL，而是从自然语言到 SQL、解释、分析、图表、修复的一整条 AI 工作流。
+- 不只是会话框，而是带连接树、对象浏览、表结构编辑、表数据编辑、ER 图、历史会话和知识库的完整工作台。
+- 不只是检索当前问题，而是会结合 Schema、样例 SQL、术语、历史 SQL 和会话长期记忆去构建上下文。
+- 不只是返回文本，而是支持风险评估、执行结果表格、图表缓存、CSV 导出和历史恢复。
 
-#### 桌面端
-| 技术 | 版本 | 说明 |
-|------|------|------|
-| Electron | 36.2.1 | 桌面应用框架 |
-| Vue | 3.5.13 | 前端框架 |
-| Ant Design Vue | 4.2.6 | UI组件库 |
-| Vite | 6.0.5 | 构建工具 |
-| TypeScript | 5.7.2 | 类型系统 |
-| Monaco Editor | 0.55.1 | SQL代码编辑器 |
-| ECharts | 5.6.0 | 数据可视化 |
+## 应用截图
 
-#### 后端
-| 技术 | 版本 | 说明 |
-|------|------|------|
-| Spring Boot | 3.3.4 | 后端框架 |
-| JDK | 17 | 后端运行与 jlink 打包 |
-| MyBatis | 3.0.3 | ORM框架 |
-| SQLite | 3.46.0.0 | 本地元数据存储 |
-| ONNX Runtime | 1.19.2 | 向量化推理引擎 |
-| DJL Tokenizers | 0.29.0 | 分词器 |
-| JSQLParser | 4.9 | SQL解析库 |
-| JSch | 0.2.20 | SSH隧道支持 |
-| Spring AI | 1.0.0-M6 | AI集成框架 |
+### 对话式查询工作台
 
-#### AI与向量服务
-| 技术 | 说明 |
-|------|------|
-| Qdrant | 向量数据库 |
-| BGE-M3 | 文本向量化模型 (ONNX格式) |
-| OpenAI API | 大语言模型集成 |
+![对话查询](docs/img/query-workbench.png)
 
----
+- 在同一页面中完成自然语言提问、SQL 生成、流式输出、结果追问和执行闭环。
+- 支持 `auto` 自动模式，先做意图识别，再路由到生成 SQL、解释 SQL、分析 SQL 或生成图表。
+
+### 对象浏览与连接工作区
+
+![对象浏览](docs/img/object-browser.png)
+
+- 左侧连接树和对象树联动，支持数据库、表、视图等对象浏览。
+- 可直接从对象右键进入查询、表数据浏览、表结构编辑和向量化动作。
+
+### 表数据浏览与编辑
+
+![数据浏览](docs/img/data-browser.png)
+
+- 支持分页、筛选、排序、单元格编辑、插入、删除与事务提交。
+- 更适合做“定位数据 + 快速修正 + 再回到 AI 查询”的联合作业。
+
+### 智能 ER 图
+
+![智能ER图](docs/img/er-diagram.png)
+
+- 不只展示外键关系，还支持 AI 推断关系。
+- 可保存快照、再次打开、调整布局，并继续围绕当前结构进行分析。
+
+## 核心功能特点
+
+### 1. 面向数据库工作的 AI 对话
+
+- 对话式 SQL 生成、SQL 解释、SQL 分析、SQL 修复、图表方案生成都已落地。
+- SSE 流式输出支持 `thinking` 与最终结果分段展示，便于观察 AI 处理过程。
+- 查询结果可直接回填到 SQL 编辑器，再进入执行、Explain 或风险评估。
+
+### 2. 真正带上下文的 SQL Copilot
+
+- 当前实现会组合 Schema 表、字段、术语、样例 SQL、历史 SQL、多轮会话窗口与长期记忆。
+- 会话上下文不是简单拼接原文，而是支持窗口摘要、滑动摘要、结构化窗口 JSON 与长期向量记忆召回。
+- 长期记忆写入 `session_summary` 向量记忆，默认保留 30 天。
+
+### 3. 查询不是终点，执行闭环才是重点
+
+- 生成 SQL 后可直接执行。
+- 执行前会先做风险评估，拦截高风险操作和只读连接违规写入。
+- 结果可以表格化查看、转图表、缓存图表图片、导出 CSV。
+
+### 4. 不只有 AI，会把数据库工作台补全
+
+- 连接管理：创建、编辑、删除、测试、数据库列表预览。
+- 对象浏览：数据库/表/视图等对象树、表概览、表统计、对象详情。
+- 表设计：支持新建表、修改表、DDL 预览与执行。
+- 数据编辑：支持表数据页的筛选、排序、单元格编辑和提交。
+- ER 图：支持外键关系 + AI 推断关系、快照保存与恢复。
+- 知识库：术语管理、样例 SQL 管理、知识向量重建。
+- 历史中心：会话分页查看、恢复打开、删除、标题重命名。
+
+### 5. 本地桌面交付，不依赖浏览器页面拼装
+
+- Electron 主进程负责窗口、图表缓存、本地资源与打包态子进程托管。
+- 打包时会把 backend 和 Qdrant 资源一起准备好，桌面端不是“只有一个前端壳”。
+- `scripts/package-variants.mjs` 会为 backend 执行 Maven 打包，再通过 `jdeps + jlink` 生成裁剪运行时。
+
+## 当前已实现模块
+
+| 模块 | 当前实际能力 |
+| --- | --- |
+| 连接与对象浏览 | 连接管理、数据库列表、对象树、表统计、对象详情、右键快捷动作 |
+| AI 查询 | 生成 SQL、自动模式、解释 SQL、分析 SQL、生成图表、修复 SQL、SSE 流式输出 |
+| SQL 执行 | 执行、Explain、风险评估、结果展示、CSV 导出 |
+| Schema / 表设计 | Schema 同步、表详情、对象名补全、建表/改表/删表/清表 |
+| 表数据 | 分页、筛选、排序、编辑、提交 |
+| ER 图 | 外键关系、AI 推断关系、快照保存/改名/删除/重开 |
+| 历史 | 会话分页、历史恢复、删除、标题覆写 |
+| 知识库 | 术语、样例 SQL、从查询保存样例、重建向量 |
+| RAG | 表/字段/历史/术语/样例 SQL 多桶检索、rerank、跨作用域召回 |
+
+## 技术栈
+
+### 桌面端
+
+| 技术 | 实际版本/实现 | 说明 |
+| --- | --- | --- |
+| Electron | 36.2.1 | 桌面容器与本地资源调度 |
+| Vue 3 | 3.5.13 | 渲染层框架 |
+| TypeScript | 5.7.2 | 前端类型系统 |
+| Ant Design Vue | 4.2.6 | UI 组件库 |
+| Vite | 6.0.5 | 前端构建与预览 |
+| Monaco Editor | 0.55.1 | SQL 编辑与补全 |
+| ECharts | 5.6.0 | 图表与 ER 图渲染 |
+
+### 后端
+
+| 技术 | 实际版本/实现 | 说明 |
+| --- | --- | --- |
+| Spring Boot | 3.3.4 | 本地 HTTP 服务 |
+| Java | 17 | 后端运行与打包基线 |
+| MyBatis Spring Boot | 3.0.5 | SQLite 持久化访问 |
+| SQLite JDBC | 3.46.0.0 | 本地元数据库 |
+| Spring AI Core | 1.0.0-M6 | AI 接入基础依赖 |
+| JSQLParser | 4.9 | SQL AST 校验与表名提取 |
+| JSch | 0.2.20 | SSH 隧道支持 |
+
+### AI / RAG / 本地推理
+
+| 技术 | 实际版本/实现 | 说明 |
+| --- | --- | --- |
+| Qdrant | Electron 资源内置二进制 | 向量数据库 |
+| ONNX Runtime | 1.19.2 | 本地 embedding / rerank 推理 |
+| DJL Tokenizers | 0.29.0 | 本地 tokenizer |
+| OpenAI Compatible API | 已接入 | 在线模型、在线 embedding / rerank |
+| BGE-M3 / BGE-Reranker | `apps/server/models` | `full` 变体默认本地模型 |
 
 ## 项目结构
 
-```
-SQL-Copilot/
-├── apps/
-│   ├── server/                         # Spring Boot 后端服务
-│   │   ├── src/main/java/
-│   │   │   └── com/sqlcopilot/studio/
-│   │   │       ├── config/            # 配置类 (全局异常处理、Web配置)
-│   │   │       ├── controller/        # REST API控制器 (10个)
-│   │   │       ├── dto/               # 数据传输对象 (96个)
-│   │   │       ├── entity/            # 实体类 (12个)
-│   │   │       ├── mapper/            # MyBatis Mapper (10个)
-│   │   │       ├── service/           # 业务服务 (11个接口+实现)
-│   │   │       │   ├── impl/          # 服务实现 (10个)
-│   │   │       │   ├── llm/           # LLM集成 (OpenAI文本客户端)
-│   │   │       │   └── rag/           # RAG向量服务 (6个核心服务)
-│   │   │       ├── dialect/           # 数据库方言适配
-│   │   │       ├── support/           # 工具支持
-│   │   │       └── util/              # 工具类
-│   │   └── src/main/resources/
-│   │       ├── application.yml        # 应用配置
-│   │       └── schema.sql             # 数据库初始化脚本
-│   │
-│   └── desktop/                        # Electron 桌面端
-│       ├── electron/                   # Electron主进程 (main.cjs)
-│       ├── src/                        # Vue前端源码
-│       │   ├── api/                    # API客户端 (client.ts)
-│       │   ├── components/             # 公共组件
-│       │   │   ├── ErDiagramPanel.vue  # ER图面板
-│       │   │   ├── QueryChartPanel.vue # 图表面板
-│       │   │   └── TableEditor.vue     # 表结构编辑器
-│       │   ├── modules/studio/         # 主工作区模块
-│       │   │   ├── components/
-│       │   │   │   └── StudioShell.vue  # 核心工作区外壳 (2785行)
-│       │   │   └── composables/         # 组合式API (10个)
-│       │   └── types/                  # TypeScript类型
-│       └── resources/                  # 静态资源
-│
-├── packages/
-│   └── shared-contracts/               # 前后端共享契约
-│
-├── model/                              # AI模型文件
-│   ├── *.onnx                          # 向量化模型
-│   └── *.model                        # 模型配置
-│
-└── docs/                              # 开发文档
+```text
+.
+├── apps/desktop                    Electron + Vue 桌面端
+│   ├── electron                    主进程与 preload
+│   ├── src/modules/studio          主工作台与功能模块
+│   └── resources                   Qdrant 与打包态 backend 资源
+├── apps/server                     Spring Boot 本地服务
+│   ├── controller                  HTTP 接口
+│   ├── service                     业务服务
+│   ├── service/llm                 LLM 网关
+│   ├── service/rag                 检索、向量化、rerank
+│   ├── mapper/entity               SQLite 持久化
+│   └── resources                   application*.yml / schema.sql / drivers
+├── packages/shared-contracts       前后端共享契约
+├── scripts/package-variants.mjs    多变体打包脚本
+└── docs                            文档、截图与阶段总结
 ```
 
----
+## 开发命令
 
-## 核心功能模块
-
-### 1. 数据库连接与管理
-- **多数据库支持**: MySQL、PostgreSQL、SQL Server、SQLite、Oracle 等
-- **连接创建/编辑/删除**: 完整的连接生命周期管理
-- **连接测试**: 验证连接有效性
-- **SSH隧道支持**: 安全远程连接
-- **数据库预览**: 临时连接查看数据库列表
-
-### 2. Schema 结构管理
-- **自动同步**: 从数据库读取并同步 schema 信息
-- **表结构查看**: 字段、索引、外键关系详情
-- **表统计信息**: 行数估算、大表排名
-- **Schema缓存**: 定时刷新机制 (默认5分钟TTL)
-- **DDL操作**: 支持 CREATE/ALTER/DROP/TRUNCATE 表
-- **ER图生成**: 基于外键和AI推断的关系图
-
-### 3. AI 智能查询 (核心)
-| 接口 | 功能 |
-|------|------|
-| `/api/ai/query/generate` | 自然语言生成SQL |
-| `/api/ai/query/auto` | 自动意图识别+路由 |
-| `/api/ai/query/explain` | SQL语句解释 |
-| `/api/ai/query/analyze` | SQL合理性分析 |
-| `/api/ai/query/repair` | SQL语法错误修复 |
-| `/api/ai/query/generate-chart` | 生成图表配置 |
-
-**AI 工作流**:
-```
-用户输入 → 轻量意图预判 → RAG检索 → 最终意图识别 → LLM执行 → 结果返回
-```
-
-### 4. SQL 执行与分析
-- **SQL执行**: 支持任意SQL语句执行
-- **EXPLAIN分析**: 执行计划分析
-- **风险评估**: 高风险操作预警
-- **结果导出**: CSV/Excel/JSON 格式导出
-
-### 5. RAG 向量化服务
-| 接口 | 功能 |
-|------|------|
-| `/api/rag/vectorize/enqueue` | 加入向量化队列 |
-| `/api/rag/vectorize/table/manual` | 手动向量化单张表 |
-| `/api/rag/vectorize/status/list` | 向量化状态列表 |
-| `/api/rag/vectorize/overview` | 向量化概览 |
-| `/api/knowledge/vectorize/rebuild` | 重建向量索引 |
-
-**向量化分层策略**:
-- `schema_table`: 每张表一个向量
-- `schema_column`: 每个字段一个向量
-- `sql_history`: 每条SQL历史一个向量
-- `sql_fragment`: SQL片段级向量 (CTE/SELECT片段)
-
-### 6. 知识库管理
-- **术语管理**: 业务术语的增删改查
-- **SQL示例**: 典型SQL模式的保存与管理
-- **向量检索**: 基于语义的相似查询召回
-
-### 7. 编辑器与历史
-- **多标签页**: 支持 AI查询、ER图、表编辑器等多种Tab
-- **查询历史**: 会话历史记录、分页查看
-- **历史会话**: 续接历史会话继续对话
-- **ER图快照**: 保存/重命名/删除ER图
-- **保存查询**: 固定查询模板保存
-- **图表缓存**: 查询结果的图表缓存
-
----
-
-## API 接口总览
-
-### 健康检查
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/health/health` | 服务健康状态 |
-
-### 连接管理 (`/api/connection`)
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/list` | 获取连接列表 |
-| POST | `/create` | 创建连接 |
-| POST | `/update` | 更新连接 |
-| POST | `/remove` | 删除连接 |
-| POST | `/test` | 测试连接 |
-| POST | `/databases/preview` | 预览数据库列表 |
-
-### Schema 管理 (`/api/schema`)
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/sync` | 同步Schema |
-| GET | `/overview` | Schema概览 |
-| GET | `/tableStats` | 表统计信息 |
-| GET | `/tableDetail` | 表详情 |
-| GET | `/databases` | 数据库列表 |
-| GET | `/objectNames` | 对象名称列表 |
-| POST | `/context/build` | generation_context |
-| POST | `/er/graph` | 生成ER图 |
-| POST | `/table/create` | 创建表 |
-| POST | `/table/alter` | 修改表 |
-| POST | `/table/drop` | 删除表 |
-| POST | `/table/truncate` | 清空表 |
-| POST | `/cache/refresh` | 刷新缓存 |
-
-### SQL 执行 (`/api/sql`)
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/execute` | 执行SQL |
-| POST | `/explain` | EXPLAIN分析 |
-| POST | `/risk/evaluate` | 风险评估 |
-
-### AI 查询 (`/api/ai/query`)
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/generate` | 生成SQL |
-| POST | `/auto` | 自动模式 |
-| POST | `/generate-chart` | 生成图表 |
-| POST | `/explain` | 解释SQL |
-| POST | `/analyze` | 分析SQL |
-| POST | `/repair` | 修复SQL |
-
-### AI 配置 (`/api/ai/config`)
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/get` | 获取配置 |
-| POST | `/save` | 保存配置 |
-
-### 编辑器 (`/api/editor`)
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/history/list` | 历史列表 |
-| GET | `/history/session/page` | 会话分页 |
-| GET | `/history/session/detail` | 会话详情 |
-| POST | `/history/save` | 保存历史 |
-| POST | `/history/session/remove` | 删除会话 |
-| GET | `/saved-query/list` | 保存查询列表 |
-| POST | `/saved-query/save` | 保存查询 |
-| GET | `/er/snapshot/page` | ER图快照 |
-| GET | `/er/snapshot/detail` | 快照详情 |
-| POST | `/er/snapshot/save` | 保存快照 |
-| POST | `/er/snapshot/rename` | 重命名快照 |
-| POST | `/er/snapshot/remove` | 删除快照 |
-| POST | `/result/export` | 导出结果 |
-
-### 知识库 (`/api/knowledge`)
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/term/list` | 术语列表 |
-| POST | `/term/save` | 保存术语 |
-| POST | `/term/remove` | 删除术语 |
-| GET | `/example/list` | SQL示例列表 |
-| POST | `/example/save` | 保存示例 |
-| POST | `/example/remove` | 删除示例 |
-| POST | `/vectorize/rebuild` | 重建向量 |
-
-### RAG 配置 (`/api/rag/config`)
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/get` | 获取配置 |
-| POST | `/save` | 保存配置 |
-
-### RAG 向量 (`/api/rag/vectorize`)
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/enqueue` | 加入队列 |
-| POST | `/interrupt` | 中断任务 |
-| POST | `/table/manual` | 手动向量化 |
-| GET | `/status/list` | 状态列表 |
-| GET | `/overview` | 概览 |
-| GET | `/runtime-provider` | 运行时提供商 |
-
----
-
-## 前端界面结构
-
-### 工作区标签页类型
-1. **对象浏览**: 数据库对象树形结构
-2. **AI查询**: 智能问答式查询界面
-3. **ER图**: 关系图可视化
-4. **表编辑器**: 表结构编辑界面
-5. **知识库**: 术语和SQL示例管理
-
-### 顶部工具栏
-- 新建 AI 查询页签
-- 会话历史 (下拉菜单)
-- ER图快照 (下拉菜单)
-
-### 组件说明
-| 组件 | 路径 | 功能 |
-|------|------|------|
-| StudioShell | modules/studio/components/ | 核心工作区外壳 |
-| ErDiagramPanel | components/ | ER图可视化 (ECharts) |
-| QueryChartPanel | components/ | 图表展示 |
-| TableEditor | components/ | 表结构编辑 |
-
----
-
-## 关键技术实现
-
-### RAG 向量架构
-后端采用 ONNX Runtime 作为推理引擎，支持多种执行 provider:
-- **CPU**: 默认通用执行
-- **CUDA**: NVIDIA GPU 加速
-- **CoreML**: APPLE 推理框架 加速
-
-向量化模型: BGE-M3 (多语言embedding模型)
-
-### AI 意图识别
-双层意图识别架构:
-1. **轻量预判** (`INTENT_CLASSIFY_LIGHT_SYSTEM_PROMPT`): 快速初筛
-2. **最终识别** (`INTENT_CLASSIFY_FINAL_SYSTEM_PROMPT`): 结合RAG结果精准判断
-
-支持四种意图: `GENERATE_SQL`, `EXPLAIN_SQL`, `ANALYZE_SQL`, `GENERATE_CHART`
-
-### SQL 执行闭环
-```
-LLM生成 → JSQLParser解析 → 风险评估 → 执行 → 结果转换 → 异常修复(如需)
-```
-
-### ER 图智能推断
-- 外键关系: 实线连接
-- AI推断关系: 虚线连接 (置信度阈值 0.6)
-- 渲染引擎: Html+SVG
-
----
-
-## 开发环境搭建
-
-### 环境要求
-| 组件 | 版本 | 说明 |
-|------|------|------|
-| JDK | 17+ | 后端运行环境 |
-| Node.js | 18+ | 前端构建 |
-| Maven | 3.8+ | 后端构建 |
-| Qdrant | - | 向量数据库 |
-
-### 启动命令
+### 前端开发
 
 ```bash
-# 1. 安装前端依赖
-npm install
-
-# 2. 下载 Qdrant (可选，本地AI功能必需)
-npm run -w @sqlcopilot/desktop download:qdrant
-
-# 3. 启动后端
-cd apps/server
-mvn spring-boot:run
-
-# 4. 启动前端开发
-npm run -w @sqlcopilot/desktop dev
-
-# 5. 启动 Electron 调试
+npm run -w @sqlcopilot/desktop dev:renderer
+npm run -w @sqlcopilot/desktop dev:electron
 npm run -w @sqlcopilot/desktop debug
 ```
 
-**服务端口**:
-- 后端: `http://localhost:18080`
-- 前端渲染: `http://127.0.0.1:8888`
-- Electron主进程调试: `--inspect=9229`
-
----
-
-## 构建与打包
+### 前端校验与预览
 
 ```bash
-# 后端 JVM 编译
-mvn -f apps/server/pom.xml clean package
-
-# 前端类型检查
 npm run type-check
-
-# 前端构建
 npm run build
+npm run -w @sqlcopilot/desktop build -- --emptyOutDir
+npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 8888 --strictPort
+```
 
-# 完整应用打包（前后端，JVM 后端 + jlink 运行时；默认一次产出三种包型）
+### 后端开发与校验
+
+```bash
+mvn -f apps/server/pom.xml clean spring-boot:run
+mvn -f apps/server/pom.xml clean spring-boot:run "-Dspring-boot.run.arguments=--server.port=18080"
+mvn -f apps/server/pom.xml clean package
+mvn -f apps/server/pom.xml -Ppack-minimal clean package -DskipTests
+mvn -f apps/server/pom.xml -Ppack-medium clean package -DskipTests
+mvn -f apps/server/pom.xml -Ppack-full clean package -DskipTests
+```
+
+### 桌面端打包
+
+```bash
+npm run -w @sqlcopilot/desktop build:minimal
+npm run -w @sqlcopilot/desktop build:medium
+npm run -w @sqlcopilot/desktop build:full
+
+npm run -w @sqlcopilot/desktop dist:minimal
+npm run -w @sqlcopilot/desktop dist:medium
+npm run -w @sqlcopilot/desktop dist:full
+```
+
+### 多变体一键打包
+
+```bash
+# 默认输出 desktop 变体，backend 作为中间构建参与 jlink 打包
 npm run package:variants
 
-# Windows PowerShell 也可直接执行
-powershell -ExecutionPolicy Bypass -File .\scripts\package-variants.ps1
-
-# macOS / Linux 也可直接执行
-bash ./scripts/package-variants.sh
-
-# 完整应用打包（前后端，JVM 后端 + jlink 运行时；仅 minimal / medium / full 单一包型）
+# 只打一个变体
 npm run package:app:minimal
 npm run package:app:medium
 npm run package:app:full
 
-# 完整应用打包时额外导出 backend 发布目录（可选）
+# 同时导出 backend 运行时目录
 SQLCOPILOT_EXPORT_BACKEND=1 npm run package:variants
 
-# Windows PowerShell 设置环境变量示例
-$env:SQLCOPILOT_EXPORT_BACKEND="1"
-npm run package:variants
-
-# 自定义 JDK 17 路径（jlink 依赖完整 JDK）
-export JAVA_HOME=/path/to/jdk-17
-export PATH="$JAVA_HOME/bin:$PATH"
-npm run package:variants -- medium
-
-# Windows PowerShell jlink 打包示例
-$env:JAVA_HOME="C:\jdk-17"
-$env:Path="$env:JAVA_HOME\bin;$env:Path"
-npm run package:variants -- full
+# 仅导出 backend
+SQLCOPILOT_INCLUDE_DESKTOP=0 SQLCOPILOT_EXPORT_BACKEND=1 npm run package:variants
 ```
 
-> `npm run package:variants -- <variant>` 也支持参数化：`minimal | medium | full`。
-> 根脚本已改为 `node scripts/package-variants.mjs`，Windows 不再依赖 `bash` / WSL。
-> 打包脚本会先执行 `mvn clean package` 生成 Spring Boot jar，再用当前 `JAVA_HOME` 对应的 `jdeps + jlink` 生成内置运行时。
-> 打包产物中的 backend 默认通过 `run.sh` / `run.cmd` 优先使用内置 `jre/bin/java` 启动，不依赖目标机器的系统 Java。
-> 若 `jdeps` 漏掉动态依赖，可通过 `SQLCOPILOT_JLINK_EXTRA_MODULES=moduleA,moduleB` 追加 JDK 模块。
+## 变体说明
 
-**打包目标**:
-- Windows: NSIS
-- macOS: DMG
-- Linux: AppImage
+| 变体 | 前端行为 | 后端 / RAG 默认特征 |
+| --- | --- | --- |
+| minimal | 前端仅提供在线 OpenAI 兼容 RAG 选项 | `application-minimal.yml` 禁用本地 ONNX，rerank 关闭 |
+| medium | 前端允许本地 ONNX / 在线两种选项 | `application-medium.yml` 默认走在线 embedding / rerank 配置 |
+| full | 前端允许本地 ONNX / 在线两种选项 | `application-full.yml` 默认启用本地 embedding + 本地 rerank，并打包 `apps/server/models` |
 
----
+## 启动检查
 
-## 配置说明
-
-### application.yml 核心配置
-
-```yaml
-server:
-  port: 18080
-
-spring:
-  datasource:
-    driver-class-name: org.sqlite.JDBC
-    url: jdbc:sqlite:sql-copilot.db
-
-rag:
-  enabled: true
-  qdrant:
-    url: http://127.0.0.1:6333
-  embedding:
-    provider-type: LOCAL_ONNX
-    model-dir: ./models/bge-m3
-    execution-provider: AUTO  # CPU/CUDA/DirectML
-```
-
-### 环境变量
-
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `SQLCOPILOT_DJL_CACHE_DIR` | DJL模型缓存 | `~/.sql-copilot/djl-cache` |
-| `OPENAI_API_KEY` | OpenAI密钥 | - |
-| `VITE_PACKAGE_VARIANT` | 前端包型（minimal/medium/full） | `medium` |
-| `SQLCOPILOT_PACKAGE_VARIANT` | Electron 构建输出目录与产物命名包型 | `medium` |
-| `SQLCOPILOT_ELECTRON_DIST` | （可选）electron-builder 本地 Electron zip 目录，避免网络下载 | - |
-| `SQLCOPILOT_INCLUDE_DESKTOP` | `package:variants` 时是否导出 desktop（`1`启用） | `1` |
-| `SQLCOPILOT_EXPORT_BACKEND` | `package:variants` 时是否导出 backend（`1`启用） | `0` |
-| `SQLCOPILOT_JLINK_EXTRA_MODULES` | 为 jlink 额外追加的 JDK 模块，逗号分隔 | - |
-
----
-
-## 常见问题
-
-**Q: 启动后端报错 DJL 缓存无法写入?**
-A: 系统会自动尝试 `%LOCALAPPDATA%\SQL-Copilot\djl-cache` → `~/.sql-copilot\djl-cache` → 临时目录
-
-**Q: RAG 功能需要 Qdrant 吗?**
-A: 是的，需启动 Qdrant 服务。或在配置中设置 `rag.enabled: false` 禁用
-
-**Q: 支持本地向量化模型吗?**
-A: 支持，`apps/server/models` 目录下包含 ONNX 模型；`rag.embedding.execution-provider` 可选 CPU/CUDA/DirectML
+- 后端健康检查：`http://127.0.0.1:18080/api/health`
+- 前端 API 默认直连：`http://localhost:18080`
+- 本地元数据默认落在工程根目录：`sql-copilot.db`
+- 更详细的代码级说明见 `docs/20260311160122-technical-architecture.md`
