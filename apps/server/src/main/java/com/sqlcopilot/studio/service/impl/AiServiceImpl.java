@@ -2,23 +2,16 @@ package com.sqlcopilot.studio.service.impl;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sqlcopilot.studio.dto.ai.*;
 import com.sqlcopilot.studio.dto.schema.*;
 import com.sqlcopilot.studio.dto.sql.QueryRowVO;
 import com.sqlcopilot.studio.entity.ConnectionEntity;
-import com.sqlcopilot.studio.entity.QueryHistoryEntity;
-import com.sqlcopilot.studio.mapper.QueryHistoryMapper;
 import com.sqlcopilot.studio.service.AiConfigService;
 import com.sqlcopilot.studio.service.AiService;
 import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.SchemaService;
 import com.sqlcopilot.studio.service.llm.*;
-import com.sqlcopilot.studio.service.rag.QdrantClientService;
-import com.sqlcopilot.studio.service.rag.RagEmbeddingService;
 import com.sqlcopilot.studio.service.rag.RagRetrievalService;
-import com.sqlcopilot.studio.service.rag.model.RagCollectionNames;
 import com.sqlcopilot.studio.service.rag.model.RagPromptContext;
 import com.sqlcopilot.studio.service.stream.AiStreamObserver;
 import com.sqlcopilot.studio.util.BusinessException;
@@ -33,7 +26,6 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -50,7 +42,6 @@ public class AiServiceImpl implements AiService {
     private static final Pattern WHERE_PATTERN = Pattern.compile("(?i)\\bwhere\\b");
     private static final Pattern JOIN_PATTERN = Pattern.compile("(?i)\\bjoin\\b");
     private static final int RELATED_TABLE_META_LIMIT = 8;
-    private static final int DEFAULT_MEMORY_WINDOW_SIZE = 12;
     private static final int RELATED_INDEX_COLUMN_LIMIT = 12;
     private static final int ANALYZE_EXPLAIN_PLAN_ROW_LIMIT = 200;
     private static final int ANALYZE_EXPLAIN_PLAN_TEXT_LIMIT = 6000;
@@ -59,8 +50,6 @@ public class AiServiceImpl implements AiService {
     private static final int GLOBAL_HISTORY_RECALL_LIMIT = 10;
     private static final int SESSION_HISTORY_RECALL_LIMIT = 8;
     private static final int SQL_UNDERSTAND_TABLE_LIMIT = 8;
-    private static final ThreadLocal<Map<String, String>> REQUEST_LLM_CACHE = ThreadLocal.withInitial(ConcurrentHashMap::new);
-    private static final ThreadLocal<Integer> REQUEST_LLM_CACHE_DEPTH = ThreadLocal.withInitial(() -> 0);
     private static final ThreadLocal<AiStreamObserver> STREAM_OBSERVER = new ThreadLocal<>();
     private static final ThreadLocal<String> STREAM_ACTION_TYPE = new ThreadLocal<>();
     private static final String AUTO_INTENT_CLARIFY_CONTENT =
@@ -104,14 +93,6 @@ public class AiServiceImpl implements AiService {
         1) 如果没有 SQL，返回 {"has_sql":false,"sql_list":[]}；
         2) sql_list 必须保留原文 SQL，不做改写、补全、修复、格式化；
         3) 支持多条 SQL 时按出现顺序返回。
-        """;
-    private static final String CONTEXT_COMPRESS_SYSTEM_PROMPT = """
-        你是对话上下文压缩器。请基于输入内容生成压缩摘要，用于后续 SQL 问答。
-        要求：
-        1) 只输出最终摘要，不输出推理过程；
-        2) 保留业务意图、关键筛选、关键表字段、已确认结论与未解决问题；
-        3) 不要编造不存在的信息；
-        4) 输出纯文本，控制在 400 中文字以内。
         """;
     private static final String OPENAI_SYSTEM_PROMPT = """
         你是数据库 SQL 专家。基于提供的上下文生成 SQL。仅返回可执行 SQL，不要输出解释。
@@ -200,33 +181,24 @@ public class AiServiceImpl implements AiService {
     private final AiConfigService aiConfigService;
     private final ConnectionService connectionService;
     private final RagRetrievalService ragRetrievalService;
-    private final RagEmbeddingService ragEmbeddingService;
-    private final QdrantClientService qdrantClientService;
-    private final QueryHistoryMapper queryHistoryMapper;
-    private final RagCollectionNames ragCollectionNames;
     private final ObjectMapper objectMapper;
     private final LlmGatewayService llmGatewayService;
+    private final AiConversationContextManager conversationContextManager;
 
     public AiServiceImpl(SchemaService schemaService,
                          AiConfigService aiConfigService,
                          ConnectionService connectionService,
                          RagRetrievalService ragRetrievalService,
-                         RagEmbeddingService ragEmbeddingService,
-                         QdrantClientService qdrantClientService,
-                         QueryHistoryMapper queryHistoryMapper,
-                         @org.springframework.beans.factory.annotation.Value("${rag.collection.sql-history:sql_history}") String sqlHistoryCollection,
                          ObjectMapper objectMapper,
-                         LlmGatewayService llmGatewayService) {
+                         LlmGatewayService llmGatewayService,
+                         AiConversationContextManager conversationContextManager) {
         this.schemaService = schemaService;
         this.aiConfigService = aiConfigService;
         this.connectionService = connectionService;
         this.ragRetrievalService = ragRetrievalService;
-        this.ragEmbeddingService = ragEmbeddingService;
-        this.qdrantClientService = qdrantClientService;
-        this.queryHistoryMapper = queryHistoryMapper;
-        this.ragCollectionNames = new RagCollectionNames("schema_table", "schema_column", sqlHistoryCollection, "metric_term", "example_sql", "sql_fragment");
         this.objectMapper = objectMapper;
         this.llmGatewayService = llmGatewayService;
+        this.conversationContextManager = conversationContextManager;
     }
 
     @Override
@@ -240,7 +212,7 @@ public class AiServiceImpl implements AiService {
     }
 
     private AiAutoQueryVO doAutoQuery(AiGenerateSqlReq req) {
-        enterRequestLlmCache();
+        conversationContextManager.enterRequestScope();
         try {
         long startAt = System.currentTimeMillis();
         StepTimer timer = new StepTimer();
@@ -414,7 +386,7 @@ public class AiServiceImpl implements AiService {
         publishFinalResult(req.getSessionId(), "auto", buildFinalResult("auto", vo));
         return vo;
         } finally {
-            exitRequestLlmCache();
+            conversationContextManager.exitRequestScope();
         }
     }
 
@@ -429,7 +401,7 @@ public class AiServiceImpl implements AiService {
     }
 
     private AiGenerateSqlVO doGenerateSql(AiGenerateSqlReq req) {
-        enterRequestLlmCache();
+        conversationContextManager.enterRequestScope();
         try {
         long startAt = System.currentTimeMillis();
         StepTimer timer = new StepTimer();
@@ -479,7 +451,9 @@ public class AiServiceImpl implements AiService {
             addTraceStage(req.getSessionId(), "generate", traceStages, buildRagTraceStage("rag_retrieve", "向量库召回", retrievalInput, ragPromptContext, System.currentTimeMillis() - ragStageStart));
         }
         long contextStageStart = System.currentTimeMillis();
-        GenerationContext generationContext = buildGenerationContext(req, ragPromptContext);
+        // 关键步骤：生成链路统一向上下文管理器要最终上下文，避免主流程再次拼接历史和记忆。
+        AiConversationContextManager.ConversationGenerationContext generationContext =
+            conversationContextManager.buildGenerationContext(req, ragPromptContext);
         timer.mark("build_generation_context");
         if (detailOutputEnabled) {
             addTraceStage(req.getSessionId(), "generate", traceStages, buildGenerationContextTraceStage(generationContext, System.currentTimeMillis() - contextStageStart));
@@ -635,7 +609,7 @@ public class AiServiceImpl implements AiService {
         publishFinalResult(req.getSessionId(), "generate", buildFinalResult("generate", vo));
         return vo;
         } finally {
-            exitRequestLlmCache();
+            conversationContextManager.exitRequestScope();
         }
     }
 
@@ -650,7 +624,7 @@ public class AiServiceImpl implements AiService {
     }
 
     private AiGenerateChartVO doGenerateChart(AiGenerateSqlReq req) {
-        enterRequestLlmCache();
+        conversationContextManager.enterRequestScope();
         try {
         long startAt = System.currentTimeMillis();
         StepTimer timer = new StepTimer();
@@ -665,7 +639,7 @@ public class AiServiceImpl implements AiService {
 
         boolean detailOutputEnabled = resolveDetailOutputEnabled(req);
         List<AiTraceStageVO> traceStages = detailOutputEnabled ? new ArrayList<>() : List.of();
-        String retrievalInput = buildRetrievalInputForRag(req);
+        String retrievalInput = conversationContextManager.buildRetrievalInputForRag(req);
         timer.mark("build_retrieval_input");
         long ragStageStart = System.currentTimeMillis();
         RagPromptContext ragPromptContext = ragRetrievalService.retrievePromptContext(
@@ -678,7 +652,9 @@ public class AiServiceImpl implements AiService {
             addTraceStage(req.getSessionId(), "generate-chart", traceStages, buildRagTraceStage("rag_retrieve", "向量库召回", retrievalInput, ragPromptContext, System.currentTimeMillis() - ragStageStart));
         }
         long contextStageStart = System.currentTimeMillis();
-        GenerationContext generationContext = buildGenerationContext(req, ragPromptContext);
+        // 关键步骤：图表链路与 SQL 生成共用同一套上下文装配逻辑，避免后续优化分叉。
+        AiConversationContextManager.ConversationGenerationContext generationContext =
+            conversationContextManager.buildGenerationContext(req, ragPromptContext);
         timer.mark("build_generation_context");
         if (detailOutputEnabled) {
             addTraceStage(req.getSessionId(), "generate-chart", traceStages, buildGenerationContextTraceStage(generationContext, System.currentTimeMillis() - contextStageStart));
@@ -878,7 +854,7 @@ public class AiServiceImpl implements AiService {
         publishFinalResult(req.getSessionId(), "generate-chart", buildFinalResult("generate-chart", vo));
         return vo;
         } finally {
-            exitRequestLlmCache();
+            conversationContextManager.exitRequestScope();
         }
     }
 
@@ -890,11 +866,11 @@ public class AiServiceImpl implements AiService {
     @Override
     public AiTextResponseVO explainSql(AiGenerateSqlReq req, AiStreamObserver observer) {
         return executeWithStreamObserver(observer, "explain", () -> {
-            enterRequestLlmCache();
+            conversationContextManager.enterRequestScope();
             try {
                 return explainSqlWithPipeline(req);
             } finally {
-                exitRequestLlmCache();
+                conversationContextManager.exitRequestScope();
             }
         });
     }
@@ -907,11 +883,11 @@ public class AiServiceImpl implements AiService {
     @Override
     public AiTextResponseVO analyzeSql(AiGenerateSqlReq req, AiStreamObserver observer) {
         return executeWithStreamObserver(observer, "analyze", () -> {
-            enterRequestLlmCache();
+            conversationContextManager.enterRequestScope();
             try {
                 return analyzeSqlWithPipeline(req);
             } finally {
-                exitRequestLlmCache();
+                conversationContextManager.exitRequestScope();
             }
         });
     }
@@ -927,7 +903,7 @@ public class AiServiceImpl implements AiService {
     }
 
     private AiRepairVO doRepairSql(AiRepairReq req) {
-        enterRequestLlmCache();
+        conversationContextManager.enterRequestScope();
         long startAt = System.currentTimeMillis();
         StepTimer timer = new StepTimer();
         String sourceSql = safe(req.getSqlText());
@@ -948,7 +924,7 @@ public class AiServiceImpl implements AiService {
         try {
             AiGenerateSqlReq providerReq = buildRepairGenerateReq(req, sourceSql, errorMessage);
             timer.mark("build_repair_prompt");
-            String retrievalInput = buildRetrievalInputForRag(providerReq, sourceSql + "\n" + errorMessage);
+            String retrievalInput = conversationContextManager.buildRetrievalInputForRag(providerReq, sourceSql + "\n" + errorMessage);
             timer.mark("build_retrieval_input");
             RagPromptContext ragPromptContext = ragRetrievalService.retrievePromptContext(
                 req.getConnectionId(),
@@ -959,7 +935,9 @@ public class AiServiceImpl implements AiService {
             if (detailOutputEnabled) {
                 addTraceStage(req.getSessionId(), "repair", traceStages, buildRagTraceStage("rag_retrieve", "向量库召回", retrievalInput, ragPromptContext, 0L));
             }
-            GenerationContext generationContext = buildGenerationContext(providerReq, ragPromptContext);
+            // 关键步骤：修复链路也复用同一套上下文管理，保证修复提示词与生成提示词看到同样的记忆。
+            AiConversationContextManager.ConversationGenerationContext generationContext =
+                conversationContextManager.buildGenerationContext(providerReq, ragPromptContext);
             timer.mark("build_generation_context");
             if (detailOutputEnabled) {
                 addTraceStage(req.getSessionId(), "repair", traceStages, buildGenerationContextTraceStage(generationContext, 0L));
@@ -1095,7 +1073,7 @@ public class AiServiceImpl implements AiService {
             publishFinalResult(req.getSessionId(), "repair", buildFinalResult("repair", vo));
             return vo;
         } finally {
-            exitRequestLlmCache();
+            conversationContextManager.exitRequestScope();
         }
     }
 
@@ -1129,7 +1107,12 @@ public class AiServiceImpl implements AiService {
                 .map(this::safe)
                 .filter(item -> !item.isBlank())
                 .toList();
-            GenerationContext generationContext = new GenerationContext(contextText, relatedTables);
+            AiConversationContextManager.ConversationGenerationContext generationContext =
+                new AiConversationContextManager.ConversationGenerationContext(
+                    contextText,
+                    relatedTables,
+                    providerReq.getPrompt()
+                );
             TextProviderResult providerResult = generateTextByConfiguredProvider(
                 providerReq,
                 generationContext,
@@ -1518,24 +1501,25 @@ public class AiServiceImpl implements AiService {
     private IntentResult identifyIntent(AiGenerateSqlReq req) {
         StepTimer timer = new StepTimer();
         AiConfigVO aiConfig = aiConfigService.getConfig();
-        boolean memoryEnabled = resolveMemoryEnabled(req, aiConfig);
+        boolean memoryEnabled = conversationContextManager.isMemoryEnabled(req, aiConfig);
         ParsedIntentResponse parsed;
         if (!memoryEnabled) {
             parsed = identifyIntentSingleStage(req);
             timer.mark("identify_intent_single_stage");
         } else {
-            List<QueryHistoryEntity> chatHistory = queryHistoryMapper.listBySession(
-                req.getConnectionId(),
-                safe(req.getSessionId()),
-                200
-            );
-            List<QueryHistoryEntity> windowRecords = pickWindowRecords(chatHistory, MEMORY_SUMMARY_LIMIT);
-            String recentDialogContext = buildIntentRecentDialogContext(windowRecords);
+            // 关键步骤：意图识别先读最近窗口对话，再补全历史召回，避免把长对话整段塞给模型。
+            String recentDialogContext = conversationContextManager.buildIntentRecentDialogContext(req, MEMORY_SUMMARY_LIMIT);
             timer.mark("load_recent_dialog");
             ParsedIntentResponse light = identifyIntentLight(req, recentDialogContext);
             timer.mark("identify_intent_light");
             IntentRetrievalParams retrievalParams = light == null ? IntentRetrievalParams.defaultValue() : light.retrievalParams();
-            String historyContext = retrieveIntentHistoryContext(req, retrievalParams);
+            String historyContext = conversationContextManager.retrieveIntentHistoryContext(
+                req,
+                retrievalParams.sessionTopK(),
+                retrievalParams.globalTopK(),
+                retrievalParams.query(),
+                retrievalParams.focusTables()
+            );
             timer.mark("retrieve_history");
             parsed = identifyIntentFinal(req, recentDialogContext, historyContext);
             timer.mark("identify_intent_final");
@@ -1688,16 +1672,10 @@ public class AiServiceImpl implements AiService {
     private ParsedIntentResponse identifyRetrievalIntentForSql(AiGenerateSqlReq req) {
         try {
             AiConfigVO aiConfig = aiConfigService.getConfig();
-            boolean memoryEnabled = resolveMemoryEnabled(req, aiConfig);
+            boolean memoryEnabled = conversationContextManager.isMemoryEnabled(req, aiConfig);
             String recentDialogContext = "";
             if (memoryEnabled) {
-                List<QueryHistoryEntity> chatHistory = queryHistoryMapper.listBySession(
-                    req.getConnectionId(),
-                    safe(req.getSessionId()),
-                    200
-                );
-                List<QueryHistoryEntity> windowRecords = pickWindowRecords(chatHistory, MEMORY_SUMMARY_LIMIT);
-                recentDialogContext = buildIntentRecentDialogContext(windowRecords);
+                recentDialogContext = conversationContextManager.buildIntentRecentDialogContext(req, MEMORY_SUMMARY_LIMIT);
             }
             return identifyIntentLight(req, recentDialogContext);
         } catch (Exception ex) {
@@ -1741,134 +1719,6 @@ public class AiServiceImpl implements AiService {
 
     private int normalizeTopK(int input, int min, int max) {
         return Math.max(min, Math.min(max, input));
-    }
-
-    private String buildIntentRecentDialogContext(List<QueryHistoryEntity> windowRecords) {
-        if (windowRecords == null || windowRecords.isEmpty()) {
-            return "";
-        }
-        ArrayNode rows = objectMapper.createArrayNode();
-        for (QueryHistoryEntity item : windowRecords) {
-            ObjectNode node = objectMapper.createObjectNode();
-            node.put("role", "user");
-            node.put("prompt", safe(item.getPromptText()));
-            node.put("sql", safe(item.getSqlText()));
-            node.put("assistant", safe(item.getAssistantContent()));
-            node.put("actionType", safe(item.getActionType()));
-            rows.add(node);
-        }
-        return rows.toString();
-    }
-
-    private String retrieveIntentHistoryContext(AiGenerateSqlReq req, IntentRetrievalParams retrievalParams) {
-        IntentRetrievalParams params = retrievalParams == null ? IntentRetrievalParams.defaultValue() : retrievalParams;
-        List<String> lines = new ArrayList<>();
-        String sessionContext = retrieveSessionHistoryContext(req, params.sessionTopK());
-        if (!sessionContext.isBlank()) {
-            lines.add("会话历史:\n" + sessionContext);
-        }
-        String globalContext = retrieveGlobalHistoryContext(req, params.globalTopK(), params.query(), params.focusTables());
-        if (!globalContext.isBlank()) {
-            lines.add("全局历史:\n" + globalContext);
-        }
-        return String.join("\n\n", lines);
-    }
-
-    private String retrieveSessionHistoryContext(AiGenerateSqlReq req, int topK) {
-        List<QueryHistoryEntity> rows = queryHistoryMapper.listBySession(
-            req.getConnectionId(),
-            safe(req.getSessionId()),
-            Math.max(1, topK)
-        );
-        if (rows == null || rows.isEmpty()) {
-            return "";
-        }
-        StringBuilder builder = new StringBuilder();
-        int index = 1;
-        int start = Math.max(0, rows.size() - topK);
-        for (QueryHistoryEntity item : rows.subList(start, rows.size())) {
-            String prompt = safe(item.getPromptText());
-            String sql = safe(item.getSqlText());
-            String assistant = safe(item.getAssistantContent());
-            if (prompt.isBlank() && sql.isBlank() && assistant.isBlank()) {
-                continue;
-            }
-            builder.append(index++).append(". ");
-            if (!prompt.isBlank()) {
-                builder.append("Q=").append(prompt).append("; ");
-            }
-            if (!sql.isBlank()) {
-                builder.append("SQL=").append(sql).append("; ");
-            }
-            if (!assistant.isBlank()) {
-                builder.append("A=").append(assistant);
-            }
-            builder.append('\n');
-        }
-        return builder.toString().trim();
-    }
-
-    private String retrieveGlobalHistoryContext(AiGenerateSqlReq req, int topK, String query, List<String> focusTables) {
-        String retrievalText = query.isBlank() ? safe(req.getPrompt()) : query;
-        try {
-            List<Float> vector = ragEmbeddingService.embedText(retrievalText);
-            if (vector == null || vector.isEmpty()) {
-                return "";
-            }
-            List<com.sqlcopilot.studio.service.rag.model.QdrantScoredPoint> points = qdrantClientService.searchPoints(
-                ragCollectionNames.getSqlHistory(),
-                vector,
-                Math.max(1, topK),
-                req.getConnectionId(),
-                req.getDatabaseName()
-            );
-            if (points == null || points.isEmpty()) {
-                return "";
-            }
-            Set<String> tableFilter = new LinkedHashSet<>();
-            if (focusTables != null) {
-                focusTables.stream().map(this::normalizeRelatedTableName).filter(item -> !item.isBlank()).forEach(tableFilter::add);
-            }
-            StringBuilder builder = new StringBuilder();
-            int idx = 1;
-            for (com.sqlcopilot.studio.service.rag.model.QdrantScoredPoint point : points) {
-                Map<String, Object> payload = point.getPayload();
-                String sessionId = Objects.toString(payload.get("session_id"), "").trim();
-                if (safe(req.getSessionId()).equals(sessionId)) {
-                    continue;
-                }
-                List<String> tables = payloadStringList(payload, "tables");
-                if (!tableFilter.isEmpty()) {
-                    boolean matched = tables.stream().map(this::normalizeRelatedTableName).anyMatch(tableFilter::contains);
-                    if (!matched) {
-                        continue;
-                    }
-                }
-                String sqlText = Objects.toString(payload.get("sql_text"), "").trim();
-                String semantic = Objects.toString(payload.get("semantic_description"), "").trim();
-                if (sqlText.isBlank() && semantic.isBlank()) {
-                    continue;
-                }
-                builder.append(idx++).append(". ");
-                if (!semantic.isBlank()) {
-                    builder.append("语义=").append(semantic).append("；");
-                }
-                if (!sqlText.isBlank()) {
-                    builder.append("SQL=").append(sqlText).append("；");
-                }
-                if (!tables.isEmpty()) {
-                    builder.append("Tables=").append(String.join(",", tables));
-                }
-                builder.append('\n');
-                if (idx > topK) {
-                    break;
-                }
-            }
-            return builder.toString().trim();
-        } catch (Exception ex) {
-            log.warn("[AI-INTENT-HISTORY-RECALL-FAILED] sessionId={}, reason={}", safe(req.getSessionId()), safe(ex.getMessage()));
-            return "";
-        }
     }
 
     private IntentType parseIntentType(String rawIntent) {
@@ -2148,16 +1998,13 @@ public class AiServiceImpl implements AiService {
     }
 
     private SqlExtractionResult extractSqlByLlm(AiGenerateSqlReq req, String sourceText) {
-        String cacheKey = "extract_sql:" + safe(sourceText);
-        String raw = getOrComputeRequestCache(cacheKey, () -> {
-            TextProviderResult providerResult = generateRawTextByConfiguredProvider(
-                req,
-                SQL_EXTRACT_SYSTEM_PROMPT,
-                "输入文本:\n" + safe(sourceText),
-                "SQL提取"
-            );
-            return safe(providerResult.content());
-        });
+        TextProviderResult providerResult = generateRawTextByConfiguredProvider(
+            req,
+            SQL_EXTRACT_SYSTEM_PROMPT,
+            "输入文本:\n" + safe(sourceText),
+            "SQL提取"
+        );
+        String raw = safe(providerResult.content());
         SqlExtractionResult parsed = parseSqlExtractionResult(raw);
         if (parsed != null) {
             return parsed;
@@ -2353,7 +2200,7 @@ public class AiServiceImpl implements AiService {
     }
 
     private String buildSupplementRetrievalContext(AiGenerateSqlReq req, String sourceSql) {
-        String retrievalInput = buildRetrievalInputForRag(req, sourceSql);
+        String retrievalInput = conversationContextManager.buildRetrievalInputForRag(req, sourceSql);
         RagPromptContext context = ragRetrievalService.retrievePromptContext(
             req.getConnectionId(),
             req.getDatabaseName(),
@@ -2487,8 +2334,9 @@ public class AiServiceImpl implements AiService {
     /**
      * 关键操作：统一抽象 LLM 通道，支持 OpenAI API 与本地 CLI。
      */
-    private ProviderResult generateByConfiguredProvider(AiGenerateSqlReq req, GenerationContext context) {
-        String userPrompt = buildProviderUserPrompt(req, safe(context.promptContext()), context.relatedTables());
+    private ProviderResult generateByConfiguredProvider(AiGenerateSqlReq req,
+                                                        AiConversationContextManager.ConversationGenerationContext context) {
+        String userPrompt = buildProviderUserPrompt(req, context);
         LlmGatewayRequest gatewayRequest = new LlmGatewayRequest();
         gatewayRequest.setModelId(resolveRequestedModelId(req));
         gatewayRequest.setLegacyModelName(req.getModelName());
@@ -2509,10 +2357,10 @@ public class AiServiceImpl implements AiService {
     }
 
     private TextProviderResult generateTextByConfiguredProvider(AiGenerateSqlReq req,
-                                                                GenerationContext context,
+                                                                AiConversationContextManager.ConversationGenerationContext context,
                                                                 String systemPrompt,
                                                                 String taskLabel) {
-        String userPrompt = buildProviderUserPrompt(req, safe(context.promptContext()), context.relatedTables());
+        String userPrompt = buildProviderUserPrompt(req, context);
         LlmGatewayRequest gatewayRequest = new LlmGatewayRequest();
         gatewayRequest.setModelId(resolveRequestedModelId(req));
         gatewayRequest.setLegacyModelName(req.getModelName());
@@ -2586,9 +2434,10 @@ public class AiServiceImpl implements AiService {
         return "";
     }
 
-    private String buildProviderUserPrompt(AiGenerateSqlReq req, String contextText, List<String> relatedTables) {
+    private String buildProviderUserPrompt(AiGenerateSqlReq req,
+                                           AiConversationContextManager.ConversationGenerationContext context) {
         DatabaseBasicInfo basicInfo = loadDatabaseBasicInfo(req.getConnectionId(), req.getDatabaseName());
-        String relatedIndexInfo = buildRelatedTableIndexInfo(req.getConnectionId(), req.getDatabaseName(), relatedTables);
+        String relatedIndexInfo = buildRelatedTableIndexInfo(req.getConnectionId(), req.getDatabaseName(), context.relatedTables());
         StringBuilder builder = new StringBuilder();
         builder.append("数据库基本信息:\n")
             .append("- 类型: ").append(basicInfo.dbType()).append('\n')
@@ -2600,11 +2449,10 @@ public class AiServiceImpl implements AiService {
         if (!relatedIndexInfo.isBlank()) {
             builder.append("\n\n关联表索引字段:\n").append(relatedIndexInfo);
         }
-        String retrievalInputForLlm = buildRetrievalInputForRag(req);
         builder.append("\n\n");
         builder.append("用户需求:\n").append(req.getPrompt());
-        builder.append("\n\n检索增强输入(含会话记忆):\n").append(retrievalInputForLlm);
-        builder.append("\n\nRAG Context:\n").append(contextText);
+        builder.append("\n\n检索增强输入(含会话记忆):\n").append(context.retrievalInputForPrompt());
+        builder.append("\n\nRAG Context:\n").append(context.promptContext());
         return builder.toString();
     }
 
@@ -2986,68 +2834,6 @@ public class AiServiceImpl implements AiService {
         return normalized.toLowerCase();
     }
 
-    private GenerationContext buildGenerationContext(AiGenerateSqlReq req, RagPromptContext ragPromptContext) {
-        List<String> relatedTables = new ArrayList<>(ragPromptContext.getRelatedTables());
-        String ragContextText = safe(ragPromptContext.getPromptContext());
-
-        String schemaContextText = "";
-        if (!Boolean.TRUE.equals(ragPromptContext.getHit()) || ragContextText.isBlank()) {
-            ContextBuildReq contextReq = new ContextBuildReq();
-            contextReq.setConnectionId(req.getConnectionId());
-            contextReq.setDatabaseName(req.getDatabaseName());
-            contextReq.setQuestion(buildRetrievalInput(req.getPrompt()));
-            contextReq.setTokenBudget(1200);
-            ContextBuildVO schemaContext = schemaService.buildContext(contextReq);
-            if (schemaContext.getRelatedTables() != null && !schemaContext.getRelatedTables().isEmpty()) {
-                relatedTables.addAll(schemaContext.getRelatedTables());
-            }
-            schemaContextText = safe(schemaContext.getContext());
-        }
-
-        AiConfigVO aiConfig = aiConfigService.getConfig();
-        boolean memoryEnabled = resolveMemoryEnabled(req, aiConfig);
-        int memoryWindowSize = resolveMemoryWindowSize(aiConfig);
-        if (!memoryEnabled) {
-            String fallbackContext = !ragContextText.isBlank() ? ragContextText : schemaContextText;
-            return new GenerationContext(fallbackContext, relatedTables);
-        }
-
-        List<QueryHistoryEntity> chatHistory = queryHistoryMapper.listBySession(
-            req.getConnectionId(),
-            safe(req.getSessionId()),
-            500
-        );
-        List<QueryHistoryEntity> windowRecords = pickWindowRecords(chatHistory, memoryWindowSize);
-        String windowStructuredContext = buildStructuredContextJson(windowRecords);
-        String compressedContext = "";
-        if (chatHistory.size() > memoryWindowSize) {
-            compressedContext = buildCompressedSummary(req, chatHistory.subList(0, Math.max(0, chatHistory.size() - memoryWindowSize)));
-            upsertSessionSummaryVector(req, compressedContext, memoryWindowSize, chatHistory.size());
-        }
-        String vectorMemoryContext = querySessionMemoryFromVectorStore(req);
-
-        List<String> segments = new ArrayList<>();
-        if (!vectorMemoryContext.isBlank()) {
-            segments.add("Conversation Memory Recall:\n" + vectorMemoryContext);
-        }
-        if (!compressedContext.isBlank()) {
-            segments.add("Conversation Sliding Summary:\n" + compressedContext);
-        }
-        if (!windowStructuredContext.isBlank()) {
-            segments.add("Conversation Window Context(JSON):\n" + windowStructuredContext);
-        }
-        if (!ragContextText.isBlank()) {
-            segments.add(ragContextText);
-        } else if (!schemaContextText.isBlank()) {
-            segments.add(schemaContextText);
-        }
-        return new GenerationContext(String.join("\n\n", segments), relatedTables);
-    }
-
-    private String buildRetrievalInputForRag(AiGenerateSqlReq req) {
-        return buildRetrievalInputForRag(req, "");
-    }
-
     private String buildIntentAwareRetrievalInputForRag(AiGenerateSqlReq req, ParsedIntentResponse parsedIntent) {
         ParsedIntentResponse resolvedIntent = parsedIntent == null
             ? new ParsedIntentResponse(IntentType.GENERATE_SQL, 0D, "", false, IntentRetrievalParams.defaultValue())
@@ -3083,264 +2869,9 @@ public class AiServiceImpl implements AiService {
         if (confidence > 0D) {
             keyInfoBuilder.append("\n意图置信度: ").append(String.format(Locale.ROOT, "%.2f", confidence));
         }
-        String intentAwareBaseInput = buildRetrievalInput(retrievalQuery, keyInfoBuilder.toString());
-        return buildRetrievalInputForRag(req, intentAwareBaseInput);
+        String intentAwareBaseInput = conversationContextManager.buildRetrievalInput(retrievalQuery, keyInfoBuilder.toString());
+        return conversationContextManager.buildRetrievalInputForRag(req, intentAwareBaseInput);
     }
-
-    private String buildRetrievalInputForRag(AiGenerateSqlReq req, String extraContext) {
-        String baseInput = buildRetrievalInput(req.getPrompt(), extraContext);
-        AiConfigVO aiConfig = aiConfigService.getConfig();
-        boolean memoryEnabled = resolveMemoryEnabled(req, aiConfig);
-        if (!memoryEnabled) {
-            return baseInput;
-        }
-
-        List<String> memorySegments = new ArrayList<>();
-        try {
-            int memoryWindowSize = resolveMemoryWindowSize(aiConfig);
-            List<QueryHistoryEntity> chatHistory = queryHistoryMapper.listBySession(
-                req.getConnectionId(),
-                safe(req.getSessionId()),
-                200
-            );
-            List<QueryHistoryEntity> windowRecords = pickWindowRecords(chatHistory, memoryWindowSize);
-            String windowSummary = buildCompressedSummary(req, windowRecords);
-            if (!windowSummary.isBlank()) {
-                memorySegments.add("会话窗口摘要:\n" + windowSummary);
-            }
-        } catch (Exception ex) {
-            log.warn("[AI-RAG-RETRIEVAL-MEMORY-WINDOW-FAILED] sessionId={}, reason={}", safe(req.getSessionId()), safe(ex.getMessage()));
-        }
-
-        String vectorMemoryContext = querySessionMemoryFromVectorStore(req);
-        if (!vectorMemoryContext.isBlank()) {
-            memorySegments.add("会话向量记忆召回:\n" + vectorMemoryContext);
-        }
-
-        if (memorySegments.isEmpty()) {
-            return baseInput;
-        }
-        return buildRetrievalInput(baseInput, String.join("\n", memorySegments));
-    }
-
-    private String buildRetrievalInput(String prompt) {
-        return buildRetrievalInput(prompt, "");
-    }
-
-    private String buildRetrievalInput(String prompt, String extraContext) {
-        String normalizedPrompt = safe(prompt);
-        String normalizedExtraContext = safe(extraContext);
-        if (normalizedExtraContext.isBlank()) {
-            return normalizedPrompt;
-        }
-        return normalizedPrompt + "\n补充上下文:\n" + normalizedExtraContext;
-    }
-
-    private boolean resolveMemoryEnabled(AiGenerateSqlReq req, AiConfigVO config) {
-        if (req.getMemoryEnabled() != null) {
-            return Boolean.TRUE.equals(req.getMemoryEnabled());
-        }
-        return !Boolean.FALSE.equals(config.getConversationMemoryEnabled());
-    }
-
-    private int resolveMemoryWindowSize(AiConfigVO config) {
-        Integer size = config.getConversationMemoryWindowSize();
-        if (size == null) {
-            return DEFAULT_MEMORY_WINDOW_SIZE;
-        }
-        return Math.max(4, Math.min(size, 50));
-    }
-
-    private List<QueryHistoryEntity> pickWindowRecords(List<QueryHistoryEntity> rows, int windowSize) {
-        if (rows == null || rows.isEmpty()) {
-            return List.of();
-        }
-        int start = Math.max(0, rows.size() - windowSize);
-        return rows.subList(start, rows.size());
-    }
-
-    private String buildCompressedSummary(AiGenerateSqlReq req, List<QueryHistoryEntity> rows) {
-        if (rows == null || rows.isEmpty()) {
-            return "";
-        }
-        StringBuilder builder = new StringBuilder();
-        for (QueryHistoryEntity item : rows) {
-            String prompt = safe(item.getPromptText());
-            String sql = safe(item.getSqlText());
-            String assistant = safe(item.getAssistantContent());
-            if (!prompt.isBlank()) {
-                builder.append("U: ").append(prompt).append("\n");
-            }
-            if (!sql.isBlank()) {
-                builder.append("SQL: ").append(sql).append("\n");
-            }
-            if (!assistant.isBlank()) {
-                builder.append("A: ").append(assistant).append("\n");
-            }
-        }
-        String source = builder.toString().trim();
-        if (source.isBlank()) {
-            return "";
-        }
-        String cacheKey = "compress:summary:" + source.hashCode();
-        return getOrComputeRequestCache(cacheKey, () -> compactTextByLlm(req, "会话历史压缩", source));
-    }
-
-    private String buildStructuredContextJson(List<QueryHistoryEntity> rows) {
-        if (rows == null || rows.isEmpty()) {
-            return "[]";
-        }
-        ArrayNode arrayNode = objectMapper.createArrayNode();
-        for (QueryHistoryEntity item : rows) {
-            ObjectNode node = objectMapper.createObjectNode();
-            node.put("id", item.getId() == null ? 0L : item.getId());
-            node.put("historyType", safe(item.getHistoryType()));
-            node.put("actionType", safe(item.getActionType()));
-            node.put("prompt", safe(item.getPromptText()));
-            node.put("sql", safe(item.getSqlText()));
-            node.put("assistant", safe(item.getAssistantContent()));
-            node.put("database", safe(item.getDatabaseName()));
-            node.put("createdAt", item.getCreatedAt() == null ? 0L : item.getCreatedAt());
-            arrayNode.add(node);
-        }
-        return arrayNode.toString();
-    }
-
-    private void upsertSessionSummaryVector(AiGenerateSqlReq req, String compressedContext, int windowSize, int totalMessages) {
-        String summary = safe(compressedContext);
-        if (summary.isBlank()) {
-            return;
-        }
-        try {
-            List<Float> vector = ragEmbeddingService.embedText(summary);
-            if (vector == null || vector.isEmpty()) {
-                return;
-            }
-            qdrantClientService.ensureCollection(ragCollectionNames.getSqlHistory(), vector.size());
-            Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("connection_id", req.getConnectionId());
-            payload.put("database_name", safe(req.getDatabaseName()));
-            payload.put("session_id", safe(req.getSessionId()));
-            payload.put("entry_type", "session_summary");
-            payload.put("summary", summary);
-            payload.put("window_size", windowSize);
-            payload.put("total_messages", totalMessages);
-            payload.put("updated_at", System.currentTimeMillis());
-            qdrantClientService.upsertPoints(
-                ragCollectionNames.getSqlHistory(),
-                List.of(new com.sqlcopilot.studio.service.rag.model.QdrantPoint(
-                    "session-memory-" + req.getConnectionId() + "-" + safe(req.getSessionId()),
-                    vector,
-                    payload
-                ))
-            );
-        } catch (Exception ex) {
-            log.warn("[AI-MEMORY-UPSERT-FAILED] sessionId={}, reason={}", safe(req.getSessionId()), safe(ex.getMessage()));
-        }
-    }
-
-    private String querySessionMemoryFromVectorStore(AiGenerateSqlReq req) {
-        try {
-            List<Float> queryVector = ragEmbeddingService.embedText(buildRetrievalInput(req.getPrompt()));
-            if (queryVector == null || queryVector.isEmpty()) {
-                return "";
-            }
-            List<com.sqlcopilot.studio.service.rag.model.QdrantScoredPoint> points = qdrantClientService.searchPoints(
-                ragCollectionNames.getSqlHistory(),
-                queryVector,
-                3,
-                req.getConnectionId(),
-                req.getDatabaseName()
-            );
-            StringBuilder builder = new StringBuilder();
-            for (com.sqlcopilot.studio.service.rag.model.QdrantScoredPoint point : points) {
-                String sessionId = Objects.toString(point.getPayload().get("session_id"), "").trim();
-                String entryType = Objects.toString(point.getPayload().get("entry_type"), "").trim();
-                if (!safe(req.getSessionId()).equals(sessionId) || !"session_summary".equals(entryType)) {
-                    continue;
-                }
-                String summary = Objects.toString(point.getPayload().get("summary"), "").trim();
-                if (!summary.isBlank()) {
-                    builder.append("- ").append(summary).append("\n");
-                }
-            }
-            String merged = builder.toString().trim();
-            if (merged.isBlank()) {
-                return "";
-            }
-            String cacheKey = "compress:vector_memory:" + merged.hashCode();
-            return getOrComputeRequestCache(cacheKey, () -> compactTextByLlm(req, "会话向量记忆归并", merged));
-        } catch (Exception ex) {
-            log.warn("[AI-MEMORY-QUERY-FAILED] sessionId={}, reason={}", safe(req.getSessionId()), safe(ex.getMessage()));
-            return "";
-        }
-    }
-
-    private String compactTextByLlm(AiGenerateSqlReq req, String title, String sourceText) {
-        String input = "压缩任务: " + safe(title) + "\n\n原始内容:\n" + safe(sourceText);
-        try {
-            TextProviderResult result = generateRawTextByConfiguredProvider(
-                req,
-                CONTEXT_COMPRESS_SYSTEM_PROMPT,
-                input,
-                "上下文压缩"
-            );
-            String content = safe(result.content());
-            if (!content.isBlank()) {
-                return content;
-            }
-        } catch (Exception ex) {
-            log.warn("[AI-CONTEXT-COMPRESS-FAILED] sessionId={}, reason={}", safe(req.getSessionId()), safe(ex.getMessage()));
-        }
-        return safe(sourceText);
-    }
-
-    private void enterRequestLlmCache() {
-        int depth = REQUEST_LLM_CACHE_DEPTH.get();
-        REQUEST_LLM_CACHE_DEPTH.set(depth + 1);
-    }
-
-    private void exitRequestLlmCache() {
-        int depth = REQUEST_LLM_CACHE_DEPTH.get();
-        if (depth <= 1) {
-            REQUEST_LLM_CACHE.remove();
-            REQUEST_LLM_CACHE_DEPTH.remove();
-            return;
-        }
-        REQUEST_LLM_CACHE_DEPTH.set(depth - 1);
-    }
-
-    private String getOrComputeRequestCache(String key, Supplier<String> supplier) {
-        if (key == null || key.isBlank()) {
-            return safe(supplier.get());
-        }
-        Map<String, String> cache = REQUEST_LLM_CACHE.get();
-        if (cache.containsKey(key)) {
-            return safe(cache.get(key));
-        }
-        String value = safe(supplier.get());
-        cache.put(key, value);
-        return value;
-    }
-
-    private List<String> payloadStringList(Map<String, Object> payload, String key) {
-        if (payload == null || payload.get(key) == null) {
-            return List.of();
-        }
-        Object value = payload.get(key);
-        if (!(value instanceof List<?> rawList)) {
-            return List.of();
-        }
-        List<String> values = new ArrayList<>();
-        for (Object item : rawList) {
-            String text = Objects.toString(item, "").trim();
-            if (!text.isBlank()) {
-                values.add(text);
-            }
-        }
-        return values;
-    }
-
     private TokenUsageStats resolveTokenUsage(OpenAiTextClient.TokenUsage providerUsage,
                                               String promptText,
                                               String completionText) {
@@ -3641,7 +3172,8 @@ public class AiServiceImpl implements AiService {
         );
     }
 
-    private AiTraceStageVO buildGenerationContextTraceStage(GenerationContext context, long durationMs) {
+    private AiTraceStageVO buildGenerationContextTraceStage(AiConversationContextManager.ConversationGenerationContext context,
+                                                            long durationMs) {
         return buildTraceStage(
             "generation_context",
             "构建上下文",
@@ -3843,9 +3375,6 @@ public class AiServiceImpl implements AiService {
     }
 
     private record AstValidationResult(boolean valid, String sqlText, String message) {
-    }
-
-    private record GenerationContext(String promptContext, List<String> relatedTables) {
     }
 
     private record DatabaseBasicInfo(String dbType,
