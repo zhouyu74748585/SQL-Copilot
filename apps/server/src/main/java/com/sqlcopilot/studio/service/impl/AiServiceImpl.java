@@ -1428,18 +1428,11 @@ public class AiServiceImpl implements AiService {
 
     private String buildRepairPrompt(String sqlText, String errorMessage) {
         return """
-            Repair the failed SQL according to the execution error.
-            Keep business intent unchanged while making it executable.
-
             Execution error:
             %s
 
             Original SQL:
             %s
-
-            Return strict JSON with keys:
-            errorExplanation
-            repairedSql
             """.formatted(safe(errorMessage), safe(sqlText));
     }
 
@@ -3044,17 +3037,7 @@ public class AiServiceImpl implements AiService {
         if (!focusTables.isEmpty()) {
             keyInfoBuilder.append("\n重点表: ").append(String.join(",", focusTables));
         }
-        if (!safe(resolvedIntent.reason()).isBlank()) {
-            keyInfoBuilder.append("\n意图依据: ").append(safe(resolvedIntent.reason()));
-        }
-        if (resolvedIntent.intentType() != null) {
-            keyInfoBuilder.append("\n意图类型: ").append(resolvedIntent.intentType().name());
-        }
-        double confidence = normalizeIntentConfidence(resolvedIntent.confidence());
-        if (confidence > 0D) {
-            keyInfoBuilder.append("\n意图置信度: ").append(String.format(Locale.ROOT, "%.2f", confidence));
-        }
-        return conversationContextManager.buildRetrievalInput(retrievalQuery, keyInfoBuilder.toString());
+        return keyInfoBuilder.toString();
     }
     private TokenUsageStats resolveTokenUsage(OpenAiTextClient.TokenUsage providerUsage,
                                               String promptText,

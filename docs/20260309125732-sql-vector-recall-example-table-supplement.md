@@ -57,3 +57,96 @@
   - `npm run -w @sqlcopilot/desktop build -- --emptyOutDir`。
   - `npx vite preview --host 127.0.0.1 --port 55061 --strictPort`。
   - 探活：`curl --noproxy '*' -I http://127.0.0.1:55061/` 返回 `HTTP/1.1 200 OK`。
+### 2026-03-11 23:45:00
+
+## 20260311234500 追加记录
+
+### 本次目标
+- 优化 SQL 生成链路的 RAG 检索输入与重点表召回，降低冗长上下文对表名信号的稀释。
+- 修复本地 ONNX rerank 将 `float` 特征误喂给 cross-encoder 模型导致的 `tensor(int64)` 输入类型异常。
+
+### 关键改动
+- 修改 `apps/server/src/main/java/com/sqlcopilot/studio/service/impl/AiServiceImpl.java`
+  - 检索 hint 收敛为仅保留 `检索关键词 + 重点表`，不再向 RAG 检索文本注入 `意图依据/意图类型/置信度`。
+- 修改 `apps/server/src/main/java/com/sqlcopilot/studio/service/impl/AiConversationContextManager.java`
+  - `buildRetrievalInputForRag(...)` 新增紧凑 hint 识别。
+  - 当上游传入 `检索关键词/重点表` 时，RAG 输入优先使用紧凑 hint，而不是继续把原始 prompt 与冗余上下文整体拼接。
+- 修改 `apps/server/src/main/java/com/sqlcopilot/studio/service/rag/impl/RagRetrievalServiceImpl.java`
+  - 新增检索输入解析，提取 `检索关键词` 与 `重点表`，并用更紧凑的 embedding 文本参与向量检索。
+  - 新增基于显式重点表的 schema 补召回：当首轮 `tableHits` 未命中用户点名表时，直接从 `SchemaService` 补表与字段元数据，并提升排序分数。
+  - 新增基于显式重点表的历史 SQL 补召回：按 `tables=focusTable` 从 `sql_history` 中补入相关历史样例。
+  - 将 `tableConstraints` 过滤后移到补召回与 rerank 之后，避免首轮表召回错误时过早裁掉正确的列/历史候选。
+  - 强化规则分：增加重点表精确匹配、payload 表名命中用户文本的 bonus，在本地 rerank 缺失时也能更稳定地把显式表名顶上来。
+- 修改 `apps/server/src/main/java/com/sqlcopilot/studio/service/rag/impl/OnnxLocalRerankServiceImpl.java`
+  - 将本地 rerank 从手工 `float[feature]` 输入改为真实 cross-encoder 推理。
+  - 新增 `tokenizer.json` 加载与 query-document pair 编码，按 `int64 input_ids/attention_mask(/token_type_ids)` 构造 ONNX 输入。
+  - 支持按 bucket 组装 table/column/history/example 文档文本。
+  - 修复 `ORT_INVALID_ARGUMENT: Unexpected input data type. Actual tensor(float), expected tensor(int64)`。
+
+### 测试补充
+- 新增 `apps/server/src/test/java/com/sqlcopilot/studio/service/impl/AiConversationContextManagerRetrievalInputTest.java`
+  - 验证紧凑检索 hint 会覆盖冗长 prompt 拼接。
+- 新增 `apps/server/src/test/java/com/sqlcopilot/studio/service/rag/impl/RagRetrievalServiceImplTest.java`
+  - 验证显式重点表会触发 schema/history 补召回，并且 embedding 输入不再包含 `意图类型` 等冗余字段。
+- 新增 `apps/server/src/test/java/com/sqlcopilot/studio/service/rag/impl/OnnxLocalRerankServiceImplTest.java`
+  - 直接加载本地 `BgeRerankerBaseOnnxO4` 模型，验证 rerank 可以正常输出分数，不再触发 `tensor(float)`/`tensor(int64)` 类型异常。
+
+### 验证结果
+- 后端测试（clean）通过：
+  - `mvn -f apps/server/pom.xml clean test`
+- 后端启动验证（clean）通过：
+  - `mvn -f apps/server/pom.xml clean spring-boot:run "-Dspring-boot.run.arguments=--server.port=18091"`
+  - 健康检查：`http://127.0.0.1:18091/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`
+- 前端预览验证（clean）通过：
+  - `npm run -w @sqlcopilot/desktop build -- --emptyOutDir`
+  - `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6052 --strictPort`
+  - 探活：`http://127.0.0.1:6052/` 返回 `HTTP 200`
+### 2026-03-12 00:00:00
+
+## 20260312000000 追加记录
+
+### 本次目标
+- 修正 RAG trace 中 `rerankProvider` 在首轮请求里因懒加载而显示 `LOCAL_ONNX_UNAVAILABLE` 的时机问题。
+
+### 关键改动
+- 修改 `apps/server/src/main/java/com/sqlcopilot/studio/service/rag/impl/RagRetrievalServiceImpl.java`
+  - `retrievePromptContext(...)` 入口仍记录初始 provider，但不再把它直接作为最终 trace 结果。
+  - `rerankHits(...)` 在 `ragRerankService.score(...)` 执行后重新读取 runtime provider，bucket 级 trace 记录真实初始化后的 provider。
+  - 所有 bucket rerank 完成后，再回填 `RagPromptContext.rerankProvider`，保证首次请求也能显示 `LOCAL_ONNX_CPUEXECUTIONPROVIDER` 这类真实 provider。
+  - 新增 `currentRerankProvider(...)` 统一处理 `DISABLED` 与 runtime provider 的读取回退。
+- 修改 `apps/server/src/test/java/com/sqlcopilot/studio/service/rag/impl/RagRetrievalServiceImplTest.java`
+  - 新增首轮请求测试：先返回 `LOCAL_ONNX_UNAVAILABLE`，再在 `score(...)` 后返回 `LOCAL_ONNX_CPUEXECUTIONPROVIDER`，验证 context 与 table bucket trace 都使用最终 provider。
+
+### 验证结果
+- 后端测试通过：
+  - `mvn -f apps/server/pom.xml -Dtest=RagRetrievalServiceImplTest test`
+
+### 2026-03-12 00:05:00
+
+## 20260312000500 追加记录
+
+### 本次目标
+- 去重 SQL 修复链路中的提示词定义，避免 `buildRepairPrompt(...)` 与 `REPAIR_SQL_SYSTEM_PROMPT` 重复维护同一套约束。
+
+### 关键改动
+- 修改 `apps/server/src/main/java/com/sqlcopilot/studio/service/impl/AiServiceImpl.java`
+  - 收缩 `buildRepairPrompt(...)`，只保留本次修复请求的动态输入：
+    - `Execution error`
+    - `Original SQL`
+  - 移除重复的静态说明：
+    - 修复任务描述
+    - 保持业务意图不变
+    - 严格 JSON 输出要求
+    - `errorExplanation` / `repairedSql` 字段声明
+  - 上述稳定约束统一只由 `REPAIR_SQL_SYSTEM_PROMPT` 承担。
+- 修改 `apps/server/src/test/java/com/sqlcopilot/studio/service/impl/AiServiceImplAstValidationTest.java`
+  - 新增 `buildRepairPrompt_keepsOnlyDynamicRepairContext()`，校验修复 prompt 仅包含动态上下文，不再重复系统提示中的 JSON 约束。
+
+### 验证结果
+- 后端测试通过：
+  - `mvn -f apps/server/pom.xml -Dtest=AiServiceImplAstValidationTest test`
+- 前端 clean 构建通过：
+  - `npm run -w @sqlcopilot/desktop build -- --emptyOutDir`
+- 后端 clean 启动已尝试：
+  - `mvn -f apps/server/pom.xml clean spring-boot:run "-Dspring-boot.run.arguments=--server.port=18103"`
+  - 当前会话执行超时，未拿到健康检查结果；本次修改仅涉及 prompt 文本拼装与测试，不涉及启动链路代码。

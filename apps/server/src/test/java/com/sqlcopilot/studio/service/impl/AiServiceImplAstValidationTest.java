@@ -111,6 +111,23 @@ class AiServiceImplAstValidationTest {
         assertTrue(readString(result, "message").contains("analytics.missing_events"));
     }
 
+    @Test
+    void buildRepairPrompt_keepsOnlyDynamicRepairContext() {
+        String prompt = ReflectionTestUtils.invokeMethod(
+            aiService,
+            "buildRepairPrompt",
+            "select * from t_user",
+            "Unknown column 'name'"
+        );
+
+        assertTrue(prompt.contains("Execution error:"));
+        assertTrue(prompt.contains("Unknown column 'name'"));
+        assertTrue(prompt.contains("Original SQL:"));
+        assertTrue(prompt.contains("select * from t_user"));
+        assertFalse(prompt.contains("Return strict JSON"));
+        assertFalse(prompt.contains("Repair the failed SQL according to the execution error."));
+    }
+
     private AiGenerateSqlReq buildReq(String databaseName) {
         AiGenerateSqlReq req = new AiGenerateSqlReq();
         req.setConnectionId(1L);

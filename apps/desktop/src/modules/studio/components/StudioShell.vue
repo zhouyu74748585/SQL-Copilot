@@ -1367,12 +1367,50 @@
           </div>
 
           <div class="query-chat-composer">
-            <a-textarea
-              v-model:value="activeQueryTab.prompt"
-              :rows="4"
-              placeholder="例如：查询近 7 天订单量，并按天聚合"
-              @keydown="handleChatComposerKeydown($event, activeQueryTab)"
-            />
+            <div class="query-chat-composer-input-wrap">
+              <a-textarea
+                v-model:value="activeQueryTab.prompt"
+                :rows="4"
+                placeholder="例如：查询近 7 天订单量，并按天聚合"
+                @input="handleChatComposerInput($event, activeQueryTab)"
+                @click="handleChatComposerCursorChange($event, activeQueryTab)"
+                @keyup="handleChatComposerCursorChange($event, activeQueryTab)"
+                @keydown="handleChatComposerKeydown($event, activeQueryTab)"
+              />
+              <div
+                v-if="queryPromptAssist.visible && queryPromptAssist.tabKey === activeQueryTab.key"
+                class="query-chat-prompt-assist query-chat-prompt-assist-floating"
+              >
+                <div class="query-chat-prompt-assist-head">
+                  <span>{{ queryPromptAssist.mode === 'table' ? '引用当前库表' : `引用 ${queryPromptAssist.tableName} 字段` }}</span>
+                  <button type="button" class="query-chat-prompt-assist-close" @mousedown.prevent @click="closeQueryPromptAssist">
+                    关闭
+                  </button>
+                </div>
+                <div v-if="queryPromptAssist.loading" class="query-chat-prompt-assist-empty">正在加载...</div>
+                <div v-else-if="queryPromptAssist.items.length" ref="queryPromptAssistListRef" class="query-chat-prompt-assist-list">
+                  <button
+                    v-for="(option, index) in queryPromptAssist.items"
+                    :key="option.key"
+                    :ref="(el) => bindQueryPromptAssistItemRef(el, option.key)"
+                    type="button"
+                    class="query-chat-prompt-assist-item"
+                    :class="{ 'is-active': queryPromptAssist.activeIndex === index }"
+                    @mouseenter="setQueryPromptAssistActive(index)"
+                    @mousedown.prevent
+                    @click="applyPromptAssistOption(activeQueryTab, option)"
+                  >
+                    <span class="query-chat-prompt-assist-main">
+                      <span class="query-chat-prompt-assist-label">{{ option.label }}</span>
+                      <span v-if="option.meta" class="query-chat-prompt-assist-meta">{{ option.meta }}</span>
+                    </span>
+                    <span v-if="option.description" class="query-chat-prompt-assist-desc">{{ option.description }}</span>
+                  </button>
+                </div>
+                <div v-else class="query-chat-prompt-assist-empty">{{ queryPromptAssist.emptyText }}</div>
+                <div class="query-chat-prompt-assist-tip">输入 @ 选表，输入 . 选字段，Enter 或 Tab 确认</div>
+              </div>
+            </div>
             <div class="query-chat-composer-row">
               <div class="query-chat-composer-meta">
                 <div class="query-chat-model-box">
@@ -2585,6 +2623,7 @@ import {
 } from '@ant-design/icons-vue';
 import {Editor as MonacoEditor} from '@guolao/vue-monaco-editor';
 import type * as MonacoApi from 'monaco-editor';
+import {nextTick, ref, watch} from 'vue';
 import QueryChartPanel from '../../../components/QueryChartPanel.vue';
 import ErDiagramPanel from '../../../components/ErDiagramPanel.vue';
 import TableEditor from '../../../components/TableEditor.vue';
@@ -3145,7 +3184,13 @@ const {
     formatTime,
     formatDurationMs,
     formatVectorizeProvider,
+    queryPromptAssist,
+    handleChatComposerInput,
+    handleChatComposerCursorChange,
     handleChatComposerKeydown,
+    closeQueryPromptAssist,
+    setQueryPromptAssistActive,
+    applyPromptAssistOption,
     handleWindowResize,
     expandConnectionNode,
     buildDatabaseNodeKey,
@@ -3182,6 +3227,49 @@ const {
     fillRagConfigForm,
     resetConnectionModalState
 } = props.controller;
+
+const queryPromptAssistListRef = ref<HTMLElement | null>(null);
+const queryPromptAssistItemRefMap = new Map<string, HTMLElement>();
+
+function bindQueryPromptAssistItemRef(element: unknown, key: string) {
+  if (element instanceof HTMLElement) {
+    queryPromptAssistItemRefMap.set(key, element);
+    return;
+  }
+  queryPromptAssistItemRefMap.delete(key);
+}
+
+function syncQueryPromptAssistActiveIntoView() {
+  if (!queryPromptAssist.visible || !queryPromptAssist.items.length) {
+    return;
+  }
+  const activeItem = queryPromptAssist.items[queryPromptAssist.activeIndex];
+  if (!activeItem) {
+    return;
+  }
+  const target = queryPromptAssistItemRefMap.get(activeItem.key);
+  if (!target || !queryPromptAssistListRef.value) {
+    return;
+  }
+  target.scrollIntoView({
+    block: 'nearest',
+    inline: 'nearest',
+  });
+}
+
+watch(
+  () => ({
+    visible: queryPromptAssist.visible,
+    tabKey: queryPromptAssist.tabKey,
+    activeKey: queryPromptAssist.items[queryPromptAssist.activeIndex]?.key || '',
+  }),
+  () => {
+    void nextTick().then(() => {
+      syncQueryPromptAssistActiveIntoView();
+    });
+  },
+  {flush: 'post'},
+);
 
 function handleKnowledgeExampleSqlEditorMount(
   editor: MonacoApi.editor.IStandaloneCodeEditor,

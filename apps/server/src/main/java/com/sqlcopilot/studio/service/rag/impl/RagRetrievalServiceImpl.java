@@ -32,6 +32,9 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
     private static final int SUPPLEMENT_COLUMN_PER_TABLE_LIMIT = 12;
     private static final double SUPPLEMENT_SCORE_STEP = 0.001D;
     private static final Pattern TABLE_PATTERN = Pattern.compile("(?i)\\b(?:from|join|update|into|table)\\s+([a-zA-Z0-9_$.`\"]+)");
+    private static final Pattern RETRIEVAL_QUERY_PATTERN = Pattern.compile("(?m)^检索关键词:\\s*(.+)$");
+    private static final Pattern FOCUS_TABLES_PATTERN = Pattern.compile("(?m)^重点表:\\s*(.+)$");
+    private static final Pattern IDENTIFIER_PATTERN = Pattern.compile("\\b[a-zA-Z][a-zA-Z0-9_]{2,}\\b");
 
     private final boolean ragEnabled;
     private final boolean defaultRerankEnabled;
@@ -102,8 +105,9 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
     @Override
     public RagPromptContext retrievePromptContext(Long connectionId, String databaseName, String userInput) {
         boolean rerankEnabled = isRerankEnabled();
-        String rerankProvider = ragRerankService.getRuntimeProvider();
+        String initialRerankProvider = currentRerankProvider(rerankEnabled, "DISABLED");
         String normalizedDatabaseName = normalizeDatabaseName(databaseName);
+        RetrievalQuery retrievalQuery = parseRetrievalQuery(userInput);
         log.info(
             "[RAG-RETRIEVE-REQ] connectionId={}, databaseName={}, inputLength={}, ragEnabled={}, schemaTableLimit={}, schemaColumnLimit={}, sqlHistoryLimit={}, metricTermLimit={}, exampleSqlLimit={}, rerankEnabled={}, rerankProvider={}",
             connectionId,
@@ -116,10 +120,10 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             metricTermLimit,
             exampleSqlLimit,
             rerankEnabled,
-            rerankProvider
+            initialRerankProvider
         );
 
-        RagPromptContext empty = emptyContext(rerankEnabled, rerankProvider);
+        RagPromptContext empty = emptyContext(rerankEnabled, initialRerankProvider);
         if (!ragEnabled || connectionId == null || isBlank(userInput)) {
             log.info(
                 "[RAG-RETRIEVE-RESP] connectionId={}, databaseName={}, hit={}, reason={}, relatedTableCount={}, relatedColumnCount={}, historyCount={}, contextLength={}",
@@ -135,7 +139,7 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             return empty;
         }
 
-        List<Float> inputVector = ragEmbeddingService.embedText(userInput);
+        List<Float> inputVector = ragEmbeddingService.embedText(retrievalQuery.embeddingText());
         if (inputVector == null || inputVector.isEmpty()) {
             log.info(
                 "[RAG-RETRIEVE-RESP] connectionId={}, databaseName={}, hit={}, reason={}, relatedTableCount={}, relatedColumnCount={}, historyCount={}, contextLength={}",
@@ -186,7 +190,55 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             connectionId,
             normalizedDatabaseName
         );
+        ExampleSqlSupplementResult focusTableSupplement = supplementSchemaHitsByFocusTables(
+            connectionId,
+            normalizedDatabaseName,
+            retrievalQuery.focusTables(),
+            tableHits,
+            columnHits
+        );
+        tableHits = focusTableSupplement.tableHits();
+        columnHits = focusTableSupplement.columnHits();
+        historyHits = supplementHistoryHitsByFocusTables(
+            connectionId,
+            normalizedDatabaseName,
+            inputVector,
+            retrievalQuery.focusTables(),
+            historyHits
+        );
+        if (focusTableSupplement.supplementedTableCount() > 0 || focusTableSupplement.supplementedColumnCount() > 0) {
+            log.info(
+                "[RAG-RETRIEVE-FOCUS-SUPPLEMENT] connectionId={}, databaseName={}, focusTableCount={}, supplementedTableCount={}, supplementedColumnCount={}, tableHitCount={}, columnHitCount={}, historyHitCount={}",
+                connectionId,
+                normalizedDatabaseName,
+                retrievalQuery.focusTables().size(),
+                focusTableSupplement.supplementedTableCount(),
+                focusTableSupplement.supplementedColumnCount(),
+                tableHits.size(),
+                columnHits.size(),
+                historyHits.size()
+            );
+        }
+
+        List<Map<String, Object>> rerankDetails = new ArrayList<>();
+        RerankResult tableRerank = rerankHits(retrievalQuery, "table", tableHits, rerankEnabled);
+        tableHits = tableRerank.hits();
+        rerankDetails.add(tableRerank.traceDetail());
+        RerankResult columnRerank = rerankHits(retrievalQuery, "column", columnHits, rerankEnabled);
+        columnHits = columnRerank.hits();
+        rerankDetails.add(columnRerank.traceDetail());
+        RerankResult historyRerank = rerankHits(retrievalQuery, "query_history", historyHits, rerankEnabled);
+        historyHits = historyRerank.hits();
+        rerankDetails.add(historyRerank.traceDetail());
+        RerankResult metricRerank = rerankHits(retrievalQuery, "metric_term", metricTermHits, rerankEnabled);
+        metricTermHits = metricRerank.hits();
+        rerankDetails.add(metricRerank.traceDetail());
+        RerankResult exampleRerank = rerankHits(retrievalQuery, "example_sql", exampleSqlHits, rerankEnabled);
+        exampleSqlHits = exampleRerank.hits();
+        rerankDetails.add(exampleRerank.traceDetail());
+        String rerankProvider = currentRerankProvider(rerankEnabled, initialRerankProvider);
         Set<String> tableConstraints = collectConstraintTables(tableHits);
+        tableConstraints.addAll(retrievalQuery.focusTables());
         if (!tableConstraints.isEmpty()) {
             int columnBefore = columnHits.size();
             int historyBefore = historyHits.size();
@@ -208,23 +260,6 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
                 exampleSqlHits.size()
             );
         }
-
-        List<Map<String, Object>> rerankDetails = new ArrayList<>();
-        RerankResult tableRerank = rerankHits(userInput, "table", tableHits, rerankEnabled, rerankProvider);
-        tableHits = tableRerank.hits();
-        rerankDetails.add(tableRerank.traceDetail());
-        RerankResult columnRerank = rerankHits(userInput, "column", columnHits, rerankEnabled, rerankProvider);
-        columnHits = columnRerank.hits();
-        rerankDetails.add(columnRerank.traceDetail());
-        RerankResult historyRerank = rerankHits(userInput, "query_history", historyHits, rerankEnabled, rerankProvider);
-        historyHits = historyRerank.hits();
-        rerankDetails.add(historyRerank.traceDetail());
-        RerankResult metricRerank = rerankHits(userInput, "metric_term", metricTermHits, rerankEnabled, rerankProvider);
-        metricTermHits = metricRerank.hits();
-        rerankDetails.add(metricRerank.traceDetail());
-        RerankResult exampleRerank = rerankHits(userInput, "example_sql", exampleSqlHits, rerankEnabled, rerankProvider);
-        exampleSqlHits = exampleRerank.hits();
-        rerankDetails.add(exampleRerank.traceDetail());
         ExampleSqlSupplementResult supplementResult = supplementSchemaHitsByExampleSql(
             connectionId,
             normalizedDatabaseName,
@@ -461,6 +496,102 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         }
     }
 
+    private RetrievalQuery parseRetrievalQuery(String userInput) {
+        String rawInput = Objects.toString(userInput, "").trim();
+        String semanticQuery = extractPatternValue(RETRIEVAL_QUERY_PATTERN, rawInput);
+        if (semanticQuery.isBlank()) {
+            int contextIndex = rawInput.indexOf("\n补充上下文:");
+            semanticQuery = contextIndex >= 0 ? rawInput.substring(0, contextIndex).trim() : rawInput;
+        }
+        LinkedHashSet<String> focusTables = new LinkedHashSet<>();
+        String focusTableLine = extractPatternValue(FOCUS_TABLES_PATTERN, rawInput);
+        if (!focusTableLine.isBlank()) {
+            for (String token : focusTableLine.split("[,，\\s]+")) {
+                String normalized = normalizeTableName(token);
+                if (!normalized.isBlank()) {
+                    focusTables.add(normalized);
+                }
+            }
+        }
+        Matcher identifierMatcher = IDENTIFIER_PATTERN.matcher(rawInput);
+        while (identifierMatcher.find()) {
+            String identifier = identifierMatcher.group();
+            if (identifier == null || identifier.chars().filter(ch -> ch == '_').count() < 2) {
+                continue;
+            }
+            String normalized = normalizeTableName(identifier);
+            if (!normalized.isBlank()) {
+                focusTables.add(normalized);
+            }
+        }
+        StringBuilder embeddingBuilder = new StringBuilder();
+        if (!semanticQuery.isBlank()) {
+            embeddingBuilder.append(semanticQuery);
+        }
+        if (!focusTables.isEmpty()) {
+            if (embeddingBuilder.length() > 0) {
+                embeddingBuilder.append('\n');
+            }
+            embeddingBuilder.append("重点表: ").append(String.join(",", focusTables));
+        }
+        String embeddingText = embeddingBuilder.length() == 0 ? rawInput : embeddingBuilder.toString();
+        return new RetrievalQuery(rawInput, semanticQuery, List.copyOf(focusTables), embeddingText);
+    }
+
+    private String extractPatternValue(Pattern pattern, String text) {
+        if (pattern == null || isBlank(text)) {
+            return "";
+        }
+        Matcher matcher = pattern.matcher(text);
+        if (!matcher.find()) {
+            return "";
+        }
+        return Objects.toString(matcher.group(1), "").trim();
+    }
+
+    private ExampleSqlSupplementResult supplementSchemaHitsByFocusTables(Long connectionId,
+                                                                        String databaseName,
+                                                                        List<String> focusTables,
+                                                                        List<QdrantScoredPoint> tableHits,
+                                                                        List<QdrantScoredPoint> columnHits) {
+        if (focusTables == null || focusTables.isEmpty()) {
+            return new ExampleSqlSupplementResult(
+                tableHits == null ? List.of() : tableHits,
+                columnHits == null ? List.of() : columnHits,
+                0,
+                0
+            );
+        }
+        return supplementSchemaHitsByTables(connectionId, databaseName, focusTables, tableHits, columnHits, "focus_table");
+    }
+
+    private List<QdrantScoredPoint> supplementHistoryHitsByFocusTables(Long connectionId,
+                                                                       String databaseName,
+                                                                       List<Float> vector,
+                                                                       List<String> focusTables,
+                                                                       List<QdrantScoredPoint> historyHits) {
+        Map<String, QdrantScoredPoint> merged = new LinkedHashMap<>();
+        mergeHits(merged, historyHits);
+        if (connectionId == null || vector == null || vector.isEmpty() || focusTables == null || focusTables.isEmpty()) {
+            return merged.values().stream()
+                .sorted(Comparator.comparingDouble(QdrantScoredPoint::getScore).reversed())
+                .toList();
+        }
+        for (String focusTable : focusTables) {
+            if (focusTable == null || focusTable.isBlank()) {
+                continue;
+            }
+            mergeHits(merged, safeSearchByFilters(collectionNames.getSqlHistory(), vector, Math.max(2, sqlHistoryLimit), List.of(
+                new QdrantPayloadFilter("connection_id", connectionId),
+                new QdrantPayloadFilter("database_name", databaseName),
+                new QdrantPayloadFilter("tables", focusTable)
+            )));
+        }
+        return merged.values().stream()
+            .sorted(Comparator.comparingDouble(QdrantScoredPoint::getScore).reversed())
+            .toList();
+    }
+
     private Set<String> collectConstraintTables(List<QdrantScoredPoint> tableHits) {
         Set<String> constraints = new LinkedHashSet<>();
         if (tableHits == null || tableHits.isEmpty()) {
@@ -553,9 +684,26 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
                 0
             );
         }
+        return supplementSchemaHitsByTables(connectionId, databaseName, exampleTables, tableHits, columnHits, "example_sql");
+    }
 
+    private ExampleSqlSupplementResult supplementSchemaHitsByTables(Long connectionId,
+                                                                    String databaseName,
+                                                                    Collection<String> tablesToSupplement,
+                                                                    List<QdrantScoredPoint> tableHits,
+                                                                    List<QdrantScoredPoint> columnHits,
+                                                                    String sourcePrefix) {
+        if (connectionId == null || tablesToSupplement == null || tablesToSupplement.isEmpty()) {
+            return new ExampleSqlSupplementResult(
+                tableHits == null ? List.of() : tableHits,
+                columnHits == null ? List.of() : columnHits,
+                0,
+                0
+            );
+        }
         Set<String> existingTableNames = collectConstraintTables(tableHits);
-        List<String> missingTables = exampleTables.stream()
+        List<String> missingTables = tablesToSupplement.stream()
+            .map(this::normalizeTableName)
             .filter(table -> !existingTableNames.contains(table))
             .toList();
         if (missingTables.isEmpty()) {
@@ -580,8 +728,10 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         List<QdrantScoredPoint> mergedTableHits = new ArrayList<>(tableHits == null ? List.of() : tableHits);
         List<QdrantScoredPoint> mergedColumnHits = new ArrayList<>(columnHits == null ? List.of() : columnHits);
         Set<String> existingColumnKeys = collectColumnKeys(mergedColumnHits);
-        double tableBoostScore = resolveBoostScore(mergedTableHits);
-        double columnBoostScore = resolveBoostScore(mergedColumnHits);
+        double tableBoostScore = resolveBoostScore(mergedTableHits)
+            + ("focus_table".equals(sourcePrefix) ? 0.10D : 0D);
+        double columnBoostScore = resolveBoostScore(mergedColumnHits)
+            + ("focus_table".equals(sourcePrefix) ? 0.08D : 0D);
         int supplementedTableCount = 0;
         int supplementedColumnCount = 0;
         int tableOrder = 0;
@@ -615,7 +765,7 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             double tableScore = tableBoostScore - tableOrder * SUPPLEMENT_SCORE_STEP;
             tableOrder++;
             mergedTableHits.add(new QdrantScoredPoint(
-                "example_sql_supplement_table:" + normalizeTableName(canonicalTableName),
+                sourcePrefix + "_supplement_table:" + normalizeTableName(canonicalTableName),
                 tableScore,
                 tablePayload
             ));
@@ -636,7 +786,7 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
                 }
                 double columnScore = columnBoostScore - supplementedColumnCount * SUPPLEMENT_SCORE_STEP;
                 mergedColumnHits.add(new QdrantScoredPoint(
-                    "example_sql_supplement_column:" + columnKey,
+                    sourcePrefix + "_supplement_column:" + columnKey,
                     columnScore,
                     buildSupplementColumnPayload(canonicalTableName, column)
                 ));
@@ -781,11 +931,11 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         return hit.getScore();
     }
 
-    private RerankResult rerankHits(String userInput,
+    private RerankResult rerankHits(RetrievalQuery query,
                                     String bucket,
                                     List<QdrantScoredPoint> hits,
-                                    boolean rerankEnabled,
-                                    String rerankProvider) {
+                                    boolean rerankEnabled) {
+        String rerankProvider = currentRerankProvider(rerankEnabled, "DISABLED");
         if (hits == null || hits.isEmpty()) {
             return new RerankResult(
                 List.of(),
@@ -799,16 +949,18 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             );
         }
 
-        List<Double> onnxScores = ragRerankService.score(userInput, bucket, hits);
+        String rerankQueryText = query == null ? "" : query.embeddingText();
+        List<Double> onnxScores = ragRerankService.score(rerankQueryText, bucket, hits);
+        rerankProvider = currentRerankProvider(rerankEnabled, rerankProvider);
         boolean onnxAvailable = onnxScores.size() == hits.size();
         List<ScoredHit> rescored = new ArrayList<>(hits.size());
         for (int i = 0; i < hits.size(); i++) {
             QdrantScoredPoint hit = hits.get(i);
             double vectorScore = hit.getScore() == null ? 0.0 : hit.getScore();
-            double ruleBonus = resolveRuleBonus(userInput, bucket, hit.getPayload());
+            double ruleBonus = resolveRuleBonus(query, bucket, hit.getPayload());
             double onnxScore = onnxAvailable
                 ? clip01(onnxScores.get(i))
-                : clip01(vectorScore + ruleBonus * 0.2);
+                : clip01(vectorScore + Math.min(1.0D, ruleBonus) * 0.35D);
             double finalScore = alphaVectorScore * vectorScore + betaOnnxScore * onnxScore + gammaRuleBonus * ruleBonus;
             rescored.add(new ScoredHit(hit, finalScore, vectorScore, onnxScore, ruleBonus));
         }
@@ -917,6 +1069,17 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         return defaultRerankEnabled;
     }
 
+    private String currentRerankProvider(boolean rerankEnabled, String fallback) {
+        if (!rerankEnabled) {
+            return "DISABLED";
+        }
+        String runtimeProvider = Objects.toString(ragRerankService.getRuntimeProvider(), "").trim();
+        if (!runtimeProvider.isBlank()) {
+            return runtimeProvider;
+        }
+        return Objects.toString(fallback, "").trim();
+    }
+
     private RagConfigVO getCachedRagConfig() {
         long now = System.currentTimeMillis();
         RagConfigVO localCache = cachedRagConfig;
@@ -935,7 +1098,7 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         }
     }
 
-    private double resolveRuleBonus(String userInput, String bucket, Map<String, Object> payload) {
+    private double resolveRuleBonus(RetrievalQuery query, String bucket, Map<String, Object> payload) {
         if (payload == null) {
             return 0.0;
         }
@@ -946,8 +1109,11 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             case "example_sql", "query_history" -> isBlank(payloadString(payload, "sql_text")) ? 0.3 : 1.0;
             default -> 0.0;
         };
-        double timeBonus = containsTimeSignal(userInput) ? 0.2 : 0.0;
-        return clip01(schemaBonus + timeBonus);
+        String queryText = query == null ? "" : query.rawInput();
+        double timeBonus = containsStructuredTimeSignal(queryText) ? 0.2 : 0.0;
+        double focusTableBonus = focusTableMatchBonus(query, payload);
+        double mentionBonus = payloadMentionBonus(queryText, payload);
+        return schemaBonus + timeBonus + focusTableBonus + mentionBonus;
     }
 
     private double clip01(double score) {
@@ -963,6 +1129,45 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             || normalized.contains("季度") || normalized.contains("year") || normalized.contains("month");
     }
 
+    private double focusTableMatchBonus(RetrievalQuery query, Map<String, Object> payload) {
+        if (query == null || query.focusTables().isEmpty() || payload == null) {
+            return 0.0;
+        }
+        String tableName = normalizeTableName(payloadString(payload, "table_name"));
+        if (!tableName.isBlank() && query.focusTables().contains(tableName)) {
+            return 1.2;
+        }
+        for (String table : payloadStringList(payload, "tables")) {
+            if (query.focusTables().contains(normalizeTableName(table))) {
+                return 1.0;
+            }
+        }
+        return 0.0;
+    }
+
+    private double payloadMentionBonus(String queryText, Map<String, Object> payload) {
+        String normalizedQuery = Objects.toString(queryText, "").toLowerCase(Locale.ROOT);
+        if (normalizedQuery.isBlank() || payload == null) {
+            return 0.0;
+        }
+        String tableName = normalizeTableName(payloadString(payload, "table_name"));
+        if (!tableName.isBlank() && normalizedQuery.contains(tableName)) {
+            return 0.6;
+        }
+        String columnName = normalizeColumnName(payloadString(payload, "column_name"));
+        if (!columnName.isBlank() && normalizedQuery.contains(columnName)) {
+            return 0.2;
+        }
+        return 0.0;
+    }
+
+    private boolean containsStructuredTimeSignal(String text) {
+        String normalized = Objects.toString(text, "").toLowerCase(Locale.ROOT);
+        return containsTimeSignal(text)
+            || normalized.contains("日") || normalized.contains("周") || normalized.contains("月")
+            || normalized.contains("年") || normalized.contains("季度");
+    }
+
     private record ScoredHit(QdrantScoredPoint hit,
                              double score,
                              double vectorScore,
@@ -971,6 +1176,12 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
     }
 
     private record RerankResult(List<QdrantScoredPoint> hits, Map<String, Object> traceDetail) {
+    }
+
+    private record RetrievalQuery(String rawInput,
+                                  String semanticQuery,
+                                  List<String> focusTables,
+                                  String embeddingText) {
     }
 
     private record ExampleSqlSupplementResult(List<QdrantScoredPoint> tableHits,

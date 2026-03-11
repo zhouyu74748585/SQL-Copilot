@@ -193,7 +193,10 @@ public class AiConversationContextManager {
     }
 
     public String buildRetrievalInputForRag(AiGenerateSqlReq req, String extraContext) {
-        String baseInput = buildRetrievalInput(req.getPrompt(), extraContext);
+        String compactHint = extractCompactRetrievalHint(extraContext);
+        String baseInput = compactHint.isBlank()
+            ? buildRetrievalInput(req.getPrompt(), extraContext)
+            : compactHint;
         if (!isMemoryEnabled(req)) {
             return baseInput;
         }
@@ -275,6 +278,21 @@ public class AiConversationContextManager {
             return normalizedPrompt;
         }
         return normalizedPrompt + "\n补充上下文:\n" + normalizedExtraContext;
+    }
+
+    private String extractCompactRetrievalHint(String extraContext) {
+        String normalized = safe(extraContext);
+        if (normalized.isBlank()) {
+            return "";
+        }
+        List<String> lines = new ArrayList<>();
+        for (String rawLine : normalized.split("\\r?\\n")) {
+            String line = safe(rawLine);
+            if (line.startsWith("检索关键词:") || line.startsWith("重点表:")) {
+                lines.add(line);
+            }
+        }
+        return String.join("\n", lines).trim();
     }
 
     private ConversationMemorySnapshot loadConversationMemorySnapshot(AiGenerateSqlReq req, ConversationMemoryPolicy memoryPolicy) {

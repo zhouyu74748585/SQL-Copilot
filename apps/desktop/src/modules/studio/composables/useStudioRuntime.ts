@@ -476,6 +476,8 @@ const tableNameCache = ref<Record<string, string[]>>({});
 
 const tableNameLoadedCache = ref<Record<string, boolean>>({});
 
+const queryTableDetailCache = ref<Record<string, TableDetailVO>>({});
+
 const objectNameCache = ref<Record<string, string[]>>({});
 
 const savedQueryCache = ref<Record<string, SavedQueryVO[]>>({});
@@ -781,6 +783,8 @@ let sqlAutoSuggestTimer: number | null = null;
 let activeSqlEditorInstance: MonacoApi.editor.IStandaloneCodeEditor | null = null;
 
 const pendingTableNameLoads = new Map<string, Promise<string[]>>();
+
+const pendingTableDetailLoads = new Map<string, Promise<TableDetailVO | null>>();
 
 const sqlEditorContextResolverMap = new Map<string, () => SqlEditorContext | null>();
 
@@ -3486,6 +3490,47 @@ async function ensureTableNamesLoaded(connectionId: number, databaseName: string
   return task;
 }
 
+function queryTableDetailCacheKey(connectionId: number, databaseName: string, tableName: string) {
+  return `${connectionId}|${databaseName || ''}|${tableName || ''}`;
+}
+
+async function loadQueryTableDetail(connectionId: number, databaseName: string, tableName: string) {
+  if (!connectionId || !tableName) {
+    return null;
+  }
+  const query = databaseName
+    ? `/api/schema/tableDetail?connectionId=${connectionId}&databaseName=${encodeURIComponent(databaseName)}&tableName=${encodeURIComponent(tableName)}`
+    : `/api/schema/tableDetail?connectionId=${connectionId}&tableName=${encodeURIComponent(tableName)}`;
+  const detail = await getApi<TableDetailVO>(query);
+  queryTableDetailCache.value = {
+    ...queryTableDetailCache.value,
+    [queryTableDetailCacheKey(connectionId, databaseName, tableName)]: detail,
+  };
+  return detail;
+}
+
+async function ensureQueryTableDetailLoaded(connectionId: number, databaseName: string, tableName: string) {
+  if (!connectionId || !tableName) {
+    return null;
+  }
+  const cacheKey = queryTableDetailCacheKey(connectionId, databaseName, tableName);
+  const cached = queryTableDetailCache.value[cacheKey];
+  if (cached) {
+    return cached;
+  }
+  const pending = pendingTableDetailLoads.get(cacheKey);
+  if (pending) {
+    return pending;
+  }
+  const task = loadQueryTableDetail(connectionId, databaseName, tableName)
+    .catch(() => null)
+    .finally(() => {
+      pendingTableDetailLoads.delete(cacheKey);
+    });
+  pendingTableDetailLoads.set(cacheKey, task);
+  return task;
+}
+
 function tableNameSuggestions(
   monaco: typeof MonacoApi,
   names: string[],
@@ -4772,6 +4817,47 @@ function mergePromptWithSqlSnippet(promptText: string, selectedSqlText?: string)
   ].join('\n');
 }
 
+function enrichPromptWithSchemaReferences(promptText: string) {
+  const rawPrompt = promptText.trim();
+  if (!rawPrompt) {
+    return rawPrompt;
+  }
+  const explicitTables = new Set<string>();
+  const explicitColumns = new Set<string>();
+  const normalizedPrompt = rawPrompt.replace(
+    /(^|[\s(,，;；])@([^\s@.(),，;；]+)(?:\.([^\s@.(),，;；]+))?/g,
+    (_match, prefix: string, tableName: string, columnName?: string) => {
+      const normalizedTableName = (tableName || '').trim();
+      const normalizedColumnName = (columnName || '').trim();
+      if (!normalizedTableName) {
+        return `${prefix}@${tableName || ''}`;
+      }
+      explicitTables.add(normalizedTableName);
+      if (normalizedColumnName) {
+        explicitColumns.add(`${normalizedTableName}.${normalizedColumnName}`);
+        return `${prefix}${normalizedTableName}.${normalizedColumnName}`;
+      }
+      return `${prefix}${normalizedTableName}`;
+    },
+  );
+  if (!explicitTables.size && !explicitColumns.size) {
+    return rawPrompt;
+  }
+  const hints: string[] = [];
+  if (explicitTables.size) {
+    hints.push(`用户显式指定的当前库表: ${Array.from(explicitTables).join(', ')}`);
+  }
+  if (explicitColumns.size) {
+    hints.push(`用户显式指定的字段: ${Array.from(explicitColumns).join(', ')}`);
+  }
+  return [
+    normalizedPrompt.trim(),
+    '',
+    '[当前库显式引用]',
+    ...hints,
+  ].join('\n');
+}
+
 const aiRequestTimeoutMs = 120000;
 
 const AI_REQUEST_ABORTED = 'AI_REQUEST_ABORTED';
@@ -4887,14 +4973,15 @@ async function generateSqlForTab(
   const promptText = rawPrompt.trim() || (actionType === 'explain'
     ? 'Please explain this SQL.'
     : 'Please analyze whether this SQL is reasonable.');
+  const normalizedPromptText = enrichPromptWithSchemaReferences(promptText);
   const userMessage = retryOptions?.userMessage ?? appendUserChatMessage(tab, promptText, actionType);
   const thinkingMessage = appendAssistantThinkingMessage(tab, actionType);
   if (!retryOptions) {
     tab.prompt = '';
   }
   const finalPrompt = retryOptions?.finalPrompt ?? (actionType === 'generate'
-    ? promptText
-    : mergePromptWithSqlSnippet(promptText, actionSqlSnippet));
+    ? normalizedPromptText
+    : mergePromptWithSqlSnippet(normalizedPromptText, actionSqlSnippet));
   const retryMeta: RetryRequestMeta = {
     kind: 'ai_action',
     actionType,
@@ -5086,7 +5173,8 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
     return;
   }
   const sqlSnippet = retryOptions?.actionSqlSnippet ?? resolveSelectedSqlSnippet(tab);
-  const finalPrompt = retryOptions?.finalPrompt ?? mergePromptWithSqlSnippet(rawPrompt, sqlSnippet);
+  const normalizedPromptText = enrichPromptWithSchemaReferences(rawPrompt);
+  const finalPrompt = retryOptions?.finalPrompt ?? mergePromptWithSqlSnippet(normalizedPromptText, sqlSnippet);
   const userMessage = retryOptions?.userMessage ?? appendUserChatMessage(tab, rawPrompt, 'auto_generate');
   const thinkingMessage = appendAssistantThinkingMessage(tab, 'auto_generate');
   if (!retryOptions) {
@@ -5525,7 +5613,8 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
     message.info('Please enter chart requirements first.');
     return;
   }
-  const finalPrompt = retryOptions?.finalPrompt ?? buildChartPrompt(rawPrompt);
+  const normalizedPromptText = enrichPromptWithSchemaReferences(rawPrompt);
+  const finalPrompt = retryOptions?.finalPrompt ?? buildChartPrompt(normalizedPromptText);
   const userMessage = retryOptions?.userMessage ?? appendUserChatMessage(tab, rawPrompt, 'chart_auto_plan');
   const thinkingMessage = appendAssistantThinkingMessage(tab, 'chart_auto_plan');
   if (!retryOptions) {
@@ -6977,6 +7066,7 @@ function resetConnectionModalState() {
     expandedTreeKeys,
     tableNameCache,
     tableNameLoadedCache,
+    queryTableDetailCache,
     objectNameCache,
     savedQueryCache,
     tableStatsCache,
@@ -7245,6 +7335,7 @@ function resetConnectionModalState() {
     loadTableNamesByConnection,
     resolveQueryDatabaseName,
     ensureTableNamesLoaded,
+    ensureQueryTableDetailLoaded,
     tableNameSuggestions,
     sqlKeywordSuggestions,
     hasKeywordSuggestion,

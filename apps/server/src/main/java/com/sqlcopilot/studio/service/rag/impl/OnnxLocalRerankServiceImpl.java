@@ -1,5 +1,7 @@
 package com.sqlcopilot.studio.service.rag.impl;
 
+import ai.djl.huggingface.tokenizers.Encoding;
+import ai.djl.huggingface.tokenizers.HuggingFaceTokenizer;
 import ai.onnxruntime.OnnxTensor;
 import ai.onnxruntime.OrtEnvironment;
 import ai.onnxruntime.OrtProvider;
@@ -16,10 +18,18 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
-import java.nio.FloatBuffer;
+import java.lang.reflect.Method;
+import java.nio.LongBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -38,9 +48,10 @@ public class OnnxLocalRerankServiceImpl implements LocalRagRerankService {
     private final boolean defaultRerankEnabled;
     private final String defaultModelDir;
     private final String defaultModelFileName;
+    private final String defaultTokenizerFileName;
     private final String defaultExecutionProvider;
     private final int defaultCudaDeviceId;
-    private final int defaultFeatureSize;
+    private final int maxSeqLen;
 
     private final ReentrantReadWriteLock runtimeLock = new ReentrantReadWriteLock();
     private final Lock readLock = runtimeLock.readLock();
@@ -57,21 +68,24 @@ public class OnnxLocalRerankServiceImpl implements LocalRagRerankService {
 
     private OrtEnvironment ortEnvironment;
     private OrtSession ortSession;
+    private HuggingFaceTokenizer tokenizer;
 
     public OnnxLocalRerankServiceImpl(RagConfigService ragConfigService,
                                       @Value("${rag.rerank.enabled:false}") boolean defaultRerankEnabled,
                                       @Value("${rag.rerank.model-dir:}") String defaultModelDir,
-                                      @Value("${rag.rerank.model-file-name:rerank.onnx}") String defaultModelFileName,
-                                      @Value("${rag.rerank.feature-size:6}") int defaultFeatureSize,
+                                      @Value("${rag.rerank.model-file-name:model.onnx}") String defaultModelFileName,
+                                      @Value("${rag.rerank.tokenizer-file-name:tokenizer.json}") String defaultTokenizerFileName,
                                       @Value("${rag.rerank.execution-provider:AUTO}") String defaultExecutionProvider,
-                                      @Value("${rag.rerank.cuda-device-id:0}") int defaultCudaDeviceId) {
+                                      @Value("${rag.rerank.cuda-device-id:0}") int defaultCudaDeviceId,
+                                      @Value("${rag.rerank.max-seq-len:512}") int maxSeqLen) {
         this.ragConfigService = ragConfigService;
         this.defaultRerankEnabled = defaultRerankEnabled;
         this.defaultModelDir = safe(defaultModelDir);
         this.defaultModelFileName = safe(defaultModelFileName);
-        this.defaultFeatureSize = Math.max(6, defaultFeatureSize);
+        this.defaultTokenizerFileName = safe(defaultTokenizerFileName);
         this.defaultExecutionProvider = normalizeExecutionProvider(defaultExecutionProvider);
         this.defaultCudaDeviceId = Math.max(0, defaultCudaDeviceId);
+        this.maxSeqLen = Math.max(32, maxSeqLen);
     }
 
     @Override
@@ -84,25 +98,47 @@ public class OnnxLocalRerankServiceImpl implements LocalRagRerankService {
             return List.of();
         }
         ensureInitialized(runtimeConfig);
-        if (!available || ortEnvironment == null || ortSession == null) {
+        if (!available || ortEnvironment == null || ortSession == null || tokenizer == null) {
             return List.of();
         }
 
         readLock.lock();
         try {
-            long now = System.currentTimeMillis();
-            float[][] features = new float[hits.size()][defaultFeatureSize];
-            for (int i = 0; i < hits.size(); i++) {
-                fillFeatureRow(features[i], query, bucket, hits.get(i), now);
+            OrtSession localSession = ortSession;
+            OrtEnvironment localEnvironment = ortEnvironment;
+            HuggingFaceTokenizer localTokenizer = tokenizer;
+            String normalizedQuery = safe(query);
+            int batchSize = hits.size();
+            long[][] inputIdsBatch = new long[batchSize][maxSeqLen];
+            long[][] attentionBatch = new long[batchSize][maxSeqLen];
+            long[][] tokenTypeBatch = new long[batchSize][maxSeqLen];
+            for (int i = 0; i < batchSize; i++) {
+                String document = buildRerankDocument(bucket, hits.get(i));
+                Encoding encoding = encodeTextPair(localTokenizer, normalizedQuery, document);
+                inputIdsBatch[i] = clipAndPad(encoding == null ? null : encoding.getIds());
+                attentionBatch[i] = clipAndPad(encoding == null ? null : encoding.getAttentionMask());
             }
-            float[] flat = flatten(features, defaultFeatureSize);
-            long[] shape = new long[]{features.length, defaultFeatureSize};
-            String inputName = ortSession.getInputNames().stream().findFirst().orElse("input");
 
-            try (OnnxTensor featureTensor = OnnxTensor.createTensor(ortEnvironment, FloatBuffer.wrap(flat), shape)) {
-                Map<String, OnnxTensor> feed = new HashMap<>();
-                feed.put(inputName, featureTensor);
-                try (OrtSession.Result result = ortSession.run(feed)) {
+            Map<String, OnnxTensor> feed = new LinkedHashMap<>();
+            try (OnnxTensor inputIdsTensor = OnnxTensor.createTensor(
+                localEnvironment,
+                LongBuffer.wrap(flatten(inputIdsBatch)),
+                new long[]{batchSize, maxSeqLen}
+            );
+                 OnnxTensor attentionTensor = OnnxTensor.createTensor(
+                     localEnvironment,
+                     LongBuffer.wrap(flatten(attentionBatch)),
+                     new long[]{batchSize, maxSeqLen}
+                 );
+                 OnnxTensor tokenTypeTensor = OnnxTensor.createTensor(
+                     localEnvironment,
+                     LongBuffer.wrap(flatten(tokenTypeBatch)),
+                     new long[]{batchSize, maxSeqLen}
+                 )) {
+                putTensorIfPresent(localSession, feed, "input_ids", inputIdsTensor, true);
+                putTensorIfPresent(localSession, feed, "attention_mask", attentionTensor, false);
+                putTensorIfPresent(localSession, feed, "token_type_ids", tokenTypeTensor, false);
+                try (OrtSession.Result result = localSession.run(feed)) {
                     Object value = result.get(0).getValue();
                     return normalizeScores(value, hits.size());
                 }
@@ -145,10 +181,17 @@ public class OnnxLocalRerankServiceImpl implements LocalRagRerankService {
                 return;
             }
 
-            Path modelPath = Path.of(targetConfig.modelDir()).resolve(defaultModelFileName).normalize();
+            Path modelDir = Path.of(targetConfig.modelDir()).toAbsolutePath().normalize();
+            Path modelPath = modelDir.resolve(defaultModelFileName).normalize();
+            Path tokenizerPath = modelDir.resolve(defaultTokenizerFileName).normalize();
             if (!Files.exists(modelPath)) {
                 runtimeProvider = "MODEL_MISSING";
                 log.warn("[RAG-RERANK-INIT-SKIP] onnx model missing: {}", modelPath);
+                return;
+            }
+            if (!Files.exists(tokenizerPath)) {
+                runtimeProvider = "TOKENIZER_MISSING";
+                log.warn("[RAG-RERANK-INIT-SKIP] tokenizer missing: {}", tokenizerPath);
                 return;
             }
 
@@ -156,8 +199,16 @@ public class OnnxLocalRerankServiceImpl implements LocalRagRerankService {
             OrtSession.SessionOptions options = new OrtSession.SessionOptions();
             configureProvider(options);
             ortSession = ortEnvironment.createSession(modelPath.toString(), options);
-            available = true;
-            log.info("[RAG-RERANK-INIT] provider={}, model={}", runtimeProvider, modelPath);
+            tokenizer = HuggingFaceTokenizer.newInstance(tokenizerPath);
+            available = tokenizer != null;
+            if (!available) {
+                runtimeProvider = "TOKENIZER_INIT_FAILED";
+                log.warn("[RAG-RERANK-INIT-SKIP] tokenizer init failed: {}", tokenizerPath);
+                closeQuietly();
+                return;
+            }
+            log.info("[RAG-RERANK-INIT] provider={}, model={}, tokenizer={}",
+                runtimeProvider, modelPath, tokenizerPath);
         } catch (Exception | LinkageError ex) {
             runtimeProvider = "INIT_FAILED";
             log.warn("[RAG-RERANK-INIT-FAILED] reason={}", ex.getMessage());
@@ -181,27 +232,62 @@ public class OnnxLocalRerankServiceImpl implements LocalRagRerankService {
         runtimeProvider = OrtProvider.CPU.getName();
     }
 
-    private void fillFeatureRow(float[] row, String query, String bucket, QdrantScoredPoint hit, long now) {
-        double vectorScore = hit.getScore() == null ? 0.0 : hit.getScore();
+    private Encoding encodeTextPair(HuggingFaceTokenizer localTokenizer, String query, String document) throws Exception {
+        Method pairEncodeMethod = null;
+        try {
+            pairEncodeMethod = localTokenizer.getClass().getMethod("encode", String.class, String.class);
+        } catch (NoSuchMethodException ignore) {
+            // Fall back to single-string encoding below.
+        }
+        if (pairEncodeMethod != null) {
+            Object value = pairEncodeMethod.invoke(localTokenizer, query, document);
+            if (value instanceof Encoding encoding) {
+                return encoding;
+            }
+        }
+        return localTokenizer.encode(query + "\n" + document);
+    }
+
+    private void putTensorIfPresent(OrtSession session,
+                                    Map<String, OnnxTensor> feed,
+                                    String preferredInputName,
+                                    OnnxTensor tensor,
+                                    boolean allowFirstFallback) throws Exception {
+        if (session == null || tensor == null) {
+            return;
+        }
+        if (session.getInputInfo().containsKey(preferredInputName)) {
+            feed.put(preferredInputName, tensor);
+            return;
+        }
+        if (allowFirstFallback && !session.getInputInfo().isEmpty()) {
+            String firstInputName = session.getInputNames().stream().findFirst().orElse(preferredInputName);
+            feed.put(firstInputName, tensor);
+        }
+    }
+
+    private String buildRerankDocument(String bucket, QdrantScoredPoint hit) {
+        if (hit == null || hit.getPayload() == null) {
+            return "";
+        }
         Map<String, Object> payload = hit.getPayload();
-        if (row.length > 0) {
-            row[0] = (float) clip01(vectorScore);
-        }
-        if (row.length > 1) {
-            row[1] = (float) schemaExactHit(bucket, payload);
-        }
-        if (row.length > 2) {
-            row[2] = (float) queryTimeSignal(query);
-        }
-        if (row.length > 3) {
-            row[3] = (float) hitCoverage(query, payload);
-        }
-        if (row.length > 4) {
-            row[4] = (float) recencyDecay(payload, now);
-        }
-        if (row.length > 5) {
-            row[5] = (float) bucketCode(bucket);
-        }
+        return switch (bucket) {
+            case "table" -> "table=" + payloadString(payload, "table_name")
+                + "\ncomment=" + payloadString(payload, "table_comment")
+                + "\ncolumns=" + String.join(",", payloadStringList(payload, "columns"));
+            case "column" -> "table=" + payloadString(payload, "table_name")
+                + "\ncolumn=" + payloadString(payload, "column_name")
+                + "\ntype=" + payloadString(payload, "data_type")
+                + "\ncomment=" + payloadString(payload, "column_comment");
+            case "metric_term" -> "term=" + payloadString(payload, "term")
+                + "\ndefinition=" + payloadString(payload, "definition")
+                + "\nexpression=" + payloadString(payload, "metric_expression");
+            case "example_sql", "query_history" -> "sql=" + payloadString(payload, "sql_text")
+                + "\nsemantic=" + payloadString(payload, "semantic_description")
+                + "\nprompt=" + payloadString(payload, "prompt_text")
+                + "\ntables=" + String.join(",", payloadStringList(payload, "tables"));
+            default -> payload.toString();
+        };
     }
 
     private List<Double> normalizeScores(Object value, int size) {
@@ -220,15 +306,44 @@ public class OnnxLocalRerankServiceImpl implements LocalRagRerankService {
             }
             return scores;
         }
+        if (value instanceof double[][] matrix) {
+            for (int i = 0; i < size; i++) {
+                double raw = i < matrix.length && matrix[i].length > 0 ? matrix[i][0] : 0D;
+                scores.add(clip01(sigmoid(raw)));
+            }
+            return scores;
+        }
+        if (value instanceof double[] arr) {
+            for (int i = 0; i < size; i++) {
+                double raw = i < arr.length ? arr[i] : 0D;
+                scores.add(clip01(sigmoid(raw)));
+            }
+            return scores;
+        }
         return List.of();
     }
 
-    private float[] flatten(float[][] matrix, int featureSize) {
-        float[] flat = new float[matrix.length * featureSize];
+    private long[] clipAndPad(long[] source) {
+        long[] clipped = new long[maxSeqLen];
+        if (source == null || source.length == 0) {
+            return clipped;
+        }
+        int len = Math.min(source.length, maxSeqLen);
+        System.arraycopy(source, 0, clipped, 0, len);
+        return clipped;
+    }
+
+    private long[] flatten(long[][] matrix) {
+        if (matrix.length == 0) {
+            return new long[0];
+        }
+        int row = matrix.length;
+        int col = matrix[0].length;
+        long[] flat = new long[row * col];
         int idx = 0;
-        for (float[] row : matrix) {
-            for (int j = 0; j < featureSize; j++) {
-                flat[idx++] = j < row.length ? row[j] : 0f;
+        for (long[] values : matrix) {
+            for (long value : values) {
+                flat[idx++] = value;
             }
         }
         return flat;
@@ -254,82 +369,28 @@ public class OnnxLocalRerankServiceImpl implements LocalRagRerankService {
             if (cachedRagConfig != null && refreshedNow - cachedRagConfigLoadedAt < RAG_CONFIG_CACHE_TTL_MS) {
                 return cachedRagConfig;
             }
-            // 关键优化：Rerank 高频检索场景下短时缓存配置，避免每次查询 DB。
             cachedRagConfig = ragConfigService.getConfig();
             cachedRagConfigLoadedAt = refreshedNow;
             return cachedRagConfig;
         }
     }
 
-    private double schemaExactHit(String bucket, Map<String, Object> payload) {
-        if (payload == null) {
-            return 0.0;
+    private List<String> payloadStringList(Map<String, Object> payload, String key) {
+        if (payload == null || payload.get(key) == null) {
+            return List.of();
         }
-        return switch (bucket) {
-            case "table" -> blank(payloadString(payload, "table_name")) ? 0.0 : 1.0;
-            case "column" -> (!blank(payloadString(payload, "table_name")) && !blank(payloadString(payload, "column_name"))) ? 1.0 : 0.0;
-            case "metric_term" -> blank(payloadString(payload, "metric_expression")) ? 0.4 : 1.0;
-            case "example_sql", "query_history" -> blank(payloadString(payload, "sql_text")) ? 0.4 : 1.0;
-            default -> 0.0;
-        };
-    }
-
-    private double queryTimeSignal(String query) {
-        String normalized = Objects.toString(query, "").toLowerCase(Locale.ROOT);
-        return normalized.contains("日") || normalized.contains("周") || normalized.contains("月")
-            || normalized.contains("季度") || normalized.contains("year") || normalized.contains("month") ? 1.0 : 0.0;
-    }
-
-    private double hitCoverage(String query, Map<String, Object> payload) {
-        String q = Objects.toString(query, "").toLowerCase(Locale.ROOT).trim();
-        if (q.isBlank() || payload == null) {
-            return 0.0;
+        Object rawValue = payload.get(key);
+        if (!(rawValue instanceof List<?> rawList)) {
+            return List.of();
         }
-        StringBuilder doc = new StringBuilder();
-        doc.append(payloadString(payload, "table_name")).append(' ')
-            .append(payloadString(payload, "column_name")).append(' ')
-            .append(payloadString(payload, "term")).append(' ')
-            .append(payloadString(payload, "definition")).append(' ')
-            .append(payloadString(payload, "sql_text")).append(' ')
-            .append(payloadString(payload, "prompt_text"));
-        String d = doc.toString().toLowerCase(Locale.ROOT);
-        if (d.isBlank()) {
-            return 0.0;
-        }
-        String[] tokens = q.split("\\s+");
-        if (tokens.length == 0) {
-            return 0.0;
-        }
-        int matched = 0;
-        for (String token : tokens) {
-            if (!token.isBlank() && d.contains(token)) {
-                matched++;
+        List<String> values = new ArrayList<>();
+        for (Object item : rawList) {
+            String text = Objects.toString(item, "").trim();
+            if (!text.isBlank()) {
+                values.add(text);
             }
         }
-        return clip01((double) matched / tokens.length);
-    }
-
-    private double recencyDecay(Map<String, Object> payload, long nowMs) {
-        long ts = asLong(payload == null ? null : payload.get("created_at"));
-        if (ts <= 0L) {
-            ts = asLong(payload == null ? null : payload.get("executed_at"));
-        }
-        if (ts <= 0L) {
-            return 0.0;
-        }
-        double days = Math.max(0.0, (nowMs - ts) / 86_400_000.0);
-        return Math.exp(-days / 90.0);
-    }
-
-    private double bucketCode(String bucket) {
-        return switch (bucket) {
-            case "table" -> 0.1;
-            case "column" -> 0.2;
-            case "metric_term" -> 0.3;
-            case "example_sql" -> 0.4;
-            case "query_history" -> 0.5;
-            default -> 0.0;
-        };
+        return values;
     }
 
     private String payloadString(Map<String, Object> payload, String key) {
@@ -337,20 +398,6 @@ public class OnnxLocalRerankServiceImpl implements LocalRagRerankService {
             return "";
         }
         return Objects.toString(payload.get(key), "").trim();
-    }
-
-    private long asLong(Object value) {
-        if (value == null) {
-            return 0L;
-        }
-        if (value instanceof Number n) {
-            return n.longValue();
-        }
-        try {
-            return Long.parseLong(Objects.toString(value, "").trim());
-        } catch (Exception ignored) {
-            return 0L;
-        }
     }
 
     private double sigmoid(double x) {
@@ -362,10 +409,6 @@ public class OnnxLocalRerankServiceImpl implements LocalRagRerankService {
             return 0.0;
         }
         return Math.min(1.0, x);
-    }
-
-    private boolean blank(String text) {
-        return text == null || text.trim().isEmpty();
     }
 
     private String safe(String input) {
@@ -390,17 +433,17 @@ public class OnnxLocalRerankServiceImpl implements LocalRagRerankService {
 
     private void closeQuietly() {
         available = false;
-        try {
-            if (ortSession != null) {
+        if (ortSession != null) {
+            try {
                 ortSession.close();
+            } catch (Exception ignore) {
             }
-        } catch (Exception ignored) {
         }
         ortSession = null;
         ortEnvironment = null;
+        tokenizer = null;
     }
 
-    private record RerankRuntimeConfig(boolean enabled,
-                                       String modelDir) {
+    private record RerankRuntimeConfig(boolean enabled, String modelDir) {
     }
 }
