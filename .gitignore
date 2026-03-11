@@ -13,3 +13,4 @@ apps/server/exports
 /exports/
 /docs/review/
 /release/
+/.vscode/
