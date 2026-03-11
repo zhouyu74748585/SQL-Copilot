@@ -373,8 +373,6 @@ function resolveDefaultBackendProfile(runtimeDir) {
 function resolveBackendLaunchSpec(runtimeDir, profile) {
   const runCmd = path.join(runtimeDir, 'run.cmd');
   const runSh = path.join(runtimeDir, 'run.sh');
-  const nativeName = process.platform === 'win32' ? 'sql-copilot-server.exe' : 'sql-copilot-server';
-  const nativePath = path.join(runtimeDir, nativeName);
   const bundledJavaPath = path.join(
     runtimeDir,
     'jre',
@@ -389,11 +387,6 @@ function resolveBackendLaunchSpec(runtimeDir, profile) {
   if (process.platform !== 'win32' && fs.existsSync(runSh)) {
     ensureExecutable(runSh);
     return { command: '/bin/bash', args: [runSh, profile] };
-  }
-
-  if (fs.existsSync(nativePath)) {
-    ensureExecutable(nativePath);
-    return { command: nativePath, args: [`--spring.profiles.active=${profile}`] };
   }
 
   const jars = fs.existsSync(runtimeDir)

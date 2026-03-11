@@ -576,3 +576,35 @@
 
 ## ???
 - ?? native-image ???? reachability / reflection warning??????? minimal ?? native ?????????????????????????????????????????
+
+
+### 2026-03-11 10:11:33
+
+## 本次目标
+- 去掉项目内与 GraalVM/native 打包直接相关的代码、依赖和运行分支，统一回到 JVM jar + jlink 运行时链路。
+
+## 关键改动
+- 后端构建：
+  - `apps/server/pom.xml` 删除 `org.graalvm.buildtools:native-maven-plugin`、`native` profile，以及 `sqlcopilot.native.image.*` / `graalvm.buildtools.version` 等原生编译参数。
+- 后端代码：
+  - `SqlCopilotApplication` 去掉 `@ImportRuntimeHints(MyBatisNativeHints.class)`。
+  - 删除仅服务于 AOT/native 的 `AotMapperFactoryBean`、`MyBatisAotConfig`、`MyBatisNativeHints` 三个配置类。
+- Desktop 启动链路：
+  - `apps/desktop/electron/main.cjs` 删除对 `sql-copilot-server(.exe)` native 可执行文件的探测与优先启动分支，保留 `run.sh` / `run.cmd` / jar 启动路径。
+- 文档：
+  - `README.md` 中后端技术栈改为 `JDK 17`，去掉 GraalVM/native 相关表述。
+
+## 验证结果
+- 后端 Maven clean 打包通过：
+  - `mvn -f apps/server/pom.xml clean package -DskipTests`
+- 前端类型检查与 clean build 通过：
+  - `npm run -w @sqlcopilot/desktop type-check`
+  - `npm run -w @sqlcopilot/desktop build -- --emptyOutDir`
+- 启动验证通过：
+  - 后端：`java -Dfile.encoding=UTF-8 -jar apps/server/target/sql-copilot-server-0.1.0.jar --spring.profiles.active=medium --server.port=18081`
+  - 健康检查：`GET http://127.0.0.1:18081/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`
+  - 前端预览：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 8888 --strictPort`
+  - HTTP 检查：`curl -I http://127.0.0.1:8888` 返回 `HTTP/1.1 200 OK`
+
+## 遗留项
+- 历史总结文档中仍保留此前 native 打包过程记录，仅作为历史信息，不再代表当前构建链路。

@@ -25,7 +25,7 @@ SQL Copilot 是一款基于 Spring Boot + Electron 架构开发的 AI 原生数�
 | 技术 | 版本 | 说明 |
 |------|------|------|
 | Spring Boot | 3.3.4 | 后端框架 |
-| GraalVM | 17 | 原生编译目标 |
+| JDK | 17 | 后端运行与 jlink 打包 |
 | MyBatis | 3.0.3 | ORM框架 |
 | SQLite | 3.46.0.0 | 本地元数据存储 |
 | ONNX Runtime | 1.19.2 | 向量化推理引擎 |
@@ -388,7 +388,7 @@ SQLCOPILOT_EXPORT_BACKEND=1 npm run package:variants
 $env:SQLCOPILOT_EXPORT_BACKEND="1"
 npm run package:variants
 
-# 自定义 JDK 17 / GraalVM 17 路径（jlink 依赖完整 JDK，而不是 native-image）
+# 自定义 JDK 17 路径（jlink 依赖完整 JDK）
 export JAVA_HOME=/path/to/jdk-17
 export PATH="$JAVA_HOME/bin:$PATH"
 npm run package:variants -- medium

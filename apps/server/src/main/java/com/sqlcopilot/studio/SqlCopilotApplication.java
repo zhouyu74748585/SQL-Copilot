@@ -1,10 +1,8 @@
 package com.sqlcopilot.studio;
 
-import com.sqlcopilot.studio.config.MyBatisNativeHints;
 import org.mybatis.spring.annotation.MapperScan;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.context.annotation.ImportRuntimeHints;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.scheduling.annotation.EnableScheduling;
@@ -19,7 +17,6 @@ import java.util.Objects;
     sqlSessionTemplateRef = "sqlSessionTemplate"
 )
 @EnableScheduling
-@ImportRuntimeHints(MyBatisNativeHints.class)
 public class SqlCopilotApplication {
 
     private static final Logger log = LoggerFactory.getLogger(SqlCopilotApplication.class);
