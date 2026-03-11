@@ -50,6 +50,19 @@ public class AiServiceImpl implements AiService {
     private static final int GLOBAL_HISTORY_RECALL_LIMIT = 10;
     private static final int SESSION_HISTORY_RECALL_LIMIT = 8;
     private static final int SQL_UNDERSTAND_TABLE_LIMIT = 8;
+    private static final Set<String> SYSTEM_SCHEMA_NAMES = Set.of(
+        "information_schema",
+        "performance_schema",
+        "mysql",
+        "sys",
+        "pg_catalog",
+        "pg_toast",
+        "sqlite_schema",
+        "sqlite_master",
+        "sqlite_temp_schema",
+        "sqlite_temp_master",
+        "system"
+    );
     private static final ThreadLocal<AiStreamObserver> STREAM_OBSERVER = new ThreadLocal<>();
     private static final ThreadLocal<String> STREAM_ACTION_TYPE = new ThreadLocal<>();
     private static final String AUTO_INTENT_CLARIFY_CONTENT =
@@ -2824,11 +2837,27 @@ public class AiServiceImpl implements AiService {
             Statement statement = statements.getStatements().get(0);
             String normalizedSql = statement.toString();
 
-            List<String> referencedTables = collectReferencedTables(statement, rawSql);
+            List<TableReference> referencedTables = collectReferencedTables(statement, rawSql);
             Set<String> schemaTables = loadSchemaTables(req.getConnectionId(), req.getDatabaseName());
             if (!referencedTables.isEmpty() && !schemaTables.isEmpty()) {
+                ConnectionEntity connectionEntity = connectionService.getConnectionEntity(req.getConnectionId());
+                String currentDatabaseName = safe(req.getDatabaseName());
+                if (currentDatabaseName.isBlank()) {
+                    currentDatabaseName = safe(connectionEntity.getDatabaseName());
+                }
+                String resolvedCurrentDatabaseName = currentDatabaseName;
+                String dbType = safe(connectionEntity.getDbType());
+                Map<String, Set<String>> qualifiedSchemaTableCache = new HashMap<>();
                 List<String> missingTables = referencedTables.stream()
-                    .filter(table -> !schemaTables.contains(normalizeIdentifier(table)))
+                    .filter(table -> !tableExistsInValidationScope(
+                        req.getConnectionId(),
+                        resolvedCurrentDatabaseName,
+                        dbType,
+                        table,
+                        schemaTables,
+                        qualifiedSchemaTableCache
+                    ))
+                    .map(TableReference::displayName)
                     .distinct()
                     .toList();
                 if (!missingTables.isEmpty()) {
@@ -2846,15 +2875,16 @@ public class AiServiceImpl implements AiService {
         }
     }
 
-    private List<String> collectReferencedTables(Statement statement, String rawSql) {
+    private List<TableReference> collectReferencedTables(Statement statement, String rawSql) {
         TablesNamesFinder finder = new TablesNamesFinder();
         List<String> tables = new ArrayList<>(finder.getTableList(statement));
         Set<String> cteNames = extractCteNames(rawSql);
         return tables.stream()
-            .map(this::normalizeIdentifier)
-            .filter(item -> !item.isBlank())
-            .filter(item -> !cteNames.contains(item))
-            .sorted(String.CASE_INSENSITIVE_ORDER)
+            .map(this::buildTableReference)
+            .filter(item -> !item.normalizedName().isBlank())
+            .filter(item -> !cteNames.contains(item.normalizedName()))
+            .distinct()
+            .sorted(Comparator.comparing(TableReference::displayName, String.CASE_INSENSITIVE_ORDER))
             .toList();
     }
 
@@ -2875,6 +2905,100 @@ public class AiServiceImpl implements AiService {
         return tables;
     }
 
+    private boolean tableExistsInValidationScope(Long connectionId,
+                                                 String currentDatabaseName,
+                                                 String dbType,
+                                                 TableReference tableReference,
+                                                 Set<String> currentSchemaTables,
+                                                 Map<String, Set<String>> qualifiedSchemaTableCache) {
+        if (currentSchemaTables.contains(tableReference.normalizedName())) {
+            return true;
+        }
+        for (String qualifier : tableReference.qualifierCandidates()) {
+            if (qualifier.isBlank() || qualifier.equals(normalizeIdentifier(currentDatabaseName))) {
+                continue;
+            }
+            Set<String> qualifiedTables = qualifiedSchemaTableCache.computeIfAbsent(
+                qualifier,
+                key -> safeLoadSchemaTables(connectionId, key)
+            );
+            if (!qualifiedTables.isEmpty() && qualifiedTables.contains(tableReference.normalizedName())) {
+                return true;
+            }
+        }
+        return tableReference.qualifierCandidates().stream().anyMatch(item -> isSystemSchema(item, dbType));
+    }
+
+    private Set<String> safeLoadSchemaTables(Long connectionId, String databaseName) {
+        try {
+            return loadSchemaTables(connectionId, databaseName);
+        } catch (Exception ex) {
+            log.warn("加载限定 schema 表清单失败, connectionId={}, databaseName={}, reason={}",
+                connectionId, databaseName, ex.getMessage());
+            return Set.of();
+        }
+    }
+
+    private boolean isSystemSchema(String schemaName, String dbType) {
+        String normalizedSchema = normalizeIdentifier(schemaName);
+        if (normalizedSchema.isBlank()) {
+            return false;
+        }
+        if (SYSTEM_SCHEMA_NAMES.contains(normalizedSchema)) {
+            return true;
+        }
+        String normalizedDbType = safe(dbType).toUpperCase(Locale.ROOT);
+        return switch (normalizedDbType) {
+            case "MYSQL" -> Set.of("information_schema", "performance_schema", "mysql", "sys").contains(normalizedSchema);
+            case "POSTGRESQL" -> Set.of("information_schema", "pg_catalog", "pg_toast").contains(normalizedSchema);
+            case "SQLSERVER" -> Set.of("information_schema", "sys").contains(normalizedSchema);
+            case "SQLITE" -> Set.of("sqlite_schema", "sqlite_master", "sqlite_temp_schema", "sqlite_temp_master").contains(normalizedSchema);
+            case "ORACLE" -> Set.of("sys", "system").contains(normalizedSchema);
+            default -> false;
+        };
+    }
+
+    private TableReference buildTableReference(String identifier) {
+        List<String> segments = splitIdentifierSegments(identifier);
+        if (segments.isEmpty()) {
+            return new TableReference(safe(identifier), "", "", List.of());
+        }
+        String normalizedName = normalizeIdentifier(segments.get(segments.size() - 1));
+        LinkedHashSet<String> qualifiers = new LinkedHashSet<>();
+        for (int i = 0; i < segments.size() - 1; i++) {
+            String qualifier = normalizeIdentifier(segments.get(i));
+            if (!qualifier.isBlank()) {
+                qualifiers.add(qualifier);
+            }
+        }
+        return new TableReference(
+            safe(identifier),
+            String.join(".", segments),
+            normalizedName,
+            List.copyOf(qualifiers)
+        );
+    }
+
+    private List<String> splitIdentifierSegments(String identifier) {
+        String normalized = safe(identifier);
+        if (normalized.isBlank()) {
+            return List.of();
+        }
+        return Arrays.stream(normalized.split("\\."))
+            .map(this::cleanIdentifierSegment)
+            .filter(item -> !item.isBlank())
+            .toList();
+    }
+
+    private String cleanIdentifierSegment(String identifier) {
+        String normalized = safe(identifier)
+            .replace("`", "")
+            .replace("\"", "")
+            .replace("[", "")
+            .replace("]", "");
+        return normalized.trim();
+    }
+
     private Set<String> extractCteNames(String sql) {
         Matcher matcher = CTE_NAME_PATTERN.matcher(safe(sql).toLowerCase());
         Set<String> names = new HashSet<>();
@@ -2888,12 +3012,11 @@ public class AiServiceImpl implements AiService {
     }
 
     private String normalizeIdentifier(String identifier) {
-        String normalized = safe(identifier).replace("`", "").replace("\"", "");
-        if (normalized.contains(".")) {
-            String[] segments = normalized.split("\\.");
-            normalized = segments[segments.length - 1];
+        List<String> segments = splitIdentifierSegments(identifier);
+        if (!segments.isEmpty()) {
+            return segments.get(segments.size() - 1).toLowerCase(Locale.ROOT);
         }
-        return normalized.toLowerCase();
+        return "";
     }
 
     private String buildIntentAwareRetrievalHint(AiGenerateSqlReq req, ParsedIntentResponse parsedIntent) {
@@ -3436,6 +3559,12 @@ public class AiServiceImpl implements AiService {
     }
 
     private record AstValidationResult(boolean valid, String sqlText, String message) {
+    }
+
+    private record TableReference(String rawName,
+                                  String displayName,
+                                  String normalizedName,
+                                  List<String> qualifierCandidates) {
     }
 
     private record DatabaseBasicInfo(String dbType,
