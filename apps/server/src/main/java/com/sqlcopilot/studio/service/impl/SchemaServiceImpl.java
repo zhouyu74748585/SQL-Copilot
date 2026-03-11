@@ -78,6 +78,10 @@ public class SchemaServiceImpl implements SchemaService {
     @Override
     public SchemaOverviewVO getOverview(Long connectionId, String databaseName) {
         SchemaSnapshot snapshot = ensureCacheReady(connectionId, databaseName, false);
+        String cacheDatabaseName = resolveCacheDatabaseName(connectionId, databaseName);
+        SchemaCacheKey cacheKey = new SchemaCacheKey(connectionId, cacheDatabaseName);
+        triggerTableStatsRefresh(cacheKey, databaseName, false);
+        Map<String, TableStat> statsByTable = resolveLatestTableStats(cacheKey);
 
         SchemaOverviewVO vo = new SchemaOverviewVO();
         vo.setConnectionId(connectionId);
@@ -88,8 +92,9 @@ public class SchemaServiceImpl implements SchemaService {
             SchemaOverviewVO.TableSummaryVO summary = new SchemaOverviewVO.TableSummaryVO();
             summary.setTableName(item.getTableName());
             summary.setTableComment(item.getTableComment());
-            summary.setRowEstimate(item.getRowEstimate());
-            summary.setTableSizeBytes(item.getTableSizeBytes());
+            TableStat latest = statsByTable.get(item.getTableName());
+            summary.setRowEstimate(latest == null ? item.getRowEstimate() : latest.rowEstimate());
+            summary.setTableSizeBytes(latest == null ? item.getTableSizeBytes() : latest.tableSizeBytes());
             return summary;
         }).toList();
         vo.setTableSummaries(summaries);
@@ -100,6 +105,30 @@ public class SchemaServiceImpl implements SchemaService {
     public SchemaTableStatsVO getTableStats(Long connectionId, String databaseName) {
         String cacheDatabaseName = resolveCacheDatabaseName(connectionId, databaseName);
         SchemaCacheKey cacheKey = new SchemaCacheKey(connectionId, cacheDatabaseName);
+        if (tableStatsRefreshIntervalMs >= 0) {
+            triggerTableStatsRefresh(cacheKey, databaseName, false);
+
+            TableStatsSnapshot latest = tableStatsSnapshotCache.get(cacheKey);
+            SchemaTableStatsVO vo = new SchemaTableStatsVO();
+            vo.setConnectionId(connectionId);
+            vo.setDatabaseName(fromCacheDatabaseName(cacheDatabaseName));
+            vo.setRefreshing(tableStatsRefreshingKeys.contains(cacheKey));
+            vo.setUpdatedAt(latest == null ? null : latest.updatedAt());
+            List<SchemaTableStatsVO.TableStatVO> tableStats = latest == null
+                ? List.of()
+                : latest.tableStats().entrySet().stream()
+                .sorted(Map.Entry.comparingByKey(String.CASE_INSENSITIVE_ORDER))
+                .map(entry -> {
+                    SchemaTableStatsVO.TableStatVO item = new SchemaTableStatsVO.TableStatVO();
+                    item.setTableName(entry.getKey());
+                    item.setRowEstimate(entry.getValue().rowEstimate());
+                    item.setTableSizeBytes(entry.getValue().tableSizeBytes());
+                    return item;
+                })
+                .toList();
+            vo.setTableStats(tableStats);
+            return vo;
+        }
         long now = System.currentTimeMillis();
         TableStatsSnapshot current = tableStatsSnapshotCache.get(cacheKey);
         boolean needRefresh = current == null || now - current.updatedAt() >= tableStatsRefreshIntervalMs;
@@ -360,6 +389,8 @@ public class SchemaServiceImpl implements SchemaService {
         SchemaCacheKey cacheKey = new SchemaCacheKey(connectionId, cacheDatabaseName);
         // 移除缓存，强制下次访问时重新加载
         schemaSnapshotCache.remove(cacheKey);
+        tableStatsSnapshotCache.remove(cacheKey);
+        tableStatsRefreshingKeys.remove(cacheKey);
         log.info("Schema缓存已刷新, connectionId={}, databaseName={}", connectionId, databaseName);
     }
 
@@ -494,6 +525,27 @@ public class SchemaServiceImpl implements SchemaService {
         }
     }
 
+    @Scheduled(
+        fixedDelayString = "${schema.table-stats.refresh-interval-ms:60000}",
+        initialDelayString = "${schema.table-stats.refresh-interval-ms:60000}"
+    )
+    public void refreshTableStatsOnSchedule() {
+        Set<SchemaCacheKey> cacheKeys = new LinkedHashSet<>();
+        cacheKeys.addAll(schemaSnapshotCache.keySet());
+        cacheKeys.addAll(tableStatsSnapshotCache.keySet());
+        if (cacheKeys.isEmpty()) {
+            return;
+        }
+        for (SchemaCacheKey cacheKey : cacheKeys) {
+            try {
+                triggerTableStatsRefresh(cacheKey, fromCacheDatabaseName(cacheKey.databaseName()), true);
+            } catch (Exception ex) {
+                log.warn("瀹氭椂鍒锋柊琛ㄧ粺璁″け璐? connectionId={}, databaseName={}, reason={}",
+                    cacheKey.connectionId(), cacheKey.databaseName(), ex.getMessage());
+            }
+        }
+    }
+
     private SchemaSnapshot ensureCacheReady(Long connectionId, String databaseName, boolean requireColumnDetails) {
         String cacheDatabaseName = resolveCacheDatabaseName(connectionId, databaseName);
         SchemaCacheKey cacheKey = new SchemaCacheKey(connectionId, cacheDatabaseName);
@@ -594,6 +646,24 @@ public class SchemaServiceImpl implements SchemaService {
         } finally {
             tableStatsRefreshingKeys.remove(cacheKey);
         }
+    }
+
+    private void triggerTableStatsRefresh(SchemaCacheKey cacheKey, String databaseName, boolean forceRefresh) {
+        long now = System.currentTimeMillis();
+        TableStatsSnapshot current = tableStatsSnapshotCache.get(cacheKey);
+        boolean needRefresh = forceRefresh
+            || current == null
+            || now - current.updatedAt() >= tableStatsRefreshIntervalMs;
+        if (!needRefresh || !tableStatsRefreshingKeys.add(cacheKey)) {
+            return;
+        }
+        // 关键操作：表行数/大小统计异步执行，避免阻塞对象浏览主链路。
+        tableStatsExecutor.submit(() -> refreshTableStatsAsync(cacheKey, databaseName));
+    }
+
+    private Map<String, TableStat> resolveLatestTableStats(SchemaCacheKey cacheKey) {
+        TableStatsSnapshot latest = tableStatsSnapshotCache.get(cacheKey);
+        return latest == null ? Map.of() : latest.tableStats();
     }
 
     private TableStatsSnapshot loadTableStatsSnapshot(Long connectionId,
