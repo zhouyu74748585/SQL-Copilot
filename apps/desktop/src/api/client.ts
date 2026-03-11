@@ -61,6 +61,7 @@ export async function postSseApi<T>(path: string, payload: unknown, options: Pos
   const decoder = new TextDecoder();
   let buffer = '';
   let lastYieldAt = now();
+  let eventsSinceYield = 0;
   while (true) {
     const {done, value} = await reader.read();
     buffer += decoder.decode(value || new Uint8Array(), {stream: !done});
@@ -71,9 +72,12 @@ export async function postSseApi<T>(path: string, payload: unknown, options: Pos
       const parsed = parseSseEvent<T>(rawEvent);
       if (parsed) {
         await options.onEvent(parsed);
-        if (now() - lastYieldAt >= 16) {
+        eventsSinceYield += 1;
+        const nextBoundary = findSseBoundary(buffer);
+        if (shouldYieldAfterSseEvent(parsed.event, nextBoundary.index >= 0, eventsSinceYield, lastYieldAt)) {
           await yieldToBrowser();
           lastYieldAt = now();
+          eventsSinceYield = 0;
         }
       }
       boundary = findSseBoundary(buffer);
@@ -105,6 +109,27 @@ function yieldToBrowser() {
   return new Promise<void>((resolve) => {
     window.setTimeout(resolve, 0);
   });
+}
+
+function shouldYieldAfterSseEvent(
+  eventName: string,
+  hasBufferedEvent: boolean,
+  eventsSinceYield: number,
+  lastYieldAt: number,
+) {
+  if (hasBufferedEvent && isRenderRelevantSseEvent(eventName)) {
+    return true;
+  }
+  if (eventsSinceYield >= 8) {
+    return true;
+  }
+  return now() - lastYieldAt >= 16;
+}
+
+function isRenderRelevantSseEvent(eventName: string) {
+  return eventName === 'stage.updated'
+    || eventName === 'trace.snapshot'
+    || eventName.startsWith('llm.');
 }
 
 function findSseBoundary(buffer: string) {

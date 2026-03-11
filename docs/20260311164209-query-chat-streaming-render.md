@@ -72,3 +72,29 @@
 - 前端构建：`npm run -w @sqlcopilot/desktop build` 通过。
 - 后端 clean 启动：`mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18094` 成功，`http://127.0.0.1:18094/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
 - 前端预览：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6050` 成功，`http://127.0.0.1:6050` 返回 `HTTP/1.1 200 OK`。
+
+
+### 2026-03-11 18:05:23
+
+### 2026-03-11 18:05:00
+
+## 追加记录（2026-03-11 18:05）- SSE 同一批次事件主动让出主线程
+
+### 本次目标
+- 修复后端已返回流式 SSE 事件，但前端仍常在请求结束后才一次性显示回复的问题。
+
+### 关键改动
+- 前端 `apps/desktop/src/api/client.ts`：
+  - 在 `postSseApi` 中新增 `eventsSinceYield` 计数。
+  - 新增 `shouldYieldAfterSseEvent(...)` 与 `isRenderRelevantSseEvent(...)`。
+  - 当同一个 `reader.read()` 批次里缓冲区还存在后续 `stage.updated`、`trace.snapshot`、`llm.*` 事件时，立即 `yieldToBrowser()`，不再只依赖 16ms 时间片。
+  - 同时保留事件计数阈值兜底，避免大量小事件在极短时间内被同步吃完，导致 Vue 只能在最终结果到达后统一重绘。
+
+### 验证结果
+- 前端类型检查：`npm run -w @sqlcopilot/desktop type-check` 通过。
+- 前端 clean 构建：删除 `apps/desktop/dist` 后执行 `npm run -w @sqlcopilot/desktop build` 通过。
+- 前端预览：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6051` 成功，`http://127.0.0.1:6051` 返回 `HTTP/1.1 200 OK`。
+- 后端 clean 启动：首次执行 `mvn -f apps/server/pom.xml clean spring-boot:run` 因端口 `18080` 被本机已有进程占用而失败；改用 `mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18096` 后启动成功，健康检查 `http://127.0.0.1:18096/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+
+### 备注
+- 本次未改动后端 SSE 协议与消息结构，仅修正前端在单批次多事件场景下的渲染让出策略。
