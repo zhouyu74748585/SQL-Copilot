@@ -423,3 +423,74 @@
 
 ### 备注
 - 工作区存在用户既有修改：`apps/server/src/main/resources/application.yml`，本次未改动该文件。
+
+
+### 2026-03-11 11:48:53
+
+## 追加记录（数据浏览页返回后持续 loading 修复，2026-03-11 11:48）
+
+### 本次目标
+- 修复数据浏览页在后端已返回分页数据后，前端仍持续转圈且不渲染结果的问题。
+
+### 根因分析
+- `apps/desktop/src/modules/studio/composables/useTableDataModule.ts` 中的 `touchTableDataTab` 会把 `tableDataTabs` 中当前项替换成一个新对象。
+- 但 `loadTableDataPage(tab)` 的异步请求在此之后仍持续修改旧的 `tab` 引用。
+- 原实现回写时使用的是数组中的旧快照 `tabs[index]`，导致请求完成后 `loading=false`、`rows`、`columns` 等最新状态没有同步回真实渲染源，页面因此停留在“后端已返回但前端仍 loading”的状态。
+
+### 关键改动
+- 更新 `apps/desktop/src/modules/studio/composables/useTableDataModule.ts`
+  - 修正 `touchTableDataTab(tab)` 的同步逻辑。
+  - 从“基于 `tabs[index]` 旧快照回写”改为“基于当前传入的 `tab` 全量回写”。
+  - 保证数据浏览分页请求异步期间对 `tab.loading`、`tab.rows`、`tab.columns`、`tab.errorMessage` 等字段的修改，最终都会同步到 `runtime.tableDataTabs` 的真实渲染对象。
+
+### 验证结果
+- 前端类型检查通过：
+  - `npm run type-check`
+- 前端构建通过：
+  - `npm run -w @sqlcopilot/desktop build -- --emptyOutDir`
+- 后端 Maven clean package 通过：
+  - `mvn -f apps/server/pom.xml clean package -DskipTests`
+- 后端启动验证通过：
+  - `java -Dfile.encoding=UTF-8 -jar apps/server/target/sql-copilot-server-0.1.0.jar --spring.profiles.active=medium --server.port=18082`
+  - `GET http://127.0.0.1:18082/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`
+- 前端预览验证通过：
+  - `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4174 --strictPort`
+  - `HEAD http://127.0.0.1:4174` 返回 `200 OK`
+
+### 备注
+- 本次问题属于前端状态同步缺陷，后端接口无需修改。
+
+
+### 2026-03-11 12:24:15
+
+## 追加记录（数据浏览刷新/换页改为先清空再 loading，2026-03-11 12:24）
+
+### 本次目标
+- 调整数据浏览页在刷新、换页、筛选排序重载时的交互：请求发出后立即清空旧结果并显示加载动画，而不是保留旧数据直到新结果返回后再切换。
+
+### 关键改动
+- 更新 `apps/desktop/src/modules/studio/composables/useTableDataModule.ts`
+  - 在 `loadTableDataPage(tab)` 请求开始阶段，先清空当前页旧行数据与选中/编辑状态：
+    - `tab.rows = []`
+    - `tab.deletedRows = []`
+    - `tab.selectedRowKey = ''`
+    - `tab.editingCellKey = ''`
+    - `tab.dirty = false`
+    - `tab.hasNextPage = false`
+  - 同步递增 `rowDataVersion` 并失效展示缓存，确保虚拟表格立即切换为空白态。
+  - 保留列定义不清空，使加载过程中表头结构仍稳定，页面不会出现整块跳变。
+- 结合现有 `a-spin` 条件，刷新/换页时会立即进入空白 loading 动画，待新数据返回后再渲染结果。
+
+### 验证结果
+- 前端类型检查通过：
+  - `npm run type-check`
+- 前端构建通过：
+  - `npm run -w @sqlcopilot/desktop build -- --emptyOutDir`
+- 后端 Maven clean package 通过：
+  - `mvn -f apps/server/pom.xml clean package -DskipTests`
+- 后端启动验证通过：
+  - `java -Dfile.encoding=UTF-8 -jar apps/server/target/sql-copilot-server-0.1.0.jar --spring.profiles.active=medium --server.port=18083`
+  - `GET http://127.0.0.1:18083/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`
+- 前端预览验证通过：
+  - `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4175 --strictPort`
+  - `HEAD http://127.0.0.1:4175` 返回 `200 OK`

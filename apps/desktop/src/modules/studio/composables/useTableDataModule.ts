@@ -560,6 +560,14 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
     const filters = buildPageFilters(tab);
     tab.loading = true;
     tab.errorMessage = '';
+    tab.rows = [];
+    tab.deletedRows = [];
+    tab.selectedRowKey = '';
+    tab.editingCellKey = '';
+    tab.dirty = false;
+    tab.hasNextPage = false;
+    tab.rowDataVersion += 1;
+    tab.displayRowsCacheVersion = -1;
     touchTableDataTab(tab);
     const timeoutId = setTimeout(() => {
       if (tableDataPageRequestSeq.get(tab.key) === requestSeq) {
@@ -693,8 +701,11 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
       return;
     }
     const tabs = [...runtime.tableDataTabs.value];
+    // `loadTableDataPage` 在异步过程中会持续修改传入的 tab。
+    // 这里必须以当前 tab 为准回写，否则会把数组中的旧快照重新覆盖回去，
+    // 导致 loading/rows 等状态停留在请求前的值。
     tabs[index] = {
-      ...tabs[index],
+      ...tab,
       updatedAt: now,
     };
     runtime.tableDataTabs.value = tabs;

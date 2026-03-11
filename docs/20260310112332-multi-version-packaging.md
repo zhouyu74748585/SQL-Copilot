@@ -608,3 +608,34 @@
 
 ## 遗留项
 - 历史总结文档中仍保留此前 native 打包过程记录，仅作为历史信息，不再代表当前构建链路。
+
+
+### 2026-03-11 11:40:13
+
+## 追加记录（复核 native 代码去除并完成启动验证，2026-03-11 11:39）
+
+### 本次目标
+- 基于 `614c14e4`、`8e7cd5f6`、`9fbcfd66` 三个 commit 复核并清理 native 相关代码与逻辑残留。
+
+### 关键改动
+- 复核当前分支已包含后续提交 `172ea06 去掉native相关代码`，确认 native 主链路已切回 `Spring Boot jar + jlink runtime`。
+- 进一步清理源码中残留的 native 专属表述：
+  - `apps/server/src/main/java/com/sqlcopilot/studio/service/rag/impl/OnnxBgeM3EmbeddingServiceImpl.java`
+  - 将注释中的 `native loader crashes` 调整为更准确的 `runtime loader crashes`，避免继续把运行时 CUDA/cuDNN 检查与 native 路径绑定。
+
+### 验证结果
+- 后端构建（clean）通过：
+  - `mvn -f apps/server/pom.xml clean package -DskipTests`
+- 前端类型检查通过：
+  - `npm run type-check`
+- 前端 clean build 通过：
+  - `npm run -w @sqlcopilot/desktop build -- --emptyOutDir`
+- 后端启动验证通过：
+  - `java -Dfile.encoding=UTF-8 -jar apps/server/target/sql-copilot-server-0.1.0.jar --spring.profiles.active=medium --server.port=18081`
+  - `GET http://127.0.0.1:18081/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`
+- 前端预览验证通过：
+  - `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4173 --strictPort`
+  - `HEAD http://127.0.0.1:4173` 返回 `200 OK`
+
+### 备注
+- 默认端口 `18080` 在本机已被其他进程占用，因此本次后端启动验证改用 `18081`，不影响本次代码变更结论。
