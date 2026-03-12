@@ -1921,6 +1921,67 @@ function normalizeErRelationConfidence(value?: number) {
   return Math.max(0, Math.min(1, confidence));
 }
 
+function normalizeErRelationType(rawType?: string) {
+  return (rawType || '').trim().toUpperCase() || 'FK';
+}
+
+function normalizeErRelationDirection(rawDirection?: string) {
+  const direction = (rawDirection || '').trim().toUpperCase().replace(/-/g, '_').replace(/\s+/g, '_');
+  if (!direction) {
+    return 'SOURCE_TO_TARGET';
+  }
+  if (direction === 'TARGET_TO_SOURCE' || direction === 'INBOUND' || direction === 'REVERSE' || direction === '<-') {
+    return 'TARGET_TO_SOURCE';
+  }
+  if (direction === 'BIDIRECTIONAL' || direction === 'BOTH' || direction === 'TWO_WAY' || direction === '<->') {
+    return 'BIDIRECTIONAL';
+  }
+  return 'SOURCE_TO_TARGET';
+}
+
+function buildErRelationKey(relation: ErRelationVO) {
+  return [
+    normalizeErRelationType(relation.relationType),
+    (relation.sourceTable || '').trim().toLowerCase(),
+    (relation.sourceColumn || '').trim().toLowerCase(),
+    (relation.targetTable || '').trim().toLowerCase(),
+    (relation.targetColumn || '').trim().toLowerCase(),
+    normalizeErRelationDirection(relation.relationDirection),
+  ].join('|');
+}
+
+function mergePersistedErGraphState(previousGraph: ErGraphVO | null, nextGraph: ErGraphVO) {
+  if (!previousGraph) {
+    return nextGraph;
+  }
+  const routeOverrideMap = new Map<string, Pick<ErRelationVO, 'routeManual' | 'routeLaneX' | 'routeVersion'>>();
+  [...(previousGraph.foreignKeyRelations || []), ...(previousGraph.aiRelations || [])].forEach((relation) => {
+    const hasManualRoute = relation.routeManual === true && Number.isFinite(Number(relation.routeLaneX));
+    if (!hasManualRoute) {
+      return;
+    }
+    routeOverrideMap.set(buildErRelationKey(relation), {
+      routeManual: true,
+      routeLaneX: Number(relation.routeLaneX),
+      routeVersion: relation.routeVersion,
+    });
+  });
+
+  const mergeRelationRoutes = (relations: ErRelationVO[]) => relations.map((relation) => {
+    const override = routeOverrideMap.get(buildErRelationKey(relation));
+    return override ? {...relation, ...override} : relation;
+  });
+
+  return {
+    ...nextGraph,
+    layoutCanvas: previousGraph.layoutCanvas,
+    nodePositions: previousGraph.nodePositions,
+    relationAnchorOffsets: previousGraph.relationAnchorOffsets,
+    foreignKeyRelations: mergeRelationRoutes(nextGraph.foreignKeyRelations || []),
+    aiRelations: mergeRelationRoutes(nextGraph.aiRelations || []),
+  };
+}
+
 const tableEditorSaving = ref(false);
 
 function hasWorkbenchTab(tabKey: string) {
@@ -2001,6 +2062,7 @@ async function refreshErGraphForTab(tab: ErWorkspaceTab, includeAiInference?: bo
   tab.errorMessage = '';
   touchErTab(tab);
   try {
+    const previousGraph = tab.graph;
     const payload: ErGraphReq = {
       connectionId: tab.connectionId,
       databaseName: tab.databaseName,
@@ -2010,7 +2072,7 @@ async function refreshErGraphForTab(tab: ErWorkspaceTab, includeAiInference?: bo
       aiConfidenceThreshold: tab.aiConfidenceThreshold,
     };
     const graph = await postApi<ErGraphVO>('/api/schema/er/graph', payload);
-    tab.graph = graph;
+    tab.graph = mergePersistedErGraphState(previousGraph, graph);
     tab.includeAiInference = payload.includeAiInference !== false;
     tab.errorMessage = '';
   } catch (error) {

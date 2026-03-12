@@ -2,6 +2,22 @@
 
 type ErTab = StudioRuntime['erTabs']['value'][number];
 type ErRelation = NonNullable<NonNullable<ErTab['graph']>['aiRelations']>[number];
+type ErLayoutMode = ErTab['layoutMode'];
+
+interface ErGraphLayoutChangePayload {
+  layoutCanvas?: {
+    width: number;
+    height: number;
+  };
+  nodePositions?: Record<string, {
+    x: number;
+    y: number;
+  }>;
+  relationAnchorOffsets?: Record<string, {
+    sourcePerimeterPos?: number;
+    targetPerimeterPos?: number;
+  }>;
+}
 
 interface ErRelationRouteChangePayload {
   relationKey: string;
@@ -12,6 +28,7 @@ interface ErRelationRouteChangePayload {
 export interface ErModule {
   touchErTab: (tab: ErTab) => void;
   toggleErDetailCollapsed: (tab: ErTab) => void;
+  handleErLayoutModeChange: (tab: ErTab, nextLayoutMode?: ErLayoutMode | string) => void;
   normalizeErRelationDirection: (rawDirection?: string) => 'SOURCE_TO_TARGET' | 'TARGET_TO_SOURCE' | 'BIDIRECTIONAL';
   normalizeErRelationType: (rawType?: string) => string;
   erRelationKey: (relation: ErRelation) => string;
@@ -20,6 +37,7 @@ export interface ErModule {
   formatErRelationConfidence: (value?: number) => string;
   normalizeErRelationConfidence: (value?: number) => number;
   erRelationReasonPreview: (reason?: string) => string;
+  handleErGraphLayoutChange: (tab: ErTab, payload: ErGraphLayoutChangePayload) => void;
   handleErRelationRouteChange: (tab: ErTab, payload: ErRelationRouteChangePayload) => void;
   removeErAiRelation: (tab: ErTab, relation: ErRelation) => void;
   closeErTab: (tabKey: string) => void;
@@ -33,6 +51,12 @@ export function useErModule(runtime: StudioRuntime): ErModule {
   function toggleErDetailCollapsed(tab: ErTab) {
     tab.detailCollapsed = !tab.detailCollapsed;
     touchErTab(tab);
+  }
+
+  function normalizeErLayoutMode(rawLayoutMode?: ErLayoutMode | string): ErLayoutMode {
+    return rawLayoutMode === 'CIRCLE' || rawLayoutMode === 'HIERARCHICAL'
+      ? rawLayoutMode
+      : 'GRID';
   }
 
   function normalizeErRelationDirection(rawDirection?: string) {
@@ -105,6 +129,106 @@ export function useErModule(runtime: StudioRuntime): ErModule {
       return '模型未返回理由';
     }
     return text.length > 36 ? `${text.slice(0, 36)}...` : text;
+  }
+
+  function sanitizeGraphLayoutPayload(tab: ErTab, payload: ErGraphLayoutChangePayload) {
+    const validTableKeys = new Set((tab.graph?.tables || []).map((table) => (table.tableName || '').trim().toLowerCase()));
+    const validRelationKeys = new Set([
+      ...(tab.graph?.foreignKeyRelations || []),
+      ...(tab.graph?.aiRelations || []),
+    ].map((relation) => erRelationKey(relation)));
+
+    const layoutCanvas = Number.isFinite(Number(payload.layoutCanvas?.width)) && Number.isFinite(Number(payload.layoutCanvas?.height))
+      && Number(payload.layoutCanvas?.width) > 0 && Number(payload.layoutCanvas?.height) > 0
+      ? {
+        width: Number(payload.layoutCanvas?.width),
+        height: Number(payload.layoutCanvas?.height),
+      }
+      : undefined;
+
+    const nodePositionEntries = Object.entries(payload.nodePositions || {})
+      .map(([key, value]) => {
+        const normalizedKey = (key || '').trim().toLowerCase();
+        const x = Number(value?.x);
+        const y = Number(value?.y);
+        if (!validTableKeys.has(normalizedKey) || !Number.isFinite(x) || !Number.isFinite(y)) {
+          return null;
+        }
+        return [normalizedKey, {x, y}] as const;
+      })
+      .filter((entry): entry is readonly [string, {x: number; y: number}] => !!entry);
+
+    const relationAnchorEntries = Object.entries(payload.relationAnchorOffsets || {})
+      .map(([key, value]) => {
+        if (!validRelationKeys.has(key)) {
+          return null;
+        }
+        const nextValue: {sourcePerimeterPos?: number; targetPerimeterPos?: number} = {};
+        const sourcePerimeterPos = Number(value?.sourcePerimeterPos);
+        const targetPerimeterPos = Number(value?.targetPerimeterPos);
+        if (Number.isFinite(sourcePerimeterPos)) {
+          nextValue.sourcePerimeterPos = sourcePerimeterPos;
+        }
+        if (Number.isFinite(targetPerimeterPos)) {
+          nextValue.targetPerimeterPos = targetPerimeterPos;
+        }
+        if (nextValue.sourcePerimeterPos == null && nextValue.targetPerimeterPos == null) {
+          return null;
+        }
+        return [key, nextValue] as const;
+      })
+      .filter((entry): entry is readonly [string, {sourcePerimeterPos?: number; targetPerimeterPos?: number}] => !!entry);
+
+    return {
+      layoutCanvas,
+      nodePositions: nodePositionEntries.length ? Object.fromEntries(nodePositionEntries) : undefined,
+      relationAnchorOffsets: relationAnchorEntries.length ? Object.fromEntries(relationAnchorEntries) : undefined,
+    };
+  }
+
+  function handleErLayoutModeChange(tab: ErTab, nextLayoutMode?: ErLayoutMode | string) {
+    const normalizedLayoutMode = normalizeErLayoutMode(nextLayoutMode);
+    tab.layoutMode = normalizedLayoutMode;
+    if (tab.graph) {
+      const resetRelationRoute = (relation: ErRelation) => {
+        const nextRelation = {...relation};
+        delete nextRelation.routeManual;
+        delete nextRelation.routeLaneX;
+        delete nextRelation.routeVersion;
+        return nextRelation;
+      };
+      tab.graph = {
+        ...tab.graph,
+        layoutCanvas: undefined,
+        nodePositions: undefined,
+        relationAnchorOffsets: undefined,
+        foreignKeyRelations: (tab.graph.foreignKeyRelations || []).map(resetRelationRoute),
+        aiRelations: (tab.graph.aiRelations || []).map(resetRelationRoute),
+      };
+    }
+    touchErTab(tab);
+  }
+
+  function handleErGraphLayoutChange(tab: ErTab, payload: ErGraphLayoutChangePayload) {
+    if (!tab.graph) {
+      return;
+    }
+    const normalizedLayout = sanitizeGraphLayoutPayload(tab, payload);
+    const currentLayout = sanitizeGraphLayoutPayload(tab, {
+      layoutCanvas: tab.graph.layoutCanvas,
+      nodePositions: tab.graph.nodePositions,
+      relationAnchorOffsets: tab.graph.relationAnchorOffsets,
+    });
+    if (JSON.stringify(currentLayout) === JSON.stringify(normalizedLayout)) {
+      return;
+    }
+    tab.graph = {
+      ...tab.graph,
+      layoutCanvas: normalizedLayout.layoutCanvas,
+      nodePositions: normalizedLayout.nodePositions,
+      relationAnchorOffsets: normalizedLayout.relationAnchorOffsets,
+    };
+    touchErTab(tab);
   }
 
   function handleErRelationRouteChange(tab: ErTab, payload: ErRelationRouteChangePayload) {
@@ -197,6 +321,7 @@ export function useErModule(runtime: StudioRuntime): ErModule {
   return {
     touchErTab,
     toggleErDetailCollapsed,
+    handleErLayoutModeChange,
     normalizeErRelationDirection,
     normalizeErRelationType,
     erRelationKey,
@@ -205,6 +330,7 @@ export function useErModule(runtime: StudioRuntime): ErModule {
     formatErRelationConfidence,
     normalizeErRelationConfidence,
     erRelationReasonPreview,
+    handleErGraphLayoutChange,
     handleErRelationRouteChange,
     removeErAiRelation,
     closeErTab,
