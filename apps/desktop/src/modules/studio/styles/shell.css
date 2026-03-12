@@ -3522,6 +3522,109 @@ body {
   border-bottom-right-radius: 0;
 }
 
+.studio-root .detail-summary,
+.studio-root .detail-code-head {
+  background: color-mix(in srgb, var(--surface-1) 94%, transparent);
+}
+
+.studio-root .detail-row,
+.studio-root .detail-note,
+.studio-root .empty-pane,
+.studio-root .knowledge-card-desc,
+.studio-root .knowledge-form .ant-form-item-label > label {
+  color: var(--text-2);
+}
+
+.studio-root .detail-row strong,
+.studio-root .detail-code-head,
+.studio-root .knowledge-nav-item,
+.studio-root .knowledge-card-head,
+.studio-root .knowledge-card-title {
+  color: var(--text-1);
+}
+
+.studio-root .knowledge-card,
+.studio-root .detail-code-block,
+.studio-root .knowledge-editor-group {
+  border-color: var(--line-soft);
+  background: color-mix(in srgb, var(--surface-1) 92%, transparent);
+}
+
+.studio-root .save-query-context,
+.studio-root .knowledge-card-meta {
+  color: var(--text-3);
+}
+
+.studio-root .er-toolbar {
+  background: color-mix(in srgb, var(--surface-1) 94%, transparent);
+}
+
+.studio-root .er-kpi-row,
+.studio-root .er-rel-threshold,
+.studio-root .er-rel-meta,
+.studio-root .er-empty-tip,
+.studio-root .er-ai-rel-reason,
+.studio-root .er-rel-reason,
+.studio-root .er-select-meta {
+  color: var(--text-2);
+}
+
+.studio-root .er-kpi-row strong,
+.studio-root .er-rel-threshold-value,
+.studio-root .er-rel-group-head,
+.studio-root .er-ai-rel-head,
+.studio-root .er-rel-main,
+.studio-root .er-rel-arrow,
+.studio-root .er-side-block > strong,
+.studio-root .er-side-block-head > strong {
+  color: var(--text-1);
+}
+
+.studio-root .er-warning-tip {
+  border-color: color-mix(in srgb, var(--warning) 34%, transparent);
+  background: color-mix(in srgb, var(--warning-soft) 78%, var(--surface-1) 22%);
+  color: var(--warning);
+}
+
+.studio-root .er-rel-item,
+.studio-root .er-select-table-list {
+  border-color: var(--line-soft);
+  background: color-mix(in srgb, var(--surface-1) 92%, transparent);
+}
+
+.studio-root .er-rel-item-fk {
+  border-color: color-mix(in srgb, var(--accent) 24%, transparent);
+  background: color-mix(in srgb, var(--accent-soft) 38%, var(--surface-1) 62%);
+}
+
+.studio-root .er-rel-item-ai {
+  border-color: color-mix(in srgb, var(--warning) 26%, transparent);
+  background: color-mix(in srgb, var(--warning-soft) 34%, var(--surface-1) 66%);
+}
+
+.studio-root .er-rel-item-manual {
+  border-color: color-mix(in srgb, var(--info) 24%, transparent);
+  background: color-mix(in srgb, var(--info-soft) 34%, var(--surface-1) 66%);
+}
+
+.studio-root .er-rel-field-chip {
+  border-color: color-mix(in srgb, var(--accent) 26%, transparent);
+  color: var(--text-1);
+  background: color-mix(in srgb, var(--surface-2) 72%, var(--surface-0) 28%);
+}
+
+.studio-root .er-rel-field-source {
+  background: color-mix(in srgb, var(--accent-soft) 52%, var(--surface-0) 48%);
+}
+
+.studio-root .er-rel-field-target {
+  background: color-mix(in srgb, var(--surface-2) 78%, var(--surface-0) 22%);
+}
+
+.studio-root .er-rel-reason-popover {
+  color: var(--text-1);
+}
+
 .studio-root .table-editor-structure-pane {
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
@@ -3983,23 +4086,6 @@ body {
   align-items: center;
   gap: 5px;
   -webkit-app-region: no-drag;
-}
-
-.top-locale-select {
-  width: 108px;
-  -webkit-app-region: no-drag;
-}
-
-.top-locale-select .ant-select-selector {
-  border-radius: 10px !important;
-  border-color: color-mix(in srgb, var(--line-strong) 78%, transparent) !important;
-  background: color-mix(in srgb, var(--surface-0) 92%, transparent) !important;
-  box-shadow: none !important;
-}
-
-.top-locale-select.ant-select-focused .ant-select-selector,
-.top-locale-select:hover .ant-select-selector {
-  border-color: color-mix(in srgb, var(--accent) 52%, var(--line-strong)) !important;
 }
 
 .top-chrome .workspace-tab,

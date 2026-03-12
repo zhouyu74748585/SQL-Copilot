@@ -9,6 +9,7 @@
 import type { ChartConfigVO } from '../types';
 import * as echarts from 'echarts';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { translateText, useAppI18n } from '../i18n';
 
 type ChartRow = Record<string, string | null>;
 
@@ -24,7 +25,13 @@ const chartRef = ref<HTMLElement | null>(null);
 let chartInstance: echarts.ECharts | null = null;
 let resizeObserver: ResizeObserver | null = null;
 const optionReady = ref(false);
-const emptyText = ref('暂无可渲染图表，请先生成图表。');
+const { currentLocale } = useAppI18n();
+const emptyText = ref('');
+
+function tt(text: string) {
+  void currentLocale.value;
+  return translateText(text);
+}
 
 function parseNumber(value: string | null | undefined): number | null {
   if (value == null) {
@@ -62,7 +69,7 @@ function buildChartOption(rows: ChartRow[], config: ChartConfigVO): echarts.ECha
   const chartType = (config.chartType || '').toUpperCase();
   const dataRows = sortedRows(rows, config);
   if (!dataRows.length) {
-    emptyText.value = '结果集为空，无法生成图表。';
+    emptyText.value = tt('结果集为空，无法生成图表。');
     return null;
   }
 
@@ -70,7 +77,7 @@ function buildChartOption(rows: ChartRow[], config: ChartConfigVO): echarts.ECha
     const categoryField = (config.categoryField || '').trim();
     const valueField = (config.valueField || '').trim();
     if (!categoryField || !valueField) {
-      emptyText.value = '饼图需要分类字段和值字段。';
+      emptyText.value = tt('饼图需要分类字段和值字段。');
       return null;
     }
     const pieData = dataRows
@@ -80,7 +87,7 @@ function buildChartOption(rows: ChartRow[], config: ChartConfigVO): echarts.ECha
       }))
       .filter((item) => !!item.name);
     if (!pieData.length) {
-      emptyText.value = '饼图数据为空，请调整字段。';
+      emptyText.value = tt('饼图数据为空，请调整字段。');
       return null;
     }
     return {
@@ -89,7 +96,7 @@ function buildChartOption(rows: ChartRow[], config: ChartConfigVO): echarts.ECha
       legend: { bottom: 8, left: 'center' },
       series: [
         {
-          name: config.description || '数据占比',
+          name: config.description || tt('数据占比'),
           type: 'pie',
           radius: ['36%', '66%'],
           itemStyle: { borderRadius: 6 },
@@ -103,7 +110,7 @@ function buildChartOption(rows: ChartRow[], config: ChartConfigVO): echarts.ECha
     const xField = (config.xField || '').trim();
     const yField = (config.yFields?.[0] || '').trim();
     if (!xField || !yField) {
-      emptyText.value = '散点图需要 X 和 Y 字段。';
+      emptyText.value = tt('散点图需要 X 和 Y 字段。');
       return null;
     }
     const scatterData = dataRows
@@ -114,7 +121,7 @@ function buildChartOption(rows: ChartRow[], config: ChartConfigVO): echarts.ECha
       })
       .filter((item): item is [number, number] => Array.isArray(item));
     if (!scatterData.length) {
-      emptyText.value = '散点图缺少数值数据，请更换字段。';
+      emptyText.value = tt('散点图缺少数值数据，请更换字段。');
       return null;
     }
     return {
@@ -136,7 +143,7 @@ function buildChartOption(rows: ChartRow[], config: ChartConfigVO): echarts.ECha
   const xField = (config.xField || '').trim();
   const yFields = (config.yFields || []).map((item) => (item || '').trim()).filter((item) => !!item);
   if (!xField || !yFields.length) {
-    emptyText.value = '当前图表需要 X 字段和至少一个 Y 字段。';
+    emptyText.value = tt('当前图表需要 X 字段和至少一个 Y 字段。');
     return null;
   }
   const xData = dataRows.map((row) => String(row[xField] ?? ''));
@@ -166,8 +173,9 @@ function buildChartOption(rows: ChartRow[], config: ChartConfigVO): echarts.ECha
 }
 
 const chartOption = computed(() => {
+  void currentLocale.value;
   if (!props.config) {
-    emptyText.value = '暂无可渲染图表，请先生成图表。';
+    emptyText.value = tt('暂无可渲染图表，请先生成图表。');
     return null;
   }
   return buildChartOption(props.rows || [], props.config);

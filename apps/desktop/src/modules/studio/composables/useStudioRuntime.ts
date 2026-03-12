@@ -613,7 +613,7 @@ const tableCopyTaskInfo = ref<TableCopyTaskVO | null>(null);
 
 const aiConfigModalOpen = ref(false);
 
-const aiConfigActiveTab = ref<'model' | 'embedding'>('model');
+const aiConfigActiveTab = ref<'general' | 'model' | 'embedding'>('model');
 
 const uiTheme = ref<UiTheme>('light');
 

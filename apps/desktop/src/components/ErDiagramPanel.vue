@@ -2,6 +2,8 @@
   <div
     ref="viewportRef"
     class="er-diagram-shell"
+    :class="{ 'is-dark': dark }"
+    :data-locale="currentLocale"
     @wheel.prevent="onViewportWheel"
     @mousedown="onViewportMouseDown"
     @mousemove="onViewportMouseMove"
@@ -150,11 +152,11 @@
             type="button"
             class="er-table-card-toggle"
             data-er-interactive="true"
-            :title="table.expanded ? '收起字段' : `展开剩余 ${table.collapsedColumnCount} 个字段`"
+            :title="table.expanded ? tt('收起字段') : tt(`展开剩余 ${table.collapsedColumnCount} 个字段`)"
             @mousedown.stop
             @click.stop="toggleTableColumns(table.key)"
           >
-            {{ table.expanded ? '收起' : `展开 ${table.collapsedColumnCount}` }}
+            {{ table.expanded ? tt('收起') : tt(`展开 ${table.collapsedColumnCount}`) }}
           </button>
         </div>
         <div v-if="showComments" class="er-table-card-subtitle" :title="table.tableComment || ''">
@@ -182,7 +184,7 @@
               class="er-table-field-link-handle"
               type="button"
               data-er-interactive="true"
-              title="拖拽创建字段连线"
+              :title="tt('拖拽创建字段连线')"
               @mousedown.stop.prevent="onFieldLinkHandleMouseDown(table, field, $event)"
             >
               +
@@ -198,7 +200,7 @@
             @click.stop="toggleTableColumns(table.key)"
           >
             <span class="er-table-more-label">{{ table.moreLabel }}</span>
-            <span class="er-table-more-action">{{ table.expanded ? '收起' : '展开' }}</span>
+            <span class="er-table-more-action">{{ table.expanded ? tt('收起') : tt('展开') }}</span>
           </button>
         </div>
       </div>
@@ -220,7 +222,7 @@
       data-er-interactive="true"
     >
       <button type="button" class="er-relation-context-action" data-er-interactive="true" @click="deleteContextRelation">
-        删除连线
+        {{ tt('删除连线') }}
       </button>
     </div>
   </div>
@@ -238,6 +240,7 @@ import type {
   ErTableNodeVO,
 } from '../types';
 import {computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue';
+import {translateText, useAppI18n} from '../i18n';
 
 interface RelationRouteChangePayload {
   relationKey: string;
@@ -351,11 +354,13 @@ const props = withDefaults(defineProps<{
   layoutMode?: ErLayoutMode;
   lineType?: RelationLineType;
   showComments?: boolean;
+  dark?: boolean;
 }>(), {
   selectedRelationKey: '',
   layoutMode: 'GRID',
   lineType: 'POLYLINE',
   showComments: false,
+  dark: false,
 });
 
 const emit = defineEmits<{
@@ -378,6 +383,12 @@ const NODE_BODY_BOTTOM_PADDING = 7;
 const NODE_HORIZONTAL_GAP = 16;
 const NODE_VERTICAL_GAP = 18;
 const ORTHOGONAL_LANE_GAP = 22;
+const {currentLocale} = useAppI18n();
+
+function tt(text: string) {
+  void currentLocale.value;
+  return translateText(text);
+}
 const ANCHOR_STUB_LENGTH = 14;
 
 const MIN_SCALE = 0.35;
@@ -385,7 +396,7 @@ const MAX_SCALE = 2.5;
 
 const viewportRef = ref<HTMLDivElement | null>(null);
 const optionReady = ref(false);
-const emptyText = ref('No ER graph data');
+const emptyText = ref(tt('ER 图暂无数据'));
 
 const viewport = reactive<ViewportState>({
   width: 0,
@@ -544,12 +555,12 @@ function relationArrowText(direction: RelationDirection) {
 
 function relationDirectionText(direction: RelationDirection) {
   if (direction === 'TARGET_TO_SOURCE') {
-    return '目标指向源';
+    return tt('目标指向源');
   }
   if (direction === 'BIDIRECTIONAL') {
-    return '双向';
+    return tt('双向');
   }
-  return '源指向目标';
+  return tt('源指向目标');
 }
 
 function normalizeLayoutMode(mode?: ErLayoutMode): ErLayoutMode {
@@ -1079,8 +1090,8 @@ const tableViews = computed<TableViewModel[]>(() => {
       canToggleColumns,
       expanded,
       moreLabel: expanded
-        ? `已展开全部 ${allColumns.length} 个字段`
-        : `还有 ${collapsedColumnCount} 个字段未显示`,
+        ? tt(`已展开全部 ${allColumns.length} 个字段`)
+        : tt(`还有 ${collapsedColumnCount} 个字段未显示`),
     };
   });
 });
@@ -1362,11 +1373,11 @@ function relationTooltipHtml(relation: ErRelationVO) {
   const reason = safeText(relation.reason);
   const confidence = `${Math.round(normalizeConfidence(relation.confidence) * 100)}%`;
   return [
-    `<div style="font-weight:700;color:#0a3f72;">${escapeHtml(expression)}</div>`,
-    `<div style="margin-top:4px;color:#3b5c85;">方向：${relationDirectionText(direction)}</div>`,
-    `<div style="color:#3b5c85;">类型：${isAi ? 'AI 推断' : '外键'}</div>`,
-    isAi ? `<div style="color:#3b5c85;">置信度：${confidence}</div>` : '',
-    isAi ? `<div style="color:#5f4a1c;max-width:420px;">理由：${escapeHtml(reason || '模型未返回理由')}</div>` : '',
+    `<div class="er-tooltip-title">${escapeHtml(expression)}</div>`,
+    `<div class="er-tooltip-line">${escapeHtml(tt(`方向：${relationDirectionText(direction)}`))}</div>`,
+    `<div class="er-tooltip-line">${escapeHtml(tt(`类型：${isAi ? 'AI 推断' : '外键'}`))}</div>`,
+    isAi ? `<div class="er-tooltip-line">${escapeHtml(tt(`置信度：${confidence}`))}</div>` : '',
+    isAi ? `<div class="er-tooltip-reason">${escapeHtml(tt(`理由：${reason || '模型未返回理由'}`))}</div>` : '',
   ].filter((item) => !!item).join('');
 }
 
@@ -1374,15 +1385,15 @@ function tableTooltipHtml(table: TableViewModel) {
   const tableComment = showComments.value ? safeText(table.tableComment) : '';
   const rows = table.columns.slice(0, 40).map((column) => {
     const marks = [column.primaryKey ? 'PK' : '', column.indexed ? 'IDX' : ''].filter((item) => !!item).join(',');
-    const markText = marks ? ` <span style="color:#0f62c6;">[${escapeHtml(marks)}]</span>` : '';
+    const markText = marks ? ` <span class="er-tooltip-mark">[${escapeHtml(marks)}]</span>` : '';
     const comment = showComments.value ? safeText(column.columnComment) : '';
-    const commentText = comment ? ` <span style="color:#5a6c86;">// ${escapeHtml(comment)}</span>` : '';
+    const commentText = comment ? ` <span class="er-tooltip-comment">// ${escapeHtml(comment)}</span>` : '';
     return `${escapeHtml(safeText(column.columnName) || '-')} : ${escapeHtml(safeText(column.dataType) || '-')}${markText}${commentText}`;
   }).join('<br/>');
   return [
-    `<div style="font-weight:700;color:#0a3f72;">${escapeHtml(table.tableName)}</div>`,
-    tableComment ? `<div style="color:#516a8a;margin-top:2px;">${escapeHtml(tableComment)}</div>` : '',
-    `<div style="margin-top:6px;line-height:1.5;color:#1f3554;">${rows || '暂无字段'}</div>`,
+    `<div class="er-tooltip-title">${escapeHtml(table.tableName)}</div>`,
+    tableComment ? `<div class="er-tooltip-subtitle">${escapeHtml(tableComment)}</div>` : '',
+    `<div class="er-tooltip-body">${rows || escapeHtml(tt('暂无字段'))}</div>`,
   ].filter((item) => !!item).join('');
 }
 
@@ -2150,7 +2161,7 @@ async function exportPngDataUrl(options?: ExportPngOptions) {
       ctx.save();
       ctx.fillStyle = hasHiddenRelationEndpoint(table) ? '#915400' : '#5f7391';
       ctx.font = `${bodyFont}px sans-serif`;
-      ctx.fillText(truncateText(`${table.moreLabel} · ${table.expanded ? '收起' : '展开'}`, 54), topLeft.x + 7 * viewport.scale, y + 11 * viewport.scale);
+      ctx.fillText(truncateText(`${table.moreLabel} · ${tt(table.expanded ? '收起' : '展开')}`, 54), topLeft.x + 7 * viewport.scale, y + 11 * viewport.scale);
       ctx.restore();
     }
   });
@@ -2170,7 +2181,7 @@ watch(
     initViewportSize();
     optionReady.value = !!(props.graph?.tables?.length);
     if (!optionReady.value) {
-      emptyText.value = 'No ER graph data';
+      emptyText.value = tt('ER 图暂无数据');
       hideTooltip();
       closeRelationContextMenu();
       setActiveRelationKey('');
@@ -2548,6 +2559,41 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
+.er-tooltip-title {
+  font-weight: 700;
+  color: #0a3f72;
+}
+
+.er-tooltip-line {
+  margin-top: 4px;
+  color: #3b5c85;
+}
+
+.er-tooltip-reason {
+  margin-top: 4px;
+  max-width: 420px;
+  color: #5f4a1c;
+}
+
+.er-tooltip-subtitle {
+  margin-top: 2px;
+  color: #516a8a;
+}
+
+.er-tooltip-body {
+  margin-top: 6px;
+  line-height: 1.5;
+  color: #1f3554;
+}
+
+.er-tooltip-mark {
+  color: #0f62c6;
+}
+
+.er-tooltip-comment {
+  color: #5a6c86;
+}
+
 .er-relation-context-menu {
   position: absolute;
   z-index: 14;
@@ -2585,5 +2631,168 @@ onBeforeUnmount(() => {
   background: var(--surface-0, #fff);
   color: var(--text-2, #5f6f87);
   font-size: 12px;
+}
+
+.er-diagram-shell.is-dark {
+  background: #101927;
+}
+
+.er-diagram-shell.is-dark .er-grid-layer {
+  background-image:
+    linear-gradient(rgba(110, 132, 166, 0.2) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(110, 132, 166, 0.2) 1px, transparent 1px);
+}
+
+.er-diagram-shell.is-dark .er-table-card {
+  border-color: #5877a3;
+  background: #172334;
+  box-shadow: 0 8px 24px rgba(3, 8, 16, 0.36);
+}
+
+.er-diagram-shell.is-dark .er-table-card.is-dragging {
+  box-shadow: 0 10px 28px rgba(3, 8, 16, 0.46);
+}
+
+.er-diagram-shell.is-dark .er-table-card-header {
+  background: #2d6dbd;
+  color: #eef6ff;
+}
+
+.er-diagram-shell.is-dark .er-table-card-toggle {
+  border-color: rgba(225, 238, 255, 0.32);
+  background: rgba(225, 238, 255, 0.08);
+  color: #f3f8ff;
+}
+
+.er-diagram-shell.is-dark .er-table-card-toggle:hover {
+  background: rgba(225, 238, 255, 0.18);
+  border-color: rgba(225, 238, 255, 0.52);
+}
+
+.er-diagram-shell.is-dark .er-table-card-subtitle {
+  background: #387fcc;
+  color: #dcecff;
+}
+
+.er-diagram-shell.is-dark .er-table-field-row {
+  color: #d5e4fa;
+}
+
+.er-diagram-shell.is-dark .er-table-field-row.is-relation-endpoint {
+  background: rgba(255, 193, 93, 0.18);
+}
+
+.er-diagram-shell.is-dark .er-table-field-row.is-relation-endpoint .er-table-field-name {
+  color: #ffd28b;
+}
+
+.er-diagram-shell.is-dark .er-table-field-row.is-relation-endpoint .er-table-field-type,
+.er-diagram-shell.is-dark .er-table-field-row.is-relation-endpoint .er-table-field-comment {
+  color: #dfb775;
+}
+
+.er-diagram-shell.is-dark .er-table-field-type {
+  color: #9eb8dd;
+}
+
+.er-diagram-shell.is-dark .er-table-field-comment {
+  color: #7f97bb;
+}
+
+.er-diagram-shell.is-dark .er-table-field-link-handle {
+  color: #8ec0ff;
+}
+
+.er-diagram-shell.is-dark .er-table-field-link-handle:hover {
+  color: #b9d8ff;
+  text-shadow: 0 0 8px rgba(142, 192, 255, 0.38);
+}
+
+.er-diagram-shell.is-dark .er-field-mark-pk {
+  color: #ffd28b;
+  background: rgba(120, 84, 20, 0.42);
+  border-color: rgba(231, 185, 103, 0.5);
+}
+
+.er-diagram-shell.is-dark .er-field-mark-idx {
+  color: #a8c8ff;
+  background: rgba(50, 84, 136, 0.44);
+  border-color: rgba(147, 183, 240, 0.44);
+}
+
+.er-diagram-shell.is-dark .er-table-more {
+  color: #9db2d3;
+  border-color: rgba(109, 137, 179, 0.52);
+  background: rgba(45, 61, 88, 0.72);
+}
+
+.er-diagram-shell.is-dark .er-table-more:hover {
+  border-color: rgba(126, 160, 210, 0.78);
+  background: rgba(59, 79, 113, 0.84);
+}
+
+.er-diagram-shell.is-dark .er-table-more.is-relation-endpoint {
+  color: #ffd28f;
+  border-color: rgba(219, 170, 90, 0.58);
+  background: rgba(110, 78, 28, 0.66);
+}
+
+.er-diagram-shell.is-dark .er-table-more-action {
+  color: #9fcbff;
+}
+
+.er-diagram-shell.is-dark .er-relation-confidence {
+  fill: #ffd793;
+  stroke: rgba(16, 25, 39, 0.92);
+}
+
+.er-diagram-shell.is-dark .er-route-handle {
+  fill: #f0bd66;
+  stroke: #6e4500;
+}
+
+.er-diagram-shell.is-dark .er-route-handle-endpoint {
+  fill: #ffdd93;
+  stroke: #9b6500;
+}
+
+.er-diagram-shell.is-dark .er-float-tooltip {
+  border-color: rgba(110, 136, 176, 0.44);
+  background: rgba(19, 31, 47, 0.96);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.36);
+  color: #d9e6fb;
+}
+
+.er-diagram-shell.is-dark .er-tooltip-title {
+  color: #dce8ff;
+}
+
+.er-diagram-shell.is-dark .er-tooltip-line,
+.er-diagram-shell.is-dark .er-tooltip-subtitle,
+.er-diagram-shell.is-dark .er-tooltip-body,
+.er-diagram-shell.is-dark .er-tooltip-comment {
+  color: #9fb4d4;
+}
+
+.er-diagram-shell.is-dark .er-tooltip-mark {
+  color: #8ec0ff;
+}
+
+.er-diagram-shell.is-dark .er-tooltip-reason {
+  color: #e7c47d;
+}
+
+.er-diagram-shell.is-dark .er-relation-context-menu {
+  border-color: rgba(110, 136, 176, 0.44);
+  background: rgba(19, 31, 47, 0.98);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.34);
+}
+
+.er-diagram-shell.is-dark .er-relation-context-action {
+  color: #ff9ea8;
+}
+
+.er-diagram-shell.is-dark .er-relation-context-action:hover {
+  background: rgba(154, 58, 68, 0.24);
 }
 </style>

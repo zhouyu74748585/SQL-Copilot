@@ -89,13 +89,6 @@
         </div>
       </div>
       <div class="top-chrome-actions">
-        <a-select
-          class="top-locale-select"
-          size="small"
-          :value="currentLocale"
-          :options="localeSelectOptions"
-          @update:value="handleLocaleChange"
-        />
         <a-dropdown placement="bottomLeft" :trigger="['click']">
           <button class="tool-item top-action-btn" :disabled="!canOpenHistory" title="会话历史" @click="handleHistoryMenuClick">
             <history-outlined />
@@ -240,9 +233,9 @@
             </div>
           </template>
         </a-dropdown>
-        <button class="tool-item top-action-btn" @click="openAiConfigModal" title="AI 配置">
+        <button class="tool-item top-action-btn" @click="openAiConfigModal" title="设置">
           <setting-outlined />
-          <span>配置</span>
+          <span>设置</span>
         </button>
         <a-tooltip :title="isDarkTheme ? '切换到浅色' : '切换到深色'">
           <button class="tool-item tool-theme-toggle top-action-btn top-action-icon-btn" @click="toggleTheme">
@@ -787,6 +780,7 @@
                 :layout-mode="activeErTab.layoutMode"
                 :line-type="activeErTab.lineType"
                 :show-comments="activeErTab.showCardComments"
+                :dark="isDarkTheme"
                 @graph-layout-change="handleErGraphLayoutChange(activeErTab, $event)"
                 @relation-route-change="handleErRelationRouteChange(activeErTab, $event)"
                 @relation-select="setErSelectedRelation(activeErTab, $event)"
@@ -2269,6 +2263,7 @@
 
     <a-modal
       v-model:open="aiConfigModalOpen"
+      title="设置"
       width="760px"
       ok-text="保存配置"
       cancel-text="取消"
@@ -2276,6 +2271,25 @@
     >
       <a-form layout="vertical">
         <a-tabs v-model:activeKey="aiConfigActiveTab">
+          <a-tab-pane key="general" tab="界面设置">
+            <a-row :gutter="12">
+              <a-col :span="12">
+                <a-form-item label="界面语言">
+                  <a-select
+                    :value="currentLocale"
+                    :options="localeSelectOptions"
+                    @update:value="handleLocaleChange"
+                  />
+                </a-form-item>
+              </a-col>
+              <a-col :span="12">
+                <a-form-item label="深色模式">
+                  <a-switch :checked="isDarkTheme" @change="toggleTheme" />
+                </a-form-item>
+              </a-col>
+            </a-row>
+          </a-tab-pane>
+
           <a-tab-pane key="model" tab="模型配置">
             <a-space>
               <a-button size="small" @click="addOpenAiModelOption">新增 OpenAI 模型</a-button>
