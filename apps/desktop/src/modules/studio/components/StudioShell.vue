@@ -684,11 +684,11 @@
               />
               <span class="er-toolbar-label">布局</span>
               <a-select
-                v-model:value="activeErTab.layoutMode"
+                :value="activeErTab.layoutMode"
                 size="small"
                 style="width: 132px"
                 :options="erLayoutModeOptions"
-                @change="touchErTab(activeErTab)"
+                @change="handleErLayoutModeChange(activeErTab, $event)"
               />
               <span class="er-toolbar-label">线型</span>
               <a-select
@@ -716,6 +716,7 @@
                 :layout-mode="activeErTab.layoutMode"
                 :line-type="activeErTab.lineType"
                 :show-comments="activeErTab.showCardComments"
+                @graph-layout-change="handleErGraphLayoutChange(activeErTab, $event)"
                 @relation-route-change="handleErRelationRouteChange(activeErTab, $event)"
               />
             </a-spin>
@@ -2993,6 +2994,7 @@ const {
     closeQueryTab,
     touchErTab,
     toggleErDetailCollapsed,
+    handleErLayoutModeChange,
     normalizeErRelationDirection,
     normalizeErRelationType,
     erRelationKey,
@@ -3001,6 +3003,7 @@ const {
     formatErRelationConfidence,
     normalizeErRelationConfidence,
     erRelationReasonPreview,
+    handleErGraphLayoutChange,
     handleErRelationRouteChange,
     removeErAiRelation,
     closeErTab,

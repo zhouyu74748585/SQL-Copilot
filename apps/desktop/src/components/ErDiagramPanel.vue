@@ -166,13 +166,28 @@
 </template>
 
 <script setup lang="ts">
-import type {ErColumnNodeVO, ErGraphVO, ErLayoutMode, ErRelationVO, ErTableNodeVO} from '../types';
+import type {
+  ErColumnNodeVO,
+  ErGraphVO,
+  ErLayoutCanvasVO,
+  ErLayoutMode,
+  ErNodePositionVO,
+  ErRelationAnchorOffsetVO,
+  ErRelationVO,
+  ErTableNodeVO,
+} from '../types';
 import {computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue';
 
 interface RelationRouteChangePayload {
   relationKey: string;
   routeManual: boolean;
   routeLaneX: number;
+}
+
+interface GraphLayoutChangePayload {
+  layoutCanvas?: ErLayoutCanvasVO;
+  nodePositions?: Record<string, ErNodePositionVO>;
+  relationAnchorOffsets?: Record<string, ErRelationAnchorOffsetVO>;
 }
 
 interface NodePosition {
@@ -269,6 +284,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   (e: 'relation-route-change', payload: RelationRouteChangePayload): void;
+  (e: 'graph-layout-change', payload: GraphLayoutChangePayload): void;
 }>();
 
 const NODE_WIDTH_COMPACT = 226;
@@ -772,6 +788,53 @@ function clearRecord(record: Record<string, unknown>) {
   });
 }
 
+function cloneLayoutCanvas(): ErLayoutCanvasVO | undefined {
+  if (!(layoutCanvas.width > 0) || !(layoutCanvas.height > 0)) {
+    return undefined;
+  }
+  return {
+    width: layoutCanvas.width,
+    height: layoutCanvas.height,
+  };
+}
+
+function cloneNodePositions(): Record<string, ErNodePositionVO> | undefined {
+  const entries = Object.entries(manualNodePositions)
+    .filter(([, value]) => Number.isFinite(value?.x) && Number.isFinite(value?.y))
+    .map(([key, value]) => [key, {x: Number(value.x), y: Number(value.y)}] as const);
+  if (!entries.length) {
+    return undefined;
+  }
+  return Object.fromEntries(entries);
+}
+
+function cloneRelationAnchorOffsets(): Record<string, ErRelationAnchorOffsetVO> | undefined {
+  const entries = Object.entries(manualRouteAnchorOffsets)
+    .map(([key, value]) => {
+      const nextValue: ErRelationAnchorOffsetVO = {};
+      if (Number.isFinite(value?.sourcePerimeterPos)) {
+        nextValue.sourcePerimeterPos = Number(value.sourcePerimeterPos);
+      }
+      if (Number.isFinite(value?.targetPerimeterPos)) {
+        nextValue.targetPerimeterPos = Number(value.targetPerimeterPos);
+      }
+      return [key, nextValue] as const;
+    })
+    .filter(([, value]) => value.sourcePerimeterPos != null || value.targetPerimeterPos != null);
+  if (!entries.length) {
+    return undefined;
+  }
+  return Object.fromEntries(entries);
+}
+
+function emitGraphLayoutChange() {
+  emit('graph-layout-change', {
+    layoutCanvas: cloneLayoutCanvas(),
+    nodePositions: cloneNodePositions(),
+    relationAnchorOffsets: cloneRelationAnchorOffsets(),
+  });
+}
+
 const allRelations = computed(() => {
   const graph = props.graph;
   if (!graph?.tables?.length) {
@@ -1139,11 +1202,75 @@ function maybeResetLayoutState() {
   clearRecord(manualNodePositions);
   clearRecord(manualRouteLaneX);
   clearRecord(manualRouteAnchorOffsets);
+  layoutCanvas.width = 0;
+  layoutCanvas.height = 0;
   activeRelationKey.value = '';
   hoveredRelationKey.value = '';
   hideTooltip();
   lastLayoutModeKey = nextLayoutModeKey;
   lastTableSignature = nextTableSignature;
+}
+
+function syncLayoutCanvasFromGraph() {
+  const savedCanvas = props.graph?.layoutCanvas;
+  const width = Number(savedCanvas?.width);
+  const height = Number(savedCanvas?.height);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return;
+  }
+  layoutCanvas.width = width;
+  layoutCanvas.height = height;
+}
+
+function syncNodePositionsFromGraph() {
+  const graphPositions = props.graph?.nodePositions;
+  if (!graphPositions) {
+    return;
+  }
+  clearRecord(manualNodePositions);
+  const validTableKeys = new Set((props.graph?.tables || []).map((table) => normalizeIdentifier(table.tableName)));
+  Object.entries(graphPositions).forEach(([key, position]) => {
+    const normalizedKey = normalizeIdentifier(key);
+    const x = Number(position?.x);
+    const y = Number(position?.y);
+    if (!validTableKeys.has(normalizedKey) || !Number.isFinite(x) || !Number.isFinite(y)) {
+      return;
+    }
+    manualNodePositions[normalizedKey] = {x, y};
+  });
+}
+
+function syncRouteAnchorOffsetsFromGraph() {
+  const graphAnchorOffsets = props.graph?.relationAnchorOffsets;
+  if (!graphAnchorOffsets) {
+    return;
+  }
+  clearRecord(manualRouteAnchorOffsets);
+  const validRelationKeys = new Set(allRelations.value.map((relation) => buildRelationKey(relation)));
+  Object.entries(graphAnchorOffsets).forEach(([key, offset]) => {
+    if (!validRelationKeys.has(key)) {
+      return;
+    }
+    const nextOffset: RouteAnchorOffsets = {};
+    const sourcePerimeterPos = Number(offset?.sourcePerimeterPos);
+    const targetPerimeterPos = Number(offset?.targetPerimeterPos);
+    if (Number.isFinite(sourcePerimeterPos)) {
+      nextOffset.sourcePerimeterPos = sourcePerimeterPos;
+    }
+    if (Number.isFinite(targetPerimeterPos)) {
+      nextOffset.targetPerimeterPos = targetPerimeterPos;
+    }
+    if (nextOffset.sourcePerimeterPos == null && nextOffset.targetPerimeterPos == null) {
+      return;
+    }
+    manualRouteAnchorOffsets[key] = nextOffset;
+  });
+}
+
+function syncLayoutStateFromGraph() {
+  syncLayoutCanvasFromGraph();
+  syncNodePositionsFromGraph();
+  syncRouteAnchorOffsetsFromGraph();
 }
 
 function syncRouteOverridesFromGraph() {
@@ -1337,6 +1464,9 @@ function onWindowMouseUp() {
         routeLaneX: laneX,
       });
     }
+  }
+  if (dragState.kind === 'node' || dragState.kind === 'route-anchor') {
+    emitGraphLayoutChange();
   }
   endDrag();
 }
@@ -1653,13 +1783,17 @@ watch(
   [() => props.graph, () => props.layoutMode],
   () => {
     maybeResetLayoutState();
+    syncLayoutStateFromGraph();
+    initViewportSize();
     optionReady.value = !!(props.graph?.tables?.length);
     if (!optionReady.value) {
       emptyText.value = 'No ER graph data';
       hideTooltip();
       activeRelationKey.value = '';
       hoveredRelationKey.value = '';
+      return;
     }
+    emitGraphLayoutChange();
   },
   {deep: true, immediate: true},
 );
@@ -1674,6 +1808,9 @@ watch(
 
 onMounted(() => {
   initViewportSize();
+  if (optionReady.value) {
+    emitGraphLayoutChange();
+  }
   if (viewportRef.value && typeof ResizeObserver !== 'undefined') {
     resizeObserver = new ResizeObserver(() => {
       initViewportSize();

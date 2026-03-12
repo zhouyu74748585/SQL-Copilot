@@ -101,6 +101,46 @@
   - 后端：`mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18081` 启动成功，`/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
   - 前端：`npm run -w @sqlcopilot/desktop build -- --emptyOutDir` 后 `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6046` 启动成功，HTTP 状态码 `200`。
 
+## 追加记录（2026-03-12 11:58）- ER快照绝对布局持久化
+
+### 本次目标
+- 修复 ER 图快照/历史回显时节点布局随当前窗口尺寸被重新挤压的问题。
+- 保证 ER 图保存的是固定逻辑画布与绝对位置；窗口变小后仅裁剪显示，不自动重排。
+- 保持“仅手动调整或切换布局模式时才改变布局”的交互语义。
+
+### 关键改动
+- 修改文件：`apps/desktop/src/components/ErDiagramPanel.vue`
+  - 新增 `graph-layout-change` 事件，向父级回传固定逻辑画布尺寸、手动节点坐标、连线端点锚点偏移。
+  - 在图数据/布局模式变化时优先从快照中的 `layoutCanvas/nodePositions/relationAnchorOffsets` 恢复画布状态；缺失时才按当前视口初始化。
+  - 布局模式或表集合变化时清空旧画布状态，避免旧布局污染新模式；窗口 resize 仍只影响可视范围，不影响逻辑布局。
+- 修改文件：`apps/desktop/src/modules/studio/composables/useErModule.ts`
+  - 新增 `handleErGraphLayoutChange()`，把画布回传的布局状态持久化到 `tab.graph`，用于快照保存与历史回显。
+  - 新增 `handleErLayoutModeChange()`，切换布局模式时清空旧的节点坐标、锚点偏移和手动路由，使新模式重新布局。
+- 修改文件：`apps/desktop/src/modules/studio/composables/useStudioRuntime.ts`
+  - ER 图刷新时合并保留已有的 `layoutCanvas/nodePositions/relationAnchorOffsets` 与手动折线路由，避免刷新后本地布局状态丢失。
+- 修改文件：`apps/desktop/src/modules/studio/components/StudioShell.vue`
+  - ER 布局选择改为显式调用 `handleErLayoutModeChange()`。
+  - ER 画布接入 `graph-layout-change` 事件，确保当前布局实时回写到工作台图数据。
+- 修改文件：`apps/desktop/src/types/index.ts`
+  - 扩展 `ErGraphVO`，加入 `layoutCanvas`、`nodePositions`、`relationAnchorOffsets`。
+- 修改文件：`apps/server/src/main/java/com/sqlcopilot/studio/dto/schema/ErGraphVO.java`
+  - 后端快照 DTO 同步扩展布局字段。
+- 新增文件：
+  - `apps/server/src/main/java/com/sqlcopilot/studio/dto/schema/ErLayoutCanvasVO.java`
+  - `apps/server/src/main/java/com/sqlcopilot/studio/dto/schema/ErNodePositionVO.java`
+  - `apps/server/src/main/java/com/sqlcopilot/studio/dto/schema/ErRelationAnchorOffsetVO.java`
+
+### 验证结果
+- 前端类型检查：`npm run -w @sqlcopilot/desktop type-check` 通过。
+- 前端构建：`npm run -w @sqlcopilot/desktop build` 通过。
+- 前端 clean 构建 + 预览：`npm run -w @sqlcopilot/desktop build -- --emptyOutDir` 后，`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4174` 启动成功；`curl -I http://127.0.0.1:4174` 返回 `HTTP/1.1 200 OK`。
+- 后端 Maven：`mvn -f apps/server/pom.xml -DskipTests clean package` 通过。
+- 后端 clean 启动：`mvn -f apps/server/pom.xml clean spring-boot:run "-Dspring-boot.run.arguments=--server.port=18082"` 启动成功；`curl http://127.0.0.1:18082/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+- 额外说明：`mvn -f apps/server/pom.xml clean package` 仍被现有测试阻塞，失败用例为 `AiServiceImplAstValidationTest.buildRepairPrompt_keepsOnlyDynamicRepairContext` 与 `OnnxLocalRerankServiceImplTest.score_acceptsCrossEncoderModelInputs`；本次未修改对应业务代码。
+
+### 遗留项
+- 当前快照仍未保存 ER 页签的线型与“显示注释”开关，仅修复了布局绝对坐标与固定逻辑画布的持久化。
+
 ## 追加记录（2026-03-06 13:13）- 注释模式字段注释展示与卡片宽度控制
 
 ### 本次目标

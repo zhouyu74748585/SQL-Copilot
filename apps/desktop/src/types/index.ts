@@ -299,6 +299,21 @@ export interface ErRelationVO {
   routeVersion?: number;
 }
 
+export interface ErNodePositionVO {
+  x: number;
+  y: number;
+}
+
+export interface ErLayoutCanvasVO {
+  width: number;
+  height: number;
+}
+
+export interface ErRelationAnchorOffsetVO {
+  sourcePerimeterPos?: number;
+  targetPerimeterPos?: number;
+}
+
 export interface ErAiInferenceStatusVO {
   requested: boolean;
   success: boolean;
@@ -312,6 +327,9 @@ export interface ErGraphVO {
   foreignKeyRelations: ErRelationVO[];
   aiRelations: ErRelationVO[];
   aiInference: ErAiInferenceStatusVO;
+  layoutCanvas?: ErLayoutCanvasVO;
+  nodePositions?: Record<string, ErNodePositionVO>;
+  relationAnchorOffsets?: Record<string, ErRelationAnchorOffsetVO>;
   generatedAt: number;
 }
 
