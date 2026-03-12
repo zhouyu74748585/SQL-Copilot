@@ -296,6 +296,7 @@ export function useErSnapshotModule(runtime: StudioRuntime): ErSnapshotModule {
       if (!detail.graph) {
         throw new Error('该快照缺少 ER 图数据，无法回显');
       }
+      detail.graph.manualRelations = detail.graph.manualRelations || [];
       const models = runtime.aiModelOptions.value.map((entry) => String(entry.value)).filter((entry) => !!entry);
       const selectedModel = (detail.modelName || '').trim();
       const modelName = selectedModel && models.includes(selectedModel)
@@ -328,6 +329,7 @@ export function useErSnapshotModule(runtime: StudioRuntime): ErSnapshotModule {
           includeAiInference: detail.includeAiInference !== false,
           loading: false,
           graph: detail.graph,
+          selectedRelationKey: '',
           errorMessage: '',
           createdAt: detail.createdAt ?? now,
           updatedAt: detail.updatedAt ?? now,
@@ -350,6 +352,7 @@ export function useErSnapshotModule(runtime: StudioRuntime): ErSnapshotModule {
         tab.aiConfidenceThreshold = Number.isFinite(aiConfidenceThreshold) ? aiConfidenceThreshold : 0.6;
         tab.includeAiInference = detail.includeAiInference !== false;
         tab.graph = detail.graph;
+        tab.selectedRelationKey = '';
         tab.loading = false;
         tab.errorMessage = '';
         tab.updatedAt = now;

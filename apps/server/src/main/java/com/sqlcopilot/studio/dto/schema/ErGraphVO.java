@@ -18,6 +18,9 @@ public class ErGraphVO {
 
     private List<ErRelationVO> aiRelations;
 
+    /** 用户手工拉线生成的关系，仅在 ER 图快照/会话中生效。 */
+    private List<ErRelationVO> manualRelations;
+
     private ErAiInferenceStatusVO aiInference;
 
     /** 固定布局画布尺寸（用于历史回显时保持绝对布局）。 */

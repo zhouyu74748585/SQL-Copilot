@@ -1245,6 +1245,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  cursor: pointer;
 }
 
 .er-rel-item-fk {
@@ -1255,6 +1256,16 @@ body {
 .er-rel-item-ai {
   border-color: #e8d2a3;
   background: linear-gradient(180deg, #fffaf0 0%, #fff6e8 100%);
+}
+
+.er-rel-item-manual {
+  border-color: #b8cdfb;
+  background: linear-gradient(180deg, #f7faff 0%, #edf3ff 100%);
+}
+
+.er-rel-item.is-selected {
+  border-color: #4c8bf5;
+  box-shadow: 0 0 0 1px rgba(76, 139, 245, 0.2);
 }
 
 .er-rel-main {

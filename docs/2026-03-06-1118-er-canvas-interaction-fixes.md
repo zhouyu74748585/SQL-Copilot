@@ -141,6 +141,53 @@
 ### 遗留项
 - 当前快照仍未保存 ER 页签的线型与“显示注释”开关，仅修复了布局绝对坐标与固定逻辑画布的持久化。
 
+## 追加记录（2026-03-12 14:59）- ER手工字段连线与统一删除
+
+### 本次目标
+- 支持在 ER 图中从字段手工拉线，连接两个表中的字段。
+- 支持所有连线在选中状态下通过 Delete 键删除，或右键菜单删除。
+- 保证 ER 图中的新增、删除、布局操作仅影响当前页签和快照，不影响数据库真实元数据。
+
+### 关键改动
+- 修改文件：`apps/desktop/src/components/ErDiagramPanel.vue`
+  - 新增字段级拉线手柄、手工连线预览、关系右键删除菜单。
+  - 新增受控选中关系能力，支持父级维护 `selectedRelationKey`。
+  - 新增 `relation-select`、`relation-delete-request`、`manual-relation-create` 事件。
+  - 手工拉线时校验目标字段必须属于另一张表，避免自连。
+- 修改文件：`apps/desktop/src/modules/studio/composables/useErModule.ts`
+  - 统一管理 FK / AI / MANUAL 三类关系的选中、创建、删除。
+  - 删除关系时直接从当前图数据移除，并同步清理锚点偏移和选中态。
+  - 新增全局 Delete 快捷键处理，仅在 ER 页签且焦点不在输入控件时生效。
+- 修改文件：`apps/desktop/src/modules/studio/composables/useStudioRuntime.ts`
+  - `ErWorkspaceTab` 新增 `selectedRelationKey`。
+  - `ErGraphVO` 前端运行态新增 `manualRelations`，ER 刷新后保留手工关系及已有布局路由状态。
+  - 新增 `activeErManualRelations` 供右侧信息区展示。
+- 修改文件：`apps/desktop/src/modules/studio/components/StudioShell.vue`
+  - ER 画布接入受控选中、手工连线创建、删除请求事件。
+  - 右侧信息区新增“手工连线”分组；FK / AI / 手工三组均支持删除按钮和选中联动。
+- 修改文件：`apps/desktop/src/modules/studio/styles/shell.css`
+  - 新增手工关系卡片和选中态样式。
+- 修改文件：`apps/desktop/src/types/index.ts`
+  - `ErRelationVO.relationType` 增加 `MANUAL`。
+  - `ErGraphVO` 增加 `manualRelations`。
+- 修改文件：`apps/server/src/main/java/com/sqlcopilot/studio/dto/schema/ErGraphVO.java`
+  - 后端快照 DTO 同步增加 `manualRelations`，确保手工关系可随快照持久化。
+- 修改文件：`apps/server/src/main/java/com/sqlcopilot/studio/service/impl/ErDiagramServiceImpl.java`
+  - ER 初始图返回空的 `manualRelations`，保持前后端结构一致。
+
+### 验证结果
+- 前端类型检查：`npm run -w @sqlcopilot/desktop type-check` 通过。
+- 前端构建：`npm run -w @sqlcopilot/desktop build` 通过。
+- 后端 clean 打包：`mvn -f apps/server/pom.xml -DskipTests clean package` 通过。
+- 后端 clean 启动：`mvn -f apps/server/pom.xml -DskipTests clean spring-boot:run "-Dspring-boot.run.arguments=--server.port=18083"` 启动成功；`curl http://127.0.0.1:18083/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+- 前端 clean 构建 + 预览：`npm run -w @sqlcopilot/desktop build -- --emptyOutDir` 后，`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4175` 启动成功；`curl -I http://127.0.0.1:4175` 返回 `HTTP/1.1 200 OK`。
+
+### 额外说明
+- `mvn -f apps/server/pom.xml clean package` 仍被现有测试阻塞，失败用例为：
+  - `AiServiceImplAstValidationTest.buildRepairPrompt_keepsOnlyDynamicRepairContext`
+  - `OnnxLocalRerankServiceImplTest.score_acceptsCrossEncoderModelInputs`
+- 上述失败与本次 ER 图改动无直接关联；本次已通过 `-DskipTests` clean package 和 clean 启动完成交付验证。
+
 ## 追加记录（2026-03-06 13:13）- 注释模式字段注释展示与卡片宽度控制
 
 ### 本次目标

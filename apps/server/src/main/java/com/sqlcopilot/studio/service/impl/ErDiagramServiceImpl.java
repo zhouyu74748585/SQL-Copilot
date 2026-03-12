@@ -112,6 +112,7 @@ public class ErDiagramServiceImpl implements ErDiagramService {
         vo.setTables(tableNodes);
         vo.setForeignKeyRelations(foreignKeyRelations);
         vo.setAiRelations(aiRelations);
+        vo.setManualRelations(List.of());
         vo.setAiInference(aiInferenceStatus);
         vo.setGeneratedAt(System.currentTimeMillis());
         return vo;

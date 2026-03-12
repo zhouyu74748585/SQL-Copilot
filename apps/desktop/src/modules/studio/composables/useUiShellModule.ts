@@ -22,6 +22,7 @@ export interface UiShellModule {
 
 interface UiShellDeps {
   handleBrowserClipboardKeydown: (event: KeyboardEvent) => void;
+  handleErRelationDeleteKeydown: (event: KeyboardEvent) => void;
 }
 
 export function useUiShellModule(runtime: StudioRuntime, deps: UiShellDeps): UiShellModule {
@@ -62,6 +63,7 @@ export function useUiShellModule(runtime: StudioRuntime, deps: UiShellDeps): UiS
   }
 
   function handleWindowKeydown(event: KeyboardEvent) {
+    deps.handleErRelationDeleteKeydown(event);
     deps.handleBrowserClipboardKeydown(event);
   }
 
