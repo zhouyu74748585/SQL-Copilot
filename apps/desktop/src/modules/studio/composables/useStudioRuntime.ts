@@ -291,6 +291,7 @@ interface ErWorkspaceTab {
   includeAiInference: boolean;
   loading: boolean;
   graph: ErGraphVO | null;
+  selectedRelationKey: string;
   errorMessage: string;
   createdAt: number;
   updatedAt: number;
@@ -924,6 +925,7 @@ const activeErDisplayGraph = computed<ErGraphVO | null>(() => {
     ...graph,
     aiRelations: (graph.aiRelations ?? [])
       .filter((relation) => normalizeErRelationConfidence(relation.confidence) >= activeErConfidenceThreshold.value),
+    manualRelations: graph.manualRelations ?? [],
   };
 });
 
@@ -934,6 +936,11 @@ const activeErForeignKeyRelations = computed(() =>
 const activeErAiRelations = computed(() =>
   [...(activeErDisplayGraph.value?.aiRelations ?? [])]
     .sort((a, b) => normalizeErRelationConfidence(b.confidence) - normalizeErRelationConfidence(a.confidence)),
+);
+
+const activeErManualRelations = computed(() =>
+  [...(activeErDisplayGraph.value?.manualRelations ?? [])]
+    .sort((a, b) => buildErRelationKey(a).localeCompare(buildErRelationKey(b))),
 );
 
 const canOpenHistory = computed(() => {
@@ -2025,10 +2032,17 @@ function buildErRelationKey(relation: ErRelationVO) {
 
 function mergePersistedErGraphState(previousGraph: ErGraphVO | null, nextGraph: ErGraphVO) {
   if (!previousGraph) {
-    return nextGraph;
+    return {
+      ...nextGraph,
+      manualRelations: nextGraph.manualRelations || [],
+    };
   }
   const routeOverrideMap = new Map<string, Pick<ErRelationVO, 'routeManual' | 'routeLaneX' | 'routeVersion'>>();
-  [...(previousGraph.foreignKeyRelations || []), ...(previousGraph.aiRelations || [])].forEach((relation) => {
+  [
+    ...(previousGraph.foreignKeyRelations || []),
+    ...(previousGraph.aiRelations || []),
+    ...(previousGraph.manualRelations || []),
+  ].forEach((relation) => {
     const hasManualRoute = relation.routeManual === true && Number.isFinite(Number(relation.routeLaneX));
     if (!hasManualRoute) {
       return;
@@ -2052,6 +2066,7 @@ function mergePersistedErGraphState(previousGraph: ErGraphVO | null, nextGraph: 
     relationAnchorOffsets: previousGraph.relationAnchorOffsets,
     foreignKeyRelations: mergeRelationRoutes(nextGraph.foreignKeyRelations || []),
     aiRelations: mergeRelationRoutes(nextGraph.aiRelations || []),
+    manualRelations: mergeRelationRoutes(previousGraph.manualRelations || []),
   };
 }
 
@@ -2220,6 +2235,7 @@ async function confirmErTableSelection() {
         includeAiInference: true,
         loading: false,
         graph: null,
+        selectedRelationKey: '',
         errorMessage: '',
         createdAt: now,
         updatedAt: now,
@@ -2245,6 +2261,9 @@ async function confirmErTableSelection() {
       }
       if (tab.detailCollapsed == null) {
         tab.detailCollapsed = false;
+      }
+      if (typeof tab.selectedRelationKey !== 'string') {
+        tab.selectedRelationKey = '';
       }
       tab.title = `ER · ${erSelectDatabaseName.value}`;
       touchErTab(tab);
@@ -7402,6 +7421,7 @@ function resetConnectionModalState() {
     activeErDisplayGraph,
     activeErForeignKeyRelations,
     activeErAiRelations,
+    activeErManualRelations,
     canOpenHistory,
     canOpenErSnapshot,
     isDarkTheme,

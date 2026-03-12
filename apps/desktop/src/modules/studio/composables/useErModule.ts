@@ -1,7 +1,7 @@
-﻿import type {StudioRuntime} from './useStudioRuntime';
+import type {StudioRuntime} from './useStudioRuntime';
 
 type ErTab = StudioRuntime['erTabs']['value'][number];
-type ErRelation = NonNullable<NonNullable<ErTab['graph']>['aiRelations']>[number];
+type ErRelation = NonNullable<NonNullable<ErTab['graph']>['foreignKeyRelations']>[number];
 type ErLayoutMode = ErTab['layoutMode'];
 
 interface ErGraphLayoutChangePayload {
@@ -25,6 +25,10 @@ interface ErRelationRouteChangePayload {
   routeLaneX: number;
 }
 
+interface ErManualRelationCreatePayload {
+  relation: ErRelation;
+}
+
 export interface ErModule {
   touchErTab: (tab: ErTab) => void;
   toggleErDetailCollapsed: (tab: ErTab) => void;
@@ -37,9 +41,12 @@ export interface ErModule {
   formatErRelationConfidence: (value?: number) => string;
   normalizeErRelationConfidence: (value?: number) => number;
   erRelationReasonPreview: (reason?: string) => string;
+  setErSelectedRelation: (tab: ErTab, relationKey?: string) => void;
   handleErGraphLayoutChange: (tab: ErTab, payload: ErGraphLayoutChangePayload) => void;
   handleErRelationRouteChange: (tab: ErTab, payload: ErRelationRouteChangePayload) => void;
-  removeErAiRelation: (tab: ErTab, relation: ErRelation) => void;
+  appendErManualRelation: (tab: ErTab, payload: ErManualRelationCreatePayload) => boolean;
+  removeErRelation: (tab: ErTab, relationOrKey: ErRelation | string) => boolean;
+  handleErRelationDeleteKeydown: (event: KeyboardEvent) => void;
   closeErTab: (tabKey: string) => void;
 }
 
@@ -131,12 +138,33 @@ export function useErModule(runtime: StudioRuntime): ErModule {
     return text.length > 36 ? `${text.slice(0, 36)}...` : text;
   }
 
+  function allRelations(graph: ErTab['graph']) {
+    return [
+      ...(graph?.foreignKeyRelations || []),
+      ...(graph?.aiRelations || []),
+      ...(graph?.manualRelations || []),
+    ];
+  }
+
+  function hasRelationKey(tab: ErTab, relationKey?: string) {
+    const targetKey = (relationKey || '').trim();
+    if (!tab.graph || !targetKey) {
+      return false;
+    }
+    return allRelations(tab.graph).some((relation) => erRelationKey(relation) === targetKey);
+  }
+
+  function setErSelectedRelation(tab: ErTab, relationKey?: string) {
+    const nextKey = hasRelationKey(tab, relationKey) ? (relationKey || '').trim() : '';
+    if (tab.selectedRelationKey === nextKey) {
+      return;
+    }
+    tab.selectedRelationKey = nextKey;
+  }
+
   function sanitizeGraphLayoutPayload(tab: ErTab, payload: ErGraphLayoutChangePayload) {
     const validTableKeys = new Set((tab.graph?.tables || []).map((table) => (table.tableName || '').trim().toLowerCase()));
-    const validRelationKeys = new Set([
-      ...(tab.graph?.foreignKeyRelations || []),
-      ...(tab.graph?.aiRelations || []),
-    ].map((relation) => erRelationKey(relation)));
+    const validRelationKeys = new Set(allRelations(tab.graph).map((relation) => erRelationKey(relation)));
 
     const layoutCanvas = Number.isFinite(Number(payload.layoutCanvas?.width)) && Number.isFinite(Number(payload.layoutCanvas?.height))
       && Number(payload.layoutCanvas?.width) > 0 && Number(payload.layoutCanvas?.height) > 0
@@ -189,6 +217,7 @@ export function useErModule(runtime: StudioRuntime): ErModule {
   function handleErLayoutModeChange(tab: ErTab, nextLayoutMode?: ErLayoutMode | string) {
     const normalizedLayoutMode = normalizeErLayoutMode(nextLayoutMode);
     tab.layoutMode = normalizedLayoutMode;
+    tab.selectedRelationKey = '';
     if (tab.graph) {
       const resetRelationRoute = (relation: ErRelation) => {
         const nextRelation = {...relation};
@@ -204,6 +233,7 @@ export function useErModule(runtime: StudioRuntime): ErModule {
         relationAnchorOffsets: undefined,
         foreignKeyRelations: (tab.graph.foreignKeyRelations || []).map(resetRelationRoute),
         aiRelations: (tab.graph.aiRelations || []).map(resetRelationRoute),
+        manualRelations: (tab.graph.manualRelations || []).map(resetRelationRoute),
       };
     }
     touchErTab(tab);
@@ -261,47 +291,167 @@ export function useErModule(runtime: StudioRuntime): ErModule {
 
     const fkPatched = patchList(tab.graph.foreignKeyRelations || []);
     const aiPatched = patchList(tab.graph.aiRelations || []);
-    if (!fkPatched.changed && !aiPatched.changed) {
+    const manualPatched = patchList(tab.graph.manualRelations || []);
+    if (!fkPatched.changed && !aiPatched.changed && !manualPatched.changed) {
       return;
     }
     tab.graph = {
       ...tab.graph,
       foreignKeyRelations: fkPatched.nextList,
       aiRelations: aiPatched.nextList,
+      manualRelations: manualPatched.nextList,
     };
     touchErTab(tab);
   }
 
-  function removeErAiRelation(tab: ErTab, relation: ErRelation) {
-    if (!tab.graph?.aiRelations?.length) {
-      return;
+  function normalizeTableNameCase(tab: ErTab, rawTableName?: string) {
+    const normalized = (rawTableName || '').trim();
+    if (!normalized || !tab.graph?.tables?.length) {
+      return '';
     }
-    const sourceList = tab.graph.aiRelations;
-    let removeIndex = sourceList.findIndex((item) => item === relation);
-    if (removeIndex < 0) {
-      const direction = normalizeErRelationDirection(relation.relationDirection);
-      const confidence = normalizeErRelationConfidence(relation.confidence);
-      const reason = (relation.reason || '').trim();
-      removeIndex = sourceList.findIndex((item) => (
-        item.sourceTable === relation.sourceTable
-        && item.sourceColumn === relation.sourceColumn
-        && item.targetTable === relation.targetTable
-        && item.targetColumn === relation.targetColumn
-        && normalizeErRelationDirection(item.relationDirection) === direction
-        && normalizeErRelationConfidence(item.confidence) === confidence
-        && (item.reason || '').trim() === reason
-      ));
+    const match = tab.graph.tables.find((table) => (table.tableName || '').trim().toLowerCase() === normalized.toLowerCase());
+    return match?.tableName || normalized;
+  }
+
+  function hasColumn(tab: ErTab, rawTableName?: string, rawColumnName?: string) {
+    const tableName = normalizeTableNameCase(tab, rawTableName);
+    const columnName = (rawColumnName || '').trim();
+    if (!tableName || !columnName) {
+      return false;
     }
-    if (removeIndex < 0) {
-      return;
+    const table = tab.graph?.tables?.find((item) => item.tableName === tableName);
+    if (!table) {
+      return false;
     }
-    const nextAiRelations = [...sourceList];
-    nextAiRelations.splice(removeIndex, 1);
+    return (table.columns || []).some((column) => (column.columnName || '').trim().toLowerCase() === columnName.toLowerCase());
+  }
+
+  function normalizeManualRelation(tab: ErTab, relation: ErRelation): ErRelation | null {
+    if (!tab.graph) {
+      return null;
+    }
+    const sourceTable = normalizeTableNameCase(tab, relation.sourceTable);
+    const targetTable = normalizeTableNameCase(tab, relation.targetTable);
+    const sourceColumn = (relation.sourceColumn || '').trim();
+    const targetColumn = (relation.targetColumn || '').trim();
+    if (!sourceTable || !targetTable || !sourceColumn || !targetColumn) {
+      return null;
+    }
+    if (sourceTable.toLowerCase() === targetTable.toLowerCase()) {
+      return null;
+    }
+    if (!hasColumn(tab, sourceTable, sourceColumn) || !hasColumn(tab, targetTable, targetColumn)) {
+      return null;
+    }
+    return {
+      sourceTable,
+      sourceColumn,
+      targetTable,
+      targetColumn,
+      relationType: 'MANUAL',
+      relationDirection: 'SOURCE_TO_TARGET',
+      routeManual: relation.routeManual,
+      routeLaneX: relation.routeLaneX,
+      routeVersion: relation.routeVersion,
+    };
+  }
+
+  function appendErManualRelation(tab: ErTab, payload: ErManualRelationCreatePayload) {
+    if (!tab.graph) {
+      return false;
+    }
+    const normalized = normalizeManualRelation(tab, payload.relation);
+    if (!normalized) {
+      return false;
+    }
+    const nextKey = erRelationKey(normalized);
+    if (allRelations(tab.graph).some((relation) => erRelationKey(relation) === nextKey)) {
+      return false;
+    }
     tab.graph = {
       ...tab.graph,
-      aiRelations: nextAiRelations,
+      manualRelations: [...(tab.graph.manualRelations || []), normalized],
     };
+    tab.selectedRelationKey = nextKey;
     touchErTab(tab);
+    return true;
+  }
+
+  function removeRelationAnchorOffset(graph: NonNullable<ErTab['graph']>, relationKey: string) {
+    const entries = Object.entries(graph.relationAnchorOffsets || {})
+      .filter(([key]) => key !== relationKey);
+    return entries.length ? Object.fromEntries(entries) : undefined;
+  }
+
+  function removeErRelation(tab: ErTab, relationOrKey: ErRelation | string) {
+    if (!tab.graph) {
+      return false;
+    }
+    const relationKey = typeof relationOrKey === 'string'
+      ? relationOrKey.trim()
+      : erRelationKey(relationOrKey);
+    if (!relationKey) {
+      return false;
+    }
+
+    const removeFromList = (sourceList: ErRelation[]) => {
+      const nextList = sourceList.filter((item) => erRelationKey(item) !== relationKey);
+      return {
+        changed: nextList.length !== sourceList.length,
+        nextList,
+      };
+    };
+
+    const fkRemoved = removeFromList(tab.graph.foreignKeyRelations || []);
+    const aiRemoved = removeFromList(tab.graph.aiRelations || []);
+    const manualRemoved = removeFromList(tab.graph.manualRelations || []);
+    if (!fkRemoved.changed && !aiRemoved.changed && !manualRemoved.changed) {
+      return false;
+    }
+
+    tab.graph = {
+      ...tab.graph,
+      foreignKeyRelations: fkRemoved.nextList,
+      aiRelations: aiRemoved.nextList,
+      manualRelations: manualRemoved.nextList,
+      relationAnchorOffsets: removeRelationAnchorOffset(tab.graph, relationKey),
+    };
+    if (tab.selectedRelationKey === relationKey) {
+      tab.selectedRelationKey = '';
+    }
+    touchErTab(tab);
+    return true;
+  }
+
+  function isEditableTarget(target: EventTarget | null) {
+    const element = target instanceof HTMLElement ? target : null;
+    if (!element) {
+      return false;
+    }
+    if (element.isContentEditable) {
+      return true;
+    }
+    const tagName = element.tagName.toLowerCase();
+    if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') {
+      return true;
+    }
+    return !!element.closest('.monaco-editor,.inputarea,[contenteditable="true"]');
+  }
+
+  function handleErRelationDeleteKeydown(event: KeyboardEvent) {
+    if (event.defaultPrevented || event.key !== 'Delete') {
+      return;
+    }
+    if (isEditableTarget(event.target)) {
+      return;
+    }
+    const tab = runtime.activeErTab.value;
+    if (!tab?.selectedRelationKey) {
+      return;
+    }
+    if (removeErRelation(tab, tab.selectedRelationKey)) {
+      event.preventDefault();
+    }
   }
 
   function closeErTab(tabKey: string) {
@@ -330,9 +480,12 @@ export function useErModule(runtime: StudioRuntime): ErModule {
     formatErRelationConfidence,
     normalizeErRelationConfidence,
     erRelationReasonPreview,
+    setErSelectedRelation,
     handleErGraphLayoutChange,
     handleErRelationRouteChange,
-    removeErAiRelation,
+    appendErManualRelation,
+    removeErRelation,
+    handleErRelationDeleteKeydown,
     closeErTab,
   };
 }

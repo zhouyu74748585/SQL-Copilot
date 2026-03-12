@@ -48,6 +48,7 @@
             @mousemove="onRelationMouseMove(relation, $event)"
             @mouseleave="onRelationMouseLeave"
             @click.stop="onRelationClick(relation, $event)"
+            @contextmenu.stop.prevent="onRelationContextMenu(relation, $event)"
           />
           <polyline
             class="er-relation-line"
@@ -65,6 +66,7 @@
             @mousemove="onRelationMouseMove(relation, $event)"
             @mouseleave="onRelationMouseLeave"
             @click.stop="onRelationClick(relation, $event)"
+            @contextmenu.stop.prevent="onRelationContextMenu(relation, $event)"
           />
           <text
             v-if="relation.confidenceText"
@@ -105,6 +107,18 @@
             @mousedown.stop.prevent="onRouteHandleMouseDown(activeRelationHandle, $event)"
           />
         </g>
+
+        <polyline
+          v-if="manualRelationPreview"
+          class="er-manual-relation-preview"
+          :points="manualRelationPreview.pointsText"
+          fill="none"
+          stroke="#4c8bf5"
+          stroke-width="2"
+          stroke-dasharray="6 4"
+          vector-effect="non-scaling-stroke"
+          pointer-events="none"
+        />
       </g>
     </svg>
 
@@ -140,6 +154,9 @@
             class="er-table-field-row"
             :class="{'is-relation-endpoint': isRelationEndpointField(table.key, field.key)}"
             :title="field.fullTitle"
+            :data-er-table-key="table.key"
+            :data-er-column-key="field.key"
+            :data-er-field-row="true"
           >
             <span class="er-table-field-name">{{ field.columnName }}</span>
             <span class="er-table-field-tag-slot">
@@ -148,6 +165,15 @@
             </span>
             <span class="er-table-field-type">{{ field.dataType || '-' }}</span>
             <span v-if="showComments" class="er-table-field-comment">{{ field.columnComment || '-' }}</span>
+            <button
+              class="er-table-field-link-handle"
+              type="button"
+              data-er-interactive="true"
+              title="拖拽创建字段连线"
+              @mousedown.stop.prevent="onFieldLinkHandleMouseDown(table, field, $event)"
+            >
+              +
+            </button>
           </div>
           <div v-if="table.moreCount > 0" class="er-table-more">{{ table.moreCount }} more columns...</div>
         </div>
@@ -162,6 +188,17 @@
       :style="tooltipStyle"
       v-html="tooltip.html"
     />
+
+    <div
+      v-if="relationContextMenu.visible"
+      class="er-relation-context-menu"
+      :style="relationContextMenuStyle"
+      data-er-interactive="true"
+    >
+      <button type="button" class="er-relation-context-action" data-er-interactive="true" @click="deleteContextRelation">
+        删除连线
+      </button>
+    </div>
   </div>
 </template>
 
@@ -235,6 +272,7 @@ interface RelationViewModel {
   isHovered: boolean;
   isActive: boolean;
   isAi: boolean;
+  isManual: boolean;
   confidenceText: string;
   confidenceX: number;
   confidenceY: number;
@@ -248,6 +286,13 @@ interface TableColumnView {
   primaryKey?: boolean;
   indexed?: boolean;
   fullTitle: string;
+}
+
+interface FieldTargetRef {
+  tableKey: string;
+  tableName: string;
+  columnKey: string;
+  columnName: string;
 }
 
 interface TableViewModel {
@@ -269,14 +314,16 @@ type RelationDirection = 'SOURCE_TO_TARGET' | 'TARGET_TO_SOURCE' | 'BIDIRECTIONA
 type RelationLineType = 'POLYLINE' | 'STRAIGHT';
 type AnchorSide = 'top' | 'right' | 'bottom' | 'left';
 type RouteAnchorRole = '' | 'source' | 'target';
-type DragKind = 'none' | 'pan' | 'node' | 'route' | 'route-anchor';
+type DragKind = 'none' | 'pan' | 'node' | 'route' | 'route-anchor' | 'manual-link';
 
 const props = withDefaults(defineProps<{
   graph: ErGraphVO | null;
+  selectedRelationKey?: string;
   layoutMode?: ErLayoutMode;
   lineType?: RelationLineType;
   showComments?: boolean;
 }>(), {
+  selectedRelationKey: '',
   layoutMode: 'GRID',
   lineType: 'POLYLINE',
   showComments: false,
@@ -285,6 +332,9 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   (e: 'relation-route-change', payload: RelationRouteChangePayload): void;
   (e: 'graph-layout-change', payload: GraphLayoutChangePayload): void;
+  (e: 'relation-select', relationKey: string): void;
+  (e: 'relation-delete-request', relationKey: string): void;
+  (e: 'manual-relation-create', payload: {relation: ErRelationVO}): void;
 }>();
 
 const NODE_WIDTH_COMPACT = 226;
@@ -328,6 +378,13 @@ const manualRouteAnchorOffsets = reactive<Record<string, RouteAnchorOffsets>>({}
 const activeRelationKey = ref('');
 const hoveredRelationKey = ref('');
 
+const relationContextMenu = reactive({
+  visible: false,
+  x: 0,
+  y: 0,
+  relationKey: '',
+});
+
 const tooltip = reactive({
   visible: false,
   x: 0,
@@ -349,6 +406,25 @@ const dragState = reactive({
   relationKey: '',
   routeLaneX: 0,
   routeAnchorRole: '' as RouteAnchorRole,
+  sourceTableKey: '',
+  sourceTableName: '',
+  sourceColumnKey: '',
+  sourceColumnName: '',
+});
+
+const manualRelationDraft = reactive({
+  sourceTableKey: '',
+  sourceTableName: '',
+  sourceColumnKey: '',
+  sourceColumnName: '',
+  startX: 0,
+  startY: 0,
+  currentX: 0,
+  currentY: 0,
+  targetTableKey: '',
+  targetTableName: '',
+  targetColumnKey: '',
+  targetColumnName: '',
 });
 
 let resizeObserver: ResizeObserver | null = null;
@@ -357,6 +433,19 @@ let lastTableSignature = '';
 
 const showComments = computed(() => props.showComments === true);
 const isStraightLineMode = computed(() => props.lineType === 'STRAIGHT');
+
+function closeRelationContextMenu() {
+  relationContextMenu.visible = false;
+  relationContextMenu.relationKey = '';
+}
+
+function setActiveRelationKey(value: string) {
+  if (activeRelationKey.value === value) {
+    return;
+  }
+  activeRelationKey.value = value;
+  emit('relation-select', value);
+}
 
 function subtitleHeight() {
   return showComments.value ? NODE_SUBTITLE_HEIGHT : 0;
@@ -467,6 +556,31 @@ function buildRelationKey(relation: ErRelationVO) {
     normalizeIdentifier(relation.targetColumn),
     normalizeRelationDirection(relation.relationDirection),
   ].join('|');
+}
+
+function findFieldTargetByElement(target: Element | null): FieldTargetRef | null {
+  const row = target instanceof HTMLElement
+    ? target.closest('[data-er-field-row="true"]')
+    : null;
+  if (!(row instanceof HTMLElement)) {
+    return null;
+  }
+  const tableKey = safeText(row.dataset.erTableKey);
+  const columnKey = safeText(row.dataset.erColumnKey);
+  if (!tableKey || !columnKey) {
+    return null;
+  }
+  const table = tableMap.value.get(tableKey);
+  const column = table?.displayColumns.find((item) => item.key === columnKey);
+  if (!table || !column) {
+    return null;
+  }
+  return {
+    tableKey,
+    tableName: table.tableName,
+    columnKey,
+    columnName: column.columnName,
+  };
 }
 
 function escapeHtml(text: string) {
@@ -841,7 +955,7 @@ const allRelations = computed(() => {
     return [] as ErRelationVO[];
   }
   const tableSet = new Set(graph.tables.map((table) => normalizeIdentifier(table.tableName)));
-  return [...(graph.foreignKeyRelations || []), ...(graph.aiRelations || [])]
+  return [...(graph.foreignKeyRelations || []), ...(graph.aiRelations || []), ...(graph.manualRelations || [])]
     .filter((relation) => tableSet.has(normalizeIdentifier(relation.sourceTable)) && tableSet.has(normalizeIdentifier(relation.targetTable)));
 });
 
@@ -915,6 +1029,21 @@ const tableMap = computed(() => {
   });
   return map;
 });
+
+function resolveFieldAnchorPoint(tableKey: string, columnKey: string, oppositeX?: number) {
+  const table = tableMap.value.get(tableKey);
+  if (!table) {
+    return {x: 0, y: 0};
+  }
+  const rowIndex = Math.max(0, table.displayColumns.findIndex((field) => field.key === columnKey));
+  const bodyStartY = table.top + headerHeight() + NODE_BODY_TOP_PADDING;
+  const y = bodyStartY + rowIndex * NODE_ROW_HEIGHT + NODE_ROW_HEIGHT / 2;
+  const useRightSide = oppositeX == null ? true : oppositeX >= table.centerX;
+  return {
+    x: table.left + (useRightSide ? table.width : 0),
+    y,
+  };
+}
 
 const relationViews = computed<RelationViewModel[]>(() => {
   return allRelations.value
@@ -996,9 +1125,10 @@ const relationViews = computed<RelationViewModel[]>(() => {
       const confidenceY = isStraightLineMode.value ? ((sourceY + targetY) / 2) : ((sourceGuideY + targetGuideY) / 2);
 
       const isAi = normalizeRelationType(relation.relationType) === 'AI_INFERRED';
+      const isManual = normalizeRelationType(relation.relationType) === 'MANUAL';
       const confidence = normalizeConfidence(relation.confidence);
-      const baseColor = isAi ? buildAiEdgeColor(confidence) : '#f2c875';
-      const hoverColor = isAi ? buildAiEdgeColor(Math.min(1, confidence + 0.28)) : '#ecb34d';
+      const baseColor = isAi ? buildAiEdgeColor(confidence) : (isManual ? '#73a3ff' : '#f2c875');
+      const hoverColor = isAi ? buildAiEdgeColor(Math.min(1, confidence + 0.28)) : (isManual ? '#3f7cf0' : '#ecb34d');
       const isHovered = hoveredRelationKey.value === relationKey;
       const isActive = activeRelationKey.value === relationKey;
       const isHighlighted = isHovered || isActive;
@@ -1026,6 +1156,7 @@ const relationViews = computed<RelationViewModel[]>(() => {
         isHovered,
         isActive,
         isAi,
+        isManual,
         confidenceText,
         confidenceX,
         confidenceY,
@@ -1038,6 +1169,12 @@ const relationFocusKey = computed(() => hoveredRelationKey.value || activeRelati
 
 const highlightedFieldKeys = computed(() => {
   const result = new Set<string>();
+  if (dragState.kind === 'manual-link' && manualRelationDraft.sourceTableKey && manualRelationDraft.sourceColumnKey) {
+    result.add(`${manualRelationDraft.sourceTableKey}|${manualRelationDraft.sourceColumnKey}`);
+    if (manualRelationDraft.targetTableKey && manualRelationDraft.targetColumnKey) {
+      result.add(`${manualRelationDraft.targetTableKey}|${manualRelationDraft.targetColumnKey}`);
+    }
+  }
   if (!relationFocusKey.value) {
     return result;
   }
@@ -1105,6 +1242,25 @@ const tooltipStyle = computed(() => {
   };
 });
 
+const relationContextMenuStyle = computed(() => ({
+  left: `${clamp(relationContextMenu.x, 8, Math.max(8, viewport.width - 148))}px`,
+  top: `${clamp(relationContextMenu.y, 8, Math.max(8, viewport.height - 56))}px`,
+}));
+
+const manualRelationPreview = computed(() => {
+  if (dragState.kind !== 'manual-link' || !manualRelationDraft.sourceTableKey || !manualRelationDraft.sourceColumnKey) {
+    return null;
+  }
+  const start = resolveFieldAnchorPoint(
+    manualRelationDraft.sourceTableKey,
+    manualRelationDraft.sourceColumnKey,
+    manualRelationDraft.currentX,
+  );
+  return {
+    pointsText: `${start.x},${start.y} ${manualRelationDraft.currentX},${manualRelationDraft.currentY}`,
+  };
+});
+
 function relationTooltipHtml(relation: ErRelationVO) {
   const direction = normalizeRelationDirection(relation.relationDirection);
   const expression = `${relation.sourceTable}.${relation.sourceColumn} ${relationArrowText(direction)} ${relation.targetTable}.${relation.targetColumn}`;
@@ -1151,6 +1307,51 @@ function updateTooltipByClient(clientX: number, clientY: number, html: string) {
 function hideTooltip() {
   tooltip.visible = false;
   tooltip.html = '';
+}
+
+function resetManualRelationDraft() {
+  manualRelationDraft.sourceTableKey = '';
+  manualRelationDraft.sourceTableName = '';
+  manualRelationDraft.sourceColumnKey = '';
+  manualRelationDraft.sourceColumnName = '';
+  manualRelationDraft.startX = 0;
+  manualRelationDraft.startY = 0;
+  manualRelationDraft.currentX = 0;
+  manualRelationDraft.currentY = 0;
+  manualRelationDraft.targetTableKey = '';
+  manualRelationDraft.targetTableName = '';
+  manualRelationDraft.targetColumnKey = '';
+  manualRelationDraft.targetColumnName = '';
+}
+
+function updateManualRelationDraftTarget(clientX: number, clientY: number) {
+  const world = toWorldByClient(clientX, clientY);
+  manualRelationDraft.currentX = world.x;
+  manualRelationDraft.currentY = world.y;
+  const target = typeof document !== 'undefined'
+    ? document.elementFromPoint(clientX, clientY)
+    : null;
+  const field = findFieldTargetByElement(target);
+  if (!field || field.tableKey === manualRelationDraft.sourceTableKey) {
+    manualRelationDraft.targetTableKey = '';
+    manualRelationDraft.targetTableName = '';
+    manualRelationDraft.targetColumnKey = '';
+    manualRelationDraft.targetColumnName = '';
+    return;
+  }
+  manualRelationDraft.targetTableKey = field.tableKey;
+  manualRelationDraft.targetTableName = field.tableName;
+  manualRelationDraft.targetColumnKey = field.columnKey;
+  manualRelationDraft.targetColumnName = field.columnName;
+}
+
+function deleteContextRelation() {
+  if (!relationContextMenu.relationKey) {
+    closeRelationContextMenu();
+    return;
+  }
+  emit('relation-delete-request', relationContextMenu.relationKey);
+  closeRelationContextMenu();
 }
 
 function toWorldByClient(clientX: number, clientY: number) {
@@ -1204,8 +1405,10 @@ function maybeResetLayoutState() {
   clearRecord(manualRouteAnchorOffsets);
   layoutCanvas.width = 0;
   layoutCanvas.height = 0;
-  activeRelationKey.value = '';
+  setActiveRelationKey('');
   hoveredRelationKey.value = '';
+  closeRelationContextMenu();
+  resetManualRelationDraft();
   hideTooltip();
   lastLayoutModeKey = nextLayoutModeKey;
   lastTableSignature = nextTableSignature;
@@ -1297,10 +1500,13 @@ function syncRouteOverridesFromGraph() {
     }
   });
   if (activeRelationKey.value && !validKeys.has(activeRelationKey.value)) {
-    activeRelationKey.value = '';
+    setActiveRelationKey('');
   }
   if (hoveredRelationKey.value && !validKeys.has(hoveredRelationKey.value)) {
     hoveredRelationKey.value = '';
+  }
+  if (relationContextMenu.relationKey && !validKeys.has(relationContextMenu.relationKey)) {
+    closeRelationContextMenu();
   }
 }
 
@@ -1319,6 +1525,11 @@ function endDrag() {
   dragState.tableKey = '';
   dragState.relationKey = '';
   dragState.routeAnchorRole = '';
+  dragState.sourceTableKey = '';
+  dragState.sourceTableName = '';
+  dragState.sourceColumnKey = '';
+  dragState.sourceColumnName = '';
+  resetManualRelationDraft();
   stopWindowDragListeners();
 }
 
@@ -1327,10 +1538,15 @@ function onViewportMouseDown(event: MouseEvent) {
     return;
   }
   const target = event.target as HTMLElement | null;
-  if (target?.closest('[data-er-interactive="true"]')) {
+  const interactiveTarget = target?.closest('[data-er-interactive="true"]');
+  if (interactiveTarget) {
+    if (!target?.closest('.er-relation-context-menu')) {
+      closeRelationContextMenu();
+    }
     return;
   }
-  activeRelationKey.value = '';
+  closeRelationContextMenu();
+  setActiveRelationKey('');
   hoveredRelationKey.value = '';
   hideTooltip();
   dragState.kind = 'pan';
@@ -1361,6 +1577,7 @@ function onTableMouseDown(table: TableViewModel, event: MouseEvent) {
   if (event.button !== 0) {
     return;
   }
+  closeRelationContextMenu();
   const world = toWorldByClient(event.clientX, event.clientY);
   dragState.kind = 'node';
   dragState.tableKey = table.key;
@@ -1379,6 +1596,7 @@ function onRouteHandleMouseDown(handle: {relationKey: string; x: number; y: numb
   if (isStraightLineMode.value) {
     return;
   }
+  closeRelationContextMenu();
   const world = toWorldByClient(event.clientX, event.clientY);
   dragState.kind = 'route';
   dragState.relationKey = handle.relationKey;
@@ -1393,6 +1611,7 @@ function onRouteAnchorMouseDown(relationKey: string, anchorRole: Exclude<RouteAn
   if (event.button !== 0) {
     return;
   }
+  closeRelationContextMenu();
   const world = toWorldByClient(event.clientX, event.clientY);
   dragState.kind = 'route-anchor';
   dragState.relationKey = relationKey;
@@ -1451,6 +1670,11 @@ function onWindowMouseMove(event: MouseEvent) {
       targetPerimeterPos: dragState.routeAnchorRole === 'target' ? projected.perimeterPos : existing.targetPerimeterPos,
     };
     hideTooltip();
+    return;
+  }
+  if (dragState.kind === 'manual-link') {
+    updateManualRelationDraftTarget(event.clientX, event.clientY);
+    hideTooltip();
   }
 }
 
@@ -1467,6 +1691,24 @@ function onWindowMouseUp() {
   }
   if (dragState.kind === 'node' || dragState.kind === 'route-anchor') {
     emitGraphLayoutChange();
+  }
+  if (
+    dragState.kind === 'manual-link'
+    && manualRelationDraft.sourceTableName
+    && manualRelationDraft.sourceColumnName
+    && manualRelationDraft.targetTableName
+    && manualRelationDraft.targetColumnName
+  ) {
+    emit('manual-relation-create', {
+      relation: {
+        sourceTable: manualRelationDraft.sourceTableName,
+        sourceColumn: manualRelationDraft.sourceColumnName,
+        targetTable: manualRelationDraft.targetTableName,
+        targetColumn: manualRelationDraft.targetColumnName,
+        relationType: 'MANUAL',
+        relationDirection: 'SOURCE_TO_TARGET',
+      },
+    });
   }
   endDrag();
 }
@@ -1510,7 +1752,8 @@ function onRelationMouseLeave() {
 
 function onRelationClick(relation: RelationViewModel, event: MouseEvent) {
   event.stopPropagation();
-  activeRelationKey.value = relation.relationKey;
+  closeRelationContextMenu();
+  setActiveRelationKey(relation.relationKey);
 }
 
 function onRelationMouseDown(relation: RelationViewModel, event: MouseEvent) {
@@ -1518,7 +1761,8 @@ function onRelationMouseDown(relation: RelationViewModel, event: MouseEvent) {
     return;
   }
   event.stopPropagation();
-  activeRelationKey.value = relation.relationKey;
+  closeRelationContextMenu();
+  setActiveRelationKey(relation.relationKey);
   if (isStraightLineMode.value) {
     hideTooltip();
     return;
@@ -1533,8 +1777,51 @@ function onRelationMouseDown(relation: RelationViewModel, event: MouseEvent) {
   startWindowDragListeners();
 }
 
+function onRelationContextMenu(relation: RelationViewModel, event: MouseEvent) {
+  setActiveRelationKey(relation.relationKey);
+  hideTooltip();
+  const local = toLocalByClient(event.clientX, event.clientY);
+  relationContextMenu.visible = true;
+  relationContextMenu.x = local.x;
+  relationContextMenu.y = local.y;
+  relationContextMenu.relationKey = relation.relationKey;
+}
+
+function onFieldLinkHandleMouseDown(table: TableViewModel, field: TableColumnView, event: MouseEvent) {
+  if (event.button !== 0) {
+    return;
+  }
+  closeRelationContextMenu();
+  const world = toWorldByClient(event.clientX, event.clientY);
+  dragState.kind = 'manual-link';
+  dragState.sourceTableKey = table.key;
+  dragState.sourceTableName = table.tableName;
+  dragState.sourceColumnKey = field.key;
+  dragState.sourceColumnName = field.columnName;
+  manualRelationDraft.sourceTableKey = table.key;
+  manualRelationDraft.sourceTableName = table.tableName;
+  manualRelationDraft.sourceColumnKey = field.key;
+  manualRelationDraft.sourceColumnName = field.columnName;
+  manualRelationDraft.startX = world.x;
+  manualRelationDraft.startY = world.y;
+  manualRelationDraft.currentX = world.x;
+  manualRelationDraft.currentY = world.y;
+  manualRelationDraft.targetTableKey = '';
+  manualRelationDraft.targetTableName = '';
+  manualRelationDraft.targetColumnKey = '';
+  manualRelationDraft.targetColumnName = '';
+  hideTooltip();
+  startWindowDragListeners();
+}
+
 function onViewportMouseMove(event: MouseEvent) {
-  if (dragState.kind === 'pan' || dragState.kind === 'node' || dragState.kind === 'route' || dragState.kind === 'route-anchor') {
+  if (
+    dragState.kind === 'pan'
+    || dragState.kind === 'node'
+    || dragState.kind === 'route'
+    || dragState.kind === 'route-anchor'
+    || dragState.kind === 'manual-link'
+  ) {
     hideTooltip();
     return;
   }
@@ -1789,13 +2076,25 @@ watch(
     if (!optionReady.value) {
       emptyText.value = 'No ER graph data';
       hideTooltip();
-      activeRelationKey.value = '';
+      closeRelationContextMenu();
+      setActiveRelationKey('');
       hoveredRelationKey.value = '';
       return;
     }
     emitGraphLayoutChange();
   },
   {deep: true, immediate: true},
+);
+
+watch(
+  () => props.selectedRelationKey,
+  (value) => {
+    activeRelationKey.value = value || '';
+    if (!activeRelationKey.value) {
+      closeRelationContextMenu();
+    }
+  },
+  {immediate: true},
 );
 
 watch(
@@ -1918,7 +2217,7 @@ onBeforeUnmount(() => {
   font-size: 10px;
   color: #244367;
   display: grid;
-  grid-template-columns: minmax(0, 112px) 30px minmax(0, 68px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 104px) 30px minmax(0, 60px) minmax(0, 1fr) 14px;
   align-items: center;
   gap: 4px;
   white-space: nowrap;
@@ -1926,7 +2225,7 @@ onBeforeUnmount(() => {
 }
 
 .er-table-card.is-show-comments .er-table-field-row {
-  grid-template-columns: minmax(0, 104px) 30px minmax(0, 58px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 98px) 30px minmax(0, 54px) minmax(0, 1fr) 14px;
 }
 
 .er-table-field-row.is-relation-endpoint {
@@ -1970,6 +2269,24 @@ onBeforeUnmount(() => {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.er-table-field-link-handle {
+  width: 14px;
+  height: 14px;
+  border: 1px solid #9ec0ef;
+  border-radius: 999px;
+  padding: 0;
+  background: #eef5ff;
+  color: #2f69b4;
+  font-size: 10px;
+  line-height: 12px;
+  cursor: crosshair;
+}
+
+.er-table-field-link-handle:hover {
+  background: #dcecff;
+  border-color: #6e9fe3;
 }
 
 .er-field-mark {
@@ -2026,6 +2343,10 @@ onBeforeUnmount(() => {
   filter: drop-shadow(0 0 7px rgba(236, 179, 77, 0.34));
 }
 
+.er-manual-relation-preview {
+  filter: drop-shadow(0 0 5px rgba(76, 139, 245, 0.28));
+}
+
 .er-relation-confidence {
   font-size: 10px;
   font-weight: 700;
@@ -2063,6 +2384,33 @@ onBeforeUnmount(() => {
   font-size: 12px;
   line-height: 1.45;
   pointer-events: none;
+}
+
+.er-relation-context-menu {
+  position: absolute;
+  z-index: 14;
+  min-width: 120px;
+  padding: 4px;
+  border: 1px solid #c7d6eb;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 10px 22px rgba(15, 40, 79, 0.18);
+}
+
+.er-relation-context-action {
+  width: 100%;
+  border: 0;
+  border-radius: 6px;
+  padding: 7px 10px;
+  background: transparent;
+  color: #b63636;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.er-relation-context-action:hover {
+  background: #fff1f1;
 }
 
 .er-diagram-empty {

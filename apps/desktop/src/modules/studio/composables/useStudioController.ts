@@ -33,6 +33,7 @@ export function useStudioController() {
   const knowledgeModule = useKnowledgeModule(runtime);
   const uiShellModule = useUiShellModule(runtime, {
     handleBrowserClipboardKeydown: tableCopyModule.handleBrowserClipboardKeydown,
+    handleErRelationDeleteKeydown: erModule.handleErRelationDeleteKeydown,
   });
 
   return {

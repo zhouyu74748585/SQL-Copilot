@@ -341,7 +341,7 @@ export interface ErRelationVO {
   sourceColumn: string;
   targetTable: string;
   targetColumn: string;
-  relationType: 'FK' | 'AI_INFERRED' | string;
+  relationType: 'FK' | 'AI_INFERRED' | 'MANUAL' | string;
   relationDirection?: 'SOURCE_TO_TARGET' | 'TARGET_TO_SOURCE' | 'BIDIRECTIONAL' | string;
   confidence?: number;
   reason?: string;
@@ -377,6 +377,7 @@ export interface ErGraphVO {
   tables: ErTableNodeVO[];
   foreignKeyRelations: ErRelationVO[];
   aiRelations: ErRelationVO[];
+  manualRelations: ErRelationVO[];
   aiInference: ErAiInferenceStatusVO;
   layoutCanvas?: ErLayoutCanvasVO;
   nodePositions?: Record<string, ErNodePositionVO>;
