@@ -635,7 +635,6 @@
 
       <template v-else-if="activeErTab">
         <section class="pane pane-center er-diagram-pane">
-          <div class="pane-title">智能ER图 · {{ activeErTab.title }}</div>
           <div class="er-toolbar">
             <a-space size="small">
               <a-button size="small" @click="openErTableSelectModal(activeErTab)">
