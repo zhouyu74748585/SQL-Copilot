@@ -337,18 +337,6 @@
 
       <template v-if="activeWorkbenchTab === browserTabKey">
           <section class="pane pane-center browser-center-pane">
-            <div class="pane-title pane-title-with-action">
-              <div class="pane-title-actions">
-                <a-tooltip :title="browserDetailCollapsed ? '展开对象详情' : '收起对象详情'">
-                  <a-button size="small" type="text" class="table-data-icon-btn" @click.stop="toggleBrowserDetailCollapsed">
-                    <template #icon>
-                      <menu-fold-outlined v-if="!browserDetailCollapsed" />
-                      <menu-unfold-outlined v-else />
-                    </template>
-                  </a-button>
-                </a-tooltip>
-              </div>
-            </div>
             <div class="center-toolbar">
               <div v-if="currentObjectType === 'tables'" class="center-toolbar-left">
                 <a-button size="small" type="primary" :disabled="!canCreateTable" @click="openNewTableEditor()">
@@ -373,6 +361,14 @@
                   <a-radio-button value="row"><unordered-list-outlined /></a-radio-button>
                   <a-radio-button value="grid"><appstore-outlined /></a-radio-button>
                 </a-radio-group>
+                 <a-tooltip :title="browserDetailCollapsed ? '展开对象详情' : '收起对象详情'">
+                  <a-button size="small" type="text" class="table-data-icon-btn" @click.stop="toggleBrowserDetailCollapsed">
+                    <template #icon>
+                      <menu-fold-outlined v-if="!browserDetailCollapsed" />
+                      <menu-unfold-outlined v-else />
+                    </template>
+                  </a-button>
+                </a-tooltip>
               </div>
             </div>
 
@@ -653,18 +649,6 @@
 
       <template v-else-if="activeErTab">
         <section class="pane pane-center er-diagram-pane">
-          <div class="pane-title pane-title-with-action">
-            <div class="pane-title-actions">
-              <a-tooltip :title="activeErTab.detailCollapsed ? '展开 ER 图信息' : '收起 ER 图信息'">
-                <a-button size="small" type="text" class="table-data-icon-btn" @click.stop="toggleErDetailCollapsed(activeErTab)">
-                  <template #icon>
-                    <menu-fold-outlined v-if="!activeErTab.detailCollapsed" />
-                    <menu-unfold-outlined v-else />
-                  </template>
-                </a-button>
-              </a-tooltip>
-            </div>
-          </div>
           <div class="er-toolbar">
             <a-space size="small">
               <a-button size="small" @click="openErTableSelectModal(activeErTab)">
@@ -714,6 +698,14 @@
                 :options="erLineTypeOptions"
                 @change="touchErTab(activeErTab)"
               />
+              <a-tooltip :title="activeErTab.detailCollapsed ? '展开 ER 图信息' : '收起 ER 图信息'">
+                <a-button size="small" type="text" class="table-data-icon-btn" @click.stop="toggleErDetailCollapsed(activeErTab)">
+                  <template #icon>
+                    <menu-fold-outlined v-if="!activeErTab.detailCollapsed" />
+                    <menu-unfold-outlined v-else />
+                  </template>
+                </a-button>
+              </a-tooltip>
             </a-space>
           </div>
           <div class="er-canvas-wrap">
