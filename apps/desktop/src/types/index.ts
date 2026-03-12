@@ -201,6 +201,14 @@ export interface TableRenameVO {
   targetTableName: string;
 }
 
+export interface TableOperationVO {
+  success: boolean;
+  message: string;
+  databaseName?: string;
+  tableName?: string;
+  executedSql?: string;
+}
+
 export type SchemaObjectType = 'views' | 'functions';
 
 export interface SchemaObjectDefinitionVO {

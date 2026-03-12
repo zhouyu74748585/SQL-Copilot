@@ -17,80 +17,80 @@
           <span>字段定义</span>
           <a-button size="small" type="link" @click="addColumn"><template #icon><plus-outlined /></template>添加字段</a-button>
         </div>
-        <a-table
-          :columns="columnColumns"
-          :data-source="columns"
-          :pagination="false"
-          size="small"
-          row-key="uuid"
-          bordered
-          :scroll="{ x: 600, y: 320 }"
-          :row-class-name="(record: ColumnRecord) => selectedColumnUuid === record.uuid ? 'selected-row' : ''"
-          @change="handleTableChange"
-        >
-          <template #bodyCell="{ column, record, index }">
-            <div v-if="column.key === 'columnName'" class="column-name-cell" @click="selectColumn(record)">
-              <key-outlined v-if="record.primaryKey" class="pk-icon" />
-              <a-input v-model:value="record.columnName" size="small" />
-            </div>
-            <a-select
-              v-else-if="column.key === 'dataType'"
-              v-model:value="record.dataType"
-              size="small"
-              :options="dataTypeOptions"
-              style="width: 100%"
-              @change="handleTypeChange(record)"
-            />
-            <a-input v-else-if="column.key === 'length'" v-model:value="record.columnSize" size="small" style="width: 100%" />
-            <a-input-number
-              v-else-if="column.key === 'scale'"
-              v-model:value="record.decimalDigits"
-              size="small"
-              :min="0"
-              :disabled="!isDecimalType(record.dataType)"
-              style="width: 100%"
-            />
-            <a-input v-else-if="column.key === 'comment'" v-model:value="record.columnComment" size="small" />
-            <a-button v-else-if="column.key === 'actions'" size="small" type="link" danger @click="removeColumn(index)">
-              <template #icon><delete-outlined /></template>
-            </a-button>
-          </template>
-        </a-table>
-        <!-- 字段详情面板 -->
-        <div v-if="selectedColumn" class="column-detail-panel">
-          <div class="detail-header">
-            <span class="detail-title">{{ selectedColumn.columnName || '未命名字段' }}</span>
-            <span class="detail-type">{{ typeWithSize(selectedColumn) }}</span>
-          </div>
-          <div class="detail-content">
-            <div class="detail-row">
-              <span class="detail-label">可空</span>
-              <a-checkbox v-model:checked="selectedColumn.nullable" size="small">允许空值</a-checkbox>
-            </div>
-            <div class="detail-row">
-              <span class="detail-label">主键</span>
-              <a-checkbox v-model:checked="selectedColumn.primaryKey" size="small">
-                <span class="detail-checkbox-label"><key-outlined class="pk-icon" />主键字段</span>
-              </a-checkbox>
-            </div>
-            <div class="detail-row">
-              <span class="detail-label">自增</span>
-              <a-checkbox v-model:checked="selectedColumn.autoIncrement" size="small" :disabled="!selectedColumn.primaryKey">自动递增</a-checkbox>
-            </div>
-            <div class="detail-row">
-              <span class="detail-label">默认值</span>
-              <a-input v-model:value="selectedColumn.defaultValue" size="small" style="width: 160px" :disabled="selectedColumn.defaultCurrentTimestamp" />
-            </div>
-            <div class="detail-row time-extra">
-              <span class="detail-label">时间扩展</span>
-              <div class="time-checkboxes">
-                <a-checkbox v-model:checked="selectedColumn.defaultCurrentTimestamp" :disabled="!isTemporalType(selectedColumn.dataType)" @change="handleTemporalChange(selectedColumn)">
-                  默认当前时间
-                </a-checkbox>
-                <a-checkbox v-model:checked="selectedColumn.onUpdateCurrentTimestamp" :disabled="!isTemporalType(selectedColumn.dataType)">更新时自动刷新</a-checkbox>
+        <div ref="columnsTableHost" class="table-grid-host">
+          <a-table
+            class="compact-schema-table columns-table"
+            :columns="columnColumns"
+            :data-source="columns"
+            :pagination="false"
+            size="small"
+            row-key="uuid"
+            bordered
+            :scroll="{ x: 600, y: columnsTableScrollY }"
+            :row-class-name="(record: ColumnRecord) => selectedColumnUuid === record.uuid ? 'selected-row' : ''"
+            :expanded-row-keys="expandedColumnKeys"
+            :show-expand-column="false"
+            :custom-row="columnRowProps"
+            @change="handleTableChange"
+          >
+            <template #bodyCell="{ column, record, index }">
+              <div v-if="column.key === 'columnName'" class="column-name-cell" @click="selectColumn(record)">
+                <key-outlined v-if="record.primaryKey" class="pk-icon" />
+                <a-input v-model:value="record.columnName" size="small" />
               </div>
-            </div>
-          </div>
+              <a-select
+                v-else-if="column.key === 'dataType'"
+                v-model:value="record.dataType"
+                size="small"
+                :options="dataTypeOptions"
+                style="width: 100%"
+                @change="handleTypeChange(record)"
+              />
+              <a-input v-else-if="column.key === 'length'" v-model:value="record.columnSize" size="small" style="width: 100%" />
+              <a-input-number
+                v-else-if="column.key === 'scale'"
+                v-model:value="record.decimalDigits"
+                size="small"
+                :min="0"
+                :disabled="!isDecimalType(record.dataType)"
+                style="width: 100%"
+              />
+              <a-input v-else-if="column.key === 'comment'" v-model:value="record.columnComment" size="small" />
+              <a-button v-else-if="column.key === 'actions'" size="small" type="link" danger @click="removeColumn(index)">
+                <template #icon><delete-outlined /></template>
+              </a-button>
+            </template>
+            <template #expandedRowRender="{ record }">
+              <div class="column-inline-detail">
+                <div class="column-inline-detail-head">
+                  <span class="detail-title">{{ record.columnName || '未命名字段' }}</span>
+                  <span class="detail-type">{{ typeWithSize(record) }}</span>
+                </div>
+                <div class="column-inline-detail-grid">
+                  <a-checkbox v-model:checked="record.nullable" size="small">允许空值</a-checkbox>
+                  <a-checkbox v-model:checked="record.primaryKey" size="small">
+                    <span class="detail-checkbox-label"><key-outlined class="pk-icon" />主键字段</span>
+                  </a-checkbox>
+                  <a-checkbox v-model:checked="record.autoIncrement" size="small" :disabled="!record.primaryKey">自动递增</a-checkbox>
+                  <label class="inline-field">
+                    <span class="detail-label">默认值</span>
+                    <a-input v-model:value="record.defaultValue" size="small" :disabled="record.defaultCurrentTimestamp" />
+                  </label>
+                  <a-checkbox
+                    v-model:checked="record.defaultCurrentTimestamp"
+                    size="small"
+                    :disabled="!isTemporalType(record.dataType)"
+                    @change="handleTemporalChange(record)"
+                  >
+                    默认当前时间
+                  </a-checkbox>
+                  <a-checkbox v-model:checked="record.onUpdateCurrentTimestamp" size="small" :disabled="!isTemporalType(record.dataType)">
+                    更新时自动刷新
+                  </a-checkbox>
+                </div>
+              </div>
+            </template>
+          </a-table>
         </div>
       </a-tab-pane>
 
@@ -99,30 +99,32 @@
           <span>索引管理</span>
           <a-button size="small" type="link" @click="addIndex"><template #icon><plus-outlined /></template>添加索引</a-button>
         </div>
-        <a-table :columns="indexColumns" :data-source="indexes" :pagination="false" size="small" row-key="uuid" bordered :scroll="{ x: 920, y: 420 }">
-          <template #bodyCell="{ column, record, index }">
-            <a-input v-if="column.key === 'indexName'" v-model:value="record.indexName" size="small" />
-            <a-select v-else-if="column.key === 'indexType'" v-model:value="record.unique" size="small" :options="indexTypeOptions" style="width: 100%" />
-            <a-select
-              v-else-if="column.key === 'columns'"
-              v-model:value="record.columns"
-              mode="multiple"
-              size="small"
-              :options="columnOptions"
-              style="width: 100%"
-            />
-            <a-button v-else-if="column.key === 'actions'" size="small" type="link" danger @click="removeIndex(index)">
-              <template #icon><delete-outlined /></template>
-            </a-button>
-          </template>
-        </a-table>
+        <div ref="indexesTableHost" class="table-grid-host">
+          <a-table class="compact-schema-table indexes-table" :columns="indexColumns" :data-source="indexes" :pagination="false" size="small" row-key="uuid" bordered :scroll="{ x: 920, y: indexesTableScrollY }">
+            <template #bodyCell="{ column, record, index }">
+              <a-input v-if="column.key === 'indexName'" v-model:value="record.indexName" size="small" />
+              <a-select v-else-if="column.key === 'indexType'" v-model:value="record.unique" size="small" :options="indexTypeOptions" style="width: 100%" />
+              <a-select
+                v-else-if="column.key === 'columns'"
+                v-model:value="record.columns"
+                mode="multiple"
+                size="small"
+                :options="columnOptions"
+                style="width: 100%"
+              />
+              <a-button v-else-if="column.key === 'actions'" size="small" type="link" danger @click="removeIndex(index)">
+                <template #icon><delete-outlined /></template>
+              </a-button>
+            </template>
+          </a-table>
+        </div>
       </a-tab-pane>
     </a-tabs>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, watchEffect } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef, watch, watchEffect } from 'vue';
 import { message } from 'ant-design-vue';
 import { DeleteOutlined, FileTextOutlined, KeyOutlined, PlayCircleOutlined, PlusOutlined } from '@ant-design/icons-vue';
 import { postApi } from '../api/client';
@@ -181,11 +183,16 @@ const indexes = ref<IndexRecord[]>([]);
 const baseline = ref<Draft | null>(null);
 const saving = ref(false);
 const selectedColumnUuid = ref<string | null>(null);
+const columnsTableHost = useTemplateRef<HTMLDivElement>('columnsTableHost');
+const indexesTableHost = useTemplateRef<HTMLDivElement>('indexesTableHost');
+const columnsTableHostHeight = ref(0);
+const indexesTableHostHeight = ref(0);
+const TABLE_SCROLL_BODY_OFFSET = 54;
+let layoutObserver: ResizeObserver | null = null;
 
-const selectedColumn = computed(() => {
-  if (!selectedColumnUuid.value) return null;
-  return columns.value.find((c) => c.uuid === selectedColumnUuid.value) || null;
-});
+const expandedColumnKeys = computed(() => (selectedColumnUuid.value ? [selectedColumnUuid.value] : []));
+const columnsTableScrollY = computed(() => resolveTableScrollY(columnsTableHostHeight.value));
+const indexesTableScrollY = computed(() => resolveTableScrollY(indexesTableHostHeight.value));
 
 const dataTypeOptions = [
   'INT', 'BIGINT', 'VARCHAR', 'TEXT', 'DECIMAL', 'DATETIME', 'TIMESTAMP', 'DATE', 'TIME', 'JSON', 'BOOLEAN', 'DOUBLE', 'FLOAT', 'CHAR', 'BLOB',
@@ -222,7 +229,54 @@ function uuid() {
     return v.toString(16);
   });
 }
-function cloneColumns(list: ColumnRecord[]) { return list.map((c) => ({ ...c })); }
+function resolveTableScrollY(hostHeight: number) {
+  return Math.max(180, Math.floor(hostHeight - TABLE_SCROLL_BODY_OFFSET));
+}
+function normalizeIntegerValue(value: unknown) {
+  if (value == null) return null;
+  const raw = typeof value === 'number' ? String(value) : norm(String(value));
+  if (!raw) return null;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.trunc(parsed);
+}
+function parseTypeDefinition(dataType: string) {
+  const raw = normType(dataType);
+  const match = raw.match(/^([A-Z0-9_]+)\s*\((\d+)(?:\s*,\s*(\d+))?\)$/);
+  if (!match) return { dataType: raw, columnSize: null as number | null, decimalDigits: null as number | null };
+  return {
+    dataType: match[1],
+    columnSize: Number(match[2]),
+    decimalDigits: match[3] != null ? Number(match[3]) : null,
+  };
+}
+function normalizeColumnTypeParts(column: Pick<ColumnRecord, 'dataType' | 'columnSize' | 'decimalDigits'>) {
+  const parsed = parseTypeDefinition(column.dataType);
+  const dataType = parsed.dataType || 'VARCHAR';
+  const decimalDigits = normalizeIntegerValue(column.decimalDigits) ?? parsed.decimalDigits;
+  return {
+    dataType,
+    columnSize: normalizeIntegerValue(column.columnSize) ?? parsed.columnSize,
+    decimalDigits: isDecimalType(dataType) ? decimalDigits : null,
+  };
+}
+function sameColumnTypeDefinition(a: Pick<ColumnRecord, 'dataType' | 'columnSize' | 'decimalDigits'>, b: Pick<ColumnRecord, 'dataType' | 'columnSize' | 'decimalDigits'>) {
+  const left = normalizeColumnTypeParts(a);
+  const right = normalizeColumnTypeParts(b);
+  return left.dataType === right.dataType
+    && left.columnSize === right.columnSize
+    && left.decimalDigits === right.decimalDigits;
+}
+function normalizeColumnRecord(column: ColumnRecord): ColumnRecord {
+  const normalized = normalizeColumnTypeParts(column);
+  return {
+    ...column,
+    dataType: normalized.dataType,
+    columnSize: normalized.columnSize,
+    decimalDigits: normalized.decimalDigits,
+  };
+}
+function cloneColumns(list: ColumnRecord[]) { return list.map((c) => normalizeColumnRecord({ ...c })); }
 function cloneIndexes(list: IndexRecord[]) { return list.map((i) => ({ ...i, columns: [...i.columns] })); }
 function cloneDraft(d: Draft): Draft { return { tableName: d.tableName, tableComment: d.tableComment, columns: cloneColumns(d.columns), indexes: cloneIndexes(d.indexes) }; }
 function norm(s: string) { return String(s || '').trim(); }
@@ -250,10 +304,20 @@ function defaultColumns() {
 }
 function emptyIndex(): IndexRecord { return { uuid: uuid(), indexName: '', unique: false, columns: [] }; }
 function addColumn() { columns.value.push(emptyColumn()); }
-function removeColumn(index: number) { columns.value.splice(index, 1); }
+function removeColumn(index: number) {
+  const removed = columns.value[index];
+  columns.value.splice(index, 1);
+  if (removed?.uuid && removed.uuid === selectedColumnUuid.value) {
+    selectedColumnUuid.value = columns.value[index]?.uuid || columns.value[index - 1]?.uuid || null;
+  }
+}
 function addIndex() { indexes.value.push(emptyIndex()); }
 function removeIndex(index: number) { indexes.value.splice(index, 1); }
 function handleTypeChange(c: ColumnRecord) {
+  const normalized = normalizeColumnTypeParts(c);
+  c.dataType = normalized.dataType;
+  c.columnSize = normalized.columnSize;
+  c.decimalDigits = normalized.decimalDigits;
   if (!isDecimalType(c.dataType)) c.decimalDigits = null;
   if (!isTemporalType(c.dataType)) {
     c.defaultCurrentTimestamp = false;
@@ -266,6 +330,14 @@ function handleTemporalChange(c: ColumnRecord) {
 
 function selectColumn(record: ColumnRecord) {
   selectedColumnUuid.value = record.uuid;
+}
+
+function columnRowProps(record: ColumnRecord) {
+  return {
+    onClick: () => {
+      selectColumn(record);
+    },
+  };
 }
 
 function handleTableChange() {
@@ -307,13 +379,14 @@ const canSave = computed(() => {
 });
 
 function typeWithSize(c: ColumnRecord) {
-  const t = normType(c.dataType);
+  const normalized = normalizeColumnTypeParts(c);
+  const t = normalized.dataType;
   if (/\(.+\)/.test(t)) return t;
-  const noSize = new Set(['INT', 'BIGINT', 'TEXT', 'DATE', 'DATETIME', 'TIMESTAMP', 'TIME', 'JSON', 'BOOLEAN', 'BLOB']);
+  const noSize = new Set(['INT', 'TEXT', 'DATE', 'DATETIME', 'TIMESTAMP', 'TIME', 'JSON', 'BOOLEAN', 'BLOB']);
   if (noSize.has(t)) return t;
-  if (c.columnSize != null && c.columnSize > 0) {
-    if (isDecimalType(t) && c.decimalDigits != null && c.decimalDigits >= 0) return `${t}(${c.columnSize},${c.decimalDigits})`;
-    return `${t}(${c.columnSize})`;
+  if (normalized.columnSize != null && normalized.columnSize > 0) {
+    if (isDecimalType(t) && normalized.decimalDigits != null && normalized.decimalDigits >= 0) return `${t}(${normalized.columnSize},${normalized.decimalDigits})`;
+    return `${t}(${normalized.columnSize})`;
   }
   return t || 'VARCHAR';
 }
@@ -324,6 +397,7 @@ function defaultSql(c: ColumnRecord) {
   if (/^'.*'$/.test(raw) || /^".*"$/.test(raw) || /^-?\d+(\.\d+)?$/.test(raw)) return raw;
   const upper = raw.toUpperCase();
   if (upper === 'NULL' || upper === 'CURRENT_TIMESTAMP' || upper === 'CURRENT_TIMESTAMP()' || upper === 'NOW()') return raw;
+  if (/^[A-Z_][A-Z0-9_]*\s*\([^)]*\)$/i.test(raw)) return raw;
   return quoteStr(raw);
 }
 function columnSql(c: ColumnRecord) {
@@ -348,9 +422,7 @@ function draftNow(): Draft {
 }
 function colEq(a: ColumnRecord, b: ColumnRecord) {
   return idNorm(a.columnName) === idNorm(b.columnName)
-    && normType(a.dataType) === normType(b.dataType)
-    && (a.columnSize ?? null) === (b.columnSize ?? null)
-    && (a.decimalDigits ?? null) === (b.decimalDigits ?? null)
+    && sameColumnTypeDefinition(a, b)
     && !!a.nullable === !!b.nullable
     && !!a.autoIncrement === !!b.autoIncrement
     && (a.defaultCurrentTimestamp ? '__CTS__' : norm(a.defaultValue)) === (b.defaultCurrentTimestamp ? '__CTS__' : norm(b.defaultValue))
@@ -429,6 +501,23 @@ function emitChange() {
   emit('change', { draft: draftNow(), previewSql: previewSql.value, canSave: canSave.value, dirty: dirty.value });
 }
 
+function syncTableHostHeights() {
+  columnsTableHostHeight.value = columnsTableHost.value?.clientHeight ?? 0;
+  indexesTableHostHeight.value = indexesTableHost.value?.clientHeight ?? 0;
+}
+
+function observeTableHosts() {
+  if (!layoutObserver) {
+    return;
+  }
+  if (columnsTableHost.value) {
+    layoutObserver.observe(columnsTableHost.value);
+  }
+  if (indexesTableHost.value) {
+    layoutObserver.observe(indexesTableHost.value);
+  }
+}
+
 function loadFromTab() {
   activeTab.value = 'columns';
   selectedColumnUuid.value = null;
@@ -498,42 +587,77 @@ watch(() => columns.value, (list) => {
     if (!isDecimalType(c.dataType)) c.decimalDigits = null;
     if (c.defaultCurrentTimestamp) c.defaultValue = '';
   });
+  if (selectedColumnUuid.value && !list.some((c) => c.uuid === selectedColumnUuid.value)) {
+    selectedColumnUuid.value = list[0]?.uuid || null;
+  }
   const names = new Set(list.map((c) => norm(c.columnName)).filter((n) => !!n));
   indexes.value.forEach((i) => { i.columns = i.columns.filter((n) => names.has(norm(n))); });
 }, { deep: true });
 watch(() => [tableName.value, tableComment.value, columns.value, indexes.value], () => emitChange(), { deep: true });
+watch(activeTab, async () => {
+  await nextTick();
+  observeTableHosts();
+  syncTableHostHeights();
+});
+
+onMounted(() => {
+  syncTableHostHeights();
+  if (typeof ResizeObserver !== 'undefined') {
+    layoutObserver = new ResizeObserver(() => {
+      syncTableHostHeights();
+    });
+    observeTableHosts();
+  }
+  window.addEventListener('resize', syncTableHostHeights);
+});
+
+onBeforeUnmount(() => {
+  layoutObserver?.disconnect();
+  layoutObserver = null;
+  window.removeEventListener('resize', syncTableHostHeights);
+});
 
 </script>
 
 <style scoped>
-.table-editor { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.table-editor { display: flex; flex: 1 1 auto; flex-direction: column; height: 100%; min-height: 0; }
 .table-editor-toolbar { display: flex; justify-content: space-between; gap: 10px; padding: 8px 10px; border-bottom: 1px solid var(--line, #e8e8e8); }
 .table-editor-form { flex: 1; min-width: 0; }
 .table-editor-tabs { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .table-editor-tabs :deep(.ant-tabs-nav) { margin-bottom: 8px; }
 .table-editor-tabs :deep(.ant-tabs-tab) { padding: 4px 12px; }
-.table-editor-tabs :deep(.ant-tabs-content-holder) { flex: 1; min-height: 0; }
+.table-editor-tabs :deep(.ant-tabs-content-holder),
+.table-editor-tabs :deep(.ant-tabs-content),
+.table-editor-tabs :deep(.ant-tabs-tabpane-active) { flex: 1; min-height: 0; height: 100%; display: flex; flex-direction: column; }
 .table-editor-tabs :deep(.ant-tabs-tabpane) { height: 100%; display: flex; flex-direction: column; min-height: 0; }
 .table-editor-tabs :deep(.ant-table-wrapper) { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.table-editor-tabs :deep(.ant-spin-nested-loading),
+.table-editor-tabs :deep(.ant-spin-container),
+.table-editor-tabs :deep(.ant-table-container) { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.table-editor-tabs :deep(.compact-schema-table) { font-size: 12px; }
+.table-editor-tabs :deep(.compact-schema-table .ant-table-thead > tr > th) { padding: 5px 8px; font-size: 11px; line-height: 1.2; }
+.table-editor-tabs :deep(.compact-schema-table .ant-table-tbody > tr > td) { padding: 3px 8px; line-height: 1.15; }
+.table-editor-tabs :deep(.compact-schema-table .ant-table-expanded-row > td) { padding: 0 !important; }
+.table-editor-tabs :deep(.compact-schema-table .ant-table-cell .ant-input),
+.table-editor-tabs :deep(.compact-schema-table .ant-table-cell .ant-input-number),
+.table-editor-tabs :deep(.compact-schema-table .ant-table-cell .ant-select-selector) { min-height: 24px; height: 24px; font-size: 12px; }
+.table-editor-tabs :deep(.compact-schema-table .ant-table-cell .ant-input) { padding: 1px 7px; }
+.table-editor-tabs :deep(.compact-schema-table .ant-table-cell .ant-select-selection-item),
+.table-editor-tabs :deep(.compact-schema-table .ant-table-cell .ant-select-selection-placeholder) { line-height: 22px; font-size: 12px; }
+.table-editor-tabs :deep(.compact-schema-table .ant-input-number-input) { height: 22px; font-size: 12px; }
+.table-editor-tabs :deep(.compact-schema-table .ant-btn.ant-btn-sm) { height: 24px; padding: 0 6px; font-size: 12px; }
 .panel-head { display: flex; justify-content: space-between; align-items: center; padding: 4px 10px; border-bottom: 1px solid var(--line, #e8e8e8); font-weight: 600; }
-.time-options { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.table-grid-host { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .column-name-cell { display: flex; align-items: center; gap: 6px; cursor: pointer; }
 .pk-icon { color: #faad14; font-size: 12px; flex-shrink: 0; }
 .selected-row { background-color: rgba(24, 144, 255, 0.1) !important; }
-.column-detail-panel {
-  border-top: 1px solid var(--line, #e8e8e8);
-  padding: 10px 12px;
-  background: var(--bg, #fafafa);
-  font-size: 12px;
-}
-.detail-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--line, #e8e8e8); }
-.detail-title { font-weight: 600; font-size: 13px; }
-.detail-type { color: #666; font-size: 12px; }
-.detail-content { display: flex; flex-wrap: wrap; gap: 12px; }
-.detail-row { display: flex; align-items: center; gap: 6px; }
-.detail-label { color: #666; min-width: 48px; }
+.column-inline-detail { padding: 8px 12px 9px; background: linear-gradient(180deg, rgba(250, 250, 250, 0.96), rgba(245, 247, 250, 0.92)); border-top: 1px solid rgba(0, 0, 0, 0.04); }
+.column-inline-detail-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.detail-title { font-weight: 600; font-size: 12px; }
+.detail-type { color: #666; font-size: 11px; }
+.column-inline-detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px 12px; align-items: center; }
+.inline-field { display: grid; grid-template-columns: 44px minmax(0, 1fr); align-items: center; gap: 6px; }
+.detail-label { color: #666; font-size: 11px; }
 .detail-checkbox-label { display: inline-flex; align-items: center; gap: 4px; }
-.time-extra { flex-basis: 100%; }
-.time-checkboxes { display: flex; flex-direction: column; gap: 2px; }
 @media (max-width: 1400px) { .table-editor-toolbar { flex-direction: column; } }
 </style>

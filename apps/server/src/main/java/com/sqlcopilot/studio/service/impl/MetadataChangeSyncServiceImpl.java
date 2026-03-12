@@ -66,8 +66,8 @@ public class MetadataChangeSyncServiceImpl implements MetadataChangeSyncService 
     @Override
     public void onTableCreatedOrAltered(Long connectionId, String databaseName, String tableName) {
         refreshDatabaseCache(connectionId, databaseName);
-        runSafely("单表向量化",
-            () -> ragVectorizeQueueService.vectorizeTable(connectionId, databaseName, tableName));
+        runSafely("单表向量化入队",
+            () -> ragVectorizeQueueService.enqueueTable(connectionId, databaseName, tableName));
     }
 
     @Override
@@ -75,8 +75,8 @@ public class MetadataChangeSyncServiceImpl implements MetadataChangeSyncService 
         refreshDatabaseCache(connectionId, databaseName);
         runSafely("旧表向量数据清理",
             () -> ragIngestionService.removeTableArtifacts(connectionId, databaseName, sourceTableName));
-        runSafely("新表单表向量化",
-            () -> ragVectorizeQueueService.vectorizeTable(connectionId, databaseName, targetTableName));
+        runSafely("新表单表向量化入队",
+            () -> ragVectorizeQueueService.enqueueTable(connectionId, databaseName, targetTableName));
     }
 
     @Override

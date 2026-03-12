@@ -102,27 +102,35 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
         if (normalizedDatabaseName.isBlank()) {
             throw new BusinessException(400, "databaseName 不能为空");
         }
-        String taskKey = buildTaskKey(connectionId, normalizedDatabaseName);
-        RagVectorizeEnqueueVO vo = new RagVectorizeEnqueueVO();
+        String statusKey = buildTaskKey(connectionId, normalizedDatabaseName);
+        return enqueueTask(
+            VectorizeTask.database(connectionId, normalizedDatabaseName, statusKey),
+            "已加入向量化队列",
+            "已加入向量化队列，任务将按顺序执行",
+            "该数据库已在向量化队列中"
+        );
+    }
 
-        // 关键操作：同库去重键贯穿“排队+执行”生命周期，禁止重复入队。
-        boolean accepted = dedupeKeys.add(taskKey);
-        if (!accepted) {
-            VectorizeStatusRecord existing = statusMap.get(taskKey);
-            vo.setEnqueued(Boolean.FALSE);
-            vo.setQueueSize(dedupeKeys.size());
-            vo.setMessage(existing != null && VectorizeStatus.PENDING.name().equals(existing.status())
-                ? "该数据库已在向量化队列中（排队中），请勿重复提交"
-                : "该数据库已在向量化队列中（执行中），请勿重复提交");
-            return vo;
+    @Override
+    public RagVectorizeEnqueueVO enqueueTable(Long connectionId, String databaseName, String tableName) {
+        String normalizedDatabaseName = normalizeDatabaseName(databaseName);
+        String normalizedTableName = normalizeTableName(tableName);
+        if (connectionId == null) {
+            throw new BusinessException(400, "connectionId 不能为空");
         }
-
-        upsertStatus(connectionId, normalizedDatabaseName, taskKey, VectorizeStatus.PENDING, "已加入向量化队列");
-        taskQueue.offer(new VectorizeTask(connectionId, normalizedDatabaseName, taskKey));
-        vo.setEnqueued(Boolean.TRUE);
-        vo.setQueueSize(dedupeKeys.size());
-        vo.setMessage("已加入向量化队列，任务将按顺序执行");
-        return vo;
+        if (normalizedDatabaseName.isBlank()) {
+            throw new BusinessException(400, "databaseName 不能为空");
+        }
+        if (normalizedTableName.isBlank()) {
+            throw new BusinessException(400, "tableName 不能为空");
+        }
+        String statusKey = buildTaskKey(connectionId, normalizedDatabaseName);
+        return enqueueTask(
+            VectorizeTask.table(connectionId, normalizedDatabaseName, statusKey, normalizedTableName),
+            "表 " + normalizedTableName + " 已加入向量化队列",
+            "已加入单表向量化队列，任务将按顺序执行",
+            "该表已在向量化队列中"
+        );
     }
 
     @Override
@@ -147,70 +155,21 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
             throw new BusinessException(400, "当前数据库正在向量化，请稍后再试");
         }
 
-        // 关键操作：单表手动向量化只处理指定表，避免触发整库 Schema 同步。
-        String actualTableName = normalizedTableName;
-
-        schemaService.refreshSchemaCache(connectionId, normalizedDatabaseName);
-        TableDetailVO detail = schemaService.getTableDetail(connectionId, normalizedDatabaseName, actualTableName);
-        if (detail == null || detail.getColumns() == null || detail.getColumns().isEmpty()) {
-            throw new BusinessException(400, "未读取到目标表字段信息，无法向量化");
-        }
-
-        long now = System.currentTimeMillis();
-        SchemaTableCacheEntity tableMeta = new SchemaTableCacheEntity();
-        tableMeta.setConnectionId(connectionId);
-        tableMeta.setDatabaseName(normalizedDatabaseName);
-        tableMeta.setTableName(actualTableName);
-        tableMeta.setUpdatedAt(now);
-        if (tableMeta.getRowEstimate() == null) {
-            tableMeta.setRowEstimate(0L);
-        }
-        if (tableMeta.getTableSizeBytes() == null) {
-            tableMeta.setTableSizeBytes(0L);
-        }
-
-        List<SchemaColumnCacheEntity> columnMetaList = detail.getColumns().stream().map(column -> {
-            SchemaColumnCacheEntity entity = new SchemaColumnCacheEntity();
-            entity.setConnectionId(connectionId);
-            entity.setDatabaseName(normalizedDatabaseName);
-            entity.setTableName(actualTableName);
-            entity.setColumnName(Objects.toString(column.getColumnName(), "").trim());
-            entity.setDataType(column.getDataType());
-            entity.setColumnSize(column.getColumnSize());
-            entity.setDecimalDigits(column.getDecimalDigits());
-            entity.setColumnDefault(column.getDefaultValue());
-            entity.setAutoIncrementFlag(toIntFlag(column.getAutoIncrement()));
-            entity.setNullableFlag(toIntFlag(column.getNullable()));
-            entity.setColumnComment(column.getColumnComment());
-            entity.setIndexedFlag(toIntFlag(column.getIndexed()));
-            entity.setPrimaryKeyFlag(toIntFlag(column.getPrimaryKey()));
-            entity.setUpdatedAt(now);
-            return entity;
-        }).filter(item -> !Objects.toString(item.getColumnName(), "").isBlank()).toList();
-        if (columnMetaList.isEmpty()) {
-            throw new BusinessException(400, "未读取到目标表字段信息，无法向量化");
-        }
-
-        ragIngestionService.ingestSchema(
-            connectionId,
-            normalizedDatabaseName,
-            List.of(tableMeta),
-            columnMetaList
-        );
+        vectorizeSingleTable(connectionId, normalizedDatabaseName, normalizedTableName);
         upsertStatus(
             connectionId,
             normalizedDatabaseName,
             taskKey,
             VectorizeStatus.SUCCESS,
-            "表 " + actualTableName + " 已完成手动向量化"
+            "表 " + normalizedTableName + " 已完成手动向量化"
         );
 
         RagVectorizeTableVO vo = new RagVectorizeTableVO();
         vo.setSuccess(Boolean.TRUE);
         vo.setDatabaseName(normalizedDatabaseName);
-        vo.setTableName(actualTableName);
+        vo.setTableName(normalizedTableName);
         vo.setMessage("已完成单表手动向量化");
-        vo.setUpdatedAt(now);
+        vo.setUpdatedAt(System.currentTimeMillis());
         return vo;
     }
 
@@ -226,11 +185,11 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
 
         String taskKey = buildTaskKey(connectionId, normalizedDatabaseName);
         synchronized (taskControlLock) {
-            if (runningTask != null && taskKey.equals(runningTask.taskKey())) {
+            if (runningTask != null && taskKey.equals(runningTask.statusKey())) {
                 // 关键操作：运行中任务通过线程中断信号终止，并立即落库失败状态。
-                interruptedKeys.add(taskKey);
+                interruptedKeys.add(runningTask.dedupeKey());
                 upsertStatus(connectionId, normalizedDatabaseName, taskKey, VectorizeStatus.FAILED, "向量化任务已中断");
-                dedupeKeys.remove(taskKey);
+                dedupeKeys.remove(runningTask.dedupeKey());
                 Thread workerRef = workerThread;
                 if (workerRef != null) {
                     workerRef.interrupt();
@@ -238,11 +197,11 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
                 return buildInterruptVo(Boolean.TRUE, VectorizeStatus.FAILED.name(), "已发送中断信号，任务将尽快停止");
             }
 
-            boolean removed = taskQueue.removeIf(task -> taskKey.equals(task.taskKey()));
+            boolean removed = taskQueue.removeIf(task -> taskKey.equals(task.statusKey()));
             if (removed) {
                 upsertStatus(connectionId, normalizedDatabaseName, taskKey, VectorizeStatus.FAILED, "向量化任务已中断（已移出队列）");
-                dedupeKeys.remove(taskKey);
-                interruptedKeys.remove(taskKey);
+                dedupeKeys.removeIf(dedupeKey -> isDatabaseScopedDedupeKey(dedupeKey, taskKey));
+                interruptedKeys.removeIf(dedupeKey -> isDatabaseScopedDedupeKey(dedupeKey, taskKey));
                 return buildInterruptVo(Boolean.TRUE, VectorizeStatus.FAILED.name(), "排队中的向量化任务已中断");
             }
         }
@@ -251,8 +210,8 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
         if (VectorizeStatus.PENDING.name().equals(current.getStatus())
             || VectorizeStatus.RUNNING.name().equals(current.getStatus())) {
             upsertStatus(connectionId, normalizedDatabaseName, taskKey, VectorizeStatus.FAILED, "向量化任务已中断");
-            dedupeKeys.remove(taskKey);
-            interruptedKeys.remove(taskKey);
+            dedupeKeys.removeIf(dedupeKey -> isDatabaseScopedDedupeKey(dedupeKey, taskKey));
+            interruptedKeys.removeIf(dedupeKey -> isDatabaseScopedDedupeKey(dedupeKey, taskKey));
             return buildInterruptVo(Boolean.TRUE, VectorizeStatus.FAILED.name(), "向量化任务已中断");
         }
         return buildInterruptVo(Boolean.FALSE, current.getStatus(), "当前数据库没有可中断的向量化任务");
@@ -488,9 +447,9 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
             return;
         }
         String taskKey = buildTaskKey(connectionId, normalizedDatabaseName);
-        suppressMatchingTasks(task -> taskKey.equals(task.taskKey()));
-        dedupeKeys.remove(taskKey);
-        interruptedKeys.remove(taskKey);
+        suppressMatchingTasks(task -> taskKey.equals(task.statusKey()));
+        dedupeKeys.removeIf(dedupeKey -> isDatabaseScopedDedupeKey(dedupeKey, taskKey));
+        interruptedKeys.removeIf(dedupeKey -> isDatabaseScopedDedupeKey(dedupeKey, taskKey));
         statusMap.remove(taskKey);
         ragVectorizeStatusMapper.deleteOne(connectionId, normalizedDatabaseName);
     }
@@ -517,75 +476,89 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
                 synchronized (taskControlLock) {
                     runningTask = task;
                 }
-                upsertStatus(task.connectionId(), task.databaseName(), task.taskKey(), VectorizeStatus.RUNNING, "向量化执行中");
-                log.info("开始执行数据库重新向量化任务, connectionId={}, databaseName={}",
-                    task.connectionId(), task.databaseName());
-                // 关键操作：执行队列任务时直接触发 Schema 同步，复用现有元数据读取与向量化链路。
-                long fullVectorizeStartAt = System.currentTimeMillis();
-                schemaService.syncSchema(task.connectionId(), task.databaseName());
-                if (suppressedTaskKeys.contains(task.taskKey())) {
-                    log.info("数据库向量化任务结果已忽略, connectionId={}, databaseName={}",
-                        task.connectionId(), task.databaseName());
+                upsertStatus(task.connectionId(), task.databaseName(), task.statusKey(), VectorizeStatus.RUNNING,
+                    task.scope() == VectorizeTaskScope.TABLE
+                        ? "单表向量化执行中: " + Objects.toString(task.tableName(), "")
+                        : "向量化执行中");
+                log.info("开始执行{}向量化任务, connectionId={}, databaseName={}, tableName={}",
+                    task.scope() == VectorizeTaskScope.TABLE ? "单表" : "数据库",
+                    task.connectionId(), task.databaseName(), Objects.toString(task.tableName(), ""));
+                long startAt = System.currentTimeMillis();
+                executeQueuedTask(task);
+                if (suppressedTaskKeys.contains(task.dedupeKey())) {
+                    log.info("{}向量化任务结果已忽略, connectionId={}, databaseName={}, tableName={}",
+                        task.scope() == VectorizeTaskScope.TABLE ? "单表" : "数据库",
+                        task.connectionId(), task.databaseName(), Objects.toString(task.tableName(), ""));
                     continue;
                 }
-                if (interruptedKeys.remove(task.taskKey())) {
+                if (interruptedKeys.remove(task.dedupeKey())) {
                     interruptedByRequest = true;
-                    log.info("数据库向量化任务已中断, connectionId={}, databaseName={}",
-                        task.connectionId(), task.databaseName());
+                    log.info("{}向量化任务已中断, connectionId={}, databaseName={}, tableName={}",
+                        task.scope() == VectorizeTaskScope.TABLE ? "单表" : "数据库",
+                        task.connectionId(), task.databaseName(), Objects.toString(task.tableName(), ""));
                 } else {
-                    long durationMs = Math.max(0L, System.currentTimeMillis() - fullVectorizeStartAt);
-                    String runtimeProvider = resolveRuntimeProviderSafely();
                     upsertStatus(
                         task.connectionId(),
                         task.databaseName(),
-                        task.taskKey(),
+                        task.statusKey(),
                         VectorizeStatus.SUCCESS,
-                        "向量化完成",
-                        durationMs,
-                        runtimeProvider
+                        task.scope() == VectorizeTaskScope.TABLE
+                            ? "表 " + task.tableName() + " 向量化完成"
+                            : "向量化完成",
+                        task.scope() == VectorizeTaskScope.DATABASE
+                            ? Long.valueOf(Math.max(0L, System.currentTimeMillis() - startAt))
+                            : null,
+                        task.scope() == VectorizeTaskScope.DATABASE ? resolveRuntimeProviderSafely() : null
                     );
-                    log.info("数据库重新向量化任务完成, connectionId={}, databaseName={}, durationMs={}, provider={}",
-                        task.connectionId(), task.databaseName(), durationMs, runtimeProvider);
+                    log.info("{}向量化任务完成, connectionId={}, databaseName={}, tableName={}, durationMs={}",
+                        task.scope() == VectorizeTaskScope.TABLE ? "单表" : "数据库",
+                        task.connectionId(), task.databaseName(), Objects.toString(task.tableName(), ""),
+                        Math.max(0L, System.currentTimeMillis() - startAt));
                 }
             } catch (InterruptedException ex) {
-                if (task != null && suppressedTaskKeys.contains(task.taskKey())) {
-                    log.info("数据库向量化任务已因元数据变更取消, connectionId={}, databaseName={}",
-                        task.connectionId(), task.databaseName());
+                if (task != null && suppressedTaskKeys.contains(task.dedupeKey())) {
+                    log.info("{}向量化任务已因元数据变更取消, connectionId={}, databaseName={}, tableName={}",
+                        task.scope() == VectorizeTaskScope.TABLE ? "单表" : "数据库",
+                        task.connectionId(), task.databaseName(), Objects.toString(task.tableName(), ""));
                     interruptedByRequest = true;
                 }
-                if (task != null && interruptedKeys.remove(task.taskKey())) {
+                if (task != null && interruptedKeys.remove(task.dedupeKey())) {
                     interruptedByRequest = true;
-                    log.info("数据库向量化任务中断完成, connectionId={}, databaseName={}",
-                        task.connectionId(), task.databaseName());
+                    log.info("{}向量化任务中断完成, connectionId={}, databaseName={}, tableName={}",
+                        task.scope() == VectorizeTaskScope.TABLE ? "单表" : "数据库",
+                        task.connectionId(), task.databaseName(), Objects.toString(task.tableName(), ""));
                 }
                 if (shuttingDown) {
                     Thread.currentThread().interrupt();
                 }
             } catch (Exception ex) {
                 if (task != null) {
-                    if (suppressedTaskKeys.contains(task.taskKey())) {
-                        log.info("数据库向量化任务异常结果已忽略, connectionId={}, databaseName={}, reason={}",
-                            task.connectionId(), task.databaseName(), ex.getMessage());
+                    if (suppressedTaskKeys.contains(task.dedupeKey())) {
+                        log.info("{}向量化任务异常结果已忽略, connectionId={}, databaseName={}, tableName={}, reason={}",
+                            task.scope() == VectorizeTaskScope.TABLE ? "单表" : "数据库",
+                            task.connectionId(), task.databaseName(), Objects.toString(task.tableName(), ""), ex.getMessage());
                     } else
-                    if (interruptedKeys.remove(task.taskKey())) {
+                    if (interruptedKeys.remove(task.dedupeKey())) {
                         interruptedByRequest = true;
-                        log.info("数据库向量化任务已中断, connectionId={}, databaseName={}",
-                            task.connectionId(), task.databaseName());
+                        log.info("{}向量化任务已中断, connectionId={}, databaseName={}, tableName={}",
+                            task.scope() == VectorizeTaskScope.TABLE ? "单表" : "数据库",
+                            task.connectionId(), task.databaseName(), Objects.toString(task.tableName(), ""));
                     } else {
-                        upsertStatus(task.connectionId(), task.databaseName(), task.taskKey(), VectorizeStatus.FAILED,
+                        upsertStatus(task.connectionId(), task.databaseName(), task.statusKey(), VectorizeStatus.FAILED,
                             truncateError(ex.getMessage()));
-                        log.warn("数据库重新向量化任务失败, connectionId={}, databaseName={}, reason={}",
-                            task.connectionId(), task.databaseName(), ex.getMessage());
+                        log.warn("{}向量化任务失败, connectionId={}, databaseName={}, tableName={}, reason={}",
+                            task.scope() == VectorizeTaskScope.TABLE ? "单表" : "数据库",
+                            task.connectionId(), task.databaseName(), Objects.toString(task.tableName(), ""), ex.getMessage());
                     }
                 } else {
-                    log.warn("数据库重新向量化任务失败, reason={}", ex.getMessage());
+                    log.warn("向量化任务失败, reason={}", ex.getMessage());
                 }
             } finally {
                 if (task != null) {
-                    dedupeKeys.remove(task.taskKey());
-                    suppressedTaskKeys.remove(task.taskKey());
+                    dedupeKeys.remove(task.dedupeKey());
+                    suppressedTaskKeys.remove(task.dedupeKey());
                     synchronized (taskControlLock) {
-                        if (runningTask != null && task.taskKey().equals(runningTask.taskKey())) {
+                        if (runningTask != null && task.dedupeKey().equals(runningTask.dedupeKey())) {
                             runningTask = null;
                         }
                     }
@@ -615,13 +588,17 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
             // 关键操作：服务重启后将历史执行中/排队中任务改为失败，避免前端状态卡死。
             upsertStatus(item.getConnectionId(), normalizedDatabaseName, taskKey, VectorizeStatus.FAILED,
                 "任务因服务重启中断，请重新向量化");
-            dedupeKeys.remove(taskKey);
-            interruptedKeys.remove(taskKey);
+            dedupeKeys.removeIf(dedupeKey -> isDatabaseScopedDedupeKey(dedupeKey, taskKey));
+            interruptedKeys.removeIf(dedupeKey -> isDatabaseScopedDedupeKey(dedupeKey, taskKey));
         }
     }
 
     private String buildTaskKey(Long connectionId, String databaseName) {
         return connectionId + "|" + databaseName.toLowerCase();
+    }
+
+    private static String buildTableTaskDedupeKey(String statusKey, String tableName) {
+        return statusKey + "|table|" + tableName.toLowerCase(Locale.ROOT);
     }
 
     private void suppressMatchingTasks(java.util.function.Predicate<VectorizeTask> predicate) {
@@ -631,14 +608,101 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
         synchronized (taskControlLock) {
             taskQueue.removeIf(predicate::test);
             if (runningTask != null && predicate.test(runningTask)) {
-                suppressedTaskKeys.add(runningTask.taskKey());
-                interruptedKeys.add(runningTask.taskKey());
+                suppressedTaskKeys.add(runningTask.dedupeKey());
+                interruptedKeys.add(runningTask.dedupeKey());
                 Thread workerRef = workerThread;
                 if (workerRef != null) {
                     workerRef.interrupt();
                 }
             }
         }
+    }
+
+    private RagVectorizeEnqueueVO enqueueTask(VectorizeTask task,
+                                              String pendingMessage,
+                                              String successMessage,
+                                              String duplicatePrefix) {
+        RagVectorizeEnqueueVO vo = new RagVectorizeEnqueueVO();
+        boolean accepted = dedupeKeys.add(task.dedupeKey());
+        if (!accepted) {
+            VectorizeStatusRecord existing = statusMap.get(task.statusKey());
+            vo.setEnqueued(Boolean.FALSE);
+            vo.setQueueSize(dedupeKeys.size());
+            vo.setMessage(existing != null && VectorizeStatus.PENDING.name().equals(existing.status())
+                ? duplicatePrefix + "（排队中），请勿重复提交"
+                : duplicatePrefix + "（执行中），请勿重复提交");
+            return vo;
+        }
+        upsertStatus(task.connectionId(), task.databaseName(), task.statusKey(), VectorizeStatus.PENDING, pendingMessage);
+        taskQueue.offer(task);
+        vo.setEnqueued(Boolean.TRUE);
+        vo.setQueueSize(dedupeKeys.size());
+        vo.setMessage(successMessage);
+        return vo;
+    }
+
+    private void executeQueuedTask(VectorizeTask task) {
+        if (task.scope() == VectorizeTaskScope.TABLE) {
+            vectorizeSingleTable(task.connectionId(), task.databaseName(), Objects.toString(task.tableName(), ""));
+            return;
+        }
+        // 关键操作：执行整库队列任务时直接触发 Schema 同步，复用现有元数据读取与向量化链路。
+        schemaService.syncSchema(task.connectionId(), task.databaseName());
+    }
+
+    private void vectorizeSingleTable(Long connectionId, String databaseName, String tableName) {
+        schemaService.refreshSchemaCache(connectionId, databaseName);
+        TableDetailVO detail = schemaService.getTableDetail(connectionId, databaseName, tableName);
+        if (detail == null || detail.getColumns() == null || detail.getColumns().isEmpty()) {
+            throw new BusinessException(400, "未读取到目标表字段信息，无法向量化");
+        }
+
+        long now = System.currentTimeMillis();
+        SchemaTableCacheEntity tableMeta = new SchemaTableCacheEntity();
+        tableMeta.setConnectionId(connectionId);
+        tableMeta.setDatabaseName(databaseName);
+        tableMeta.setTableName(tableName);
+        tableMeta.setUpdatedAt(now);
+        if (tableMeta.getRowEstimate() == null) {
+            tableMeta.setRowEstimate(0L);
+        }
+        if (tableMeta.getTableSizeBytes() == null) {
+            tableMeta.setTableSizeBytes(0L);
+        }
+
+        List<SchemaColumnCacheEntity> columnMetaList = detail.getColumns().stream().map(column -> {
+            SchemaColumnCacheEntity entity = new SchemaColumnCacheEntity();
+            entity.setConnectionId(connectionId);
+            entity.setDatabaseName(databaseName);
+            entity.setTableName(tableName);
+            entity.setColumnName(Objects.toString(column.getColumnName(), "").trim());
+            entity.setDataType(column.getDataType());
+            entity.setColumnSize(column.getColumnSize());
+            entity.setDecimalDigits(column.getDecimalDigits());
+            entity.setColumnDefault(column.getDefaultValue());
+            entity.setAutoIncrementFlag(toIntFlag(column.getAutoIncrement()));
+            entity.setNullableFlag(toIntFlag(column.getNullable()));
+            entity.setColumnComment(column.getColumnComment());
+            entity.setIndexedFlag(toIntFlag(column.getIndexed()));
+            entity.setPrimaryKeyFlag(toIntFlag(column.getPrimaryKey()));
+            entity.setUpdatedAt(now);
+            return entity;
+        }).filter(item -> !Objects.toString(item.getColumnName(), "").isBlank()).toList();
+        if (columnMetaList.isEmpty()) {
+            throw new BusinessException(400, "未读取到目标表字段信息，无法向量化");
+        }
+
+        ragIngestionService.ingestSchema(
+            connectionId,
+            databaseName,
+            List.of(tableMeta),
+            columnMetaList
+        );
+    }
+
+    private boolean isDatabaseScopedDedupeKey(String dedupeKey, String statusKey) {
+        return Objects.toString(dedupeKey, "").equals(statusKey)
+            || Objects.toString(dedupeKey, "").startsWith(statusKey + "|table|");
     }
 
     private String normalizeDatabaseName(String databaseName) {
@@ -800,7 +864,27 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
         return text.substring(0, 180) + "...";
     }
 
-    private record VectorizeTask(Long connectionId, String databaseName, String taskKey) {
+    private record VectorizeTask(Long connectionId,
+                                 String databaseName,
+                                 String statusKey,
+                                 String dedupeKey,
+                                 VectorizeTaskScope scope,
+                                 String tableName) {
+
+        private static VectorizeTask database(Long connectionId, String databaseName, String statusKey) {
+            return new VectorizeTask(connectionId, databaseName, statusKey, statusKey, VectorizeTaskScope.DATABASE, null);
+        }
+
+        private static VectorizeTask table(Long connectionId, String databaseName, String statusKey, String tableName) {
+            return new VectorizeTask(
+                connectionId,
+                databaseName,
+                statusKey,
+                buildTableTaskDedupeKey(statusKey, tableName),
+                VectorizeTaskScope.TABLE,
+                tableName
+            );
+        }
     }
 
     private record VectorizeStatusRecord(Long connectionId, String databaseName, String status,
@@ -814,5 +898,10 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
         RUNNING,
         SUCCESS,
         FAILED
+    }
+
+    private enum VectorizeTaskScope {
+        DATABASE,
+        TABLE
     }
 }

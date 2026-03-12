@@ -520,6 +520,10 @@ const objectNameCache = ref<Record<string, string[]>>({});
 
 const savedQueryCache = ref<Record<string, SavedQueryVO[]>>({});
 
+const browserObjectNameList = ref<string[]>([]);
+
+const browserSavedQueryList = ref<SavedQueryVO[]>([]);
+
 const saveQueryModalOpen = ref(false);
 
 const saveQuerySubmitting = ref(false);
@@ -1144,7 +1148,7 @@ const objectRows = computed<ObjectRow[]>(() => {
   }
 
   if (currentObjectType.value === 'views') {
-    const names = objectNameCache.value[objectCacheKey(workflow.connectionId, databaseName, currentObjectType.value)] ?? [];
+    const names = browserObjectNameList.value;
     return names.map((name) => ({
       objectName: name,
       objectType: 'views',
@@ -1158,7 +1162,7 @@ const objectRows = computed<ObjectRow[]>(() => {
   }
 
   if (currentObjectType.value === 'queries') {
-    return savedQueriesByDatabase(workflow.connectionId, databaseName).map((item) => ({
+    return browserSavedQueryList.value.map((item) => ({
       objectName: item.title,
       objectType: 'queries',
       rowEstimate: 0,
@@ -1172,7 +1176,7 @@ const objectRows = computed<ObjectRow[]>(() => {
     }));
   }
 
-  const names = objectNameCache.value[objectCacheKey(workflow.connectionId, databaseName, currentObjectType.value)] ?? [];
+  const names = browserObjectNameList.value;
   return names.map((name) => ({
     objectName: name,
     objectType: currentObjectType.value,
@@ -1699,6 +1703,11 @@ function vectorizeStatusCacheKey(connectionId: number, databaseName: string) {
   return `${connectionId}|${databaseName.trim().toLowerCase()}`;
 }
 
+function clearBrowserObjectCollections() {
+  browserObjectNameList.value = [];
+  browserSavedQueryList.value = [];
+}
+
 function invalidateConnectionMetadataCaches(connectionId: number) {
   if (!connectionId) {
     return;
@@ -1814,6 +1823,31 @@ function invalidateDatabaseMetadataCaches(connectionId: number, databaseName: st
   if (workflow.connectionId === connectionId && getActiveDatabaseName(connectionId) === normalizedDatabaseName) {
     schemaOverview.value = null;
   }
+}
+
+function clearDatabaseTableStatsCache(connectionId: number, databaseName: string) {
+  if (!connectionId) {
+    return;
+  }
+  const normalizedDatabaseName = (databaseName || '').trim();
+  if (!normalizedDatabaseName) {
+    return;
+  }
+  const cacheKey = tableCacheKey(connectionId, normalizedDatabaseName);
+
+  const nextTableStatsCache = {...tableStatsCache.value};
+  delete nextTableStatsCache[cacheKey];
+  tableStatsCache.value = nextTableStatsCache;
+
+  const nextTableStatsLoadingState = {...tableStatsLoadingState.value};
+  delete nextTableStatsLoadingState[cacheKey];
+  tableStatsLoadingState.value = nextTableStatsLoadingState;
+
+  const nextTableStatsLastRequestAt = {...tableStatsLastRequestAt.value};
+  delete nextTableStatsLastRequestAt[cacheKey];
+  tableStatsLastRequestAt.value = nextTableStatsLastRequestAt;
+
+  clearTableStatsPollingTimer(cacheKey);
 }
 
 function invalidateDatabaseListCache(connectionId: number) {
@@ -2039,15 +2073,17 @@ function savedQueriesByDatabase(connectionId: number, databaseName?: string) {
   return savedQueryCache.value[savedQueryCacheKey(connectionId, databaseName)] ?? [];
 }
 
-async function loadSavedQueries(connectionId: number, databaseName: string) {
+async function loadSavedQueries(connectionId: number, databaseName: string, options?: { syncCache?: boolean }) {
   const normalizedDatabaseName = databaseName || '';
   const list = await getApi<SavedQueryVO[]>(
     `/api/editor/saved-query/list?connectionId=${connectionId}&databaseName=${encodeURIComponent(normalizedDatabaseName)}`,
   );
-  savedQueryCache.value = {
-    ...savedQueryCache.value,
-    [savedQueryCacheKey(connectionId, normalizedDatabaseName)]: list,
-  };
+  if (options?.syncCache !== false) {
+    savedQueryCache.value = {
+      ...savedQueryCache.value,
+      [savedQueryCacheKey(connectionId, normalizedDatabaseName)]: list,
+    };
+  }
   return list;
 }
 
@@ -3259,13 +3295,13 @@ async function runAiTextActionWithSql(
   }
 }
 
-async function prepareConnectionTreeData(connectionId: number) {
+async function prepareConnectionTreeData(connectionId: number, options?: { force?: boolean }) {
   const connection = connections.value.find((item) => item.id === connectionId);
   if (!connection) {
     return;
   }
   if (requiresDatabaseLayer(connection)) {
-    await loadDatabaseListForConnection(connectionId);
+    await loadDatabaseListForConnection(connectionId, options);
   } else {
     const configuredDb = parseConfiguredDatabaseName(connection);
     if (configuredDb) {
@@ -3277,8 +3313,8 @@ async function prepareConnectionTreeData(connectionId: number) {
   }
 }
 
-async function loadDatabaseListForConnection(connectionId: number) {
-  if (databaseListCache.value[connectionId]?.length) {
+async function loadDatabaseListForConnection(connectionId: number, options?: { force?: boolean }) {
+  if (!options?.force && databaseListCache.value[connectionId]?.length) {
     return;
   }
   const list = await getApi<SchemaDatabaseVO[]>(`/api/schema/databases?connectionId=${connectionId}`);
@@ -3670,7 +3706,7 @@ async function syncSchema(targetConnectionId?: number) {
   });
 }
 
-async function loadOverview() {
+async function loadOverview(options?: { forceTableStats?: boolean; syncTreeCaches?: boolean }) {
   ensureConnection();
   await runSafely(async () => {
     const databaseName = getActiveDatabaseName(workflow.connectionId);
@@ -3679,23 +3715,27 @@ async function loadOverview() {
       : `/api/schema/overview?connectionId=${workflow.connectionId}`;
     const overview = await getApi<SchemaOverviewVO>(query);
     schemaOverview.value = overview;
-    const cacheKey = tableCacheKey(workflow.connectionId, databaseName);
-    const tableNames = (overview.tableSummaries ?? []).map((item) => item.tableName);
-    tableNameCache.value = {
-      ...tableNameCache.value,
-      [cacheKey]: tableNames,
-    };
-    tableNameLoadedCache.value = {
-      ...tableNameLoadedCache.value,
-      [cacheKey]: true,
-    };
-    objectNameCache.value = {
-      ...objectNameCache.value,
-      [objectCacheKey(workflow.connectionId, databaseName, 'tables')]: tableNames,
-    };
+    if (options?.syncTreeCaches !== false) {
+      const cacheKey = tableCacheKey(workflow.connectionId, databaseName);
+      const tableNames = (overview.tableSummaries ?? []).map((item) => item.tableName);
+      tableNameCache.value = {
+        ...tableNameCache.value,
+        [cacheKey]: tableNames,
+      };
+      tableNameLoadedCache.value = {
+        ...tableNameLoadedCache.value,
+        [cacheKey]: true,
+      };
+      objectNameCache.value = {
+        ...objectNameCache.value,
+        [objectCacheKey(workflow.connectionId, databaseName, 'tables')]: tableNames,
+      };
+    }
     expandConnectionNode(workflow.connectionId);
     if (databaseName && databaseName !== '未发现数据库' && isDatabaseNodeExpanded(workflow.connectionId, databaseName)) {
-      void fetchTableStatsForDatabase(workflow.connectionId, databaseName);
+      void fetchTableStatsForDatabase(workflow.connectionId, databaseName, {
+        force: options?.forceTableStats,
+      });
     }
   });
 }
@@ -4323,28 +4363,70 @@ function handleSqlEditorMount(
   void warmupTableSuggestionsForContext(getContext());
 }
 
-async function loadObjectNames(connectionId: number, databaseName: string, objectType: string) {
+async function loadObjectNames(connectionId: number, databaseName: string, objectType: string, options?: { syncCache?: boolean }) {
   const query = `/api/schema/objectNames?connectionId=${connectionId}&databaseName=${encodeURIComponent(databaseName)}&objectType=${encodeURIComponent(objectType)}`;
   const names = await getApi<string[]>(query);
-  objectNameCache.value = {
-    ...objectNameCache.value,
-    [objectCacheKey(connectionId, databaseName, objectType)]: names,
-  };
+  if (options?.syncCache !== false) {
+    objectNameCache.value = {
+      ...objectNameCache.value,
+      [objectCacheKey(connectionId, databaseName, objectType)]: names,
+    };
+  }
+  return names;
 }
 
-async function refreshCurrentObjects() {
+async function refreshCurrentObjects(options?: { force?: boolean }) {
   ensureConnection();
   await runSafely(async () => {
-    const databaseName = getActiveDatabaseName(workflow.connectionId);
+    const connectionId = workflow.connectionId;
+    const databaseName = getActiveDatabaseName(connectionId);
+    if (options?.force) {
+      invalidateDatabaseListCache(connectionId);
+      if (databaseName && databaseName !== '未发现数据库') {
+        invalidateDatabaseMetadataCaches(connectionId, databaseName);
+      } else {
+        invalidateConnectionMetadataCaches(connectionId);
+      }
+      // 关键操作：显式刷新按钮必须强制回源，并用最新结果覆盖本地缓存。
+      await prepareConnectionTreeData(connectionId, { force: true });
+    }
     if (currentObjectType.value === 'tables') {
-      await loadOverview();
-      return;
+      clearBrowserObjectCollections();
+      await loadOverview({ forceTableStats: options?.force });
+    } else if (currentObjectType.value === 'queries') {
+      browserSavedQueryList.value = await loadSavedQueries(connectionId, databaseName);
+      browserObjectNameList.value = [];
+    } else {
+      browserObjectNameList.value = await loadObjectNames(connectionId, databaseName, currentObjectType.value);
+      browserSavedQueryList.value = [];
     }
-    if (currentObjectType.value === 'queries') {
-      await loadSavedQueries(workflow.connectionId, databaseName);
-      return;
+    if (selectedObjectName.value && currentObjectType.value !== 'queries') {
+      await loadObjectDetail(connectionId, databaseName, currentObjectType.value, selectedObjectName.value);
     }
-    await loadObjectNames(workflow.connectionId, databaseName, currentObjectType.value);
+  });
+}
+
+async function refreshCurrentPageObjects(options?: { force?: boolean }) {
+  ensureConnection();
+  await runSafely(async () => {
+    const connectionId = workflow.connectionId;
+    const databaseName = getActiveDatabaseName(connectionId);
+    if (currentObjectType.value === 'tables') {
+      clearBrowserObjectCollections();
+      if (options?.force) {
+        clearDatabaseTableStatsCache(connectionId, databaseName);
+      }
+      await loadOverview({ forceTableStats: false, syncTreeCaches: false });
+    } else if (currentObjectType.value === 'queries') {
+      browserSavedQueryList.value = await loadSavedQueries(connectionId, databaseName, { syncCache: false });
+      browserObjectNameList.value = [];
+    } else {
+      browserObjectNameList.value = await loadObjectNames(connectionId, databaseName, currentObjectType.value, { syncCache: false });
+      browserSavedQueryList.value = [];
+    }
+    if (selectedObjectName.value && currentObjectType.value !== 'queries') {
+      await loadObjectDetail(connectionId, databaseName, currentObjectType.value, selectedObjectName.value);
+    }
   });
 }
 
@@ -4352,16 +4434,19 @@ async function loadCategoryObjects(connectionId: number, databaseName: string, c
   currentObjectType.value = toObjectType(category);
   browserNavMode.value = 'connections';
   if (currentObjectType.value === 'tables') {
+    clearBrowserObjectCollections();
     await loadOverview();
     return;
   }
   if (currentObjectType.value === 'queries') {
-    await loadSavedQueries(connectionId, databaseName);
+    browserSavedQueryList.value = await loadSavedQueries(connectionId, databaseName);
+    browserObjectNameList.value = [];
     expandCategoryNode(connectionId, databaseName, currentObjectType.value);
     return;
   }
   await runSafely(async () => {
-    await loadObjectNames(connectionId, databaseName, currentObjectType.value);
+    browserObjectNameList.value = await loadObjectNames(connectionId, databaseName, currentObjectType.value);
+    browserSavedQueryList.value = [];
     expandCategoryNode(connectionId, databaseName, currentObjectType.value);
   });
 }
@@ -4426,6 +4511,7 @@ async function handleTreeSelect(keys: (string | number)[]) {
     workflow.connectionId = connectionId;
     currentObjectType.value = 'tables';
     selectedObjectName.value = '';
+    clearBrowserObjectCollections();
     clearObjectDetail();
     await prepareConnectionTreeData(connectionId);
     expandConnectionNode(connectionId);
@@ -4450,6 +4536,18 @@ async function handleTreeSelect(keys: (string | number)[]) {
       [connectionId]: databaseName,
     };
     currentObjectType.value = objectType;
+    if (objectType === 'tables') {
+      clearBrowserObjectCollections();
+    } else if (objectType === 'queries') {
+      browserSavedQueryList.value = savedQueriesByDatabase(connectionId, databaseName).length
+        ? savedQueriesByDatabase(connectionId, databaseName)
+        : await loadSavedQueries(connectionId, databaseName);
+      browserObjectNameList.value = [];
+    } else {
+      const cachedNames = objectNameCache.value[objectCacheKey(connectionId, databaseName, objectType)] ?? [];
+      browserObjectNameList.value = cachedNames.length ? cachedNames : await loadObjectNames(connectionId, databaseName, objectType);
+      browserSavedQueryList.value = [];
+    }
     expandConnectionNode(connectionId);
     await runSafely(async () => {
       await selectObject(connectionId, databaseName, objectType, objectName);
@@ -4468,6 +4566,7 @@ async function handleTreeSelect(keys: (string | number)[]) {
       [connectionId]: databaseName,
     };
     selectedObjectName.value = '';
+    clearBrowserObjectCollections();
     clearObjectDetail();
     await loadCategoryObjects(connectionId, databaseName, category);
     return;
@@ -4484,6 +4583,7 @@ async function handleTreeSelect(keys: (string | number)[]) {
     };
     currentObjectType.value = 'tables';
     selectedObjectName.value = '';
+    clearBrowserObjectCollections();
     clearObjectDetail();
     expandConnectionNode(connectionId);
     await loadOverview();
@@ -7050,7 +7150,7 @@ function buildColumnSqlDefinition(
   dbType: string,
 ) {
   const colName = quoteSqlIdentifier(column.columnName, dbType) || column.columnName;
-  const baseType = (column.dataType || 'TEXT').trim();
+  const baseType = String(column.dataType || 'TEXT').trim().toUpperCase();
   let typeSql = baseType;
   if (!/\(/.test(baseType) && column.columnSize && column.columnSize > 0) {
     if (column.decimalDigits && column.decimalDigits > 0) {
@@ -7799,6 +7899,7 @@ function resetConnectionModalState() {
     handleSqlEditorMount,
     loadObjectNames,
     refreshCurrentObjects,
+    refreshCurrentPageObjects,
     loadCategoryObjects,
     loadTreeChildrenByKey,
     handleTreeSelect,

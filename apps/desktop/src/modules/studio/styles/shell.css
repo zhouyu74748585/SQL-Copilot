@@ -2530,6 +2530,11 @@ body {
   border-right: 1px solid var(--line);
 }
 
+.workbench.workbench-table-editor .table-editor-structure-pane > .table-editor {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .workbench.workbench-table-editor .table-editor-pane-splitter {
   grid-column: 4;
   grid-row: 2;

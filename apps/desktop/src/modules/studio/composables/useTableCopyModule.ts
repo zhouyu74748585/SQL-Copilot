@@ -162,22 +162,20 @@ export function useTableCopyModule(runtime: StudioRuntime): TableCopyModule {
 
   async function refreshAndFocusCopiedTable(connectionId: number, databaseName: string, tableName: string) {
     runtime.activeWorkbenchTab.value = runtime.browserTabKey;
+    runtime.browserNavMode.value = 'connections';
     runtime.workflow.connectionId = connectionId;
     runtime.activeDatabaseMap.value = {
       ...runtime.activeDatabaseMap.value,
       [connectionId]: databaseName,
     };
     runtime.currentObjectType.value = 'tables';
-    runtime.invalidateDatabaseMetadataCaches(connectionId, databaseName);
     runtime.expandConnectionNode(connectionId);
     runtime.expandCategoryNode(connectionId, databaseName, 'tables');
-    await runtime.prepareConnectionTreeData(connectionId);
-    await runtime.loadOverview();
-    runtime.selectedTreeKeys.value = [runtime.buildObjectNodeKey(connectionId, databaseName, 'tables', tableName)];
+    await runtime.refreshCurrentPageObjects({ force: true });
     await runtime.selectObject(connectionId, databaseName, 'tables', tableName);
   }
 
-  function initTaskModal(copyResult: TableCopyVO) {
+  function initTaskModal(copyResult: TableCopyVO, req: TableCopyReq) {
     runtime.tableCopyTaskModalOpen.value = true;
     runtime.tableCopyTaskInfo.value = {
       taskId: copyResult.taskId || '',
@@ -187,9 +185,9 @@ export function useTableCopyModule(runtime: StudioRuntime): TableCopyModule {
       progressPercent: 0,
       copiedRows: 0,
       totalRows: 0,
-      sourceConnectionId: runtime.tablePasteForm.sourceConnectionId,
-      sourceDatabaseName: runtime.tablePasteForm.sourceDatabaseName,
-      sourceTableName: runtime.tablePasteForm.sourceTableName,
+      sourceConnectionId: req.sourceConnectionId,
+      sourceDatabaseName: req.sourceDatabaseName,
+      sourceTableName: req.sourceTableName,
       targetConnectionId: copyResult.targetConnectionId,
       targetDatabaseName: copyResult.targetDatabaseName,
       targetTableName: copyResult.targetTableName,
@@ -205,11 +203,14 @@ export function useTableCopyModule(runtime: StudioRuntime): TableCopyModule {
     taskCompletionHandled = true;
     if (taskInfo.status === 'SUCCESS') {
       message.success(taskInfo.message || '表复制完成');
-      await refreshAndFocusCopiedTable(
+      void refreshAndFocusCopiedTable(
         taskInfo.targetConnectionId,
         taskInfo.targetDatabaseName || '',
         taskInfo.targetTableName,
-      );
+      ).catch((error) => {
+        const msg = error instanceof Error ? error.message : String(error);
+        message.warning(`复制结果已完成，但页面刷新失败: ${msg}`);
+      });
       return;
     }
     message.error(taskInfo.message || '表复制失败');
@@ -237,7 +238,7 @@ export function useTableCopyModule(runtime: StudioRuntime): TableCopyModule {
     }
   }
 
-  function startTaskPolling(copyResult: TableCopyVO) {
+  function startTaskPolling(copyResult: TableCopyVO, req: TableCopyReq) {
     const taskId = (copyResult.taskId || '').trim();
     if (!taskId) {
       message.error('复制任务缺少 taskId');
@@ -245,7 +246,7 @@ export function useTableCopyModule(runtime: StudioRuntime): TableCopyModule {
     }
     stopTaskPolling();
     taskCompletionHandled = false;
-    initTaskModal(copyResult);
+    initTaskModal(copyResult, req);
     void pollTask(taskId);
     taskPollingTimer = window.setInterval(() => {
       void pollTask(taskId);
@@ -260,19 +261,22 @@ export function useTableCopyModule(runtime: StudioRuntime): TableCopyModule {
       const result = await postApi<TableCopyVO>('/api/schema/table/copy', req);
       if (result.async) {
         closeTablePasteModal();
-        startTaskPolling(result);
+        startTaskPolling(result, req);
         message.success(result.message || '复制任务已创建');
         return;
       }
       closeTablePasteModal();
-      await refreshAndFocusCopiedTable(
+      message.success(
+        result.message || (req.copyMode === 'STRUCTURE_ONLY' ? '表结构复制成功' : '表结构和数据复制成功'),
+      );
+      void refreshAndFocusCopiedTable(
         result.targetConnectionId,
         result.targetDatabaseName || req.targetDatabaseName || '',
         result.targetTableName,
-      );
-      message.success(
-        req.copyMode === 'STRUCTURE_ONLY' ? '表结构复制成功' : '表结构和数据复制成功',
-      );
+      ).catch((error) => {
+        const msg = error instanceof Error ? error.message : String(error);
+        message.warning(`复制结果已完成，但页面刷新失败: ${msg}`);
+      });
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       message.error(msg);

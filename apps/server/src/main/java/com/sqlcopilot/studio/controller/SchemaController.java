@@ -127,7 +127,7 @@ public class SchemaController {
                 result.getTableName()
             );
         }
-        return ApiResponse.success(result);
+        return toTableOperationResponse(result);
     }
 
     @PostMapping("/table/alter")
@@ -140,7 +140,7 @@ public class SchemaController {
                 result.getTableName()
             );
         }
-        return ApiResponse.success(result);
+        return toTableOperationResponse(result);
     }
 
     @PostMapping("/namespace/create")
@@ -232,7 +232,7 @@ public class SchemaController {
                 result.getTableName()
             );
         }
-        return ApiResponse.success(result);
+        return toTableOperationResponse(result);
     }
 
     @PostMapping("/table/truncate")
@@ -240,6 +240,19 @@ public class SchemaController {
         TableOperationVO result = schemaService.truncateTable(req.getConnectionId(), req.getDatabaseName(), req.getTableName());
         if (result.isSuccess()) {
             schemaService.refreshSchemaCache(req.getConnectionId(), result.getDatabaseName());
+        }
+        return toTableOperationResponse(result);
+    }
+
+    /**
+     * 表操作失败时返回非 0 响应码，避免前端把业务失败误判为成功。
+     */
+    private ApiResponse<TableOperationVO> toTableOperationResponse(TableOperationVO result) {
+        if (result == null) {
+            return ApiResponse.fail(500, "表操作失败");
+        }
+        if (!result.isSuccess()) {
+            return ApiResponse.fail(500, result.getMessage());
         }
         return ApiResponse.success(result);
     }

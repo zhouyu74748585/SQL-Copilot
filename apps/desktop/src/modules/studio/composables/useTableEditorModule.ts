@@ -1,6 +1,6 @@
 ﻿import {message} from 'ant-design-vue';
 import {getApi, postApi} from '../../../api/client';
-import type {TableDetailVO} from '../../../types';
+import type {TableDetailVO, TableOperationVO} from '../../../types';
 import type {StudioRuntime} from './useStudioRuntime';
 
 type TableEditorTab = StudioRuntime['tableEditorTabs']['value'][number];
@@ -210,7 +210,7 @@ export function useTableEditorModule(runtime: StudioRuntime): TableEditorModule 
 
     runtime.tableEditorSaving.value = true;
     try {
-      await postApi(tab.mode === 'create' ? '/api/schema/table/create' : '/api/schema/table/alter', {
+      const result = await postApi<TableOperationVO>(tab.mode === 'create' ? '/api/schema/table/create' : '/api/schema/table/alter', {
         connectionId: tab.connectionId,
         databaseName: tab.databaseName,
         tableName: tab.draft?.tableName || tab.tableName,
@@ -219,9 +219,12 @@ export function useTableEditorModule(runtime: StudioRuntime): TableEditorModule 
         indexes: tab.draft?.indexes || [],
         ddl,
       });
+      if (!result.success) {
+        throw new Error(result.message || (tab.mode === 'create' ? '表创建失败' : '表结构更新失败'));
+      }
       const nextTableName = tab.draft?.tableName || tab.tableName;
       runtime.invalidateDatabaseMetadataCaches(tab.connectionId, tab.databaseName);
-      message.success(tab.mode === 'create' ? '表创建成功' : '表结构更新成功');
+      message.success(result.message || (tab.mode === 'create' ? '表创建成功' : '表结构更新成功'));
       tab.saved = true;
       tab.dirty = false;
       tab.updatedAt = Date.now();

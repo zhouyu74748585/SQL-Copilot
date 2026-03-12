@@ -365,7 +365,7 @@
                 <a-input v-model:value="tableKeyword" size="small" :placeholder="currentObjectType === 'queries' ? '搜索保存查询' : '搜索表名'" allow-clear>
                   <template #prefix><search-outlined /></template>
                 </a-input>
-                <a-button size="small" @click="refreshCurrentObjects" title="刷新当前对象">
+                <a-button size="small" @click="refreshCurrentPageObjects({ force: true })" title="刷新当前对象">
                   <reload-outlined />
                 </a-button>
                 <a-radio-group v-model:value="objectViewMode" size="small">
@@ -440,7 +440,6 @@
             <div class="center-status">
               <span>对象: {{ filteredObjectRows.length }}</span>
               <span>类型: {{ currentObjectType === 'queries' ? '保存查询' : objectTypeLabel(currentObjectType) }}</span>
-              <span>字段: {{ schemaOverview?.columnCount ?? 0 }}</span>
             </div>
           </section>
 
@@ -962,7 +961,6 @@
         />
 
         <section class="pane pane-center table-editor-structure-pane">
-          <div class="pane-title">表结构编辑 · {{ activeTableEditorTab.title }}</div>
           <TableEditor
             :key="activeTableEditorTab.key"
             :tab="activeTableEditorTab"
@@ -3274,8 +3272,7 @@ const {
     registerSqlScrollTracker,
     warmupTableSuggestions,
     handleSqlEditorMount,
-    loadObjectNames,
-    refreshCurrentObjects,
+    refreshCurrentPageObjects,
     loadCategoryObjects,
     loadTreeChildrenByKey,
     handleTreeSelect,

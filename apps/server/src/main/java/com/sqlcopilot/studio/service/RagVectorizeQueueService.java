@@ -8,6 +8,8 @@ public interface RagVectorizeQueueService {
 
     RagVectorizeEnqueueVO enqueue(Long connectionId, String databaseName);
 
+    RagVectorizeEnqueueVO enqueueTable(Long connectionId, String databaseName, String tableName);
+
     RagVectorizeTableVO vectorizeTable(Long connectionId, String databaseName, String tableName);
 
     RagVectorizeInterruptVO interrupt(Long connectionId, String databaseName);
