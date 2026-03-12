@@ -719,6 +719,8 @@ const objectDefinitionDetail = ref<SchemaObjectDefinitionVO | null>(null);
 
 const objectDefinitionDetailLoading = ref(false);
 
+const queryEditorPaneRef = ref<HTMLElement | null>(null);
+
 const sqlEditorContainerRef = ref<HTMLElement | null>(null);
 
 const queryChatScrollRef = ref<HTMLElement | null>(null);
@@ -775,6 +777,15 @@ const queryPaneResizeState = reactive({
   resizing: false,
   startX: 0,
   startWidth: 420,
+});
+
+const queryEditorSectionHeight = ref(260);
+
+const queryEditorSectionResizeState = reactive({
+  resizing: false,
+  startY: 0,
+  startHeight: 260,
+  paneHeight: 0,
 });
 
 const contextMenu = reactive({
@@ -1366,7 +1377,23 @@ const objectColumns = computed(() => {
 
 const tableScrollY = computed(() => Math.max(260, viewportHeight.value - 240));
 
-const queryResultScrollY = computed(() => Math.max(180, viewportHeight.value - 560));
+const queryResultScrollY = computed(() => {
+  const paneHeight = queryEditorPaneRef.value?.clientHeight ?? Math.max(520, viewportHeight.value - 190);
+  const titleHeight = 40;
+  const splitterHeight = 8;
+  const resultHeaderHeight = 34;
+  const resultFooterHeight = 28;
+  const resultErrorHeight = activeQueryTab.value?.lastExecuteFailed ? 44 : 0;
+  const available = paneHeight
+    - titleHeight
+    - queryEditorSectionHeight.value
+    - splitterHeight
+    - resultHeaderHeight
+    - resultFooterHeight
+    - resultErrorHeight
+    - 8;
+  return Math.max(180, available);
+});
 
 const aiModelOptions = computed(() =>
   (aiConfigForm.modelOptions ?? []).map((item) => ({
@@ -8091,6 +8118,7 @@ function resetConnectionModalState() {
     tableDetailLoading,
     objectDefinitionDetail,
     objectDefinitionDetailLoading,
+    queryEditorPaneRef,
     sqlEditorContainerRef,
     queryChatScrollRef,
     queryChatMessageElementMap,
@@ -8106,6 +8134,8 @@ function resetConnectionModalState() {
     erPaneResizeState,
     queryRightPaneWidth,
     queryPaneResizeState,
+    queryEditorSectionHeight,
+    queryEditorSectionResizeState,
     contextMenu,
     connectionForm,
     connectionPreviewDbOptions,

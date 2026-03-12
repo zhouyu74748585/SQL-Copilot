@@ -1688,6 +1688,32 @@ body {
   border-bottom: 1px solid var(--line);
 }
 
+.query-editor-pane .query-editor-group {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 0 0 auto;
+}
+
+.query-editor-pane .query-editor-group .sql-editor {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.query-editor-section-splitter {
+  height: 8px;
+  flex: 0 0 8px;
+  cursor: row-resize;
+  background:
+    linear-gradient(180deg, transparent 0%, transparent 35%, rgba(115, 140, 183, 0.22) 35%, rgba(115, 140, 183, 0.22) 65%, transparent 65%, transparent 100%);
+  transition: background-color 0.16s ease;
+}
+
+.query-editor-section-splitter:hover {
+  background-color: rgba(76, 112, 176, 0.08);
+}
+
 .object-definition-pane {
   display: flex;
   flex-direction: column;
@@ -2622,7 +2648,7 @@ body {
 
 .query-result-panel {
   flex: 1;
-  min-height: 0;
+  min-height: 240px;
   display: flex;
   flex-direction: column;
   overflow: hidden;

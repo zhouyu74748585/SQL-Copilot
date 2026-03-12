@@ -18,6 +18,9 @@ export interface UiShellModule {
   startResizeQueryPane: (event: MouseEvent) => void;
   handleResizeQueryPane: (event: MouseEvent) => void;
   stopResizeQueryPane: () => void;
+  startResizeQueryEditorSections: (event: MouseEvent) => void;
+  handleResizeQueryEditorSections: (event: MouseEvent) => void;
+  stopResizeQueryEditorSections: () => void;
 }
 
 interface UiShellDeps {
@@ -26,6 +29,33 @@ interface UiShellDeps {
 }
 
 export function useUiShellModule(runtime: StudioRuntime, deps: UiShellDeps): UiShellModule {
+  const QUERY_EDITOR_SECTION_MIN_HEIGHT = 180;
+  const QUERY_RESULT_SECTION_MIN_HEIGHT = 240;
+  const QUERY_EDITOR_SECTION_SPLITTER_HEIGHT = 8;
+  const QUERY_EDITOR_PANE_TITLE_HEIGHT = 40;
+
+  function clampQueryEditorSectionHeight(paneHeight?: number) {
+    const resolvedPaneHeight = paneHeight ?? runtime.queryEditorPaneRef.value?.clientHeight ?? 0;
+    if (!resolvedPaneHeight) {
+      runtime.queryEditorSectionHeight.value = Math.max(
+        QUERY_EDITOR_SECTION_MIN_HEIGHT,
+        runtime.queryEditorSectionHeight.value,
+      );
+      return;
+    }
+    const maxHeight = Math.max(
+      QUERY_EDITOR_SECTION_MIN_HEIGHT,
+      resolvedPaneHeight
+      - QUERY_EDITOR_PANE_TITLE_HEIGHT
+      - QUERY_EDITOR_SECTION_SPLITTER_HEIGHT
+      - QUERY_RESULT_SECTION_MIN_HEIGHT,
+    );
+    runtime.queryEditorSectionHeight.value = Math.min(
+      maxHeight,
+      Math.max(QUERY_EDITOR_SECTION_MIN_HEIGHT, runtime.queryEditorSectionHeight.value),
+    );
+  }
+
   function toggleTheme() {
     runtime.uiTheme.value = runtime.uiTheme.value === 'dark' ? 'light' : 'dark';
   }
@@ -60,6 +90,9 @@ export function useUiShellModule(runtime: StudioRuntime, deps: UiShellDeps): UiS
   function handleWindowResize() {
     runtime.viewportHeight.value = window.innerHeight;
     runtime.viewportWidth.value = window.innerWidth;
+    window.requestAnimationFrame(() => {
+      clampQueryEditorSectionHeight();
+    });
   }
 
   function handleWindowKeydown(event: KeyboardEvent) {
@@ -187,6 +220,48 @@ export function useUiShellModule(runtime: StudioRuntime, deps: UiShellDeps): UiS
     window.removeEventListener('mouseup', stopResizeQueryPane);
   }
 
+  function startResizeQueryEditorSections(event: MouseEvent) {
+    if (!runtime.activeQueryTab.value || !runtime.queryEditorPaneRef.value) {
+      return;
+    }
+    event.preventDefault();
+    clampQueryEditorSectionHeight();
+    runtime.queryEditorSectionResizeState.resizing = true;
+    runtime.queryEditorSectionResizeState.startY = event.clientY;
+    runtime.queryEditorSectionResizeState.startHeight = runtime.queryEditorSectionHeight.value;
+    runtime.queryEditorSectionResizeState.paneHeight = runtime.queryEditorPaneRef.value.clientHeight;
+    window.addEventListener('mousemove', handleResizeQueryEditorSections);
+    window.addEventListener('mouseup', stopResizeQueryEditorSections);
+  }
+
+  function handleResizeQueryEditorSections(event: MouseEvent) {
+    if (!runtime.queryEditorSectionResizeState.resizing) {
+      return;
+    }
+    const delta = event.clientY - runtime.queryEditorSectionResizeState.startY;
+    const maxHeight = Math.max(
+      QUERY_EDITOR_SECTION_MIN_HEIGHT,
+      runtime.queryEditorSectionResizeState.paneHeight
+      - QUERY_EDITOR_PANE_TITLE_HEIGHT
+      - QUERY_EDITOR_SECTION_SPLITTER_HEIGHT
+      - QUERY_RESULT_SECTION_MIN_HEIGHT,
+    );
+    const next = runtime.queryEditorSectionResizeState.startHeight + delta;
+    runtime.queryEditorSectionHeight.value = Math.min(
+      maxHeight,
+      Math.max(QUERY_EDITOR_SECTION_MIN_HEIGHT, next),
+    );
+  }
+
+  function stopResizeQueryEditorSections() {
+    if (!runtime.queryEditorSectionResizeState.resizing) {
+      return;
+    }
+    runtime.queryEditorSectionResizeState.resizing = false;
+    window.removeEventListener('mousemove', handleResizeQueryEditorSections);
+    window.removeEventListener('mouseup', stopResizeQueryEditorSections);
+  }
+
   onMounted(() => {
     window.addEventListener('resize', handleWindowResize);
     window.addEventListener('keydown', handleWindowKeydown);
@@ -204,6 +279,8 @@ export function useUiShellModule(runtime: StudioRuntime, deps: UiShellDeps): UiS
     window.removeEventListener('mouseup', stopResizeErPane);
     window.removeEventListener('mousemove', handleResizeQueryPane);
     window.removeEventListener('mouseup', stopResizeQueryPane);
+    window.removeEventListener('mousemove', handleResizeQueryEditorSections);
+    window.removeEventListener('mouseup', stopResizeQueryEditorSections);
   });
 
   watch(
@@ -230,5 +307,8 @@ export function useUiShellModule(runtime: StudioRuntime, deps: UiShellDeps): UiS
     startResizeQueryPane,
     handleResizeQueryPane,
     stopResizeQueryPane,
+    startResizeQueryEditorSections,
+    handleResizeQueryEditorSections,
+    stopResizeQueryEditorSections,
   };
 }

@@ -1829,7 +1829,7 @@
 
         <div v-if="activeQueryTab" class="pane-splitter pane-splitter-right query-pane-splitter" @mousedown="startResizeQueryPane" />
 
-        <aside v-if="activeQueryTab" class="pane pane-right query-editor-pane">
+        <aside v-if="activeQueryTab" ref="queryEditorPaneRef" class="pane pane-right query-editor-pane">
           <div class="pane-title pane-title-with-action">
             <div class="pane-title-actions query-editor-header-actions">
               <a-tooltip :title="activeQueryTab.selectedSqlText ? '计划选择的SQL' : '计划 SQL'">
@@ -1903,12 +1903,16 @@
             </div>
           </div>
 
-          <div class="editor-group" ref="sqlEditorContainerRef">
+          <div
+            ref="sqlEditorContainerRef"
+            class="editor-group query-editor-group"
+            :style="{ height: `${queryEditorSectionHeight}px` }"
+          >
             <MonacoEditor
               v-model:value="activeQueryTab.sqlText"
               language="sql"
               width="100%"
-              height="240px"
+              height="100%"
               :theme="monacoTheme"
               :options="sqlEditorOptions"
               class="sql-editor"
@@ -1953,6 +1957,12 @@
               </a-space>
             </div>
           </div>
+
+          <div
+            class="query-editor-section-splitter"
+            title="拖拽调整 SQL 编辑区和查询结果区高度"
+            @mousedown="startResizeQueryEditorSections"
+          />
 
           <div class="query-result-panel">
             <div class="query-result-title-row">
@@ -3046,6 +3056,8 @@ const {
     tableDetail,
     tableDetailLoading,
     objectDefinitionDetailLoading,
+    queryEditorPaneRef,
+    queryEditorSectionHeight,
     sqlEditorContainerRef,
     queryChatScrollRef,
     queryChatMessageElementMap,
@@ -3375,6 +3387,7 @@ const {
     startResizeQueryPane,
     handleResizeQueryPane,
     stopResizeQueryPane,
+    startResizeQueryEditorSections,
     openQueryTabByObject,
     getDesktopBridge,
     pickRagEmbeddingModelDir,
