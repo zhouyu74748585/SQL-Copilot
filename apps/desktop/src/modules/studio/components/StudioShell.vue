@@ -335,7 +335,6 @@
 
       <template v-if="activeWorkbenchTab === browserTabKey">
           <section class="pane pane-center">
-            <div class="pane-title">对象浏览</div>
             <div class="center-toolbar">
               <div v-if="currentObjectType === 'tables'" class="center-toolbar-left">
                 <a-button size="small" type="primary" :disabled="!canCreateTable" @click="openNewTableEditor()">
@@ -427,7 +426,7 @@
           <div class="pane-splitter pane-splitter-right" @mousedown="startResizeBrowserPane" />
 
           <aside class="pane pane-right detail-pane">
-            <div class="pane-title">对象详情</div>
+            <div class="pane-title">详情</div>
             <div v-if="!selectedObjectRecord && !selectedTreeDetail" class="empty-pane">请从对象浏览中选择连接、数据库或对象</div>
             <div v-else-if="selectedObjectRecord" class="detail-wrapper">
               <div class="detail-summary">
