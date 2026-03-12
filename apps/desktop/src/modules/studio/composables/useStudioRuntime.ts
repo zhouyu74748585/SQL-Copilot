@@ -283,6 +283,7 @@ interface ErWorkspaceTab {
   layoutMode: ErLayoutMode;
   lineType: ErLineType;
   showCardComments: boolean;
+  detailCollapsed: boolean;
   aiConfidenceThreshold: number;
   includeAiInference: boolean;
   loading: boolean;
@@ -528,6 +529,8 @@ const truncateTableName = ref('');
 const dropTableModalOpen = ref(false);
 
 const dropTableName = ref('');
+
+const browserDetailCollapsed = ref(false);
 
 const tableCopyClipboard = ref<TableCopyClipboard | null>(null);
 
@@ -2069,6 +2072,7 @@ async function confirmErTableSelection() {
         layoutMode: 'GRID',
         lineType: 'POLYLINE',
         showCardComments: false,
+        detailCollapsed: false,
         aiConfidenceThreshold: 0.6,
         includeAiInference: true,
         loading: false,
@@ -2095,6 +2099,9 @@ async function confirmErTableSelection() {
       }
       if (tab.showCardComments == null) {
         tab.showCardComments = false;
+      }
+      if (tab.detailCollapsed == null) {
+        tab.detailCollapsed = false;
       }
       tab.title = `ER · ${erSelectDatabaseName.value}`;
       touchErTab(tab);
@@ -7012,6 +7019,7 @@ function resetConnectionModalState() {
     truncateTableName,
     dropTableModalOpen,
     dropTableName,
+    browserDetailCollapsed,
     tableCopyClipboard,
     tablePasteModalOpen,
     tablePasteSubmitting,

@@ -2390,7 +2390,17 @@ body {
   border-right: none;
 }
 
+.workbench.workbench-browser.is-browser-detail-collapsed .browser-center-pane {
+  grid-column: 3 / 6;
+  border-right: none;
+}
+
 .workbench.workbench-table-data.is-table-data-detail-collapsed .table-data-center-pane {
+  grid-column: 3 / 6;
+  border-right: none;
+}
+
+.workbench.workbench-er.is-er-detail-collapsed .er-diagram-pane {
   grid-column: 3 / 6;
   border-right: none;
 }
@@ -2943,6 +2953,7 @@ body {
 @media (max-width: 1400px) {
   .workbench,
   .workbench.workbench-query,
+  .workbench.workbench-er,
   .workbench.workbench-knowledge,
   .workbench.workbench-table-editor,
   .workbench.workbench-table-data {
@@ -2953,6 +2964,7 @@ body {
 @media (max-width: 1200px) {
   .workbench,
   .workbench.workbench-query,
+  .workbench.workbench-er,
   .workbench.workbench-knowledge,
   .workbench.workbench-table-editor,
   .workbench.workbench-table-data {
@@ -2999,6 +3011,13 @@ body {
     border-right: none;
   }
 
+  .workbench.workbench-er .er-diagram-pane,
+  .workbench.workbench-er .er-side-pane {
+    grid-column: auto;
+    grid-row: auto;
+    border-right: none;
+  }
+
   .workbench.workbench-table-editor .table-editor-structure-pane,
   .workbench.workbench-table-editor .table-editor-preview-pane {
     grid-column: auto;
@@ -3018,6 +3037,10 @@ body {
   }
 
   .workbench.workbench-knowledge .pane-left {
+    grid-row: auto;
+  }
+
+  .workbench.workbench-er .pane-left {
     grid-row: auto;
   }
 

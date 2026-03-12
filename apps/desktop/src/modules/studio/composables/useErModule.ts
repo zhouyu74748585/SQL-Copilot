@@ -11,6 +11,7 @@ interface ErRelationRouteChangePayload {
 
 export interface ErModule {
   touchErTab: (tab: ErTab) => void;
+  toggleErDetailCollapsed: (tab: ErTab) => void;
   normalizeErRelationDirection: (rawDirection?: string) => 'SOURCE_TO_TARGET' | 'TARGET_TO_SOURCE' | 'BIDIRECTIONAL';
   normalizeErRelationType: (rawType?: string) => string;
   erRelationKey: (relation: ErRelation) => string;
@@ -27,6 +28,11 @@ export interface ErModule {
 export function useErModule(runtime: StudioRuntime): ErModule {
   function touchErTab(tab: ErTab) {
     tab.updatedAt = Date.now();
+  }
+
+  function toggleErDetailCollapsed(tab: ErTab) {
+    tab.detailCollapsed = !tab.detailCollapsed;
+    touchErTab(tab);
   }
 
   function normalizeErRelationDirection(rawDirection?: string) {
@@ -190,6 +196,7 @@ export function useErModule(runtime: StudioRuntime): ErModule {
 
   return {
     touchErTab,
+    toggleErDetailCollapsed,
     normalizeErRelationDirection,
     normalizeErRelationType,
     erRelationKey,
