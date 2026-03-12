@@ -7,6 +7,7 @@ import com.sqlcopilot.studio.dto.connection.*;
 import com.sqlcopilot.studio.entity.ConnectionEntity;
 import com.sqlcopilot.studio.mapper.ConnectionMapper;
 import com.sqlcopilot.studio.service.ConnectionService;
+import com.sqlcopilot.studio.support.JdbcDriverResolver;
 import com.sqlcopilot.studio.support.driver.IsolatedJdbcConnectionManager;
 import com.sqlcopilot.studio.support.ssh.SshTunnelManager;
 import com.sqlcopilot.studio.util.BusinessException;
@@ -33,19 +34,34 @@ public class ConnectionServiceImpl implements ConnectionService {
     private static final String SSH_AUTH_KEY_TEXT = "SSH_KEY_TEXT";
 
     private final ConnectionMapper connectionMapper;
+    private final JdbcDriverResolver jdbcDriverResolver;
     private final IsolatedJdbcConnectionManager isolatedJdbcConnectionManager;
     private final SshTunnelManager sshTunnelManager;
     private final ObjectMapper objectMapper;
     private final AtomicLong temporaryConnectionIdGenerator = new AtomicLong(-1L);
 
     public ConnectionServiceImpl(ConnectionMapper connectionMapper,
+                                 JdbcDriverResolver jdbcDriverResolver,
                                  IsolatedJdbcConnectionManager isolatedJdbcConnectionManager,
                                  SshTunnelManager sshTunnelManager,
                                  ObjectMapper objectMapper) {
         this.connectionMapper = connectionMapper;
+        this.jdbcDriverResolver = jdbcDriverResolver;
         this.isolatedJdbcConnectionManager = isolatedJdbcConnectionManager;
         this.sshTunnelManager = sshTunnelManager;
         this.objectMapper = objectMapper;
+    }
+
+    @Override
+    public List<ConnectionDbTypeVO> listSupportedDbTypes() {
+        return jdbcDriverResolver.listSupportedDbTypes().stream().map(spec -> {
+            ConnectionDbTypeVO vo = new ConnectionDbTypeVO();
+            vo.setDbType(spec.dbType());
+            vo.setDisplayName(spec.displayName());
+            vo.setDefaultPort(spec.defaultPort());
+            vo.setSupportsSelectedDatabases(spec.supportsSelectedDatabases());
+            return vo;
+        }).toList();
     }
 
     @Override
@@ -456,8 +472,7 @@ public class ConnectionServiceImpl implements ConnectionService {
     }
 
     private boolean supportsSelectedDatabases(String dbType) {
-        String type = upper(dbType);
-        return DB_TYPE_MYSQL.equals(type) || DB_TYPE_POSTGRESQL.equals(type) || DB_TYPE_SQLSERVER.equals(type);
+        return jdbcDriverResolver.supportsSelectedDatabases(dbType);
     }
 
     private List<String> normalizeSelectedDatabases(List<String> selectedDatabases) {

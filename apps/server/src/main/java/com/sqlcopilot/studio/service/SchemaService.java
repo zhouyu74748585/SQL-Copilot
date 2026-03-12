@@ -14,6 +14,8 @@ public interface SchemaService {
 
     TableDetailVO getTableDetail(Long connectionId, String databaseName, String tableName);
 
+    SchemaObjectDefinitionVO getObjectDefinition(Long connectionId, String databaseName, String objectType, String objectName);
+
     List<String> listDatabases(Long connectionId);
 
     List<String> listObjectNames(Long connectionId, String databaseName, String objectType);
@@ -25,6 +27,8 @@ public interface SchemaService {
     TableOperationVO alterTable(TableAlterReq req);
 
     TableRenameVO renameTable(TableRenameReq req);
+
+    SchemaObjectDefinitionSaveVO saveObjectDefinition(SchemaObjectDefinitionSaveReq req);
 
     TableOperationVO dropTable(Long connectionId, String databaseName, String tableName);
 

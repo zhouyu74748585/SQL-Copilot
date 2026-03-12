@@ -71,6 +71,13 @@ export interface ConnectionDatabasePreviewVO {
   databaseNames: string[];
 }
 
+export interface ConnectionDbTypeVO {
+  dbType: string;
+  displayName: string;
+  defaultPort?: number;
+  supportsSelectedDatabases: boolean;
+}
+
 export interface SchemaOverviewVO {
   connectionId: number;
   databaseName?: string;
@@ -184,6 +191,33 @@ export interface TableRenameVO {
   targetTableName: string;
 }
 
+export type SchemaObjectType = 'views' | 'functions';
+
+export interface SchemaObjectDefinitionVO {
+  connectionId: number;
+  databaseName: string;
+  objectType: SchemaObjectType;
+  objectName: string;
+  definitionSql: string;
+}
+
+export interface SchemaObjectDefinitionSaveReq {
+  connectionId: number;
+  databaseName: string;
+  objectType: SchemaObjectType;
+  objectName: string;
+  definitionSql: string;
+}
+
+export interface SchemaObjectDefinitionSaveVO {
+  success: boolean;
+  message: string;
+  databaseName: string;
+  objectType: SchemaObjectType;
+  objectName: string;
+  definitionSql: string;
+}
+
 export type TableDataFilterOperator =
   | 'EQ'
   | 'NE'
@@ -201,6 +235,7 @@ export interface TableDataPageReq {
   connectionId: number;
   databaseName: string;
   tableName: string;
+  objectType?: 'tables' | 'views';
   pageNo: number;
   pageSize: number;
   filters: Array<{
@@ -242,6 +277,7 @@ export interface TableDataCommitReq {
   connectionId: number;
   databaseName: string;
   tableName: string;
+  objectType?: 'tables' | 'views';
   inserts: Array<{
     cells: Array<{
       columnName: string;

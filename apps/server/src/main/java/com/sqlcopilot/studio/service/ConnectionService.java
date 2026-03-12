@@ -7,6 +7,8 @@ import java.util.List;
 
 public interface ConnectionService {
 
+    List<ConnectionDbTypeVO> listSupportedDbTypes();
+
     List<ConnectionVO> listConnections();
 
     ConnectionVO createConnection(ConnectionCreateReq req);

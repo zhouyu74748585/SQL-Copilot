@@ -398,7 +398,11 @@ public class TableCopyServiceImpl implements TableCopyService {
         }
         String targetIdentifier = quoteIdentifier(context.targetTableName(), context.dbType());
         String sourceIdentifier = quoteIdentifier(context.sourceTableName(), context.dbType());
-        String rewritten = replaceCreateTableIdentifier(ddl, sourceIdentifier, targetIdentifier);
+        String qualifiedSourceIdentifier = qualifyTableName(context.sourceDatabaseName(), context.sourceTableName(), context.dbType());
+        String rewritten = replaceCreateTableIdentifier(ddl, qualifiedSourceIdentifier, targetIdentifier);
+        if (rewritten.equals(ddl)) {
+            rewritten = replaceCreateTableIdentifier(ddl, sourceIdentifier, targetIdentifier);
+        }
         if (rewritten.equals(ddl)) {
             rewritten = replaceCreateTableIdentifier(ddl, normalize(context.sourceTableName()), normalize(context.targetTableName()));
         }

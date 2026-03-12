@@ -3,6 +3,7 @@ import {useErModule} from './useErModule';
 import {useErSnapshotModule} from './useErSnapshotModule';
 import {useHistoryModule} from './useHistoryModule';
 import {useKnowledgeModule} from './useKnowledgeModule';
+import {useObjectDefinitionEditorModule} from './useObjectDefinitionEditorModule';
 import {useQueryModule} from './useQueryModule';
 import {useStudioRuntime} from './useStudioRuntime';
 import {useTableCopyModule} from './useTableCopyModule';
@@ -17,11 +18,13 @@ export function useStudioController() {
   const tableEditorModule = useTableEditorModule(runtime);
   const tableDataModule = useTableDataModule(runtime);
   const tableRenameModule = useTableRenameModule(runtime);
+  const objectDefinitionEditorModule = useObjectDefinitionEditorModule(runtime);
   const connectionBrowserModule = useConnectionBrowserModule(runtime, {
     copyTableWithinCurrentDatabase: tableCopyModule.copyTableWithinCurrentDatabase,
     openEditTableEditor: tableEditorModule.openEditTableEditor,
     openTableDataTabByObject: tableDataModule.openTableDataTabByObject,
     openRenameTableModal: tableRenameModule.openRenameTableModal,
+    openObjectDefinitionEditor: objectDefinitionEditorModule.openObjectDefinitionEditor,
   });
   const queryModule = useQueryModule(runtime);
   const erModule = useErModule(runtime);
@@ -44,6 +47,7 @@ export function useStudioController() {
     ...tableEditorModule,
     ...tableDataModule,
     ...tableRenameModule,
+    ...objectDefinitionEditorModule,
     ...uiShellModule,
     connectionBrowserModule,
     queryModule,
@@ -55,6 +59,7 @@ export function useStudioController() {
     tableEditorModule,
     tableDataModule,
     tableRenameModule,
+    objectDefinitionEditorModule,
     uiShellModule,
   };
 }

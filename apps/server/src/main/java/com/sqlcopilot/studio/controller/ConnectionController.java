@@ -18,6 +18,11 @@ public class ConnectionController {
         this.connectionService = connectionService;
     }
 
+    @GetMapping("/db-types")
+    public ApiResponse<List<ConnectionDbTypeVO>> listSupportedDbTypes() {
+        return ApiResponse.success(connectionService.listSupportedDbTypes());
+    }
+
     @GetMapping("/list")
     public ApiResponse<List<ConnectionVO>> list() {
         return ApiResponse.success(connectionService.listConnections());

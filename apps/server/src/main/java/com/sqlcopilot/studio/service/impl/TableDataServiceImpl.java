@@ -55,11 +55,15 @@ public class TableDataServiceImpl implements TableDataService {
     public TableDataPageVO page(TableDataPageReq req) {
         String tableName = normalize(req.getTableName());
         String databaseName = normalize(req.getDatabaseName());
+        String objectType = normalizeObjectType(req.getObjectType());
         if (tableName.isBlank()) {
             throw new BusinessException(400, "表名不能为空");
         }
         if (databaseName.isBlank()) {
             throw new BusinessException(400, "数据库名称不能为空");
+        }
+        if (!"tables".equals(objectType) && !"views".equals(objectType)) {
+            throw new BusinessException(400, "仅支持表或视图数据浏览");
         }
 
         int pageNo = req.getPageNo() == null || req.getPageNo() <= 0 ? DEFAULT_PAGE_NO : req.getPageNo();
@@ -115,8 +119,11 @@ public class TableDataServiceImpl implements TableDataService {
         vo.setPageNo(pageNo);
         vo.setPageSize(pageSize);
         vo.setPrimaryKeyColumns(primaryKeyColumns);
-        vo.setEditable(!primaryKeyColumns.isEmpty() && !isReadOnlyConnection(connectionEntity));
-        if (isReadOnlyConnection(connectionEntity)) {
+        boolean viewReadOnly = "views".equals(objectType);
+        vo.setEditable(!viewReadOnly && !primaryKeyColumns.isEmpty() && !isReadOnlyConnection(connectionEntity));
+        if (viewReadOnly) {
+            vo.setReadOnlyReason("视图只支持只读浏览");
+        } else if (isReadOnlyConnection(connectionEntity)) {
             vo.setReadOnlyReason("当前连接为只读模式");
         } else if (primaryKeyColumns.isEmpty()) {
             vo.setReadOnlyReason("该表未识别到主键，暂不支持编辑与删除");
@@ -158,11 +165,15 @@ public class TableDataServiceImpl implements TableDataService {
     public TableDataCommitVO commit(TableDataCommitReq req) {
         String tableName = normalize(req.getTableName());
         String databaseName = normalize(req.getDatabaseName());
+        String objectType = normalizeObjectType(req.getObjectType());
         if (tableName.isBlank()) {
             throw new BusinessException(400, "表名不能为空");
         }
         if (databaseName.isBlank()) {
             throw new BusinessException(400, "数据库名称不能为空");
+        }
+        if (!"tables".equals(objectType)) {
+            throw new BusinessException(400, "视图只支持只读浏览，禁止提交数据变更");
         }
 
         ConnectionEntity connectionEntity = connectionService.getConnectionEntity(req.getConnectionId());
@@ -476,6 +487,11 @@ public class TableDataServiceImpl implements TableDataService {
 
     private String normalize(String value) {
         return Objects.toString(value, "").trim();
+    }
+
+    private String normalizeObjectType(String value) {
+        String normalized = normalize(value).toLowerCase(Locale.ROOT);
+        return normalized.isBlank() ? "tables" : normalized;
     }
 
     private record UpdateRowData(LinkedHashMap<String, Object> primaryKeyValues,

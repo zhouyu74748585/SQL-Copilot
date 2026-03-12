@@ -53,6 +53,26 @@ public class JdbcDriverResolver {
         return findIntrospectionSql(dbType, INTROSPECTION_SCHEMAS);
     }
 
+    public List<SupportedDbTypeSpec> listSupportedDbTypes() {
+        List<SupportedDbTypeSpec> result = new ArrayList<>();
+        for (Map.Entry<String, DriverSpec> entry : specs.entrySet()) {
+            DriverSpec spec = entry.getValue();
+            result.add(new SupportedDbTypeSpec(
+                entry.getKey(),
+                spec.displayName,
+                spec.defaultPort,
+                spec.supportsSelectedDatabases
+            ));
+        }
+        return result;
+    }
+
+    public boolean supportsSelectedDatabases(String dbType) {
+        String type = normalizeType(dbType);
+        DriverSpec spec = specs.get(type);
+        return spec != null && spec.supportsSelectedDatabases;
+    }
+
     public String findTablesSql(String dbType) {
         return findIntrospectionSql(dbType, INTROSPECTION_TABLES);
     }
@@ -86,6 +106,16 @@ public class JdbcDriverResolver {
         return trimText(spec.tableOperationSpec.renameTableSql());
     }
 
+    public ObjectDefinitionSpec findObjectDefinitionSpec(String dbType, String objectType) {
+        String type = normalizeType(dbType);
+        DriverSpec spec = specs.get(type);
+        if (spec == null || spec.objectDefinitionSpecMap.isEmpty()) {
+            return null;
+        }
+        String key = normalizeObjectType(objectType);
+        return spec.objectDefinitionSpecMap.get(key);
+    }
+
     private Map<String, DriverSpec> loadSpecs() {
         ClassPathResource resource = new ClassPathResource("jdbc-drivers.yml");
         if (!resource.exists()) {
@@ -108,7 +138,7 @@ public class JdbcDriverResolver {
                 if (!(entry.getValue() instanceof Map<?, ?> node)) {
                     continue;
                 }
-                DriverSpec spec = parseSpec(node);
+                DriverSpec spec = parseSpec(type, node);
                 if (spec != null) {
                     result.put(type, spec);
                 }
@@ -119,9 +149,12 @@ public class JdbcDriverResolver {
         }
     }
 
-    private DriverSpec parseSpec(Map<?, ?> node) {
+    private DriverSpec parseSpec(String type, Map<?, ?> node) {
         String defaultVersion = normalizeVersion(node.get("defaultVersion"));
         String defaultDriver = trimText(node.get("defaultDriver"));
+        String displayName = trimText(node.get("displayName"));
+        Integer defaultPort = parseInteger(node.get("defaultPort"));
+        boolean supportsSelectedDatabases = parseBoolean(node.get("supportsSelectedDatabases"));
         String resourcePattern = trimText(node.get("resourcePattern"));
         if (resourcePattern.isBlank()) {
             resourcePattern = DEFAULT_RESOURCE_PATTERN;
@@ -160,7 +193,11 @@ public class JdbcDriverResolver {
         CreateTableSpec createTableSpec = parseCreateTableSpec(node.get("tableCopy"));
         TableCopyFastPathSpec tableCopyFastPathSpec = parseTableCopyFastPathSpec(node.get("tableCopy"));
         TableOperationSpec tableOperationSpec = parseTableOperationSpec(node.get("tableOperations"));
+        Map<String, ObjectDefinitionSpec> objectDefinitionSpecMap = parseObjectDefinitionSpecMap(node.get("objectDefinitions"));
         return new DriverSpec(
+            displayName.isBlank() ? type : displayName,
+            defaultPort,
+            supportsSelectedDatabases,
             defaultVersion,
             defaultDriver,
             resourcePattern,
@@ -169,7 +206,8 @@ public class JdbcDriverResolver {
             introspectionSqlMap,
             createTableSpec,
             tableCopyFastPathSpec,
-            tableOperationSpec
+            tableOperationSpec,
+            objectDefinitionSpecMap
         );
     }
 
@@ -207,6 +245,37 @@ public class JdbcDriverResolver {
             return null;
         }
         return new TableOperationSpec(renameTableSql);
+    }
+
+    private Map<String, ObjectDefinitionSpec> parseObjectDefinitionSpecMap(Object node) {
+        Map<String, ObjectDefinitionSpec> result = new LinkedHashMap<>();
+        if (!(node instanceof Map<?, ?> definitionMap)) {
+            return result;
+        }
+        for (Map.Entry<?, ?> entry : definitionMap.entrySet()) {
+            String objectType = normalizeObjectType(Objects.toString(entry.getKey(), ""));
+            if (objectType.isBlank() || !(entry.getValue() instanceof Map<?, ?> valueMap)) {
+                continue;
+            }
+            String fetchSql = trimText(valueMap.get("fetchSql"));
+            String saveStrategy = trimText(valueMap.get("saveStrategy"));
+            String replaceSql = trimText(valueMap.get("replaceSql"));
+            String dropSql = trimText(valueMap.get("dropSql"));
+            String fetchColumnLabel = trimText(valueMap.get("fetchColumnLabel"));
+            Integer fetchColumnIndex = parseInteger(valueMap.get("fetchColumnIndex"));
+            if (fetchSql.isBlank() || replaceSql.isBlank()) {
+                continue;
+            }
+            result.put(objectType, new ObjectDefinitionSpec(
+                fetchSql,
+                fetchColumnLabel,
+                fetchColumnIndex == null || fetchColumnIndex <= 0 ? 1 : fetchColumnIndex,
+                saveStrategy.isBlank() ? "REPLACE" : saveStrategy,
+                replaceSql,
+                dropSql
+            ));
+        }
+        return result;
     }
 
     private Map<String, String> parseStringMap(Object node) {
@@ -247,8 +316,24 @@ public class JdbcDriverResolver {
         }
     }
 
+    private boolean parseBoolean(Object value) {
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        String normalized = trimText(value).toLowerCase(Locale.ROOT);
+        return "true".equals(normalized) || "1".equals(normalized) || "yes".equals(normalized);
+    }
+
     private String normalizeType(String value) {
         return trimText(value).toUpperCase(Locale.ROOT);
+    }
+
+    private String normalizeObjectType(String value) {
+        String normalized = trimText(value).toLowerCase(Locale.ROOT);
+        if (normalized.endsWith("s")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized;
     }
 
     private String normalizeVersion(Object value) {
@@ -260,6 +345,9 @@ public class JdbcDriverResolver {
     }
 
     private static final class DriverSpec {
+        private final String displayName;
+        private final Integer defaultPort;
+        private final boolean supportsSelectedDatabases;
         private final String defaultVersion;
         private final String defaultDriver;
         private final String resourcePattern;
@@ -269,8 +357,12 @@ public class JdbcDriverResolver {
         private final CreateTableSpec createTableSpec;
         private final TableCopyFastPathSpec tableCopyFastPathSpec;
         private final TableOperationSpec tableOperationSpec;
+        private final Map<String, ObjectDefinitionSpec> objectDefinitionSpecMap;
 
-        private DriverSpec(String defaultVersion,
+        private DriverSpec(String displayName,
+                           Integer defaultPort,
+                           boolean supportsSelectedDatabases,
+                           String defaultVersion,
                            String defaultDriver,
                            String resourcePattern,
                            Map<String, String> driversByVersion,
@@ -278,7 +370,11 @@ public class JdbcDriverResolver {
                            Map<String, String> introspectionSqlMap,
                            CreateTableSpec createTableSpec,
                            TableCopyFastPathSpec tableCopyFastPathSpec,
-                           TableOperationSpec tableOperationSpec) {
+                           TableOperationSpec tableOperationSpec,
+                           Map<String, ObjectDefinitionSpec> objectDefinitionSpecMap) {
+            this.displayName = displayName;
+            this.defaultPort = defaultPort;
+            this.supportsSelectedDatabases = supportsSelectedDatabases;
             this.defaultVersion = defaultVersion;
             this.defaultDriver = defaultDriver;
             this.resourcePattern = resourcePattern;
@@ -288,6 +384,7 @@ public class JdbcDriverResolver {
             this.createTableSpec = createTableSpec;
             this.tableCopyFastPathSpec = tableCopyFastPathSpec;
             this.tableOperationSpec = tableOperationSpec;
+            this.objectDefinitionSpecMap = objectDefinitionSpecMap;
         }
     }
 
@@ -303,6 +400,20 @@ public class JdbcDriverResolver {
     }
 
     public record TableOperationSpec(String renameTableSql) {
+    }
+
+    public record ObjectDefinitionSpec(String fetchSql,
+                                       String fetchColumnLabel,
+                                       Integer fetchColumnIndex,
+                                       String saveStrategy,
+                                       String replaceSql,
+                                       String dropSql) {
+    }
+
+    public record SupportedDbTypeSpec(String dbType,
+                                      String displayName,
+                                      Integer defaultPort,
+                                      boolean supportsSelectedDatabases) {
     }
 
     public record ResolvedDriver(String dbType,

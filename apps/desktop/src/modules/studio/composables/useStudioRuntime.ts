@@ -77,6 +77,7 @@ import type {
   ChartConfigVO,
   ChartType,
   ConnectionCreateReq,
+  ConnectionDbTypeVO,
   ConnectionDatabasePreviewReq,
   ConnectionDatabasePreviewVO,
   ErGraphReq,
@@ -96,6 +97,7 @@ import type {
   RagVectorizeOverviewVO,
   RagVectorizeTableVO,
   RiskEvaluateVO,
+  SchemaObjectType,
   SavedQuerySaveReq,
   SavedQueryVO,
   SchemaDatabaseVO,
@@ -386,6 +388,7 @@ interface TableDataWorkspaceTab {
   connectionId: number;
   databaseName: string;
   tableName: string;
+  objectType: 'tables' | 'views';
   dbType: string;
   loading: boolean;
   submitting: boolean;
@@ -426,6 +429,24 @@ interface TableDataWorkspaceTab {
   }>;
   errorMessage: string;
   dirty: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface ObjectDefinitionEditorTab {
+  key: string;
+  title: string;
+  connectionId: number;
+  databaseName: string;
+  objectType: SchemaObjectType;
+  objectName: string;
+  dbType: string;
+  sqlText: string;
+  baselineSql: string;
+  loading: boolean;
+  saving: boolean;
+  dirty: boolean;
+  errorMessage: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -586,6 +607,8 @@ const tableEditorTabs = ref<TableEditorWorkspaceTab[]>([]);
 
 const tableDataTabs = ref<TableDataWorkspaceTab[]>([]);
 
+const objectDefinitionEditorTabs = ref<ObjectDefinitionEditorTab[]>([]);
+
 const knowledgeTabs = ref<KnowledgeWorkspaceTab[]>([]);
 
 const erTableSelectModalOpen = ref(false);
@@ -741,6 +764,8 @@ const contextMenu = reactive({
 
 const connectionForm = reactive<ConnectionCreateReq>(defaultConnectionForm());
 
+const supportedDbTypes = ref<ConnectionDbTypeVO[]>([]);
+
 const connectionPreviewDbOptions = ref<string[]>([]);
 
 const connectionPreviewLoading = ref(false);
@@ -761,13 +786,12 @@ const workflow = reactive({
   sqlText: '',
 });
 
-const dbTypeOptions = [
-  { label: 'MySQL', value: 'MYSQL' },
-  { label: 'PostgreSQL', value: 'POSTGRESQL' },
-  { label: 'SQLite', value: 'SQLITE' },
-  { label: 'SQL Server', value: 'SQLSERVER' },
-  { label: 'Oracle', value: 'ORACLE' },
-];
+const dbTypeOptions = computed(() =>
+  supportedDbTypes.value.map((item) => ({
+    label: item.displayName || item.dbType,
+    value: item.dbType,
+  })),
+);
 
 const envOptions = [
   { label: '开发 DEV', value: 'DEV' },
@@ -869,6 +893,10 @@ const activeTableEditorTab = computed(() =>
 
 const activeTableDataTab = computed(() =>
   tableDataTabs.value.find((item) => item.key === activeWorkbenchTab.value) ?? null,
+);
+
+const activeObjectDefinitionEditorTab = computed(() =>
+  objectDefinitionEditorTabs.value.find((item) => item.key === activeWorkbenchTab.value) ?? null,
 );
 
 const activeKnowledgeTab = computed(() =>
@@ -1543,8 +1571,32 @@ function requiresDatabaseLayer(connection: ConnectionVO) {
   return !parseConfiguredDatabaseName(connection).trim();
 }
 
+function findSupportedDbType(dbType: string) {
+  return supportedDbTypes.value.find((item) => item.dbType === dbType) ?? null;
+}
+
+function defaultPortForDbType(dbType: string) {
+  const configuredPort = findSupportedDbType(dbType)?.defaultPort;
+  if (typeof configuredPort === 'number') {
+    return configuredPort;
+  }
+  if (dbType === 'MYSQL') {
+    return 3306;
+  }
+  if (dbType === 'POSTGRESQL') {
+    return 5432;
+  }
+  if (dbType === 'SQLSERVER') {
+    return 1433;
+  }
+  if (dbType === 'ORACLE') {
+    return 1521;
+  }
+  return 0;
+}
+
 function isMultiDatabaseType(dbType: string) {
-  return dbType === 'MYSQL' || dbType === 'POSTGRESQL' || dbType === 'SQLSERVER';
+  return !!findSupportedDbType(dbType)?.supportsSelectedDatabases;
 }
 
 function normalizeSelectedDatabases(values: string[] | undefined) {
@@ -2013,6 +2065,7 @@ function hasWorkbenchTab(tabKey: string) {
     || erTabs.value.some((item) => item.key === tabKey)
     || knowledgeTabs.value.some((item) => item.key === tabKey)
     || tableEditorTabs.value.some((item) => item.key === tabKey)
+    || objectDefinitionEditorTabs.value.some((item) => item.key === tabKey)
     || tableDataTabs.value.some((item) => item.key === tabKey);
 }
 
@@ -2024,6 +2077,7 @@ function ensureActiveWorkbenchTab() {
     ?? erTabs.value[0]?.key
     ?? knowledgeTabs.value[0]?.key
     ?? tableEditorTabs.value[0]?.key
+    ?? objectDefinitionEditorTabs.value[0]?.key
     ?? tableDataTabs.value[0]?.key
     ?? browserTabKey;
 }
@@ -3133,6 +3187,23 @@ function resetErSnapshotTitleEditState() {
   editingErSnapshotTitle.value = '';
 }
 
+function ensureConnectionFormDbType() {
+  if (!supportedDbTypes.value.length) {
+    return;
+  }
+  if (findSupportedDbType(connectionForm.dbType)) {
+    return;
+  }
+  const mysqlType = supportedDbTypes.value.find((item) => item.dbType === 'MYSQL');
+  connectionForm.dbType = mysqlType?.dbType ?? supportedDbTypes.value[0].dbType;
+}
+
+async function loadSupportedDbTypes() {
+  const list = await getApi<ConnectionDbTypeVO[]>('/api/connection/db-types');
+  supportedDbTypes.value = list;
+  ensureConnectionFormDbType();
+}
+
 async function loadConnections() {
   connectionRefreshing.value = true;
   try {
@@ -3357,6 +3428,7 @@ async function removeConnection(id: number) {
     erTabs.value = erTabs.value.filter((item) => item.connectionId !== id);
     tableEditorTabs.value = tableEditorTabs.value.filter((item) => item.connectionId !== id);
     tableDataTabs.value = tableDataTabs.value.filter((item) => item.connectionId !== id);
+    objectDefinitionEditorTabs.value = objectDefinitionEditorTabs.value.filter((item) => item.connectionId !== id);
     if (erSnapshotConnectionId.value === id) {
       erSnapshotConnectionId.value = 0;
       erSnapshotItems.value = [];
@@ -6442,6 +6514,9 @@ onMounted(async () => {
   loadSessionTitleOverrides();
   startVectorizeStatusPolling();
   await runSafely(async () => {
+    await loadSupportedDbTypes();
+  });
+  await runSafely(async () => {
     await loadConnections();
   });
   await runSafely(async () => {
@@ -6497,20 +6572,15 @@ watch(
 watch(
   () => connectionForm.dbType,
   (dbType) => {
-    if (dbType === 'MYSQL' && (!connectionForm.port || connectionForm.port <= 0)) {
-      connectionForm.port = 3306;
-    } else if (dbType === 'POSTGRESQL' && (!connectionForm.port || connectionForm.port <= 0)) {
-      connectionForm.port = 5432;
-    } else if (dbType === 'SQLSERVER' && (!connectionForm.port || connectionForm.port <= 0)) {
-      connectionForm.port = 1433;
-    } else if (dbType === 'ORACLE' && (!connectionForm.port || connectionForm.port <= 0)) {
-      connectionForm.port = 1521;
-    } else if (dbType === 'SQLITE') {
+    const defaultPort = defaultPortForDbType(dbType);
+    if (dbType === 'SQLITE') {
       connectionForm.host = '';
-      connectionForm.port = 0;
+      connectionForm.port = defaultPort;
       connectionForm.username = '';
       connectionForm.password = '';
       connectionForm.selectedDatabases = [];
+    } else if (defaultPort > 0 && (!connectionForm.port || connectionForm.port <= 0)) {
+      connectionForm.port = defaultPort;
     }
     if (!isMultiDatabaseType(dbType)) {
       connectionForm.selectedDatabases = [];
@@ -7007,11 +7077,11 @@ function removeModelOption(index: number) {
 
 function defaultConnectionForm(): ConnectionCreateReq {
   return {
-    name: '本地 SQLite',
-    dbType: 'SQLITE',
+    name: '新建连接',
+    dbType: 'MYSQL',
     host: '',
     port: 0,
-    databaseName: 'sample.db',
+    databaseName: '',
     selectedDatabases: [],
     username: '',
     password: '',
@@ -7032,6 +7102,7 @@ function defaultConnectionForm(): ConnectionCreateReq {
 
 function resetConnectionForm() {
   Object.assign(connectionForm, defaultConnectionForm());
+  ensureConnectionFormDbType();
 }
 
 function fillConnectionForm(connection: ConnectionVO) {
@@ -7230,6 +7301,7 @@ function resetConnectionModalState() {
     erTabs,
     tableEditorTabs,
     tableDataTabs,
+    objectDefinitionEditorTabs,
     knowledgeTabs,
     erTableSelectModalOpen,
     erTableSelectSubmitting,
@@ -7323,6 +7395,7 @@ function resetConnectionModalState() {
     activeErTab,
     activeTableEditorTab,
     activeTableDataTab,
+    activeObjectDefinitionEditorTab,
     activeKnowledgeTab,
     activeErConfidenceThreshold,
     activeErAiRelationTotal,

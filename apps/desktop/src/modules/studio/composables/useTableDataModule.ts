@@ -110,7 +110,7 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
     record: ObjectRow,
     options?: { connectionId?: number; databaseName?: string },
   ) {
-    if (record.objectType !== 'tables') {
+    if (record.objectType !== 'tables' && record.objectType !== 'views') {
       return;
     }
     const connectionId = options?.connectionId ?? runtime.workflow.connectionId;
@@ -120,7 +120,10 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
       return;
     }
     const existing = runtime.tableDataTabs.value.find(
-      (item) => item.connectionId === connectionId && item.databaseName === databaseName && item.tableName === record.objectName,
+      (item) => item.connectionId === connectionId
+        && item.databaseName === databaseName
+        && item.tableName === record.objectName
+        && item.objectType === record.objectType,
     );
     if (existing) {
       runtime.activeWorkbenchTab.value = existing.key;
@@ -135,6 +138,7 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
       connectionId,
       databaseName,
       tableName: record.objectName,
+      objectType: record.objectType,
       dbType,
       loading: false,
       submitting: false,
@@ -579,6 +583,7 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
         connectionId: tab.connectionId,
         databaseName: tab.databaseName,
         tableName: tab.tableName,
+        objectType: tab.objectType,
         pageNo: tab.pageNo,
         pageSize: tab.pageSize,
         filters,
@@ -763,6 +768,7 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
       connectionId: tab.connectionId,
       databaseName: tab.databaseName,
       tableName: tab.tableName,
+      objectType: tab.objectType,
       inserts,
       updates,
       deletes,

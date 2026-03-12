@@ -15,6 +15,7 @@ type ContextAction =
   | 'browseData'
   | 'vectorizeTable'
   | 'editTable'
+  | 'editDefinition'
   | 'copyTableStructure'
   | 'copyTableStructureAndData'
   | 'renameTable'
@@ -62,6 +63,12 @@ interface ConnectionBrowserDeps {
     databaseName: string;
     tableName: string;
   } | null) => void;
+  openObjectDefinitionEditor: (
+    connectionId: number,
+    databaseName: string,
+    objectType: 'views' | 'functions',
+    objectName: string,
+  ) => Promise<void>;
 }
 
 export function useConnectionBrowserModule(
@@ -141,7 +148,7 @@ export function useConnectionBrowserModule(
       return;
     }
     if (action === 'querySql') {
-      if (targetType !== 'object' || !objectName || objectType !== 'tables') {
+      if (targetType !== 'object' || !objectName || (objectType !== 'tables' && objectType !== 'views')) {
         return;
       }
       const rowVectorizeRecord = runtime.getDatabaseVectorizeStatusRecord(id, databaseName || '');
@@ -158,7 +165,7 @@ export function useConnectionBrowserModule(
       return;
     }
     if (action === 'browseData') {
-      if (targetType !== 'object' || !objectName || objectType !== 'tables') {
+      if (targetType !== 'object' || !objectName || (objectType !== 'tables' && objectType !== 'views')) {
         return;
       }
       const rowVectorizeRecord = runtime.getDatabaseVectorizeStatusRecord(id, databaseName || '');
@@ -189,6 +196,16 @@ export function useConnectionBrowserModule(
         return;
       }
       await deps.openEditTableEditor(id, databaseName, objectName);
+      return;
+    }
+    if (action === 'editDefinition') {
+      if (targetType !== 'object' || !objectName || !databaseName) {
+        return;
+      }
+      if (objectType !== 'views' && objectType !== 'functions') {
+        return;
+      }
+      await deps.openObjectDefinitionEditor(id, databaseName, objectType, objectName);
       return;
     }
     if (action === 'copyTableStructure' || action === 'copyTableStructureAndData') {
@@ -260,23 +277,29 @@ export function useConnectionBrowserModule(
   }
 
   async function handleTreeNodeDblclick(node: TreeNodeData) {
-    if (node.nodeType !== 'tables' || !node.objectName || !node.connectionId || !node.databaseName) {
+    if (!node.objectName || !node.connectionId || !node.databaseName) {
       return;
     }
-    const rowVectorizeRecord = runtime.getDatabaseVectorizeStatusRecord(node.connectionId, node.databaseName);
-    await deps.openTableDataTabByObject({
-      objectName: node.objectName,
-      objectType: 'tables',
-      rowEstimate: 0,
-      tableSize: '-',
-      description: '',
-      vectorizeStatus: rowVectorizeRecord?.status || 'NOT_VECTORIZED',
-      vectorizeMessage: rowVectorizeRecord?.message,
-      vectorizeUpdatedAt: rowVectorizeRecord?.updatedAt,
-    }, {
-      connectionId: node.connectionId,
-      databaseName: node.databaseName,
-    });
+    if (node.nodeType === 'tables' || node.nodeType === 'views') {
+      const rowVectorizeRecord = runtime.getDatabaseVectorizeStatusRecord(node.connectionId, node.databaseName);
+      await deps.openTableDataTabByObject({
+        objectName: node.objectName,
+        objectType: node.nodeType,
+        rowEstimate: 0,
+        tableSize: '-',
+        description: '',
+        vectorizeStatus: rowVectorizeRecord?.status || 'NOT_VECTORIZED',
+        vectorizeMessage: rowVectorizeRecord?.message,
+        vectorizeUpdatedAt: rowVectorizeRecord?.updatedAt,
+      }, {
+        connectionId: node.connectionId,
+        databaseName: node.databaseName,
+      });
+      return;
+    }
+    if (node.nodeType === 'functions') {
+      await deps.openObjectDefinitionEditor(node.connectionId, node.databaseName, 'functions', node.objectName);
+    }
   }
 
   function onObjectRow(record: ObjectRow) {
@@ -289,11 +312,20 @@ export function useConnectionBrowserModule(
         });
       },
       onDblclick: () => {
-        if (record.objectType === 'tables') {
+        if (record.objectType === 'tables' || record.objectType === 'views') {
           void deps.openTableDataTabByObject(record, {
             connectionId: runtime.workflow.connectionId,
             databaseName: runtime.getActiveDatabaseName(runtime.workflow.connectionId),
           });
+          return;
+        }
+        if (record.objectType === 'functions') {
+          void deps.openObjectDefinitionEditor(
+            runtime.workflow.connectionId,
+            runtime.getActiveDatabaseName(runtime.workflow.connectionId),
+            'functions',
+            record.objectName,
+          );
           return;
         }
         runtime.openQueryTabByObject(record);

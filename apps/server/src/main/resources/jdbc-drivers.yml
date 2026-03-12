@@ -1,6 +1,8 @@
 drivers:
   POSTGRESQL:
     displayName: "PostgreSQL"
+    defaultPort: 5432
+    supportsSelectedDatabases: true
     defaultVersion: "16"
     defaultDriver: "org.postgresql.Driver"
     resourcePattern: "drivers/{type}/{version}/driver.jar"
@@ -115,8 +117,38 @@ drivers:
     tableOperations:
       renameTableSql: |-
         alter table {quoted_source_table} rename to {quoted_target_table}
+    objectDefinitions:
+      view:
+        fetchSql: |-
+          select 'create or replace view ' || quote_ident(c.relname) || E' as\n' || pg_get_viewdef(c.oid, true) as definition_sql
+            from pg_class c
+            join pg_namespace n
+              on n.oid = c.relnamespace
+           where c.relkind = 'v'
+             and n.nspname = current_schema()
+             and c.relname = {object_literal}
+        fetchColumnLabel: "definition_sql"
+        saveStrategy: "REPLACE"
+        replaceSql: |-
+          {definition_sql}
+      function:
+        fetchSql: |-
+          select pg_get_functiondef(p.oid) as definition_sql
+            from pg_proc p
+            join pg_namespace n
+              on n.oid = p.pronamespace
+           where n.nspname = current_schema()
+             and p.proname = {object_literal}
+           order by p.oid
+           limit 1
+        fetchColumnLabel: "definition_sql"
+        saveStrategy: "REPLACE"
+        replaceSql: |-
+          {definition_sql}
   MYSQL:
     displayName: "MySQL"
+    defaultPort: 3306
+    supportsSelectedDatabases: true
     defaultVersion: "8.0"
     defaultDriver: "com.mysql.cj.jdbc.Driver"
     resourcePattern: "drivers/{type}/{version}/driver.jar"
@@ -193,60 +225,189 @@ drivers:
     tableOperations:
       renameTableSql: |-
         rename table {quoted_source_table} to {quoted_target_table}
-#  ORACLE:
-#    displayName: "Oracle"
-#    defaultVersion: "19c"
-#    defaultDriver: "oracle.jdbc.OracleDriver"
-#    resourcePattern: "drivers/{type}/{version}/driver.jar"
-#    driversByVersion:
-#      "19c": "oracle.jdbc.OracleDriver"
-#      "12c": "oracle.jdbc.OracleDriver"
-#      "11g": "oracle.jdbc.OracleDriver"
-#    resourceAliases:
-#      "19c": "universal"
-#      "12c": "universal"
-#      "11g": "universal"
-#    introspection:
-#      schemas: |-
-#        select username as schema_name
-#          from all_users
-#         order by username
-#      tables: |-
-#        select owner as table_schema,
-#               table_name,
-#               comments as table_comment
-#          from all_tab_comments
-#         where owner = ?
-#           and table_type = 'TABLE'
-#         order by table_name
-#      columns: |-
-#        select col.column_name,
-#               col.data_type,
-#               col.nullable as is_nullable,
-#               col.data_length as character_maximum_length,
-#               col.data_precision as numeric_precision,
-#               col.data_scale as numeric_scale,
-#               c.comments as column_comment
-#          from all_tab_columns col
-#          left join all_col_comments c
-#            on c.owner = col.owner
-#           and c.table_name = col.table_name
-#           and c.column_name = col.column_name
-#         where col.owner = ?
-#           and col.table_name = ?
-#         order by col.column_id
-#      primaryKeys: |-
-#        select col.column_name
-#          from all_constraints con
-#          join all_cons_columns col
-#            on con.constraint_name = col.constraint_name
-#           and con.owner = col.owner
-#         where con.constraint_type = 'P'
-#           and con.owner = ?
-#           and con.table_name = ?
-#         order by col.position
+    objectDefinitions:
+      view:
+        fetchSql: |-
+          show create view {quoted_object_name}
+        fetchColumnIndex: 2
+        saveStrategy: "DROP_CREATE"
+        replaceSql: |-
+          {definition_sql}
+        dropSql: |-
+          drop view if exists {quoted_object_name}
+      function:
+        fetchSql: |-
+          show create function {quoted_object_name}
+        fetchColumnIndex: 3
+        saveStrategy: "DROP_CREATE"
+        replaceSql: |-
+          {definition_sql}
+        dropSql: |-
+          drop function if exists {quoted_object_name}
+  SQLITE:
+    displayName: "SQLite"
+    defaultPort: 0
+    supportsSelectedDatabases: false
+    defaultVersion: "universal"
+    defaultDriver: "org.sqlite.JDBC"
+    resourcePattern: "drivers/{type}/{version}/driver.jar"
+    driversByVersion:
+      "universal": "org.sqlite.JDBC"
+    resourceAliases:
+      "universal": "universal"
+    introspection:
+      schemas: |-
+        select 'main' as schema_name
+      tables: |-
+        select 'main' as table_schema,
+               name as table_name,
+               '' as table_comment
+          from sqlite_master
+         where type = 'table'
+           and name not like 'sqlite_%'
+         order by name
+      columns: |-
+        select p.name as column_name,
+               lower(p.type) as data_type,
+               case
+                 when p."notnull" = 1 then 'NO'
+                 else 'YES'
+               end as is_nullable,
+               null as character_maximum_length,
+               null as numeric_precision,
+               null as numeric_scale,
+               p.dflt_value as column_default,
+               'NO' as is_auto_increment,
+               '' as column_comment
+          from pragma_table_info({table_literal}) p
+         order by p.cid
+      primaryKeys: |-
+        select p.name as column_name
+          from pragma_table_info({table_literal}) p
+         where p.pk > 0
+         order by p.pk
+    tableCopy:
+      createTableSql: |-
+        select sql as ddl
+          from sqlite_master
+         where type = 'table'
+           and name = {source_table_literal}
+      ddlColumnLabel: "ddl"
+    tableOperations:
+      renameTableSql: |-
+        alter table {quoted_source_table} rename to {quoted_target_table}
+    objectDefinitions:
+      view:
+        fetchSql: |-
+          select sql as definition_sql
+            from sqlite_master
+           where type = 'view'
+             and name = {object_literal}
+        fetchColumnLabel: "definition_sql"
+        saveStrategy: "DROP_CREATE"
+        replaceSql: |-
+          {definition_sql}
+        dropSql: |-
+          drop view if exists {quoted_object_name}
+  ORACLE:
+    displayName: "Oracle"
+    defaultPort: 1521
+    supportsSelectedDatabases: true
+    defaultVersion: "19c"
+    defaultDriver: "oracle.jdbc.OracleDriver"
+    resourcePattern: "drivers/{type}/{version}/driver.jar"
+    driversByVersion:
+      "19c": "oracle.jdbc.OracleDriver"
+      "12c": "oracle.jdbc.OracleDriver"
+      "11g": "oracle.jdbc.OracleDriver"
+    resourceAliases:
+      "19c": "universal"
+      "12c": "universal"
+      "11g": "universal"
+    introspection:
+      schemas: |-
+        select username as schema_name
+          from all_users
+         order by username
+      tables: |-
+        select owner as table_schema,
+               table_name,
+               comments as table_comment
+          from all_tab_comments
+         where owner = ?
+           and table_type = 'TABLE'
+         order by table_name
+      columns: |-
+        select col.column_name,
+               col.data_type,
+               case
+                 when col.nullable = 'Y' then 'YES'
+                 else 'NO'
+               end as is_nullable,
+               col.data_length as character_maximum_length,
+               col.data_precision as numeric_precision,
+               col.data_scale as numeric_scale,
+               cast(null as varchar2(4000)) as column_default,
+               case
+                 when idc.column_name is not null then 'YES'
+                 else 'NO'
+               end as is_auto_increment,
+               c.comments as column_comment
+          from all_tab_columns col
+          left join all_col_comments c
+            on c.owner = col.owner
+           and c.table_name = col.table_name
+           and c.column_name = col.column_name
+          left join all_tab_identity_cols idc
+            on idc.owner = col.owner
+           and idc.table_name = col.table_name
+           and idc.column_name = col.column_name
+         where col.owner = ?
+           and col.table_name = ?
+         order by col.column_id
+      primaryKeys: |-
+        select col.column_name
+          from all_constraints con
+          join all_cons_columns col
+            on con.constraint_name = col.constraint_name
+           and con.owner = col.owner
+         where con.constraint_type = 'P'
+           and con.owner = ?
+           and con.table_name = ?
+         order by col.position
+    tableCopy:
+      createTableSql: |-
+        select dbms_metadata.get_ddl('TABLE', {source_table_literal}, sys_context('USERENV', 'CURRENT_SCHEMA')) as ddl
+          from dual
+      ddlColumnLabel: "ddl"
+    tableOperations:
+      renameTableSql: |-
+        alter table {quoted_source_table} rename to {quoted_target_table}
+    objectDefinitions:
+      view:
+        fetchSql: |-
+          select dbms_metadata.get_ddl('VIEW', {object_literal}, sys_context('USERENV', 'CURRENT_SCHEMA')) as definition_sql
+            from dual
+        fetchColumnLabel: "definition_sql"
+        saveStrategy: "DROP_CREATE"
+        replaceSql: |-
+          {definition_sql}
+        dropSql: |-
+          drop view {quoted_object_name}
+      function:
+        fetchSql: |-
+          select dbms_metadata.get_ddl('FUNCTION', {object_literal}, sys_context('USERENV', 'CURRENT_SCHEMA')) as definition_sql
+            from dual
+        fetchColumnLabel: "definition_sql"
+        saveStrategy: "DROP_CREATE"
+        replaceSql: |-
+          {definition_sql}
+        dropSql: |-
+          drop function {quoted_object_name}
   SQLSERVER:
     displayName: "SQL Server"
+    defaultPort: 1433
+    supportsSelectedDatabases: true
     defaultVersion: "2019"
     defaultDriver: "com.microsoft.sqlserver.jdbc.SQLServerDriver"
     resourcePattern: "drivers/{type}/{version}/driver.jar"
@@ -342,33 +503,22 @@ drivers:
     tableOperations:
       renameTableSql: |-
         exec sp_rename {source_full_name_literal}, {target_table_literal}
-#  HIVE:
-#    displayName: "Hive"
-#    defaultVersion: "3.x"
-#    defaultDriver: "org.apache.hive.jdbc.HiveDriver"
-#    resourcePattern: "drivers/{type}/{version}/driver.jar"
-#    driversByVersion:
-#      "3.x": "org.apache.hive.jdbc.HiveDriver"
-#    resourceAliases:
-#      "3.x": "3.x"
-#    introspection:
-#      schemas: |-
-#        select schema_name
-#          from information_schema.schemata
-#         order by schema_name
-#      tables: |-
-#        select table_schema, table_name
-#          from information_schema.tables
-#         where table_schema = ?
-#         order by table_name
-#      columns: |-
-#        select column_name,
-#               data_type,
-#               is_nullable,
-#               character_maximum_length,
-#               numeric_precision,
-#               numeric_scale
-#          from information_schema.columns
-#         where table_schema = ?
-#           and table_name = ?
-#         order by ordinal_position
+    objectDefinitions:
+      view:
+        fetchSql: |-
+          select object_definition(object_id(quotename(schema_name()) + '.' + quotename({object_literal}))) as definition_sql
+        fetchColumnLabel: "definition_sql"
+        saveStrategy: "DROP_CREATE"
+        replaceSql: |-
+          {definition_sql}
+        dropSql: |-
+          drop view if exists {quoted_object_name}
+      function:
+        fetchSql: |-
+          select object_definition(object_id(quotename(schema_name()) + '.' + quotename({object_literal}))) as definition_sql
+        fetchColumnLabel: "definition_sql"
+        saveStrategy: "DROP_CREATE"
+        replaceSql: |-
+          {definition_sql}
+        dropSql: |-
+          drop function if exists {quoted_object_name}

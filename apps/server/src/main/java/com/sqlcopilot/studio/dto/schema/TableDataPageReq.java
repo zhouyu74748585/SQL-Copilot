@@ -26,6 +26,9 @@ public class TableDataPageReq {
     @NotBlank(message = "表名不能为空")
     private String tableName;
 
+    /** 对象类型（tables/views）。 */
+    private String objectType;
+
     /** 页码（从 1 开始）。 */
     private Integer pageNo;
 

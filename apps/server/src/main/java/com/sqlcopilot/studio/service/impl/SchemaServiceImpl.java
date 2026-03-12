@@ -4,6 +4,7 @@ import com.sqlcopilot.studio.dto.schema.*;
 import com.sqlcopilot.studio.entity.ConnectionEntity;
 import com.sqlcopilot.studio.entity.SchemaColumnCacheEntity;
 import com.sqlcopilot.studio.entity.SchemaTableCacheEntity;
+import com.sqlcopilot.studio.repository.SchemaObjectDefinitionJdbcRepository;
 import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.SchemaService;
 import com.sqlcopilot.studio.service.rag.RagIngestionService;
@@ -34,6 +35,7 @@ public class SchemaServiceImpl implements SchemaService {
     private final ConnectionService connectionService;
     private final RagIngestionService ragIngestionService;
     private final JdbcDriverResolver jdbcDriverResolver;
+    private final SchemaObjectDefinitionJdbcRepository schemaObjectDefinitionJdbcRepository;
     private final long schemaCacheTtlMs;
     private final long tableStatsRefreshIntervalMs;
     private final Map<SchemaCacheKey, SchemaSnapshot> schemaSnapshotCache = new ConcurrentHashMap<>();
@@ -49,11 +51,13 @@ public class SchemaServiceImpl implements SchemaService {
     public SchemaServiceImpl(ConnectionService connectionService,
                              RagIngestionService ragIngestionService,
                              JdbcDriverResolver jdbcDriverResolver,
+                             SchemaObjectDefinitionJdbcRepository schemaObjectDefinitionJdbcRepository,
                              @Value("${schema.cache.ttl-ms:300000}") long schemaCacheTtlMs,
                              @Value("${schema.table-stats.refresh-interval-ms:60000}") long tableStatsRefreshIntervalMs) {
         this.connectionService = connectionService;
         this.ragIngestionService = ragIngestionService;
         this.jdbcDriverResolver = jdbcDriverResolver;
+        this.schemaObjectDefinitionJdbcRepository = schemaObjectDefinitionJdbcRepository;
         this.schemaCacheTtlMs = Math.max(schemaCacheTtlMs, MIN_CACHE_TTL_MS);
         this.tableStatsRefreshIntervalMs = Math.max(tableStatsRefreshIntervalMs, MIN_TABLE_STATS_REFRESH_INTERVAL_MS);
     }
@@ -225,6 +229,47 @@ public class SchemaServiceImpl implements SchemaService {
         vo.setColumns(columnDetails);
         vo.setIndexes(indexDetails);
         return vo;
+    }
+
+    @Override
+    public SchemaObjectDefinitionVO getObjectDefinition(Long connectionId, String databaseName, String objectType, String objectName) {
+        String normalizedObjectType = normalizeObjectType(objectType);
+        String normalizedObjectName = normalize(objectName);
+        if (normalizedObjectName.isBlank()) {
+            throw new BusinessException(400, "对象名称不能为空");
+        }
+        ConnectionEntity connectionEntity = connectionService.getConnectionEntity(connectionId);
+        String targetDatabaseName = resolveTargetDatabaseName(connectionEntity, databaseName);
+        JdbcDriverResolver.ObjectDefinitionSpec spec = jdbcDriverResolver.findObjectDefinitionSpec(connectionEntity.getDbType(), normalizedObjectType);
+        if (spec == null) {
+            throw new BusinessException(400, "当前数据库未配置对象定义 SQL: " + normalizedObjectType);
+        }
+        if (!objectExists(connectionId, targetDatabaseName, normalizedObjectType, normalizedObjectName)) {
+            throw new BusinessException(404, "对象不存在: " + normalizedObjectName);
+        }
+
+        try (Connection connection = connectionService.openTargetConnection(connectionId)) {
+            applyDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
+            String definitionSql = schemaObjectDefinitionJdbcRepository.fetchDefinition(
+                connection,
+                connectionEntity.getDbType(),
+                spec,
+                targetDatabaseName,
+                normalizedObjectName
+            );
+            if (definitionSql.isBlank()) {
+                throw new BusinessException(404, "未读取到对象定义: " + normalizedObjectName);
+            }
+            SchemaObjectDefinitionVO vo = new SchemaObjectDefinitionVO();
+            vo.setConnectionId(connectionId);
+            vo.setDatabaseName(targetDatabaseName);
+            vo.setObjectType(normalizedObjectType);
+            vo.setObjectName(normalizedObjectName);
+            vo.setDefinitionSql(definitionSql);
+            return vo;
+        } catch (SQLException ex) {
+            throw new BusinessException(500, "读取对象定义失败: " + ex.getMessage());
+        }
     }
 
     @Override
@@ -404,6 +449,63 @@ public class SchemaServiceImpl implements SchemaService {
         vo.setDatabaseName(databaseName);
         vo.setSourceTableName(sourceTableName);
         vo.setTargetTableName(targetTableName);
+        return vo;
+    }
+
+    @Override
+    public SchemaObjectDefinitionSaveVO saveObjectDefinition(SchemaObjectDefinitionSaveReq req) {
+        String normalizedObjectType = normalizeObjectType(req.getObjectType());
+        String normalizedObjectName = normalize(req.getObjectName());
+        String definitionSql = normalize(req.getDefinitionSql());
+        if (normalizedObjectName.isBlank()) {
+            throw new BusinessException(400, "对象名称不能为空");
+        }
+        if (definitionSql.isBlank()) {
+            throw new BusinessException(400, "定义SQL不能为空");
+        }
+
+        ConnectionEntity connectionEntity = connectionService.getConnectionEntity(req.getConnectionId());
+        String targetDatabaseName = resolveTargetDatabaseName(connectionEntity, req.getDatabaseName());
+        JdbcDriverResolver.ObjectDefinitionSpec spec = jdbcDriverResolver.findObjectDefinitionSpec(connectionEntity.getDbType(), normalizedObjectType);
+        if (spec == null) {
+            throw new BusinessException(400, "当前数据库未配置对象定义保存 SQL: " + normalizedObjectType);
+        }
+        if (!objectExists(req.getConnectionId(), targetDatabaseName, normalizedObjectType, normalizedObjectName)) {
+            throw new BusinessException(404, "对象不存在: " + normalizedObjectName);
+        }
+
+        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId())) {
+            applyDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
+            schemaObjectDefinitionJdbcRepository.saveDefinition(
+                connection,
+                connectionEntity.getDbType(),
+                spec,
+                targetDatabaseName,
+                normalizedObjectType,
+                normalizedObjectName,
+                definitionSql
+            );
+        } catch (SQLException ex) {
+            throw new BusinessException(500, "保存对象定义失败: " + ex.getMessage());
+        }
+
+        if (!objectExists(req.getConnectionId(), targetDatabaseName, normalizedObjectType, normalizedObjectName)) {
+            throw new BusinessException(500, "对象定义保存后未找到原对象，当前不支持通过定义编辑页改名");
+        }
+
+        SchemaObjectDefinitionVO latest = getObjectDefinition(
+            req.getConnectionId(),
+            targetDatabaseName,
+            normalizedObjectType,
+            normalizedObjectName
+        );
+        SchemaObjectDefinitionSaveVO vo = new SchemaObjectDefinitionSaveVO();
+        vo.setSuccess(Boolean.TRUE);
+        vo.setMessage("对象定义保存成功");
+        vo.setDatabaseName(targetDatabaseName);
+        vo.setObjectType(normalizedObjectType);
+        vo.setObjectName(normalizedObjectName);
+        vo.setDefinitionSql(latest.getDefinitionSql());
         return vo;
     }
 
@@ -1221,6 +1323,11 @@ public class SchemaServiceImpl implements SchemaService {
         return "'" + normalize(value).replace("'", "''") + "'";
     }
 
+    private boolean objectExists(Long connectionId, String databaseName, String objectType, String objectName) {
+        return listObjectNames(connectionId, databaseName, objectType).stream()
+            .anyMatch(item -> item.equalsIgnoreCase(normalize(objectName)));
+    }
+
     private boolean isCacheExpired(SchemaSnapshot snapshot) {
         return System.currentTimeMillis() - snapshot.updatedAt() >= schemaCacheTtlMs;
     }
@@ -1512,6 +1619,15 @@ public class SchemaServiceImpl implements SchemaService {
 
     private String normalize(String value) {
         return Objects.toString(value, "").trim();
+    }
+
+    private String normalizeObjectType(String value) {
+        String normalized = normalize(value).toLowerCase(Locale.ROOT);
+        return switch (normalized) {
+            case "view", "views" -> "views";
+            case "function", "functions" -> "functions";
+            default -> throw new BusinessException(400, "不支持的对象类型: " + value);
+        };
     }
 
     private String escapeSingleQuote(String value) {

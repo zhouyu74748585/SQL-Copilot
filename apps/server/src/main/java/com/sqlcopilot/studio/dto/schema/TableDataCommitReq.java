@@ -27,6 +27,9 @@ public class TableDataCommitReq {
     @NotBlank(message = "表名不能为空")
     private String tableName;
 
+    /** 对象类型（tables/views）。 */
+    private String objectType;
+
     /** 待新增行列表。 */
     @Valid
     private List<InsertRowReq> inserts = new ArrayList<>();

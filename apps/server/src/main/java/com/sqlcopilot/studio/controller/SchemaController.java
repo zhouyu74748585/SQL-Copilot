@@ -63,6 +63,14 @@ public class SchemaController {
         return ApiResponse.success(schemaService.getTableDetail(connectionId, databaseName, tableName));
     }
 
+    @GetMapping("/object/definition")
+    public ApiResponse<SchemaObjectDefinitionVO> objectDefinition(@RequestParam("connectionId") Long connectionId,
+                                                                  @RequestParam("databaseName") String databaseName,
+                                                                  @RequestParam("objectType") String objectType,
+                                                                  @RequestParam("objectName") String objectName) {
+        return ApiResponse.success(schemaService.getObjectDefinition(connectionId, databaseName, objectType, objectName));
+    }
+
     @GetMapping("/databases")
     public ApiResponse<List<SchemaDatabaseVO>> databases(@RequestParam("connectionId") Long connectionId) {
         List<String> databases = schemaService.listDatabases(connectionId);
@@ -118,6 +126,16 @@ public class SchemaController {
     @PostMapping("/table/rename")
     public ApiResponse<TableRenameVO> renameTable(@Valid @RequestBody TableRenameReq req) {
         TableRenameVO result = schemaService.renameTable(req);
+        if (result.isSuccess()) {
+            schemaService.refreshSchemaCache(req.getConnectionId(), req.getDatabaseName());
+            ragVectorizeQueueService.enqueue(req.getConnectionId(), req.getDatabaseName());
+        }
+        return ApiResponse.success(result);
+    }
+
+    @PostMapping("/object/definition/save")
+    public ApiResponse<SchemaObjectDefinitionSaveVO> saveObjectDefinition(@Valid @RequestBody SchemaObjectDefinitionSaveReq req) {
+        SchemaObjectDefinitionSaveVO result = schemaService.saveObjectDefinition(req);
         if (result.isSuccess()) {
             schemaService.refreshSchemaCache(req.getConnectionId(), req.getDatabaseName());
             ragVectorizeQueueService.enqueue(req.getConnectionId(), req.getDatabaseName());

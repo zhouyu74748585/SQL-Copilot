@@ -71,6 +71,16 @@
             <span>{{ tab.title }}</span>
             <close-outlined class="tab-close" @click.stop="closeTableDataTab(tab.key)" />
           </button>
+          <button
+            v-for="tab in objectDefinitionEditorTabs"
+            :key="tab.key"
+            class="workspace-tab"
+            :class="{ 'is-active': activeWorkbenchTab === tab.key }"
+            @click="activeWorkbenchTab = tab.key"
+          >
+            <span>{{ tab.title }}</span>
+            <close-outlined class="tab-close" @click.stop="closeObjectDefinitionEditorTab(tab.key)" />
+          </button>
           <a-tooltip title="新建 AI 查询页签">
             <button class="top-chrome-tab-add" @click="openAiQueryTab()">
               <plus-outlined />
@@ -243,6 +253,7 @@
         'workbench-query': !!activeQueryTab,
         'workbench-table-editor': !!activeTableEditorTab,
         'workbench-table-data': !!activeTableDataTab,
+        'workbench-object-definition': !!activeObjectDefinitionEditorTab,
         'is-table-data-detail-collapsed': !!activeTableDataTab?.detailCollapsed,
         'workbench-er': !!activeErTab,
         'is-er-detail-collapsed': !!activeErTab?.detailCollapsed,
@@ -1170,6 +1181,74 @@
             </div>
           </div>
         </aside>
+      </template>
+
+      <template v-else-if="activeObjectDefinitionEditorTab">
+        <StudioConnectionContextBar
+          class="table-editor-shared-meta"
+          :connection-id="activeObjectDefinitionEditorTab.connectionId"
+          :database-name="activeObjectDefinitionEditorTab.databaseName"
+          :connection-options="connectionSelectOptions"
+          :database-options="[{ label: activeObjectDefinitionEditorTab.databaseName, value: activeObjectDefinitionEditorTab.databaseName }]"
+          :connection-disabled="true"
+          :database-disabled="true"
+        />
+
+        <section class="pane pane-center">
+          <div class="pane-title pane-title-with-action">
+            <div class="table-data-title-main">
+              <span>定义编辑 · {{ activeObjectDefinitionEditorTab.title }}</span>
+            </div>
+            <div class="pane-title-actions">
+              <a-space size="small">
+                <a-button
+                  size="small"
+                  type="text"
+                  class="btn-mini"
+                  :disabled="activeObjectDefinitionEditorTab.loading || activeObjectDefinitionEditorTab.saving"
+                  @click="reloadObjectDefinition(activeObjectDefinitionEditorTab)"
+                >
+                  <template #icon><sync-outlined /></template>
+                  刷新
+                </a-button>
+                <a-button
+                  size="small"
+                  type="primary"
+                  class="btn-execute"
+                  :loading="activeObjectDefinitionEditorTab.saving"
+                  :disabled="activeObjectDefinitionEditorTab.loading || !activeObjectDefinitionEditorTab.dirty"
+                  @click="saveObjectDefinition(activeObjectDefinitionEditorTab)"
+                >
+                  <template #icon><play-circle-outlined /></template>
+                  保存
+                </a-button>
+                <a-button size="small" type="text" class="btn-mini" @click="copyObjectDefinitionSql(activeObjectDefinitionEditorTab)">
+                  <template #icon><copy-outlined /></template>
+                  复制
+                </a-button>
+              </a-space>
+            </div>
+          </div>
+          <div v-if="activeObjectDefinitionEditorTab.errorMessage" class="table-data-error-tip">
+            {{ activeObjectDefinitionEditorTab.errorMessage }}
+          </div>
+          <div class="editor-group">
+            <MonacoEditor
+              :value="activeObjectDefinitionEditorTab.sqlText"
+              language="sql"
+              width="100%"
+              height="100%"
+              :theme="monacoTheme"
+              :options="sqlEditorOptions"
+              class="sql-editor"
+              @update:value="handleObjectDefinitionSqlChange(activeObjectDefinitionEditorTab, String($event ?? ''))"
+              @mount="handleObjectDefinitionSqlEditorMount"
+            >
+              <template #default>编辑器加载中...</template>
+              <template #failure>编辑器加载失败，请刷新页面重试</template>
+            </MonacoEditor>
+          </div>
+        </section>
       </template>
 
       <template v-else>
@@ -2389,14 +2468,16 @@
         </button>
       </template>
       <template v-else-if="contextMenu.targetType === 'object'">
-         <button
+        <button
+          v-if="contextMenu.objectType === 'tables' || contextMenu.objectType === 'views'"
           class="context-menu-item"
-          :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
+          :disabled="(contextMenu.objectType !== 'tables' && contextMenu.objectType !== 'views') || !contextMenu.databaseName"
           @click="triggerContextAction('querySql')"
         >
           SQL查询
         </button>
         <button
+          v-if="contextMenu.objectType === 'tables'"
           class="context-menu-item"
           :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
           @click="triggerContextAction('editTable')"
@@ -2404,13 +2485,23 @@
           编辑表结构
         </button>
         <button
+          v-if="contextMenu.objectType === 'views' || contextMenu.objectType === 'functions'"
           class="context-menu-item"
-          :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
+          :disabled="(contextMenu.objectType !== 'views' && contextMenu.objectType !== 'functions') || !contextMenu.databaseName"
+          @click="triggerContextAction('editDefinition')"
+        >
+          编辑定义
+        </button>
+        <button
+          v-if="contextMenu.objectType === 'tables' || contextMenu.objectType === 'views'"
+          class="context-menu-item"
+          :disabled="(contextMenu.objectType !== 'tables' && contextMenu.objectType !== 'views') || !contextMenu.databaseName"
           @click="triggerContextAction('browseData')"
         >
           数据浏览
         </button>
         <button
+          v-if="contextMenu.objectType === 'tables'"
           class="context-menu-item"
           :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
           @click="triggerContextAction('renameTable')"
@@ -2418,6 +2509,7 @@
           重命名
         </button>
         <button
+          v-if="contextMenu.objectType === 'tables'"
           class="context-menu-item"
           :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
           @click="triggerContextAction('vectorizeTable')"
@@ -2425,6 +2517,7 @@
           向量化
         </button>
         <div
+          v-if="contextMenu.objectType === 'tables'"
           class="context-menu-submenu"
           :class="{ 'is-disabled': contextMenu.objectType !== 'tables' || !contextMenu.databaseName }"
         >
@@ -2453,8 +2546,9 @@
             </button>
           </div>
         </div>
-        <div class="context-menu-divider" />
+        <div v-if="contextMenu.objectType === 'tables'" class="context-menu-divider" />
         <button
+          v-if="contextMenu.objectType === 'tables'"
           class="context-menu-item danger"
           :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
           @click="triggerContextAction('truncateTable')"
@@ -2462,6 +2556,7 @@
           清空表数据
         </button>
         <button
+          v-if="contextMenu.objectType === 'tables'"
           class="context-menu-item danger"
           :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
           @click="triggerContextAction('dropTable')"
@@ -2846,6 +2941,7 @@ const {
     erTabs,
     tableEditorTabs,
     tableDataTabs,
+    objectDefinitionEditorTabs,
     knowledgeTabs,
     erTableSelectModalOpen,
     erTableSelectSubmitting,
@@ -2941,6 +3037,7 @@ const {
     activeErTab,
     activeTableEditorTab,
     activeTableDataTab,
+    activeObjectDefinitionEditorTab,
     activeKnowledgeTab,
     activeErConfidenceThreshold,
     activeErAiRelationTotal,
@@ -3043,6 +3140,7 @@ const {
     closeErTab,
     closeTableEditorTab,
     closeTableDataTab,
+    closeObjectDefinitionEditorTab,
     openNewTableEditor,
     openEditTableEditor,
     openTableDataTabByObject,
@@ -3221,6 +3319,10 @@ const {
     handleTableEditorDatabaseChange,
     handleTableDataConnectionSelectorChange,
     handleTableDataDatabaseSelectorChange,
+    handleObjectDefinitionSqlChange,
+    saveObjectDefinition,
+    reloadObjectDefinition,
+    copyObjectDefinitionSql,
     tableDataFilterOperatorOptions,
     tableDataSortDirectionOptions,
     reloadTableDataForTab,
@@ -3449,6 +3551,24 @@ function handleKnowledgeExampleSqlEditorMount(
       connectionId: knowledgeConnectionId.value,
       databaseName: knowledgeDatabaseName.value,
     }),
+    enableSelectionActions: false,
+  });
+}
+
+function handleObjectDefinitionSqlEditorMount(
+  editor: MonacoApi.editor.IStandaloneCodeEditor,
+  monaco: typeof MonacoApi,
+) {
+  handleSqlEditorMount(editor, monaco, {
+    getContext: () => {
+      if (!activeObjectDefinitionEditorTab.value) {
+        return null;
+      }
+      return {
+        connectionId: activeObjectDefinitionEditorTab.value.connectionId,
+        databaseName: activeObjectDefinitionEditorTab.value.databaseName,
+      };
+    },
     enableSelectionActions: false,
   });
 }
