@@ -245,7 +245,9 @@
         'workbench-table-data': !!activeTableDataTab,
         'is-table-data-detail-collapsed': !!activeTableDataTab?.detailCollapsed,
         'workbench-er': !!activeErTab,
+        'is-er-detail-collapsed': !!activeErTab?.detailCollapsed,
         'workbench-browser': activeWorkbenchTab === browserTabKey,
+        'is-browser-detail-collapsed': activeWorkbenchTab === browserTabKey && browserDetailCollapsed,
         'workbench-knowledge': !!activeKnowledgeTab,
       }"
       :style="workbenchStyle"
@@ -334,7 +336,19 @@
       <div class="pane-splitter pane-splitter-left" @mousedown="startResizeLeftPane" />
 
       <template v-if="activeWorkbenchTab === browserTabKey">
-          <section class="pane pane-center">
+          <section class="pane pane-center browser-center-pane">
+            <div class="pane-title pane-title-with-action">
+              <div class="pane-title-actions">
+                <a-tooltip :title="browserDetailCollapsed ? '展开对象详情' : '收起对象详情'">
+                  <a-button size="small" type="text" class="table-data-icon-btn" @click.stop="toggleBrowserDetailCollapsed">
+                    <template #icon>
+                      <menu-fold-outlined v-if="!browserDetailCollapsed" />
+                      <menu-unfold-outlined v-else />
+                    </template>
+                  </a-button>
+                </a-tooltip>
+              </div>
+            </div>
             <div class="center-toolbar">
               <div v-if="currentObjectType === 'tables'" class="center-toolbar-left">
                 <a-button size="small" type="primary" :disabled="!canCreateTable" @click="openNewTableEditor()">
@@ -423,9 +437,13 @@
             </div>
           </section>
 
-          <div class="pane-splitter pane-splitter-right" @mousedown="startResizeBrowserPane" />
+          <div
+            v-if="!browserDetailCollapsed"
+            class="pane-splitter pane-splitter-right"
+            @mousedown="startResizeBrowserPane"
+          />
 
-          <aside class="pane pane-right detail-pane">
+          <aside v-if="!browserDetailCollapsed" class="pane pane-right detail-pane browser-detail-pane">
             <div class="pane-title">详情</div>
             <div v-if="!selectedObjectRecord && !selectedTreeDetail" class="empty-pane">请从对象浏览中选择连接、数据库或对象</div>
             <div v-else-if="selectedObjectRecord" class="detail-wrapper">
@@ -635,6 +653,18 @@
 
       <template v-else-if="activeErTab">
         <section class="pane pane-center er-diagram-pane">
+          <div class="pane-title pane-title-with-action">
+            <div class="pane-title-actions">
+              <a-tooltip :title="activeErTab.detailCollapsed ? '展开 ER 图信息' : '收起 ER 图信息'">
+                <a-button size="small" type="text" class="table-data-icon-btn" @click.stop="toggleErDetailCollapsed(activeErTab)">
+                  <template #icon>
+                    <menu-fold-outlined v-if="!activeErTab.detailCollapsed" />
+                    <menu-unfold-outlined v-else />
+                  </template>
+                </a-button>
+              </a-tooltip>
+            </div>
+          </div>
           <div class="er-toolbar">
             <a-space size="small">
               <a-button size="small" @click="openErTableSelectModal(activeErTab)">
@@ -699,9 +729,13 @@
             </a-spin>
           </div>
         </section>
-        <div class="pane-splitter pane-splitter-right er-pane-splitter" @mousedown="startResizeErPane" />
+        <div
+          v-if="!activeErTab.detailCollapsed"
+          class="pane-splitter pane-splitter-right er-pane-splitter"
+          @mousedown="startResizeErPane"
+        />
 
-        <aside class="pane pane-right er-side-pane">
+        <aside v-if="!activeErTab.detailCollapsed" class="pane pane-right er-side-pane">
           <div class="pane-title">ER 图信息</div>
           <div class="er-side-content">
             <div class="er-kpi-row">
@@ -2770,6 +2804,7 @@ const {
     truncateTableName,
     dropTableModalOpen,
     dropTableName,
+    browserDetailCollapsed,
     tablePasteModalOpen,
     tablePasteSubmitting,
     tablePasteForm,
@@ -2957,6 +2992,7 @@ const {
     databaseStatusIcon,
     getActiveDatabaseName,
     activateBrowserTab,
+    toggleBrowserDetailCollapsed,
     openCreateModal,
     openEditModal,
     openAiQueryTab,
@@ -2964,6 +3000,7 @@ const {
     saveCurrentQuery,
     closeQueryTab,
     touchErTab,
+    toggleErDetailCollapsed,
     normalizeErRelationDirection,
     normalizeErRelationType,
     erRelationKey,

@@ -22,6 +22,7 @@ type ContextAction =
 
 export interface ConnectionBrowserModule {
   activateBrowserTab: () => void;
+  toggleBrowserDetailCollapsed: () => void;
   openCreateModal: () => void;
   openEditModal: (targetConnectionId?: number) => void;
   closeContextMenu: () => void;
@@ -54,6 +55,10 @@ export function useConnectionBrowserModule(
   function activateBrowserTab() {
     runtime.browserNavMode.value = 'connections';
     runtime.activeWorkbenchTab.value = runtime.browserTabKey;
+  }
+
+  function toggleBrowserDetailCollapsed() {
+    runtime.browserDetailCollapsed.value = !runtime.browserDetailCollapsed.value;
   }
 
   function closeContextMenu() {
@@ -268,6 +273,7 @@ export function useConnectionBrowserModule(
 
   return {
     activateBrowserTab,
+    toggleBrowserDetailCollapsed,
     openCreateModal,
     openEditModal,
     closeContextMenu,

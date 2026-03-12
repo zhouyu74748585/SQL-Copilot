@@ -323,6 +323,7 @@ export function useErSnapshotModule(runtime: StudioRuntime): ErSnapshotModule {
           layoutMode,
           lineType: 'POLYLINE',
           showCardComments: false,
+          detailCollapsed: false,
           aiConfidenceThreshold: Number.isFinite(aiConfidenceThreshold) ? aiConfidenceThreshold : 0.6,
           includeAiInference: detail.includeAiInference !== false,
           loading: false,
@@ -345,6 +346,7 @@ export function useErSnapshotModule(runtime: StudioRuntime): ErSnapshotModule {
           tab.lineType = 'POLYLINE';
         }
         tab.showCardComments = tab.showCardComments === true;
+        tab.detailCollapsed = tab.detailCollapsed === true;
         tab.aiConfidenceThreshold = Number.isFinite(aiConfidenceThreshold) ? aiConfidenceThreshold : 0.6;
         tab.includeAiInference = detail.includeAiInference !== false;
         tab.graph = detail.graph;
