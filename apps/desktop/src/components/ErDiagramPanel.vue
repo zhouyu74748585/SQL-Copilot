@@ -143,7 +143,20 @@
         @mousemove="onTableMouseMove(table, $event)"
         @mouseleave="onTableMouseLeave"
       >
-        <div class="er-table-card-header" :title="table.tableName">{{ table.tableName }}</div>
+        <div class="er-table-card-header" :title="table.tableName">
+          <span class="er-table-card-header-title">{{ table.tableName }}</span>
+          <button
+            v-if="table.canToggleColumns"
+            type="button"
+            class="er-table-card-toggle"
+            data-er-interactive="true"
+            :title="table.expanded ? '收起字段' : `展开剩余 ${table.collapsedColumnCount} 个字段`"
+            @mousedown.stop
+            @click.stop="toggleTableColumns(table.key)"
+          >
+            {{ table.expanded ? '收起' : `展开 ${table.collapsedColumnCount}` }}
+          </button>
+        </div>
         <div v-if="showComments" class="er-table-card-subtitle" :title="table.tableComment || ''">
           {{ table.tableComment || ' ' }}
         </div>
@@ -176,7 +189,7 @@
             </button>
           </div>
           <button
-            v-if="table.canToggleColumns"
+            v-if="table.canToggleColumns && !table.expanded"
             type="button"
             class="er-table-more"
             :class="{'is-relation-endpoint': hasHiddenRelationEndpoint(table)}"
@@ -2263,16 +2276,42 @@ onBeforeUnmount(() => {
 
 .er-table-card-header {
   height: 24px;
-  line-height: 24px;
-  padding: 0 8px;
-  text-align: center;
+  padding: 0 6px 0 8px;
   background: #3e8de9;
   color: #fff;
   font-size: 12px;
   font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.er-table-card-header-title {
+  min-width: 0;
+  flex: 1;
+  text-align: center;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.er-table-card-toggle {
+  flex-shrink: 0;
+  height: 16px;
+  padding: 0 6px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #f7fbff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  cursor: pointer;
+}
+
+.er-table-card-toggle:hover {
+  background: rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 255, 255, 0.72);
 }
 
 .er-table-card-subtitle {

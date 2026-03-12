@@ -101,6 +101,24 @@
   - 后端：`mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18081` 启动成功，`/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
   - 前端：`npm run -w @sqlcopilot/desktop build -- --emptyOutDir` 后 `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6046` 启动成功，HTTP 状态码 `200`。
 
+## 追加记录（2026-03-12 15:53）- ER 表头显式折叠/展开控件
+
+### 本次目标
+- 为 ER 表卡补充更显式的折叠/展开入口，避免用户只能依赖底部“更多字段”行感知隐藏字段。
+
+### 关键改动
+- 修改文件：`apps/desktop/src/components/ErDiagramPanel.vue`
+  - 在表头右侧新增显式折叠/展开按钮，字段较多的表可直接在表头执行“展开 N / 收起”。
+  - 折叠态继续保留底部“还有 N 个字段未显示”提示行；展开态底部提示隐藏，避免界面重复。
+  - 表头按钮使用独立交互命中区，并通过 `@mousedown.stop` 避免误触发表卡拖拽。
+
+### 验证结果
+- 前端类型检查：`npm run type-check` 通过。
+- 前端构建：`npm run build -- --emptyOutDir` 通过。
+- 启动验证（clean）：
+  - 后端：`mvn -f apps/server/pom.xml clean spring-boot:run "-Dspring-boot.run.arguments=--server.port=18092"` 启动成功，`/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+  - 前端：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6066 --strictPort` 启动成功，HTTP 状态码 `200`。
+
 ## 追加记录（2026-03-12 15:46）- ER 连线加号去圈与折叠字段处理
 
 ### 本次目标

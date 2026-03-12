@@ -810,47 +810,7 @@
                 @change="touchErTab(activeErTab)"
               />
               <div class="er-rel-groups">
-                <div class="er-rel-group">
-                  <div class="er-rel-group-head">
-                    <span>外键识别</span>
-                    <a-tag color="blue">{{ activeErForeignKeyRelations.length }}</a-tag>
-                  </div>
-                  <div v-if="activeErForeignKeyRelations.length" class="er-rel-list">
-                    <div
-                      v-for="(relation, index) in activeErForeignKeyRelations"
-                      :key="`fk-${erRelationKey(relation)}-${index}`"
-                      class="er-rel-item er-rel-item-fk"
-                      :class="{ 'is-selected': activeErTab.selectedRelationKey === erRelationKey(relation) }"
-                      @click="setErSelectedRelation(activeErTab, erRelationKey(relation))"
-                    >
-                      <div class="er-rel-main-row">
-                        <div class="er-rel-main er-rel-main-structured">
-                          <a-tag color="blue" class="er-rel-table-tag">{{ relation.sourceTable }}</a-tag>
-                          <span class="er-rel-field-chip er-rel-field-source">{{ relation.sourceColumn }}</span>
-                          <span class="er-rel-arrow">{{ erRelationArrow(relation.relationDirection) }}</span>
-                          <a-tag color="blue" class="er-rel-table-tag">{{ relation.targetTable }}</a-tag>
-                          <span class="er-rel-field-chip er-rel-field-target">{{ relation.targetColumn }}</span>
-                        </div>
-                        <a-button
-                          size="small"
-                          type="text"
-                          danger
-                          class="er-rel-delete-btn"
-                          title="删除该关系"
-                          @click.stop="removeErRelation(activeErTab, relation)"
-                        >
-                          <template #icon><delete-outlined /></template>
-                        </a-button>
-                      </div>
-                      <div class="er-rel-meta">
-                        <span>方向：{{ erRelationDirectionLabel(relation.relationDirection) }}</span>
-                        <span>来源：外键元数据</span>
-                      </div>
-                    </div>
-                  </div>
-                  <div v-else class="er-empty-tip">未识别到外键关系</div>
-                </div>
-
+              
                 <div class="er-rel-group">
                   <div class="er-rel-group-head">
                     <span>AI 推断</span>
@@ -900,6 +860,46 @@
                     </div>
                   </div>
                   <div v-else class="er-empty-tip">当前阈值下暂无 AI 推断关系</div>
+                </div>
+  <div class="er-rel-group">
+                  <div class="er-rel-group-head">
+                    <span>外键识别</span>
+                    <a-tag color="blue">{{ activeErForeignKeyRelations.length }}</a-tag>
+                  </div>
+                  <div v-if="activeErForeignKeyRelations.length" class="er-rel-list">
+                    <div
+                      v-for="(relation, index) in activeErForeignKeyRelations"
+                      :key="`fk-${erRelationKey(relation)}-${index}`"
+                      class="er-rel-item er-rel-item-fk"
+                      :class="{ 'is-selected': activeErTab.selectedRelationKey === erRelationKey(relation) }"
+                      @click="setErSelectedRelation(activeErTab, erRelationKey(relation))"
+                    >
+                      <div class="er-rel-main-row">
+                        <div class="er-rel-main er-rel-main-structured">
+                          <a-tag color="blue" class="er-rel-table-tag">{{ relation.sourceTable }}</a-tag>
+                          <span class="er-rel-field-chip er-rel-field-source">{{ relation.sourceColumn }}</span>
+                          <span class="er-rel-arrow">{{ erRelationArrow(relation.relationDirection) }}</span>
+                          <a-tag color="blue" class="er-rel-table-tag">{{ relation.targetTable }}</a-tag>
+                          <span class="er-rel-field-chip er-rel-field-target">{{ relation.targetColumn }}</span>
+                        </div>
+                        <a-button
+                          size="small"
+                          type="text"
+                          danger
+                          class="er-rel-delete-btn"
+                          title="删除该关系"
+                          @click.stop="removeErRelation(activeErTab, relation)"
+                        >
+                          <template #icon><delete-outlined /></template>
+                        </a-button>
+                      </div>
+                      <div class="er-rel-meta">
+                        <span>方向：{{ erRelationDirectionLabel(relation.relationDirection) }}</span>
+                        <span>来源：外键元数据</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div v-else class="er-empty-tip">未识别到外键关系</div>
                 </div>
 
                 <div class="er-rel-group">
