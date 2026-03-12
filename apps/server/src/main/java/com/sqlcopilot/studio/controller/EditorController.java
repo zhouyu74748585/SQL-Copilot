@@ -75,6 +75,17 @@ public class EditorController {
         return ApiResponse.success(editorService.saveSavedQuery(req));
     }
 
+    @PostMapping("/saved-query/update")
+    public ApiResponse<SavedQueryVO> updateSavedQuery(@Valid @RequestBody SavedQueryUpdateReq req) {
+        return ApiResponse.success(editorService.updateSavedQuery(req));
+    }
+
+    @PostMapping("/saved-query/remove")
+    public ApiResponse<Boolean> removeSavedQuery(@Valid @RequestBody SavedQueryRemoveReq req) {
+        editorService.removeSavedQuery(req);
+        return ApiResponse.success(Boolean.TRUE);
+    }
+
     @GetMapping("/saved-query/list")
     public ApiResponse<List<SavedQueryVO>> listSavedQueries(@RequestParam("connectionId") Long connectionId,
                                                             @RequestParam(value = "databaseName", required = false) String databaseName) {

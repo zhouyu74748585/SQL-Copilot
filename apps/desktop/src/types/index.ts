@@ -76,6 +76,16 @@ export interface ConnectionDbTypeVO {
   displayName: string;
   defaultPort?: number;
   supportsSelectedDatabases: boolean;
+  namespaceLabel?: string;
+  supportsNamespaceCreate?: boolean;
+  supportsNamespaceRename?: boolean;
+  supportsNamespaceDrop?: boolean;
+  supportsTableCreate?: boolean;
+  supportsTableDrop?: boolean;
+  supportsViewCreate?: boolean;
+  supportsViewDrop?: boolean;
+  supportsFunctionCreate?: boolean;
+  supportsFunctionDrop?: boolean;
 }
 
 export interface SchemaOverviewVO {
@@ -216,6 +226,46 @@ export interface SchemaObjectDefinitionSaveVO {
   objectType: SchemaObjectType;
   objectName: string;
   definitionSql: string;
+}
+
+export interface SchemaNamespaceCreateReq {
+  connectionId: number;
+  targetNamespaceName: string;
+}
+
+export interface SchemaNamespaceRenameReq {
+  connectionId: number;
+  sourceNamespaceName: string;
+  targetNamespaceName: string;
+}
+
+export interface SchemaNamespaceDropReq {
+  connectionId: number;
+  sourceNamespaceName: string;
+}
+
+export interface SchemaNamespaceOperationVO {
+  success: boolean;
+  message: string;
+  sourceNamespaceName?: string;
+  targetNamespaceName?: string;
+  executedSql?: string;
+}
+
+export interface SchemaObjectDropReq {
+  connectionId: number;
+  databaseName: string;
+  objectType: SchemaObjectType;
+  objectName: string;
+}
+
+export interface SchemaObjectDropVO {
+  success: boolean;
+  message: string;
+  databaseName: string;
+  objectType: SchemaObjectType;
+  objectName: string;
+  executedSql?: string;
 }
 
 export type TableDataFilterOperator =
@@ -534,6 +584,19 @@ export interface SavedQuerySaveReq {
   databaseName?: string;
   title: string;
   sqlText: string;
+}
+
+export interface SavedQueryUpdateReq {
+  id: number;
+  connectionId: number;
+  databaseName?: string;
+  title: string;
+  sqlText: string;
+}
+
+export interface SavedQueryRemoveReq {
+  id: number;
+  connectionId: number;
 }
 
 export type KnowledgeScope = 'GLOBAL' | 'CONNECTION' | 'DATABASE';

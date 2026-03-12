@@ -26,9 +26,17 @@ public interface SchemaService {
 
     TableOperationVO alterTable(TableAlterReq req);
 
+    SchemaNamespaceOperationVO createNamespace(SchemaNamespaceCreateReq req);
+
+    SchemaNamespaceOperationVO renameNamespace(SchemaNamespaceRenameReq req);
+
+    SchemaNamespaceOperationVO dropNamespace(SchemaNamespaceDropReq req);
+
     TableRenameVO renameTable(TableRenameReq req);
 
     SchemaObjectDefinitionSaveVO saveObjectDefinition(SchemaObjectDefinitionSaveReq req);
+
+    SchemaObjectDropVO dropObject(SchemaObjectDropReq req);
 
     TableOperationVO dropTable(Long connectionId, String databaseName, String tableName);
 

@@ -123,6 +123,21 @@ public class SchemaController {
         return ApiResponse.success(schemaService.alterTable(req));
     }
 
+    @PostMapping("/namespace/create")
+    public ApiResponse<SchemaNamespaceOperationVO> createNamespace(@Valid @RequestBody SchemaNamespaceCreateReq req) {
+        return ApiResponse.success(schemaService.createNamespace(req));
+    }
+
+    @PostMapping("/namespace/rename")
+    public ApiResponse<SchemaNamespaceOperationVO> renameNamespace(@Valid @RequestBody SchemaNamespaceRenameReq req) {
+        return ApiResponse.success(schemaService.renameNamespace(req));
+    }
+
+    @PostMapping("/namespace/drop")
+    public ApiResponse<SchemaNamespaceOperationVO> dropNamespace(@Valid @RequestBody SchemaNamespaceDropReq req) {
+        return ApiResponse.success(schemaService.dropNamespace(req));
+    }
+
     @PostMapping("/table/rename")
     public ApiResponse<TableRenameVO> renameTable(@Valid @RequestBody TableRenameReq req) {
         TableRenameVO result = schemaService.renameTable(req);
@@ -136,6 +151,16 @@ public class SchemaController {
     @PostMapping("/object/definition/save")
     public ApiResponse<SchemaObjectDefinitionSaveVO> saveObjectDefinition(@Valid @RequestBody SchemaObjectDefinitionSaveReq req) {
         SchemaObjectDefinitionSaveVO result = schemaService.saveObjectDefinition(req);
+        if (result.isSuccess()) {
+            schemaService.refreshSchemaCache(req.getConnectionId(), req.getDatabaseName());
+            ragVectorizeQueueService.enqueue(req.getConnectionId(), req.getDatabaseName());
+        }
+        return ApiResponse.success(result);
+    }
+
+    @PostMapping("/object/drop")
+    public ApiResponse<SchemaObjectDropVO> dropObject(@Valid @RequestBody SchemaObjectDropReq req) {
+        SchemaObjectDropVO result = schemaService.dropObject(req);
         if (result.isSuccess()) {
             schemaService.refreshSchemaCache(req.getConnectionId(), req.getDatabaseName());
             ragVectorizeQueueService.enqueue(req.getConnectionId(), req.getDatabaseName());

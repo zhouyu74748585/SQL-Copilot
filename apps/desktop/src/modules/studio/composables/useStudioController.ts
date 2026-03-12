@@ -21,10 +21,12 @@ export function useStudioController() {
   const objectDefinitionEditorModule = useObjectDefinitionEditorModule(runtime);
   const connectionBrowserModule = useConnectionBrowserModule(runtime, {
     copyTableWithinCurrentDatabase: tableCopyModule.copyTableWithinCurrentDatabase,
+    openNewTableEditor: tableEditorModule.openNewTableEditor,
     openEditTableEditor: tableEditorModule.openEditTableEditor,
     openTableDataTabByObject: tableDataModule.openTableDataTabByObject,
     openRenameTableModal: tableRenameModule.openRenameTableModal,
     openObjectDefinitionEditor: objectDefinitionEditorModule.openObjectDefinitionEditor,
+    openNewObjectDefinitionEditor: objectDefinitionEditorModule.openNewObjectDefinitionEditor,
   });
   const queryModule = useQueryModule(runtime);
   const erModule = useErModule(runtime);

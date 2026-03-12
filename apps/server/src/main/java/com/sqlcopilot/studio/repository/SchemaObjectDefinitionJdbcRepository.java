@@ -77,6 +77,25 @@ public class SchemaObjectDefinitionJdbcRepository {
         }
     }
 
+    /**
+     * 删除对象定义。
+     */
+    public String dropDefinition(Connection connection,
+                                 String dbType,
+                                 JdbcDriverResolver.ObjectDefinitionSpec spec,
+                                 String databaseName,
+                                 String objectName) throws SQLException {
+        String dropSql = renderSqlTemplate(spec.dropSql(), dbType, databaseName, objectName, "");
+        try (Statement statement = connection.createStatement()) {
+            for (String sql : splitSqlStatements(dropSql)) {
+                if (!sql.isBlank()) {
+                    statement.execute(sql);
+                }
+            }
+        }
+        return dropSql;
+    }
+
     private void validateDefinitionTarget(String objectType, String expectedObjectName, String definitionSql) {
         String actualObjectName = extractDefinedObjectName(objectType, definitionSql);
         if (actualObjectName.isBlank()) {

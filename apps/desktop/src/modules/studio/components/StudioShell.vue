@@ -2438,133 +2438,65 @@
       class="context-menu"
       :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
     >
-      <template v-if="contextMenu.targetType === 'connection'">
-        <button class="context-menu-item" @click="triggerContextAction('edit')">编辑连接</button>
-        <button class="context-menu-item" @click="triggerContextAction('test')">测试连接</button>
-        <button class="context-menu-item" @click="triggerContextAction('sync')">同步 Schema</button>
-        <button class="context-menu-item danger" @click="triggerContextAction('delete')">删除连接</button>
-      </template>
-      <template v-else-if="contextMenu.targetType === 'database'">
-        <button
-          class="context-menu-item"
-          :disabled="isContextDatabaseVectorizing"
-          @click="triggerContextAction('revectorize')"
-        >
-          重新向量化
-        </button>
-        <button
-          class="context-menu-item"
-          :disabled="!canInterruptContextVectorize"
-          @click="triggerContextAction('interruptVectorize')"
-        >
-          中断向量化
-        </button>
-        <button
-          class="context-menu-item"
-          :disabled="!canViewContextVectorizedData"
-          @click="triggerContextAction('viewVectorizedData')"
-        >
-          查看向量化数据
-        </button>
-      </template>
-      <template v-else-if="contextMenu.targetType === 'object'">
-        <button
-          v-if="contextMenu.objectType === 'tables' || contextMenu.objectType === 'views'"
-          class="context-menu-item"
-          :disabled="(contextMenu.objectType !== 'tables' && contextMenu.objectType !== 'views') || !contextMenu.databaseName"
-          @click="triggerContextAction('querySql')"
-        >
-          SQL查询
-        </button>
-        <button
-          v-if="contextMenu.objectType === 'tables'"
-          class="context-menu-item"
-          :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
-          @click="triggerContextAction('editTable')"
-        >
-          编辑表结构
-        </button>
-        <button
-          v-if="contextMenu.objectType === 'views' || contextMenu.objectType === 'functions'"
-          class="context-menu-item"
-          :disabled="(contextMenu.objectType !== 'views' && contextMenu.objectType !== 'functions') || !contextMenu.databaseName"
-          @click="triggerContextAction('editDefinition')"
-        >
-          编辑定义
-        </button>
-        <button
-          v-if="contextMenu.objectType === 'tables' || contextMenu.objectType === 'views'"
-          class="context-menu-item"
-          :disabled="(contextMenu.objectType !== 'tables' && contextMenu.objectType !== 'views') || !contextMenu.databaseName"
-          @click="triggerContextAction('browseData')"
-        >
-          数据浏览
-        </button>
-        <button
-          v-if="contextMenu.objectType === 'tables'"
-          class="context-menu-item"
-          :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
-          @click="triggerContextAction('renameTable')"
-        >
-          重命名
-        </button>
-        <button
-          v-if="contextMenu.objectType === 'tables'"
-          class="context-menu-item"
-          :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
-          @click="triggerContextAction('vectorizeTable')"
-        >
-          向量化
-        </button>
-        <div
-          v-if="contextMenu.objectType === 'tables'"
-          class="context-menu-submenu"
-          :class="{ 'is-disabled': contextMenu.objectType !== 'tables' || !contextMenu.databaseName }"
-        >
+      <template v-for="action in contextMenuActions" :key="action.id">
+        <div v-if="action.children?.length" class="context-menu-submenu" :class="{ 'is-disabled': action.disabled }">
           <button
             class="context-menu-item context-menu-item-with-arrow"
-            :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
+            :class="{ danger: action.danger }"
+            :disabled="action.disabled"
             type="button"
           >
-            复制
+            {{ action.label }}
             <span class="context-menu-submenu-arrow">›</span>
           </button>
           <div class="context-menu-submenu-panel">
             <button
+              v-for="child in action.children"
+              :key="child.id"
               class="context-menu-item"
-              :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
-              @click="triggerContextAction('copyTableStructure')"
+              :class="{ danger: child.danger }"
+              :disabled="child.disabled"
+              @click="triggerContextAction(child.id)"
             >
-              仅复制结构
-            </button>
-            <button
-              class="context-menu-item"
-              :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
-              @click="triggerContextAction('copyTableStructureAndData')"
-            >
-              复制结构和数据
+              {{ child.label }}
             </button>
           </div>
         </div>
-        <div v-if="contextMenu.objectType === 'tables'" class="context-menu-divider" />
         <button
-          v-if="contextMenu.objectType === 'tables'"
-          class="context-menu-item danger"
-          :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
-          @click="triggerContextAction('truncateTable')"
+          v-else
+          class="context-menu-item"
+          :class="{ danger: action.danger }"
+          :disabled="action.disabled"
+          @click="triggerContextAction(action.id)"
         >
-          清空表数据
-        </button>
-        <button
-          v-if="contextMenu.objectType === 'tables'"
-          class="context-menu-item danger"
-          :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
-          @click="triggerContextAction('dropTable')"
-        >
-          删除表
+          {{ action.label }}
         </button>
       </template>
     </div>
+
+    <a-modal
+      v-model:open="namespaceModalOpen"
+      :title="namespaceForm.mode === 'create' ? `新建${namespaceForm.namespaceLabel}` : `编辑${namespaceForm.namespaceLabel}`"
+      :ok-text="namespaceForm.mode === 'create' ? '创建' : '保存'"
+      cancel-text="取消"
+      :confirm-loading="namespaceModalSubmitting"
+      @ok="confirmNamespaceModal"
+      @cancel="closeNamespaceModal"
+    >
+      <a-form layout="vertical">
+        <a-form-item v-if="namespaceForm.mode === 'rename'" :label="`原${namespaceForm.namespaceLabel}名称`">
+          <a-input :value="namespaceForm.sourceNamespaceName" disabled />
+        </a-form-item>
+        <a-form-item :label="`${namespaceForm.mode === 'create' ? '新' : ''}${namespaceForm.namespaceLabel}名称`">
+          <a-input
+            v-model:value="namespaceForm.targetNamespaceName"
+            :placeholder="`请输入${namespaceForm.namespaceLabel}名称`"
+            maxlength="128"
+            @pressEnter="confirmNamespaceModal"
+          />
+        </a-form-item>
+      </a-form>
+    </a-modal>
 
     <a-modal
       v-model:open="renameTableModalOpen"
@@ -2923,6 +2855,9 @@ const {
     truncateTableName,
     dropTableModalOpen,
     dropTableName,
+    namespaceModalOpen,
+    namespaceModalSubmitting,
+    namespaceForm,
     browserDetailCollapsed,
     tablePasteModalOpen,
     tablePasteSubmitting,
@@ -3000,6 +2935,7 @@ const {
     queryRightPaneWidth,
     queryPaneResizeState,
     contextMenu,
+    contextMenuActions,
     connectionForm,
     connectionPreviewDbOptions,
     connectionPreviewLoading,
@@ -3119,6 +3055,8 @@ const {
     toggleBrowserDetailCollapsed,
     openCreateModal,
     openEditModal,
+    closeNamespaceModal,
+    confirmNamespaceModal,
     openAiQueryTab,
     openSaveQueryModal,
     saveCurrentQuery,

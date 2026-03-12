@@ -233,6 +233,7 @@ export function useHistoryModule(runtime: StudioRuntime): HistoryModule {
       title: '未命名会话',
       connectionId,
       databaseName: (last?.databaseName || '').trim() || runtime.getActiveDatabaseName(connectionId),
+      savedQueryEditMode: false,
       sessionId,
       prompt: '',
       sqlText: '',

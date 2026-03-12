@@ -18,6 +18,11 @@ export interface ObjectDefinitionEditorModule {
     objectType: SchemaObjectType,
     objectName: string,
   ) => Promise<void>;
+  openNewObjectDefinitionEditor: (
+    connectionId: number,
+    databaseName: string,
+    objectType: SchemaObjectType,
+  ) => Promise<void>;
   handleObjectDefinitionSqlChange: (tab: ObjectDefinitionEditorTab, sqlText: string) => void;
   saveObjectDefinition: (tab: ObjectDefinitionEditorTab) => Promise<void>;
   reloadObjectDefinition: (tab: ObjectDefinitionEditorTab) => Promise<void>;
@@ -43,6 +48,49 @@ export function useObjectDefinitionEditorModule(runtime: StudioRuntime): ObjectD
     return objectType === 'views' ? '视图' : '函数';
   }
 
+  function buildDefaultObjectName(objectType: SchemaObjectType) {
+    const suffix = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
+    return `${objectType === 'views' ? 'new_view' : 'new_function'}_${suffix}`;
+  }
+
+  function buildTemplateSql(dbType: string, objectType: SchemaObjectType, objectName: string) {
+    const normalizedDbType = (dbType || 'MYSQL').toUpperCase();
+    if (objectType === 'views') {
+      if (normalizedDbType === 'ORACLE') {
+        return `create or replace view ${objectName} as\nselect *\nfrom your_table;`;
+      }
+      if (normalizedDbType === 'SQLSERVER') {
+        return `create view ${objectName} as\nselect top 100 *\nfrom your_table;`;
+      }
+      return `create or replace view ${objectName} as\nselect *\nfrom your_table\nlimit 100;`;
+    }
+    if (normalizedDbType === 'ORACLE') {
+      return `create or replace function ${objectName}\nreturn number\nis\nbegin\n  return 1;\nend;`;
+    }
+    if (normalizedDbType === 'MYSQL') {
+      return `create function ${objectName}()\nreturns int\nbegin\n  return 1;\nend;`;
+    }
+    if (normalizedDbType === 'SQLSERVER') {
+      return `create function ${objectName}()\nreturns int\nas\nbegin\n  return 1;\nend;`;
+    }
+    return `create or replace function ${objectName}()\nreturns integer\nlanguage plpgsql\nas $$\nbegin\n  return 1;\nend;\n$$;`;
+  }
+
+  function parseObjectNameFromSql(objectType: SchemaObjectType, sqlText: string) {
+    const keyword = objectType === 'views' ? 'view' : 'function';
+    const matcher = String(sqlText || '').trim().match(
+      new RegExp(
+        `^create\\s+(?:or\\s+replace\\s+|or\\s+alter\\s+)?(?:algorithm\\s*=\\s*\\w+\\s+)?(?:definer\\s*=\\s*[^\\s]+\\s+)?(?:sql\\s+security\\s+\\w+\\s+)?(?:\\w+\\s+)*?${keyword}\\s+([^\\s(]+)`,
+        'i',
+      ),
+    );
+    if (!matcher?.[1]) {
+      return '';
+    }
+    const raw = matcher[1].split('.').pop() || '';
+    return raw.replace(/^[`"'[]|[`"'\]]$/g, '').trim();
+  }
+
   async function fetchObjectDefinition(
     connectionId: number,
     databaseName: string,
@@ -64,7 +112,8 @@ export function useObjectDefinitionEditorModule(runtime: StudioRuntime): ObjectD
       (item) => item.connectionId === connectionId
         && item.databaseName === databaseName
         && item.objectType === objectType
-        && item.objectName === objectName,
+        && item.objectName === objectName
+        && item.mode === 'edit',
     );
     if (existingTab) {
       runtime.activeWorkbenchTab.value = existingTab.key;
@@ -81,6 +130,8 @@ export function useObjectDefinitionEditorModule(runtime: StudioRuntime): ObjectD
       objectType,
       objectName,
       dbType,
+      mode: 'edit',
+      isNewObject: false,
       sqlText: '',
       baselineSql: '',
       loading: true,
@@ -110,18 +161,63 @@ export function useObjectDefinitionEditorModule(runtime: StudioRuntime): ObjectD
     }
   }
 
+  async function openNewObjectDefinitionEditor(
+    connectionId: number,
+    databaseName: string,
+    objectType: SchemaObjectType,
+  ) {
+    const now = Date.now();
+    const dbType = runtime.connections.value.find((item) => item.id === connectionId)?.dbType ?? 'MYSQL';
+    const objectName = buildDefaultObjectName(objectType);
+    const sqlText = buildTemplateSql(dbType, objectType, objectName);
+    const tab: ObjectDefinitionEditorTab = {
+      key: `object-definition-new-${now}-${Math.round(Math.random() * 1000)}`,
+      title: `新建${objectTypeLabel(objectType)}`,
+      connectionId,
+      databaseName,
+      objectType,
+      objectName,
+      dbType,
+      mode: 'create',
+      isNewObject: true,
+      sqlText,
+      baselineSql: '',
+      loading: false,
+      saving: false,
+      dirty: true,
+      errorMessage: '',
+      createdAt: now,
+      updatedAt: now,
+    };
+    runtime.objectDefinitionEditorTabs.value = [...runtime.objectDefinitionEditorTabs.value, tab];
+    runtime.activeWorkbenchTab.value = tab.key;
+  }
+
   function handleObjectDefinitionSqlChange(tab: ObjectDefinitionEditorTab, sqlText: string) {
     tab.sqlText = sqlText;
+    if (tab.mode === 'create') {
+      const parsedObjectName = parseObjectNameFromSql(tab.objectType, sqlText);
+      if (parsedObjectName) {
+        tab.objectName = parsedObjectName;
+      }
+    }
     tab.dirty = sqlText.trim() !== tab.baselineSql.trim();
     tab.updatedAt = Date.now();
   }
 
   async function saveObjectDefinition(tab: ObjectDefinitionEditorTab) {
+    const objectName = tab.mode === 'create'
+      ? parseObjectNameFromSql(tab.objectType, tab.sqlText)
+      : tab.objectName;
+    if (!objectName) {
+      message.warning('未识别到对象名称，请检查 CREATE 语句头部');
+      return;
+    }
     const payload: SchemaObjectDefinitionSaveReq = {
       connectionId: tab.connectionId,
       databaseName: tab.databaseName,
       objectType: tab.objectType,
-      objectName: tab.objectName,
+      objectName,
       definitionSql: tab.sqlText,
     };
     if (!payload.definitionSql.trim()) {
@@ -134,6 +230,10 @@ export function useObjectDefinitionEditorModule(runtime: StudioRuntime): ObjectD
       const result = await postApi<SchemaObjectDefinitionSaveVO>('/api/schema/object/definition/save', payload);
       tab.sqlText = result.definitionSql || payload.definitionSql;
       tab.baselineSql = result.definitionSql || payload.definitionSql;
+      tab.objectName = result.objectName;
+      tab.title = `${objectTypeLabel(tab.objectType)} · ${result.objectName}`;
+      tab.mode = 'edit';
+      tab.isNewObject = false;
       tab.dirty = false;
       tab.errorMessage = '';
       tab.updatedAt = Date.now();
@@ -160,6 +260,10 @@ export function useObjectDefinitionEditorModule(runtime: StudioRuntime): ObjectD
   }
 
   async function reloadObjectDefinition(tab: ObjectDefinitionEditorTab) {
+    if (tab.mode === 'create') {
+      message.info('新建对象尚未保存，暂不支持刷新');
+      return;
+    }
     if (tab.dirty) {
       message.warning('存在未保存改动，请先保存');
       return;
@@ -208,6 +312,7 @@ export function useObjectDefinitionEditorModule(runtime: StudioRuntime): ObjectD
   return {
     closeObjectDefinitionEditorTab,
     openObjectDefinitionEditor,
+    openNewObjectDefinitionEditor,
     handleObjectDefinitionSqlChange,
     saveObjectDefinition,
     reloadObjectDefinition,

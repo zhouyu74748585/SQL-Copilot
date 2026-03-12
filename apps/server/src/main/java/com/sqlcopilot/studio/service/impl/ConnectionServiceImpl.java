@@ -60,6 +60,16 @@ public class ConnectionServiceImpl implements ConnectionService {
             vo.setDisplayName(spec.displayName());
             vo.setDefaultPort(spec.defaultPort());
             vo.setSupportsSelectedDatabases(spec.supportsSelectedDatabases());
+            vo.setNamespaceLabel(spec.namespaceLabel());
+            vo.setSupportsNamespaceCreate(spec.supportsNamespaceCreate());
+            vo.setSupportsNamespaceRename(spec.supportsNamespaceRename());
+            vo.setSupportsNamespaceDrop(spec.supportsNamespaceDrop());
+            vo.setSupportsTableCreate(spec.supportsTableCreate());
+            vo.setSupportsTableDrop(spec.supportsTableDrop());
+            vo.setSupportsViewCreate(spec.supportsViewCreate());
+            vo.setSupportsViewDrop(spec.supportsViewDrop());
+            vo.setSupportsFunctionCreate(spec.supportsFunctionCreate());
+            vo.setSupportsFunctionDrop(spec.supportsFunctionDrop());
             return vo;
         }).toList();
     }

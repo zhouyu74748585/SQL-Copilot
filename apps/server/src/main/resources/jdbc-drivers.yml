@@ -117,6 +117,14 @@ drivers:
     tableOperations:
       renameTableSql: |-
         alter table {quoted_source_table} rename to {quoted_target_table}
+    namespace:
+      label: "数据库"
+      createSql: |-
+        create database {quoted_target_namespace}
+      renameSql: |-
+        alter database {quoted_source_namespace} rename to {quoted_target_namespace}
+      dropSql: |-
+        drop database if exists {quoted_source_namespace}
     objectDefinitions:
       view:
         fetchSql: |-
@@ -131,6 +139,8 @@ drivers:
         saveStrategy: "REPLACE"
         replaceSql: |-
           {definition_sql}
+        dropSql: |-
+          drop view if exists {quoted_object_name}
       function:
         fetchSql: |-
           select pg_get_functiondef(p.oid) as definition_sql
@@ -145,6 +155,8 @@ drivers:
         saveStrategy: "REPLACE"
         replaceSql: |-
           {definition_sql}
+        dropSql: |-
+          drop function if exists {quoted_object_name}
   MYSQL:
     displayName: "MySQL"
     defaultPort: 3306
@@ -225,6 +237,12 @@ drivers:
     tableOperations:
       renameTableSql: |-
         rename table {quoted_source_table} to {quoted_target_table}
+    namespace:
+      label: "数据库"
+      createSql: |-
+        create database {quoted_target_namespace}
+      dropSql: |-
+        drop database if exists {quoted_source_namespace}
     objectDefinitions:
       view:
         fetchSql: |-
@@ -383,6 +401,8 @@ drivers:
     tableOperations:
       renameTableSql: |-
         alter table {quoted_source_table} rename to {quoted_target_table}
+    namespace:
+      label: "Schema"
     objectDefinitions:
       view:
         fetchSql: |-
@@ -503,6 +523,12 @@ drivers:
     tableOperations:
       renameTableSql: |-
         exec sp_rename {source_full_name_literal}, {target_table_literal}
+    namespace:
+      label: "Schema"
+      createSql: |-
+        exec('create schema {target_namespace}')
+      dropSql: |-
+        drop schema {quoted_source_namespace}
     objectDefinitions:
       view:
         fetchSql: |-

@@ -57,11 +57,24 @@ public class JdbcDriverResolver {
         List<SupportedDbTypeSpec> result = new ArrayList<>();
         for (Map.Entry<String, DriverSpec> entry : specs.entrySet()) {
             DriverSpec spec = entry.getValue();
+            NamespaceSpec namespaceSpec = spec.namespaceSpec;
             result.add(new SupportedDbTypeSpec(
                 entry.getKey(),
                 spec.displayName,
                 spec.defaultPort,
-                spec.supportsSelectedDatabases
+                spec.supportsSelectedDatabases,
+                namespaceSpec == null ? "" : namespaceSpec.label(),
+                namespaceSpec != null && !trimText(namespaceSpec.createSql()).isBlank(),
+                namespaceSpec != null && !trimText(namespaceSpec.renameSql()).isBlank(),
+                namespaceSpec != null && !trimText(namespaceSpec.dropSql()).isBlank(),
+                true,
+                true,
+                spec.objectDefinitionSpecMap.containsKey("view"),
+                spec.objectDefinitionSpecMap.containsKey("view")
+                    && !trimText(spec.objectDefinitionSpecMap.get("view").dropSql()).isBlank(),
+                spec.objectDefinitionSpecMap.containsKey("function"),
+                spec.objectDefinitionSpecMap.containsKey("function")
+                    && !trimText(spec.objectDefinitionSpecMap.get("function").dropSql()).isBlank()
             ));
         }
         return result;
@@ -114,6 +127,12 @@ public class JdbcDriverResolver {
         }
         String key = normalizeObjectType(objectType);
         return spec.objectDefinitionSpecMap.get(key);
+    }
+
+    public NamespaceSpec findNamespaceSpec(String dbType) {
+        String type = normalizeType(dbType);
+        DriverSpec spec = specs.get(type);
+        return spec == null ? null : spec.namespaceSpec;
     }
 
     private Map<String, DriverSpec> loadSpecs() {
@@ -194,6 +213,7 @@ public class JdbcDriverResolver {
         TableCopyFastPathSpec tableCopyFastPathSpec = parseTableCopyFastPathSpec(node.get("tableCopy"));
         TableOperationSpec tableOperationSpec = parseTableOperationSpec(node.get("tableOperations"));
         Map<String, ObjectDefinitionSpec> objectDefinitionSpecMap = parseObjectDefinitionSpecMap(node.get("objectDefinitions"));
+        NamespaceSpec namespaceSpec = parseNamespaceSpec(node.get("namespace"));
         return new DriverSpec(
             displayName.isBlank() ? type : displayName,
             defaultPort,
@@ -207,7 +227,8 @@ public class JdbcDriverResolver {
             createTableSpec,
             tableCopyFastPathSpec,
             tableOperationSpec,
-            objectDefinitionSpecMap
+            objectDefinitionSpecMap,
+            namespaceSpec
         );
     }
 
@@ -276,6 +297,20 @@ public class JdbcDriverResolver {
             ));
         }
         return result;
+    }
+
+    private NamespaceSpec parseNamespaceSpec(Object node) {
+        if (!(node instanceof Map<?, ?> namespaceMap)) {
+            return null;
+        }
+        String label = trimText(namespaceMap.get("label"));
+        String createSql = trimText(namespaceMap.get("createSql"));
+        String renameSql = trimText(namespaceMap.get("renameSql"));
+        String dropSql = trimText(namespaceMap.get("dropSql"));
+        if (label.isBlank() && createSql.isBlank() && renameSql.isBlank() && dropSql.isBlank()) {
+            return null;
+        }
+        return new NamespaceSpec(label, createSql, renameSql, dropSql);
     }
 
     private Map<String, String> parseStringMap(Object node) {
@@ -358,6 +393,7 @@ public class JdbcDriverResolver {
         private final TableCopyFastPathSpec tableCopyFastPathSpec;
         private final TableOperationSpec tableOperationSpec;
         private final Map<String, ObjectDefinitionSpec> objectDefinitionSpecMap;
+        private final NamespaceSpec namespaceSpec;
 
         private DriverSpec(String displayName,
                            Integer defaultPort,
@@ -371,7 +407,8 @@ public class JdbcDriverResolver {
                            CreateTableSpec createTableSpec,
                            TableCopyFastPathSpec tableCopyFastPathSpec,
                            TableOperationSpec tableOperationSpec,
-                           Map<String, ObjectDefinitionSpec> objectDefinitionSpecMap) {
+                           Map<String, ObjectDefinitionSpec> objectDefinitionSpecMap,
+                           NamespaceSpec namespaceSpec) {
             this.displayName = displayName;
             this.defaultPort = defaultPort;
             this.supportsSelectedDatabases = supportsSelectedDatabases;
@@ -385,6 +422,7 @@ public class JdbcDriverResolver {
             this.tableCopyFastPathSpec = tableCopyFastPathSpec;
             this.tableOperationSpec = tableOperationSpec;
             this.objectDefinitionSpecMap = objectDefinitionSpecMap;
+            this.namespaceSpec = namespaceSpec;
         }
     }
 
@@ -410,10 +448,26 @@ public class JdbcDriverResolver {
                                        String dropSql) {
     }
 
+    public record NamespaceSpec(String label,
+                                String createSql,
+                                String renameSql,
+                                String dropSql) {
+    }
+
     public record SupportedDbTypeSpec(String dbType,
                                       String displayName,
                                       Integer defaultPort,
-                                      boolean supportsSelectedDatabases) {
+                                      boolean supportsSelectedDatabases,
+                                      String namespaceLabel,
+                                      boolean supportsNamespaceCreate,
+                                      boolean supportsNamespaceRename,
+                                      boolean supportsNamespaceDrop,
+                                      boolean supportsTableCreate,
+                                      boolean supportsTableDrop,
+                                      boolean supportsViewCreate,
+                                      boolean supportsViewDrop,
+                                      boolean supportsFunctionCreate,
+                                      boolean supportsFunctionDrop) {
     }
 
     public record ResolvedDriver(String dbType,

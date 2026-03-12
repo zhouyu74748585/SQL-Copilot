@@ -4,6 +4,7 @@ import com.sqlcopilot.studio.dto.schema.*;
 import com.sqlcopilot.studio.entity.ConnectionEntity;
 import com.sqlcopilot.studio.entity.SchemaColumnCacheEntity;
 import com.sqlcopilot.studio.entity.SchemaTableCacheEntity;
+import com.sqlcopilot.studio.repository.SchemaNamespaceJdbcRepository;
 import com.sqlcopilot.studio.repository.SchemaObjectDefinitionJdbcRepository;
 import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.SchemaService;
@@ -35,6 +36,7 @@ public class SchemaServiceImpl implements SchemaService {
     private final ConnectionService connectionService;
     private final RagIngestionService ragIngestionService;
     private final JdbcDriverResolver jdbcDriverResolver;
+    private final SchemaNamespaceJdbcRepository schemaNamespaceJdbcRepository;
     private final SchemaObjectDefinitionJdbcRepository schemaObjectDefinitionJdbcRepository;
     private final long schemaCacheTtlMs;
     private final long tableStatsRefreshIntervalMs;
@@ -51,12 +53,14 @@ public class SchemaServiceImpl implements SchemaService {
     public SchemaServiceImpl(ConnectionService connectionService,
                              RagIngestionService ragIngestionService,
                              JdbcDriverResolver jdbcDriverResolver,
+                             SchemaNamespaceJdbcRepository schemaNamespaceJdbcRepository,
                              SchemaObjectDefinitionJdbcRepository schemaObjectDefinitionJdbcRepository,
                              @Value("${schema.cache.ttl-ms:300000}") long schemaCacheTtlMs,
                              @Value("${schema.table-stats.refresh-interval-ms:60000}") long tableStatsRefreshIntervalMs) {
         this.connectionService = connectionService;
         this.ragIngestionService = ragIngestionService;
         this.jdbcDriverResolver = jdbcDriverResolver;
+        this.schemaNamespaceJdbcRepository = schemaNamespaceJdbcRepository;
         this.schemaObjectDefinitionJdbcRepository = schemaObjectDefinitionJdbcRepository;
         this.schemaCacheTtlMs = Math.max(schemaCacheTtlMs, MIN_CACHE_TTL_MS);
         this.tableStatsRefreshIntervalMs = Math.max(tableStatsRefreshIntervalMs, MIN_TABLE_STATS_REFRESH_INTERVAL_MS);
@@ -406,6 +410,110 @@ public class SchemaServiceImpl implements SchemaService {
     }
 
     @Override
+    public SchemaNamespaceOperationVO createNamespace(SchemaNamespaceCreateReq req) {
+        String targetNamespaceName = normalize(req.getTargetNamespaceName());
+        if (targetNamespaceName.isBlank()) {
+            throw new BusinessException(400, "新名称不能为空");
+        }
+        ConnectionEntity connectionEntity = connectionService.getConnectionEntity(req.getConnectionId());
+        JdbcDriverResolver.NamespaceSpec spec = requireNamespaceSpec(connectionEntity.getDbType(), "新建");
+        List<String> namespaceNames = listDatabases(req.getConnectionId());
+        if (namespaceNames.stream().anyMatch(item -> item.equalsIgnoreCase(targetNamespaceName))) {
+            throw new BusinessException(400, "目标命名空间已存在: " + targetNamespaceName);
+        }
+
+        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId())) {
+            String executedSql = schemaNamespaceJdbcRepository.createNamespace(
+                connection,
+                connectionEntity.getDbType(),
+                spec,
+                targetNamespaceName
+            );
+            return SchemaNamespaceOperationVO.success(
+                spec.label() + "创建成功",
+                "",
+                targetNamespaceName,
+                executedSql
+            );
+        } catch (SQLException ex) {
+            throw new BusinessException(500, "创建" + spec.label() + "失败: " + ex.getMessage());
+        }
+    }
+
+    @Override
+    public SchemaNamespaceOperationVO renameNamespace(SchemaNamespaceRenameReq req) {
+        String sourceNamespaceName = normalize(req.getSourceNamespaceName());
+        String targetNamespaceName = normalize(req.getTargetNamespaceName());
+        if (sourceNamespaceName.isBlank()) {
+            throw new BusinessException(400, "原名称不能为空");
+        }
+        if (targetNamespaceName.isBlank()) {
+            throw new BusinessException(400, "新名称不能为空");
+        }
+        if (sourceNamespaceName.equalsIgnoreCase(targetNamespaceName)) {
+            throw new BusinessException(400, "新名称不能与原名称相同");
+        }
+        ConnectionEntity connectionEntity = connectionService.getConnectionEntity(req.getConnectionId());
+        JdbcDriverResolver.NamespaceSpec spec = requireNamespaceSpec(connectionEntity.getDbType(), "重命名");
+        List<String> namespaceNames = listDatabases(req.getConnectionId());
+        if (namespaceNames.stream().noneMatch(item -> item.equalsIgnoreCase(sourceNamespaceName))) {
+            throw new BusinessException(404, "原命名空间不存在: " + sourceNamespaceName);
+        }
+        if (namespaceNames.stream().anyMatch(item -> item.equalsIgnoreCase(targetNamespaceName))) {
+            throw new BusinessException(400, "目标命名空间已存在: " + targetNamespaceName);
+        }
+
+        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId())) {
+            String executedSql = schemaNamespaceJdbcRepository.renameNamespace(
+                connection,
+                connectionEntity.getDbType(),
+                spec,
+                sourceNamespaceName,
+                targetNamespaceName
+            );
+            return SchemaNamespaceOperationVO.success(
+                spec.label() + "重命名成功",
+                sourceNamespaceName,
+                targetNamespaceName,
+                executedSql
+            );
+        } catch (SQLException ex) {
+            throw new BusinessException(500, "重命名" + spec.label() + "失败: " + ex.getMessage());
+        }
+    }
+
+    @Override
+    public SchemaNamespaceOperationVO dropNamespace(SchemaNamespaceDropReq req) {
+        String sourceNamespaceName = normalize(req.getSourceNamespaceName());
+        if (sourceNamespaceName.isBlank()) {
+            throw new BusinessException(400, "待删除名称不能为空");
+        }
+        ConnectionEntity connectionEntity = connectionService.getConnectionEntity(req.getConnectionId());
+        JdbcDriverResolver.NamespaceSpec spec = requireNamespaceSpec(connectionEntity.getDbType(), "删除");
+        List<String> namespaceNames = listDatabases(req.getConnectionId());
+        if (namespaceNames.stream().noneMatch(item -> item.equalsIgnoreCase(sourceNamespaceName))) {
+            throw new BusinessException(404, "命名空间不存在: " + sourceNamespaceName);
+        }
+
+        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId())) {
+            String executedSql = schemaNamespaceJdbcRepository.dropNamespace(
+                connection,
+                connectionEntity.getDbType(),
+                spec,
+                sourceNamespaceName
+            );
+            return SchemaNamespaceOperationVO.success(
+                spec.label() + "删除成功",
+                sourceNamespaceName,
+                "",
+                executedSql
+            );
+        } catch (SQLException ex) {
+            throw new BusinessException(500, "删除" + spec.label() + "失败: " + ex.getMessage());
+        }
+    }
+
+    @Override
     public TableRenameVO renameTable(TableRenameReq req) {
         String sourceTableName = normalize(req.getSourceTableName());
         String targetTableName = normalize(req.getTargetTableName());
@@ -470,9 +578,6 @@ public class SchemaServiceImpl implements SchemaService {
         if (spec == null) {
             throw new BusinessException(400, "当前数据库未配置对象定义保存 SQL: " + normalizedObjectType);
         }
-        if (!objectExists(req.getConnectionId(), targetDatabaseName, normalizedObjectType, normalizedObjectName)) {
-            throw new BusinessException(404, "对象不存在: " + normalizedObjectName);
-        }
 
         try (Connection connection = connectionService.openTargetConnection(req.getConnectionId())) {
             applyDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
@@ -507,6 +612,48 @@ public class SchemaServiceImpl implements SchemaService {
         vo.setObjectName(normalizedObjectName);
         vo.setDefinitionSql(latest.getDefinitionSql());
         return vo;
+    }
+
+    @Override
+    public SchemaObjectDropVO dropObject(SchemaObjectDropReq req) {
+        String normalizedObjectType = normalizeObjectType(req.getObjectType());
+        String normalizedObjectName = normalize(req.getObjectName());
+        if (!"view".equals(normalizedObjectType) && !"function".equals(normalizedObjectType)) {
+            throw new BusinessException(400, "当前仅支持删除视图或函数");
+        }
+        if (normalizedObjectName.isBlank()) {
+            throw new BusinessException(400, "对象名称不能为空");
+        }
+        ConnectionEntity connectionEntity = connectionService.getConnectionEntity(req.getConnectionId());
+        String targetDatabaseName = resolveTargetDatabaseName(connectionEntity, req.getDatabaseName());
+        JdbcDriverResolver.ObjectDefinitionSpec spec = jdbcDriverResolver.findObjectDefinitionSpec(connectionEntity.getDbType(), normalizedObjectType);
+        if (spec == null || normalize(spec.dropSql()).isBlank()) {
+            throw new BusinessException(400, "当前数据库未配置对象删除 SQL: " + normalizedObjectType);
+        }
+        if (!objectExists(req.getConnectionId(), targetDatabaseName, normalizedObjectType, normalizedObjectName)) {
+            throw new BusinessException(404, "对象不存在: " + normalizedObjectName);
+        }
+
+        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId())) {
+            applyDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
+            String executedSql = schemaObjectDefinitionJdbcRepository.dropDefinition(
+                connection,
+                connectionEntity.getDbType(),
+                spec,
+                targetDatabaseName,
+                normalizedObjectName
+            );
+            SchemaObjectDropVO vo = new SchemaObjectDropVO();
+            vo.setSuccess(true);
+            vo.setMessage("对象删除成功");
+            vo.setDatabaseName(targetDatabaseName);
+            vo.setObjectType(normalizedObjectType + "s");
+            vo.setObjectName(normalizedObjectName);
+            vo.setExecutedSql(executedSql);
+            return vo;
+        } catch (SQLException ex) {
+            throw new BusinessException(500, "删除对象失败: " + ex.getMessage());
+        }
     }
 
     @Override
@@ -1321,6 +1468,34 @@ public class SchemaServiceImpl implements SchemaService {
 
     private String toSqlStringLiteral(String value) {
         return "'" + normalize(value).replace("'", "''") + "'";
+    }
+
+    private JdbcDriverResolver.NamespaceSpec requireNamespaceSpec(String dbType, String actionName) {
+        JdbcDriverResolver.NamespaceSpec spec = jdbcDriverResolver.findNamespaceSpec(dbType);
+        if (spec == null) {
+            throw new BusinessException(400, "当前数据库未配置命名空间能力");
+        }
+        return switch (actionName) {
+            case "新建" -> {
+                if (normalize(spec.createSql()).isBlank()) {
+                    throw new BusinessException(400, "当前数据库不支持新建" + spec.label());
+                }
+                yield spec;
+            }
+            case "重命名" -> {
+                if (normalize(spec.renameSql()).isBlank()) {
+                    throw new BusinessException(400, "当前数据库不支持重命名" + spec.label());
+                }
+                yield spec;
+            }
+            case "删除" -> {
+                if (normalize(spec.dropSql()).isBlank()) {
+                    throw new BusinessException(400, "当前数据库不支持删除" + spec.label());
+                }
+                yield spec;
+            }
+            default -> spec;
+        };
     }
 
     private boolean objectExists(Long connectionId, String databaseName, String objectType, String objectName) {

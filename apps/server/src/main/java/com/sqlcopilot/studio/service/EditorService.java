@@ -26,6 +26,10 @@ public interface EditorService {
 
     SavedQueryVO saveSavedQuery(SavedQuerySaveReq req);
 
+    SavedQueryVO updateSavedQuery(SavedQueryUpdateReq req);
+
+    void removeSavedQuery(SavedQueryRemoveReq req);
+
     List<SavedQueryVO> listSavedQueries(Long connectionId, String databaseName);
 
     void saveErGraphSnapshot(ErGraphSnapshotSaveReq req);

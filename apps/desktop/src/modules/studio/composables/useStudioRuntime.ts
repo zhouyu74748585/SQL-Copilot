@@ -224,6 +224,8 @@ interface QueryWorkspaceTab {
   title: string;
   connectionId: number;
   databaseName: string;
+  savedQueryId?: number;
+  savedQueryEditMode: boolean;
   sessionId: string;
   prompt: string;
   sqlText: string;
@@ -441,6 +443,8 @@ interface ObjectDefinitionEditorTab {
   objectType: SchemaObjectType;
   objectName: string;
   dbType: string;
+  mode: 'create' | 'edit';
+  isNewObject: boolean;
   sqlText: string;
   baselineSql: string;
   loading: boolean;
@@ -557,6 +561,18 @@ const dropTableName = ref('');
 const renameTableModalOpen = ref(false);
 
 const renameTableSubmitting = ref(false);
+
+const namespaceModalOpen = ref(false);
+
+const namespaceModalSubmitting = ref(false);
+
+const namespaceForm = reactive({
+  mode: 'create' as 'create' | 'rename',
+  connectionId: 0,
+  namespaceLabel: '命名空间',
+  sourceNamespaceName: '',
+  targetNamespaceName: '',
+});
 
 const renameTableForm = reactive({
   connectionId: 0,
@@ -755,9 +771,10 @@ const contextMenu = reactive({
   visible: false,
   x: 0,
   y: 0,
-  targetType: 'none' as 'none' | 'connection' | 'database' | 'object',
+  targetType: 'none' as 'none' | 'connection' | 'database' | 'category' | 'object',
   connectionId: 0,
   databaseName: '',
+  category: '' as '' | 'tables' | 'views' | 'functions' | 'queries',
   objectType: '' as '' | ObjectRow['objectType'],
   objectName: '',
 });
@@ -1039,7 +1056,9 @@ const browserErEntryTooltip = computed(() => {
 const canCreateTable = computed(() => {
   const connectionId = workflow.connectionId;
   const databaseName = getActiveDatabaseName(connectionId);
-  return !!(connectionId && databaseName);
+  const connection = connections.value.find((item) => item.id === connectionId) ?? null;
+  const spec = connection ? findSupportedDbType(connection.dbType) : null;
+  return !!(connectionId && databaseName && spec?.supportsTableCreate !== false);
 });
 
 const connectionSelectOptions = computed(() =>
@@ -1800,6 +1819,8 @@ function createQueryTab(options?: {
   databaseName?: string;
   prompt?: string;
   sqlText?: string;
+  savedQueryId?: number;
+  savedQueryEditMode?: boolean;
   detailOutputOverride?: boolean | null;
 }) {
   ensureConnection();
@@ -1812,6 +1833,8 @@ function createQueryTab(options?: {
     title: options?.title || '新的查询',
     connectionId,
     databaseName,
+    savedQueryId: options?.savedQueryId,
+    savedQueryEditMode: options?.savedQueryEditMode === true,
     sessionId: `session-${now}`,
     prompt: options?.prompt ?? '',
     sqlText: options?.sqlText ?? workflow.sqlText,
@@ -1885,7 +1908,9 @@ function openSaveQueryModal(tab: QueryWorkspaceTab) {
     message.warning('请先输入要保存的 SQL');
     return;
   }
-  saveQueryTitle.value = tab.title.includes('新的查询') ? '' : tab.title;
+  saveQueryTitle.value = tab.savedQueryEditMode
+    ? tab.title
+    : (tab.title.includes('新的查询') ? '' : tab.title);
   saveQueryModalOpen.value = true;
 }
 
@@ -1902,22 +1927,33 @@ async function saveCurrentQuery(tab: QueryWorkspaceTab) {
   }
   saveQuerySubmitting.value = true;
   try {
-    const payload: SavedQuerySaveReq = {
-      connectionId: tab.connectionId,
-      databaseName: tab.databaseName || '',
-      title,
-      sqlText,
-    };
-    const saved = await postApi<SavedQueryVO>('/api/editor/saved-query/save', payload);
+    const wasEditing = tab.savedQueryEditMode && !!tab.savedQueryId;
+    const saved = wasEditing
+      ? await postApi<SavedQueryVO>('/api/editor/saved-query/update', {
+        id: tab.savedQueryId,
+        connectionId: tab.connectionId,
+        databaseName: tab.databaseName || '',
+        title,
+        sqlText,
+      })
+      : await postApi<SavedQueryVO>('/api/editor/saved-query/save', {
+        connectionId: tab.connectionId,
+        databaseName: tab.databaseName || '',
+        title,
+        sqlText,
+      } satisfies SavedQuerySaveReq);
     sessionTitleOverrides.value = {
       ...sessionTitleOverrides.value,
       [sessionTitleOverrideKey(tab)]: title,
     };
     persistSessionTitleOverrides();
     tab.title = title;
+    tab.savedQueryId = saved.id;
+    tab.savedQueryEditMode = true;
+    tab.databaseName = saved.databaseName || tab.databaseName;
     saveQueryModalOpen.value = false;
     await loadSavedQueries(tab.connectionId, tab.databaseName || '');
-    message.success('查询已保存');
+    message.success(wasEditing ? '查询已更新' : '查询已保存');
     return saved;
   } finally {
     saveQuerySubmitting.value = false;
@@ -1926,6 +1962,14 @@ async function saveCurrentQuery(tab: QueryWorkspaceTab) {
 
 async function openSavedQueryTab(savedQuery: SavedQueryVO) {
   const normalizedDatabaseName = savedQuery.databaseName || '';
+  const existingTab = queryTabs.value.find((item) => item.savedQueryId === savedQuery.id);
+  if (existingTab) {
+    activeWorkbenchTab.value = existingTab.key;
+    existingTab.sqlText = savedQuery.sqlText;
+    existingTab.title = savedQuery.title;
+    existingTab.updatedAt = Date.now();
+    return existingTab;
+  }
   workflow.connectionId = savedQuery.connectionId;
   activeDatabaseMap.value = {
     ...activeDatabaseMap.value,
@@ -1937,6 +1981,8 @@ async function openSavedQueryTab(savedQuery: SavedQueryVO) {
     databaseName: normalizedDatabaseName,
     prompt: '',
     sqlText: savedQuery.sqlText,
+    savedQueryId: savedQuery.id,
+    savedQueryEditMode: true,
   });
   await runSafely(async () => {
     await prepareConnectionTreeData(savedQuery.connectionId);
@@ -4320,6 +4366,7 @@ async function handleTreeRightClick(event: { event: MouseEvent; node: { key?: st
     contextMenu.targetType = 'object';
     contextMenu.connectionId = connectionId;
     contextMenu.databaseName = databaseName;
+    contextMenu.category = '';
     contextMenu.objectType = objectType;
     contextMenu.objectName = objectName;
     void runSafely(async () => {
@@ -4329,6 +4376,24 @@ async function handleTreeRightClick(event: { event: MouseEvent; node: { key?: st
   }
   const categoryMatch = keyValue.match(/^conn-(\d+)-db-(.+?)-category-([a-z]+)$/);
   if (categoryMatch) {
+    const connectionId = Number(categoryMatch[1]);
+    const databaseName = decodeURIComponent(categoryMatch[2]);
+    const category = categoryMatch[3] as 'tables' | 'views' | 'functions' | 'queries';
+    workflow.connectionId = connectionId;
+    activeDatabaseMap.value = {
+      ...activeDatabaseMap.value,
+      [connectionId]: databaseName,
+    };
+    selectedTreeKeys.value = [keyValue];
+    contextMenu.visible = true;
+    contextMenu.x = Math.min(event.event.clientX, window.innerWidth - 220);
+    contextMenu.y = Math.min(event.event.clientY, window.innerHeight - 180);
+    contextMenu.targetType = 'category';
+    contextMenu.connectionId = connectionId;
+    contextMenu.databaseName = databaseName;
+    contextMenu.category = category;
+    contextMenu.objectType = '';
+    contextMenu.objectName = '';
     return;
   }
 
@@ -4348,6 +4413,7 @@ async function handleTreeRightClick(event: { event: MouseEvent; node: { key?: st
     contextMenu.targetType = 'connection';
     contextMenu.connectionId = connectionId;
     contextMenu.databaseName = '';
+    contextMenu.category = '';
     contextMenu.objectType = '';
     contextMenu.objectName = '';
     return;
@@ -4378,6 +4444,7 @@ async function handleTreeRightClick(event: { event: MouseEvent; node: { key?: st
   contextMenu.targetType = 'database';
   contextMenu.connectionId = connectionId;
   contextMenu.databaseName = databaseName;
+  contextMenu.category = '';
   contextMenu.objectType = '';
   contextMenu.objectName = '';
 }
@@ -4386,6 +4453,7 @@ function closeContextMenu() {
   contextMenu.visible = false;
   contextMenu.targetType = 'none';
   contextMenu.databaseName = '';
+  contextMenu.category = '';
   contextMenu.objectType = '';
   contextMenu.objectName = '';
 }
@@ -7285,6 +7353,9 @@ function resetConnectionModalState() {
     renameTableModalOpen,
     renameTableSubmitting,
     renameTableForm,
+    namespaceModalOpen,
+    namespaceModalSubmitting,
+    namespaceForm,
     browserDetailCollapsed,
     tableCopyClipboard,
     tablePasteModalOpen,
@@ -7369,6 +7440,7 @@ function resetConnectionModalState() {
     pickingRagModelDir,
     pickingRagRerankModelDir,
     workflow,
+    supportedDbTypes,
     dbTypeOptions,
     envOptions,
     sshAuthTypeOptions,
@@ -7455,6 +7527,7 @@ function resetConnectionModalState() {
     buildConnectionNode,
     buildCategoryChildren,
     getCategoryChildren,
+    findSupportedDbType,
     requiresDatabaseLayer,
     isMultiDatabaseType,
     normalizeSelectedDatabases,

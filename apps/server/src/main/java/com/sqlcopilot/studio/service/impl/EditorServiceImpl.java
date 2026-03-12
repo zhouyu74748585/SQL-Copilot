@@ -238,6 +238,55 @@ public class EditorServiceImpl implements EditorService {
     }
 
     @Override
+    public SavedQueryVO updateSavedQuery(SavedQueryUpdateReq req) {
+        Long id = req.getId();
+        Long connectionId = req.getConnectionId();
+        if (id == null || connectionId == null) {
+            throw new BusinessException(400, "id 与 connectionId 不能为空");
+        }
+        SavedQueryEntity existing = savedQueryMapper.findById(id);
+        if (existing == null || !Objects.equals(existing.getConnectionId(), connectionId)) {
+            throw new BusinessException(404, "保存查询不存在");
+        }
+        String databaseName = safe(req.getDatabaseName());
+        String title = normalizeOneLine(req.getTitle(), 80);
+        if (title.isBlank()) {
+            throw new BusinessException(400, "保存查询名称不能为空");
+        }
+        String sqlText = safe(req.getSqlText());
+        if (sqlText.isBlank()) {
+            throw new BusinessException(400, "SQL 内容不能为空");
+        }
+        SavedQueryEntity duplicated = savedQueryMapper.findByUniqueKey(connectionId, databaseName, title);
+        if (duplicated != null && !Objects.equals(duplicated.getId(), id)) {
+            throw new BusinessException(400, "当前库下已存在同名保存查询");
+        }
+
+        // 关键操作：保存查询更新时仅覆盖当前记录，避免树节点右键编辑产生重复记录。
+        existing.setDatabaseName(databaseName);
+        existing.setTitle(title);
+        existing.setSqlText(sqlText);
+        existing.setUpdatedAt(System.currentTimeMillis());
+        savedQueryMapper.updateById(existing);
+        return toSavedQueryVO(existing);
+    }
+
+    @Override
+    public void removeSavedQuery(SavedQueryRemoveReq req) {
+        if (req.getId() == null || req.getConnectionId() == null) {
+            throw new BusinessException(400, "id 与 connectionId 不能为空");
+        }
+        SavedQueryEntity existing = savedQueryMapper.findById(req.getId());
+        if (existing == null || !Objects.equals(existing.getConnectionId(), req.getConnectionId())) {
+            throw new BusinessException(404, "保存查询不存在");
+        }
+        int affected = savedQueryMapper.deleteById(req.getConnectionId(), req.getId());
+        if (affected <= 0) {
+            throw new BusinessException(404, "保存查询不存在");
+        }
+    }
+
+    @Override
     public List<SavedQueryVO> listSavedQueries(Long connectionId, String databaseName) {
         if (connectionId == null) {
             throw new BusinessException(400, "connectionId 不能为空");
