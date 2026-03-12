@@ -1,5 +1,5 @@
 <template>
-  <a-config-provider :theme="antdThemeConfig">
+  <a-config-provider :theme="antdThemeConfig" :locale="antLocale">
     <div
       class="studio-root"
       :class="{
@@ -89,6 +89,13 @@
         </div>
       </div>
       <div class="top-chrome-actions">
+        <a-select
+          class="top-locale-select"
+          size="small"
+          :value="currentLocale"
+          :options="localeSelectOptions"
+          @update:value="handleLocaleChange"
+        />
         <a-dropdown placement="bottomLeft" :trigger="['click']">
           <button class="tool-item top-action-btn" :disabled="!canOpenHistory" title="会话历史" @click="handleHistoryMenuClick">
             <history-outlined />
@@ -2937,12 +2944,16 @@ import {
 import {Editor as MonacoEditor} from '@guolao/vue-monaco-editor';
 import type * as MonacoApi from 'monaco-editor';
 import {nextTick, ref, watch} from 'vue';
+import {useAppI18n, type AppLocale} from '../../../i18n';
 import QueryChartPanel from '../../../components/QueryChartPanel.vue';
 import ErDiagramPanel from '../../../components/ErDiagramPanel.vue';
 import TableEditor from '../../../components/TableEditor.vue';
 import StudioConnectionContextBar from './StudioConnectionContextBar.vue';
 import TableDataVirtualGrid from './TableDataVirtualGrid.vue';
 import type {StudioController} from '../composables/useStudioController';
+
+const {currentLocale, antLocale, localeSelectOptions, setLocale, useDomI18n} = useAppI18n();
+useDomI18n();
 
 const props = defineProps<{ controller: StudioController }>();
 const {
@@ -3667,6 +3678,10 @@ function handleKnowledgeConnectionSelectorChange(value: string | number) {
 function handleKnowledgeDatabaseSelectorChange(value: string) {
   knowledgeDatabaseName.value = value;
   void handleKnowledgeDatabaseChange();
+}
+
+function handleLocaleChange(value: string) {
+  setLocale(value as AppLocale);
 }
 
 function handleActiveQueryModelMenuClick(event: { key: string | number }) {

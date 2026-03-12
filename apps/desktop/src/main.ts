@@ -9,6 +9,7 @@ import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
 import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
 import 'ant-design-vue/dist/reset.css';
 import App from './App.vue';
+import {installAppI18nRuntime} from './i18n';
 import './style.css';
 
 const monacoEnvironment = {
@@ -34,5 +35,7 @@ if (typeof self !== 'undefined') {
 }
 
 loader.config({monaco});
+
+installAppI18nRuntime();
 
 createApp(App).use(Antd).mount('#app');

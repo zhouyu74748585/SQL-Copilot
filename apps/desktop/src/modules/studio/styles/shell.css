@@ -3985,6 +3985,23 @@ body {
   -webkit-app-region: no-drag;
 }
 
+.top-locale-select {
+  width: 108px;
+  -webkit-app-region: no-drag;
+}
+
+.top-locale-select .ant-select-selector {
+  border-radius: 10px !important;
+  border-color: color-mix(in srgb, var(--line-strong) 78%, transparent) !important;
+  background: color-mix(in srgb, var(--surface-0) 92%, transparent) !important;
+  box-shadow: none !important;
+}
+
+.top-locale-select.ant-select-focused .ant-select-selector,
+.top-locale-select:hover .ant-select-selector {
+  border-color: color-mix(in srgb, var(--accent) 52%, var(--line-strong)) !important;
+}
+
 .top-chrome .workspace-tab,
 .top-chrome .tool-item,
 .top-chrome .tab-close {
