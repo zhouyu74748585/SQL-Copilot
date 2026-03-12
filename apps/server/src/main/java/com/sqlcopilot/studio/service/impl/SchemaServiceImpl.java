@@ -7,6 +7,7 @@ import com.sqlcopilot.studio.entity.SchemaTableCacheEntity;
 import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.SchemaService;
 import com.sqlcopilot.studio.service.rag.RagIngestionService;
+import com.sqlcopilot.studio.support.JdbcDriverResolver;
 import com.sqlcopilot.studio.util.BusinessException;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -32,6 +33,7 @@ public class SchemaServiceImpl implements SchemaService {
 
     private final ConnectionService connectionService;
     private final RagIngestionService ragIngestionService;
+    private final JdbcDriverResolver jdbcDriverResolver;
     private final long schemaCacheTtlMs;
     private final long tableStatsRefreshIntervalMs;
     private final Map<SchemaCacheKey, SchemaSnapshot> schemaSnapshotCache = new ConcurrentHashMap<>();
@@ -46,10 +48,12 @@ public class SchemaServiceImpl implements SchemaService {
 
     public SchemaServiceImpl(ConnectionService connectionService,
                              RagIngestionService ragIngestionService,
+                             JdbcDriverResolver jdbcDriverResolver,
                              @Value("${schema.cache.ttl-ms:300000}") long schemaCacheTtlMs,
                              @Value("${schema.table-stats.refresh-interval-ms:60000}") long tableStatsRefreshIntervalMs) {
         this.connectionService = connectionService;
         this.ragIngestionService = ragIngestionService;
+        this.jdbcDriverResolver = jdbcDriverResolver;
         this.schemaCacheTtlMs = Math.max(schemaCacheTtlMs, MIN_CACHE_TTL_MS);
         this.tableStatsRefreshIntervalMs = Math.max(tableStatsRefreshIntervalMs, MIN_TABLE_STATS_REFRESH_INTERVAL_MS);
     }
@@ -228,20 +232,16 @@ public class SchemaServiceImpl implements SchemaService {
         ConnectionEntity connectionEntity = connectionService.getConnectionEntity(connectionId);
         String dbType = normalize(connectionEntity.getDbType()).toUpperCase(Locale.ROOT);
 
-        if ("SQLITE".equals(dbType)) {
-            String sqliteName = normalize(connectionEntity.getDatabaseName());
-            return List.of(sqliteName.isBlank() ? "main" : sqliteName);
-        }
-
         try (Connection connection = connectionService.openTargetConnection(connectionId)) {
-            return switch (dbType) {
-                case "MYSQL" -> querySingleColumn(connection, "SHOW DATABASES", 2000);
-                case "POSTGRESQL" -> querySingleColumn(connection,
-                    "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname", 2000);
-                case "SQLSERVER" -> querySingleColumn(connection, "SELECT name FROM sys.databases ORDER BY name", 2000);
-                case "ORACLE" -> querySingleColumn(connection, "SELECT username FROM all_users ORDER BY username", 2000);
-                default -> List.of();
-            };
+            String schemasSql = jdbcDriverResolver.findSchemasSql(dbType);
+            if (!schemasSql.isBlank()) {
+                return queryConfiguredSchemas(connection, schemasSql, connectionEntity);
+            }
+            if ("SQLITE".equals(dbType)) {
+                String sqliteName = normalize(connectionEntity.getDatabaseName());
+                return List.of(sqliteName.isBlank() ? "main" : sqliteName);
+            }
+            return List.of();
         } catch (Exception ex) {
             throw new BusinessException(500, "读取数据库列表失败: " + ex.getMessage());
         }
@@ -597,29 +597,54 @@ public class SchemaServiceImpl implements SchemaService {
 
         try (Connection connection = connectionService.openTargetConnection(connectionId)) {
             applyDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
-            DatabaseMetaData metaData = connection.getMetaData();
-            String catalog = resolveCatalog(connection, connectionEntity.getDbType(), targetDatabaseName);
-            String schemaPattern = resolveSchemaPattern(connectionEntity.getDbType(), targetDatabaseName);
-
-            try (ResultSet tableRs = metaData.getTables(catalog, schemaPattern, "%", new String[]{"TABLE"})) {
-                while (tableRs.next()) {
-                    String tableName = tableRs.getString("TABLE_NAME");
-                    if (tableName == null) {
-                        continue;
+            List<SchemaTableCacheEntity> configuredTables = queryTablesByConfiguredSql(
+                connection,
+                connectionEntity.getDbType(),
+                connectionId,
+                cacheDatabaseName,
+                targetDatabaseName,
+                now
+            );
+            if (!configuredTables.isEmpty()) {
+                tables.addAll(configuredTables);
+                if (includeColumnDetails) {
+                    for (SchemaTableCacheEntity table : configuredTables) {
+                        columns.addAll(queryColumnsByConfiguredSql(
+                            connection,
+                            connectionEntity.getDbType(),
+                            connectionId,
+                            cacheDatabaseName,
+                            targetDatabaseName,
+                            table.getTableName(),
+                            now
+                        ));
                     }
+                }
+            } else {
+                DatabaseMetaData metaData = connection.getMetaData();
+                String catalog = resolveCatalog(connection, connectionEntity.getDbType(), targetDatabaseName);
+                String schemaPattern = resolveSchemaPattern(connectionEntity.getDbType(), targetDatabaseName);
 
-                    SchemaTableCacheEntity tableEntity = new SchemaTableCacheEntity();
-                    tableEntity.setConnectionId(connectionId);
-                    tableEntity.setDatabaseName(cacheDatabaseName);
-                    tableEntity.setTableName(tableName);
-                    tableEntity.setTableComment(tableRs.getString("REMARKS"));
-                    tableEntity.setRowEstimate(0L);
-                    tableEntity.setTableSizeBytes(0L);
-                    tableEntity.setUpdatedAt(now);
-                    tables.add(tableEntity);
+                try (ResultSet tableRs = metaData.getTables(catalog, schemaPattern, "%", new String[]{"TABLE"})) {
+                    while (tableRs.next()) {
+                        String tableName = tableRs.getString("TABLE_NAME");
+                        if (tableName == null) {
+                            continue;
+                        }
 
-                    if (includeColumnDetails) {
-                        columns.addAll(readColumnsForTable(metaData, catalog, schemaPattern, connectionId, cacheDatabaseName, tableName, now));
+                        SchemaTableCacheEntity tableEntity = new SchemaTableCacheEntity();
+                        tableEntity.setConnectionId(connectionId);
+                        tableEntity.setDatabaseName(cacheDatabaseName);
+                        tableEntity.setTableName(tableName);
+                        tableEntity.setTableComment(tableRs.getString("REMARKS"));
+                        tableEntity.setRowEstimate(0L);
+                        tableEntity.setTableSizeBytes(0L);
+                        tableEntity.setUpdatedAt(now);
+                        tables.add(tableEntity);
+
+                        if (includeColumnDetails) {
+                            columns.addAll(readColumnsForTable(metaData, catalog, schemaPattern, connectionId, cacheDatabaseName, tableName, now));
+                        }
                     }
                 }
             }
@@ -804,6 +829,18 @@ public class SchemaServiceImpl implements SchemaService {
         String targetDatabaseName = resolveTargetDatabaseName(connectionEntity, databaseName);
         try (Connection connection = connectionService.openTargetConnection(connectionId)) {
             applyDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
+            List<SchemaColumnCacheEntity> configuredColumns = queryColumnsByConfiguredSql(
+                connection,
+                connectionEntity.getDbType(),
+                connectionId,
+                cacheDatabaseName,
+                targetDatabaseName,
+                tableName,
+                now
+            );
+            if (!configuredColumns.isEmpty()) {
+                return configuredColumns;
+            }
             DatabaseMetaData metaData = connection.getMetaData();
             String catalog = resolveCatalog(connection, connectionEntity.getDbType(), targetDatabaseName);
             String schemaPattern = resolveSchemaPattern(connectionEntity.getDbType(), targetDatabaseName);
@@ -845,6 +882,243 @@ public class SchemaServiceImpl implements SchemaService {
             }
         }
         return columns;
+    }
+
+    private List<String> queryConfiguredSchemas(Connection connection,
+                                                String schemasSql,
+                                                ConnectionEntity connectionEntity) throws SQLException {
+        List<String> values = new ArrayList<>();
+        try (PreparedStatement statement = prepareConfiguredStatement(connection, schemasSql, connectionEntity, null);
+             ResultSet rs = statement.executeQuery()) {
+            while (rs.next() && values.size() < 2000) {
+                String value = readOptionalStringColumn(rs, "schema_name");
+                if (value.isBlank()) {
+                    value = normalize(rs.getString(1));
+                }
+                if (!value.isBlank()) {
+                    values.add(value);
+                }
+            }
+        }
+        return values;
+    }
+
+    private List<SchemaTableCacheEntity> queryTablesByConfiguredSql(Connection connection,
+                                                                    String dbType,
+                                                                    Long connectionId,
+                                                                    String cacheDatabaseName,
+                                                                    String targetDatabaseName,
+                                                                    long now) throws SQLException {
+        String tablesSql = jdbcDriverResolver.findTablesSql(dbType);
+        if (tablesSql.isBlank()) {
+            return List.of();
+        }
+        List<SchemaTableCacheEntity> tables = new ArrayList<>();
+        try (PreparedStatement statement = prepareConfiguredStatement(connection, tablesSql, null, targetDatabaseName);
+             ResultSet rs = statement.executeQuery()) {
+            while (rs.next()) {
+                String tableName = readOptionalStringColumn(rs, "table_name");
+                if (tableName.isBlank()) {
+                    tableName = readOptionalStringColumn(rs, "TABLE_NAME");
+                }
+                if (tableName.isBlank()) {
+                    continue;
+                }
+                SchemaTableCacheEntity tableEntity = new SchemaTableCacheEntity();
+                tableEntity.setConnectionId(connectionId);
+                tableEntity.setDatabaseName(cacheDatabaseName);
+                tableEntity.setTableName(tableName);
+                tableEntity.setTableComment(readOptionalStringColumn(rs, "table_comment"));
+                tableEntity.setRowEstimate(0L);
+                tableEntity.setTableSizeBytes(0L);
+                tableEntity.setUpdatedAt(now);
+                tables.add(tableEntity);
+            }
+        }
+        return tables;
+    }
+
+    private List<SchemaColumnCacheEntity> queryColumnsByConfiguredSql(Connection connection,
+                                                                      String dbType,
+                                                                      Long connectionId,
+                                                                      String cacheDatabaseName,
+                                                                      String targetDatabaseName,
+                                                                      String tableName,
+                                                                      long now) throws SQLException {
+        String columnsSql = jdbcDriverResolver.findColumnsSql(dbType);
+        if (columnsSql.isBlank()) {
+            return List.of();
+        }
+        Set<String> primaryKeys = queryPrimaryKeysByConfiguredSql(connection, dbType, targetDatabaseName, tableName);
+        Set<String> indexedColumns = queryIndexedColumnsByMetadata(connection, dbType, targetDatabaseName, tableName);
+        List<SchemaColumnCacheEntity> columns = new ArrayList<>();
+        try (PreparedStatement statement = prepareConfiguredStatement(connection, columnsSql, null, targetDatabaseName, tableName);
+             ResultSet rs = statement.executeQuery()) {
+            while (rs.next()) {
+                String columnName = readOptionalStringColumn(rs, "column_name");
+                if (columnName.isBlank()) {
+                    continue;
+                }
+                SchemaColumnCacheEntity columnEntity = new SchemaColumnCacheEntity();
+                columnEntity.setConnectionId(connectionId);
+                columnEntity.setDatabaseName(cacheDatabaseName);
+                columnEntity.setTableName(tableName);
+                columnEntity.setColumnName(columnName);
+                columnEntity.setDataType(readOptionalStringColumn(rs, "data_type"));
+                Integer columnSize = readOptionalIntegerColumn(rs, "character_maximum_length");
+                if (columnSize == null) {
+                    columnSize = readOptionalIntegerColumn(rs, "numeric_precision");
+                }
+                columnEntity.setColumnSize(columnSize);
+                columnEntity.setDecimalDigits(readOptionalIntegerColumn(rs, "numeric_scale"));
+                columnEntity.setColumnDefault(readOptionalStringColumn(rs, "column_default"));
+                columnEntity.setAutoIncrementFlag(parseConfiguredAutoIncrementFlag(rs));
+                columnEntity.setNullableFlag(parseConfiguredNullableFlag(rs));
+                columnEntity.setColumnComment(readOptionalStringColumn(rs, "column_comment"));
+                columnEntity.setIndexedFlag(indexedColumns.contains(columnName) ? 1 : 0);
+                columnEntity.setPrimaryKeyFlag(primaryKeys.contains(columnName) ? 1 : 0);
+                columnEntity.setUpdatedAt(now);
+                columns.add(columnEntity);
+            }
+        }
+        return columns;
+    }
+
+    private Set<String> queryPrimaryKeysByConfiguredSql(Connection connection,
+                                                        String dbType,
+                                                        String targetDatabaseName,
+                                                        String tableName) throws SQLException {
+        String primaryKeysSql = jdbcDriverResolver.findPrimaryKeysSql(dbType);
+        if (primaryKeysSql.isBlank()) {
+            return Set.of();
+        }
+        Set<String> keys = new HashSet<>();
+        try (PreparedStatement statement = prepareConfiguredStatement(connection, primaryKeysSql, null, targetDatabaseName, tableName);
+             ResultSet rs = statement.executeQuery()) {
+            while (rs.next()) {
+                String columnName = readOptionalStringColumn(rs, "column_name");
+                if (columnName.isBlank()) {
+                    columnName = normalize(rs.getString(1));
+                }
+                if (!columnName.isBlank()) {
+                    keys.add(columnName);
+                }
+            }
+        }
+        return keys;
+    }
+
+    private Set<String> queryIndexedColumnsByMetadata(Connection connection,
+                                                      String dbType,
+                                                      String targetDatabaseName,
+                                                      String tableName) throws SQLException {
+        DatabaseMetaData metaData = connection.getMetaData();
+        String catalog = resolveCatalog(connection, dbType, targetDatabaseName);
+        String schemaPattern = resolveSchemaPattern(dbType, targetDatabaseName);
+        return readIndexedColumns(metaData, catalog, schemaPattern, tableName);
+    }
+
+    private PreparedStatement prepareConfiguredStatement(Connection connection,
+                                                         String sqlTemplate,
+                                                         ConnectionEntity connectionEntity,
+                                                         String databaseName,
+                                                         String... extraParams) throws SQLException {
+        String renderedSql = renderConfiguredSql(sqlTemplate, connectionEntity, databaseName, extraParams);
+        PreparedStatement statement = connection.prepareStatement(renderedSql);
+        int parameterIndex = 1;
+        if (renderedSql.contains("?")) {
+            statement.setString(parameterIndex++, normalize(databaseName));
+            for (String value : extraParams) {
+                statement.setString(parameterIndex++, value);
+            }
+        }
+        return statement;
+    }
+
+    private String renderConfiguredSql(String sqlTemplate,
+                                       ConnectionEntity connectionEntity,
+                                       String databaseName,
+                                       String... extraParams) {
+        String rendered = sqlTemplate;
+        String dbLiteral = toSqlStringLiteral(databaseName);
+        String tableName = extraParams.length > 0 ? extraParams[0] : "";
+        String tableLiteral = toSqlStringLiteral(tableName);
+        rendered = rendered.replace("{database_literal}", dbLiteral);
+        rendered = rendered.replace("{table_literal}", tableLiteral);
+        if (connectionEntity != null) {
+            rendered = rendered.replace("{configured_database_literal}", toSqlStringLiteral(connectionEntity.getDatabaseName()));
+        }
+        return rendered;
+    }
+
+    private int parseConfiguredNullableFlag(ResultSet rs) throws SQLException {
+        String nullable = readOptionalStringColumn(rs, "is_nullable");
+        if (nullable.isBlank()) {
+            Object value = readOptionalObject(rs, "nullable_flag");
+            if (value instanceof Number number) {
+                return number.intValue() == 1 ? 1 : 0;
+            }
+            return 1;
+        }
+        return "YES".equalsIgnoreCase(nullable) || "Y".equalsIgnoreCase(nullable) || "TRUE".equalsIgnoreCase(nullable) ? 1 : 0;
+    }
+
+    private int parseConfiguredAutoIncrementFlag(ResultSet rs) throws SQLException {
+        String autoIncrement = readOptionalStringColumn(rs, "is_auto_increment");
+        if (autoIncrement.isBlank()) {
+            String extra = readOptionalStringColumn(rs, "column_extra");
+            if (!extra.isBlank() && extra.toLowerCase(Locale.ROOT).contains("auto_increment")) {
+                return 1;
+            }
+            return 0;
+        }
+        return "YES".equalsIgnoreCase(autoIncrement)
+            || "Y".equalsIgnoreCase(autoIncrement)
+            || "TRUE".equalsIgnoreCase(autoIncrement) ? 1 : 0;
+    }
+
+    private Integer readOptionalIntegerColumn(ResultSet rs, String columnLabel) throws SQLException {
+        Object value = readOptionalObject(rs, columnLabel);
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        try {
+            return Integer.parseInt(value.toString());
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    private Object readOptionalObject(ResultSet rs, String columnLabel) throws SQLException {
+        if (!hasColumn(rs, columnLabel)) {
+            return null;
+        }
+        return rs.getObject(columnLabel);
+    }
+
+    private String readOptionalStringColumn(ResultSet rs, String columnLabel) throws SQLException {
+        if (!hasColumn(rs, columnLabel)) {
+            return "";
+        }
+        return normalize(rs.getString(columnLabel));
+    }
+
+    private boolean hasColumn(ResultSet rs, String columnLabel) throws SQLException {
+        ResultSetMetaData metaData = rs.getMetaData();
+        for (int index = 1; index <= metaData.getColumnCount(); index += 1) {
+            if (columnLabel.equalsIgnoreCase(metaData.getColumnLabel(index))
+                || columnLabel.equalsIgnoreCase(metaData.getColumnName(index))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String toSqlStringLiteral(String value) {
+        return "'" + normalize(value).replace("'", "''") + "'";
     }
 
     private boolean isCacheExpired(SchemaSnapshot snapshot) {

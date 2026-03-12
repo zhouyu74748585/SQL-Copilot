@@ -15,6 +15,10 @@ import java.util.*;
 public class JdbcDriverResolver {
 
     private static final String DEFAULT_RESOURCE_PATTERN = "drivers/{type}/{version}/driver.jar";
+    private static final String INTROSPECTION_SCHEMAS = "schemas";
+    private static final String INTROSPECTION_TABLES = "tables";
+    private static final String INTROSPECTION_COLUMNS = "columns";
+    private static final String INTROSPECTION_PRIMARY_KEYS = "primaryKeys";
     private final Map<String, DriverSpec> specs;
 
     public JdbcDriverResolver() {
@@ -43,6 +47,28 @@ public class JdbcDriverResolver {
             .replace("{version}", resourceVersion);
 
         return new ResolvedDriver(type, version, driverClass, resourcePath);
+    }
+
+    public String findSchemasSql(String dbType) {
+        return findIntrospectionSql(dbType, INTROSPECTION_SCHEMAS);
+    }
+
+    public String findTablesSql(String dbType) {
+        return findIntrospectionSql(dbType, INTROSPECTION_TABLES);
+    }
+
+    public String findColumnsSql(String dbType) {
+        return findIntrospectionSql(dbType, INTROSPECTION_COLUMNS);
+    }
+
+    public String findPrimaryKeysSql(String dbType) {
+        return findIntrospectionSql(dbType, INTROSPECTION_PRIMARY_KEYS);
+    }
+
+    public CreateTableSpec findCreateTableSpec(String dbType) {
+        String type = normalizeType(dbType);
+        DriverSpec spec = specs.get(type);
+        return spec == null ? null : spec.createTableSpec;
     }
 
     private Map<String, DriverSpec> loadSpecs() {
@@ -115,7 +141,68 @@ public class JdbcDriverResolver {
         }
         aliases.putIfAbsent(defaultVersion, defaultVersion);
 
-        return new DriverSpec(defaultVersion, defaultDriver, resourcePattern, driversByVersion, aliases);
+        Map<String, String> introspectionSqlMap = parseStringMap(node.get("introspection"));
+        CreateTableSpec createTableSpec = parseCreateTableSpec(node.get("tableCopy"));
+        return new DriverSpec(
+            defaultVersion,
+            defaultDriver,
+            resourcePattern,
+            driversByVersion,
+            aliases,
+            introspectionSqlMap,
+            createTableSpec
+        );
+    }
+
+    private CreateTableSpec parseCreateTableSpec(Object node) {
+        if (!(node instanceof Map<?, ?> tableCopyMap)) {
+            return null;
+        }
+        String sql = trimText(tableCopyMap.get("createTableSql"));
+        if (sql.isBlank()) {
+            return null;
+        }
+        String ddlColumnLabel = trimText(tableCopyMap.get("ddlColumnLabel"));
+        Integer ddlColumnIndex = parseInteger(tableCopyMap.get("ddlColumnIndex"));
+        return new CreateTableSpec(sql, ddlColumnLabel, ddlColumnIndex == null || ddlColumnIndex <= 0 ? 1 : ddlColumnIndex);
+    }
+
+    private Map<String, String> parseStringMap(Object node) {
+        Map<String, String> result = new LinkedHashMap<>();
+        if (!(node instanceof Map<?, ?> valueMap)) {
+            return result;
+        }
+        for (Map.Entry<?, ?> entry : valueMap.entrySet()) {
+            String key = trimText(entry.getKey());
+            String value = trimText(entry.getValue());
+            if (!key.isBlank() && !value.isBlank()) {
+                result.put(key, value);
+            }
+        }
+        return result;
+    }
+
+    private String findIntrospectionSql(String dbType, String key) {
+        String type = normalizeType(dbType);
+        DriverSpec spec = specs.get(type);
+        if (spec == null) {
+            return "";
+        }
+        return trimText(spec.introspectionSqlMap.get(key));
+    }
+
+    private Integer parseInteger(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        try {
+            return Integer.parseInt(value.toString().trim());
+        } catch (NumberFormatException ex) {
+            return null;
+        }
     }
 
     private String normalizeType(String value) {
@@ -136,18 +223,29 @@ public class JdbcDriverResolver {
         private final String resourcePattern;
         private final Map<String, String> driversByVersion;
         private final Map<String, String> resourceAliases;
+        private final Map<String, String> introspectionSqlMap;
+        private final CreateTableSpec createTableSpec;
 
         private DriverSpec(String defaultVersion,
                            String defaultDriver,
                            String resourcePattern,
                            Map<String, String> driversByVersion,
-                           Map<String, String> resourceAliases) {
+                           Map<String, String> resourceAliases,
+                           Map<String, String> introspectionSqlMap,
+                           CreateTableSpec createTableSpec) {
             this.defaultVersion = defaultVersion;
             this.defaultDriver = defaultDriver;
             this.resourcePattern = resourcePattern;
             this.driversByVersion = driversByVersion;
             this.resourceAliases = resourceAliases;
+            this.introspectionSqlMap = introspectionSqlMap;
+            this.createTableSpec = createTableSpec;
         }
+    }
+
+    public record CreateTableSpec(String sql,
+                                  String ddlColumnLabel,
+                                  Integer ddlColumnIndex) {
     }
 
     public record ResolvedDriver(String dbType,

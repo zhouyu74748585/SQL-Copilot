@@ -10,6 +10,7 @@ import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.RagVectorizeQueueService;
 import com.sqlcopilot.studio.service.SchemaService;
 import com.sqlcopilot.studio.service.TableCopyService;
+import com.sqlcopilot.studio.support.JdbcDriverResolver;
 import com.sqlcopilot.studio.util.BusinessException;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -31,6 +32,8 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Service
 public class TableCopyServiceImpl implements TableCopyService {
@@ -41,6 +44,7 @@ public class TableCopyServiceImpl implements TableCopyService {
     private final ConnectionService connectionService;
     private final SchemaService schemaService;
     private final RagVectorizeQueueService ragVectorizeQueueService;
+    private final JdbcDriverResolver jdbcDriverResolver;
     private final ExecutorService taskExecutor = Executors.newFixedThreadPool(2, runnable -> {
         Thread thread = new Thread(runnable, "table-copy-worker");
         thread.setDaemon(true);
@@ -50,10 +54,12 @@ public class TableCopyServiceImpl implements TableCopyService {
 
     public TableCopyServiceImpl(ConnectionService connectionService,
                                 SchemaService schemaService,
-                                RagVectorizeQueueService ragVectorizeQueueService) {
+                                RagVectorizeQueueService ragVectorizeQueueService,
+                                JdbcDriverResolver jdbcDriverResolver) {
         this.connectionService = connectionService;
         this.schemaService = schemaService;
         this.ragVectorizeQueueService = ragVectorizeQueueService;
+        this.jdbcDriverResolver = jdbcDriverResolver;
     }
 
     @PreDestroy
@@ -236,9 +242,17 @@ public class TableCopyServiceImpl implements TableCopyService {
     }
 
     private void createTargetTable(CopyContext context) {
-        String createTableSql = buildCreateTableSql(context.targetTableName(), context.sourceTableDetail(), context.dbType());
-        List<String> indexSqlList = buildCreateIndexSqlList(context.targetTableName(), context.sourceTableDetail(), context.dbType());
-        List<String> commentSqlList = buildCommentSqlList(context.targetTableName(), context.sourceTableDetail(), context.dbType());
+        String createTableSql = tryLoadCreateTableSql(context);
+        boolean usedSystemDdl = !createTableSql.isBlank();
+        List<String> indexSqlList = usedSystemDdl
+            ? List.of()
+            : buildCreateIndexSqlList(context.targetTableName(), context.sourceTableDetail(), context.dbType());
+        List<String> commentSqlList = usedSystemDdl
+            ? List.of()
+            : buildCommentSqlList(context.targetTableName(), context.sourceTableDetail(), context.dbType());
+        if (!usedSystemDdl) {
+            createTableSql = buildCreateTableSql(context.targetTableName(), context.sourceTableDetail(), context.dbType());
+        }
 
         try (Connection connection = connectionService.openTargetConnection(context.targetConnection().getId())) {
             applyDatabaseContext(connection, context.dbType(), context.targetDatabaseName());
@@ -255,6 +269,82 @@ public class TableCopyServiceImpl implements TableCopyService {
         } catch (SQLException ex) {
             throw new BusinessException(500, "创建目标表失败: " + ex.getMessage());
         }
+    }
+
+    private String tryLoadCreateTableSql(CopyContext context) {
+        JdbcDriverResolver.CreateTableSpec spec = jdbcDriverResolver.findCreateTableSpec(context.dbType());
+        if (spec == null || normalize(spec.sql()).isBlank()) {
+            return "";
+        }
+        try (Connection connection = connectionService.openTargetConnection(context.sourceConnection().getId())) {
+            applyDatabaseContext(connection, context.dbType(), context.sourceDatabaseName());
+            String sql = renderCreateTableSql(spec.sql(), context);
+            try (PreparedStatement statement = connection.prepareStatement(sql);
+                 ResultSet rs = statement.executeQuery()) {
+                if (!rs.next()) {
+                    return "";
+                }
+                String ddl = readCreateTableDdl(rs, spec);
+                if (ddl.isBlank()) {
+                    return "";
+                }
+                return rewriteCreateTableTarget(ddl, context);
+            }
+        } catch (Exception ex) {
+            log.warn("读取源表 DDL 失败，回退结构重建, source={}.{}, reason={}",
+                context.sourceDatabaseName(), context.sourceTableName(), ex.getMessage());
+            return "";
+        }
+    }
+
+    private String renderCreateTableSql(String sqlTemplate, CopyContext context) {
+        return sqlTemplate
+            .replace("{source_table}", normalize(context.sourceTableName()))
+            .replace("{source_table_literal}", toSqlLiteral(context.sourceTableName()))
+            .replace("{source_database_literal}", toSqlLiteral(context.sourceDatabaseName()))
+            .replace("{quoted_source_table}", quoteIdentifier(context.sourceTableName(), context.dbType()));
+    }
+
+    private String readCreateTableDdl(ResultSet rs, JdbcDriverResolver.CreateTableSpec spec) throws SQLException {
+        String ddlColumnLabel = normalize(spec.ddlColumnLabel());
+        if (!ddlColumnLabel.isBlank()) {
+            return normalize(rs.getString(ddlColumnLabel));
+        }
+        Integer ddlColumnIndex = spec.ddlColumnIndex();
+        int columnIndex = ddlColumnIndex == null || ddlColumnIndex <= 0 ? 1 : ddlColumnIndex;
+        return normalize(rs.getString(columnIndex));
+    }
+
+    private String rewriteCreateTableTarget(String sourceDdl, CopyContext context) {
+        String ddl = sourceDdl.trim();
+        if (ddl.isBlank()) {
+            return ddl;
+        }
+        String targetIdentifier = quoteIdentifier(context.targetTableName(), context.dbType());
+        String sourceIdentifier = quoteIdentifier(context.sourceTableName(), context.dbType());
+        String rewritten = replaceCreateTableIdentifier(ddl, sourceIdentifier, targetIdentifier);
+        if (rewritten.equals(ddl)) {
+            rewritten = replaceCreateTableIdentifier(ddl, normalize(context.sourceTableName()), normalize(context.targetTableName()));
+        }
+        if (!normalize(context.sourceTableName()).equalsIgnoreCase(normalize(context.targetTableName()))
+            && rewritten.equals(ddl)) {
+            throw new BusinessException(500, "源表 DDL 改写失败，未识别到可替换的 CREATE TABLE 表名");
+        }
+        return rewritten;
+    }
+
+    private String replaceCreateTableIdentifier(String ddl, String sourceIdentifier, String targetIdentifier) {
+        if (normalize(sourceIdentifier).isBlank() || normalize(targetIdentifier).isBlank()) {
+            return ddl;
+        }
+        Pattern pattern = Pattern.compile(
+            "(?is)(create\\s+table\\s+(?:if\\s+not\\s+exists\\s+)?)" + Pattern.quote(sourceIdentifier)
+        );
+        Matcher matcher = pattern.matcher(ddl);
+        if (!matcher.find()) {
+            return ddl;
+        }
+        return matcher.replaceFirst("$1" + Matcher.quoteReplacement(targetIdentifier));
     }
 
     private long countSourceRows(CopyContext context) {
@@ -572,6 +662,10 @@ public class TableCopyServiceImpl implements TableCopyService {
 
     private String escapeSingleQuote(String value) {
         return normalize(value).replace("'", "''");
+    }
+
+    private String toSqlLiteral(String value) {
+        return "'" + escapeSingleQuote(value) + "'";
     }
 
     private record CopyContext(ConnectionEntity sourceConnection,

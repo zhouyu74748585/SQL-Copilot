@@ -18,26 +18,37 @@ drivers:
       "12": "universal"
     introspection:
       schemas: |-
-        select schema_name
-          from information_schema.schemata
-         where schema_name not in ('pg_catalog', 'information_schema')
-         order by schema_name
+        select datname as schema_name
+          from pg_database
+         where datistemplate = false
+         order by datname
       tables: |-
-        select table_schema, table_name
-          from information_schema.tables
-         where table_type = 'BASE TABLE'
-           and table_schema = ?
-         order by table_name
+        select n.nspname as table_schema,
+               c.relname as table_name,
+               coalesce(obj_description(c.oid, 'pg_class'), '') as table_comment
+          from pg_class c
+          join pg_namespace n
+            on n.oid = c.relnamespace
+         where c.relkind = 'r'
+           and n.nspname = current_schema()
+         order by c.relname
       columns: |-
         select column_name,
                data_type,
                is_nullable,
                character_maximum_length,
                numeric_precision,
-               numeric_scale
+               numeric_scale,
+               column_default,
+               case
+                 when column_default like 'nextval(%'
+                   or is_identity = 'YES' then 'YES'
+                 else 'NO'
+               end as is_auto_increment,
+               pg_catalog.col_description(format('%I.%I', table_schema, table_name)::regclass::oid, ordinal_position) as column_comment
           from information_schema.columns
-         where table_schema = ?
-           and table_name = ?
+         where table_schema = current_schema()
+           and table_name = {table_literal}
          order by ordinal_position
       primaryKeys: |-
         select kcu.column_name
@@ -47,8 +58,8 @@ drivers:
            and tc.table_schema = kcu.table_schema
            and tc.table_name = kcu.table_name
          where tc.constraint_type = 'PRIMARY KEY'
-           and tc.table_schema = ?
-           and tc.table_name = ?
+           and tc.table_schema = current_schema()
+           and tc.table_name = {table_literal}
          order by kcu.ordinal_position
     pagination:
       preview: |-
@@ -60,6 +71,42 @@ drivers:
       ingestion: |-
         {sql}
         limit ?
+    tableCopy:
+      createTableSql: |-
+        select sql as ddl
+          from (
+                select 'CREATE TABLE ' || quote_ident(c.relname) || E' (\n'
+                       || string_agg(
+                            '    ' || quote_ident(a.attname) || ' ' || format_type(a.atttypid, a.atttypmod)
+                            || case when a.attnotnull then ' NOT NULL' else '' end
+                            || case when ad.adbin is not null then ' DEFAULT ' || pg_get_expr(ad.adbin, ad.adrelid) else '' end,
+                            E',\n'
+                            order by a.attnum
+                          )
+                       || coalesce(
+                            (
+                                select E',\n    PRIMARY KEY (' || string_agg(quote_ident(kcu.column_name), ', ' order by kcu.ordinal_position) || ')'
+                                  from information_schema.table_constraints tc
+                                  join information_schema.key_column_usage kcu
+                                    on tc.constraint_name = kcu.constraint_name
+                                   and tc.table_schema = kcu.table_schema
+                                    and tc.table_name = kcu.table_name
+                                 where tc.constraint_type = 'PRIMARY KEY'
+                                   and tc.table_schema = current_schema()
+                                   and tc.table_name = {source_table_literal}
+                            ),
+                            ''
+                          )
+                       || E'\n)' as sql
+                  from pg_class c
+                  join pg_namespace n on n.oid = c.relnamespace
+                  join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+                  left join pg_attrdef ad on ad.adrelid = a.attrelid and ad.adnum = a.attnum
+                 where n.nspname = current_schema()
+                   and c.relname = {source_table_literal}
+                 group by c.relname
+               ) ddl
+      ddlColumnLabel: "ddl"
   MYSQL:
     displayName: "MySQL"
     defaultVersion: "8.0"
@@ -89,6 +136,12 @@ drivers:
                character_maximum_length,
                numeric_precision,
                numeric_scale,
+               column_default,
+               case
+                 when extra like '%auto_increment%' then 'YES'
+                 else 'NO'
+               end as is_auto_increment,
+               extra as column_extra,
                column_comment
           from information_schema.columns
          where table_schema = ?
@@ -115,6 +168,10 @@ drivers:
       ingestion: |-
         {sql}
         limit ?
+    tableCopy:
+      createTableSql: |-
+        show create table {quoted_source_table}
+      ddlColumnIndex: 2
 #  ORACLE:
 #    displayName: "Oracle"
 #    defaultVersion: "19c"
@@ -212,12 +269,17 @@ drivers:
                c.max_length as character_maximum_length,
                c.precision as numeric_precision,
                c.scale as numeric_scale,
+               dc.definition as column_default,
+               case when c.is_identity = 1 then 'YES' else 'NO' end as is_auto_increment,
                cast(ep.value as nvarchar(500)) as column_comment
           from sys.columns c
           join sys.tables t
             on c.object_id = t.object_id
           join sys.schemas s
             on t.schema_id = s.schema_id
+          left join sys.default_constraints dc
+            on dc.parent_object_id = c.object_id
+           and dc.parent_column_id = c.column_id
           outer apply (
               select ep.value
                 from sys.extended_properties ep
