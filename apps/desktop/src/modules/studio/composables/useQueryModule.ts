@@ -107,13 +107,26 @@ export function useQueryModule(runtime: StudioRuntime): QueryModule {
     queryPromptAssist.activeIndex = nextIndex;
   }
 
-  function resolvePromptAssistContext(tab: QueryTab, event: Event | null): QueryPromptAssistContext | null {
-    const target = event?.target;
-    if (!(target instanceof HTMLTextAreaElement)) {
-      return null;
+  function resolveComposerTextarea(event: Event | null) {
+    const candidates = [event?.target, event?.currentTarget, document.activeElement];
+    for (const candidate of candidates) {
+      if (candidate instanceof HTMLTextAreaElement) {
+        return candidate;
+      }
+      if (candidate instanceof HTMLElement) {
+        const textarea = candidate.querySelector('textarea');
+        if (textarea instanceof HTMLTextAreaElement) {
+          return textarea;
+        }
+      }
     }
-    const promptText = tab.prompt || '';
-    const caret = target.selectionStart ?? promptText.length;
+    return null;
+  }
+
+  function resolvePromptAssistContext(tab: QueryTab, event: Event | null): QueryPromptAssistContext | null {
+    const textarea = resolveComposerTextarea(event);
+    const promptText = textarea?.value ?? tab.prompt ?? '';
+    const caret = textarea?.selectionStart ?? promptText.length;
     const prefix = promptText.slice(0, caret);
     const columnMatch = prefix.match(COLUMN_REFERENCE_PATTERN);
     if (columnMatch) {

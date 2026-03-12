@@ -830,13 +830,14 @@ public class AiServiceImpl implements AiService {
                 fallbackUsed ? "fallback" : "success",
                 0L,
                 List.of(
-                    buildTraceField("rawContent", "妯″瀷杈撳嚭", rawContent),
-                    buildTraceField("parsedChartConfig", "瑙ｆ瀽閰嶇疆", chartConfig)
+                    buildTraceField("rawContent", "原始输入", rawContent),
+
+                    buildTraceField("parsedChartConfig", "解析后图表配置", chartConfig)
                 ),
                 List.of(
-                    buildTraceField("sqlText", "鏈€缁?SQL", sqlText),
-                    buildTraceField("configSummary", "閰嶇疆璇存槑", configSummary),
-                    buildTraceField("fallbackUsed", "鏄惁闄嶇骇", fallbackUsed)
+                    buildTraceField("sqlText", "SQL内容", sqlText),
+                    buildTraceField("configSummary", "配置总结", configSummary),
+                    buildTraceField("fallbackUsed", "是否使用了回退", fallbackUsed)
                 ),
                 null
             ));

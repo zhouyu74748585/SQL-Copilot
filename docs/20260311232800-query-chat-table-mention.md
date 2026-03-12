@@ -51,3 +51,26 @@
 - 前端 clean 构建：`npm run -w @sqlcopilot/desktop build -- --emptyOutDir` 通过。
 - 后端 clean 启动：`mvn -f apps/server/pom.xml clean spring-boot:run '-Dspring-boot.run.arguments=--server.port=18101' '-Dfile.encoding=UTF-8'` 成功，`http://127.0.0.1:18101/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
 - 前端预览：`npx vite preview --host 127.0.0.1 --port 6056 --strictPort` 成功，`http://127.0.0.1:6056` 返回 `HTTP 200`。
+
+
+### 2026-03-12 21:59:28
+
+## 追加目标
+- 修复对话输入框中 `@` 选表浮层不再弹出的回归问题。
+
+## 追加原因定位
+- `apps/desktop/src/modules/studio/composables/useQueryModule.ts`
+  - 引用补全上下文解析主要依赖 `tab.prompt`，对 `a-textarea` 的事件顺序过于敏感。
+  - 当输入 `@` 的当次 `input` 事件发生时，补全逻辑可能仍读取到同步前的旧值，导致正则匹配失败，表现为“@ 选表没了”。
+
+## 追加改动
+- 前端 `apps/desktop/src/modules/studio/composables/useQueryModule.ts`
+  - 新增 `resolveComposerTextarea`，优先从事件目标、当前目标或激活元素中解析真实 `textarea`。
+  - 引用补全上下文改为优先读取 `textarea.value` 与实时光标位置，仅在取不到 DOM 时回退到 `tab.prompt`。
+  - 保持现有 `@表` / `@表.字段` 匹配、键盘选择和插入逻辑不变，只修正触发时机。
+
+## 追加验证
+- 前端类型检查：`npm run -w @sqlcopilot/desktop type-check` 通过。
+- 前端 clean 构建：`npm run -w @sqlcopilot/desktop build -- --emptyOutDir` 通过。
+- 后端 clean 启动：`mvn -f apps/server/pom.xml clean spring-boot:run '-Dspring-boot.run.arguments=--server.port=18102' '-Dfile.encoding=UTF-8'` 成功，`http://127.0.0.1:18102/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+- 前端预览：`npx vite preview --host 127.0.0.1 --port 6057 --strictPort` 成功，`http://127.0.0.1:6057` 返回 `HTTP 200`。
