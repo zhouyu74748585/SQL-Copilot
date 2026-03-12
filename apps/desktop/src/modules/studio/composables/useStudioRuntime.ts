@@ -103,6 +103,8 @@ import type {
   SchemaTableStatsVO,
   SortDirection,
   SqlExecuteVO,
+  TableCopyMode,
+  TableCopyTaskVO,
   TableDetailVO,
 } from '../../../types';
 
@@ -139,6 +141,15 @@ interface ObjectRow {
   vectorizeUpdatedAt?: number;
   sqlText?: string;
   updatedAt?: number;
+}
+
+interface TableCopyClipboard {
+  sourceConnectionId: number;
+  sourceDatabaseName: string;
+  sourceTableName: string;
+  sourceDbType: string;
+  preferredCopyMode: TableCopyMode;
+  copiedAt: number;
 }
 
 type QueryActionType =
@@ -520,6 +531,28 @@ const truncateTableName = ref('');
 const dropTableModalOpen = ref(false);
 
 const dropTableName = ref('');
+
+const tableCopyClipboard = ref<TableCopyClipboard | null>(null);
+
+const tablePasteModalOpen = ref(false);
+
+const tablePasteSubmitting = ref(false);
+
+const tablePasteForm = reactive({
+  sourceConnectionId: 0,
+  sourceDatabaseName: '',
+  sourceTableName: '',
+  sourceDbType: '',
+  targetConnectionId: 0,
+  targetDatabaseName: '',
+  targetTableName: '',
+  preferredCopyMode: 'STRUCTURE_AND_DATA' as TableCopyMode,
+  copyData: true,
+});
+
+const tableCopyTaskModalOpen = ref(false);
+
+const tableCopyTaskInfo = ref<TableCopyTaskVO | null>(null);
 
 const aiConfigModalOpen = ref(false);
 
@@ -7088,6 +7121,12 @@ function resetConnectionModalState() {
     truncateTableName,
     dropTableModalOpen,
     dropTableName,
+    tableCopyClipboard,
+    tablePasteModalOpen,
+    tablePasteSubmitting,
+    tablePasteForm,
+    tableCopyTaskModalOpen,
+    tableCopyTaskInfo,
     aiConfigModalOpen,
     aiConfigActiveTab,
     uiTheme,
