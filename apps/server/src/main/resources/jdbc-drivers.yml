@@ -107,6 +107,14 @@ drivers:
                  group by c.relname
                ) ddl
       ddlColumnLabel: "ddl"
+      structureOnlySameDatabaseSql: |-
+        create table {quoted_target_table} (like {quoted_source_table} including all)
+      structureAndDataSameDatabaseSql: |-
+        create table {quoted_target_table} (like {quoted_source_table} including all);
+        insert into {quoted_target_table} select * from {quoted_source_table}
+    tableOperations:
+      renameTableSql: |-
+        alter table {quoted_source_table} rename to {quoted_target_table}
   MYSQL:
     displayName: "MySQL"
     defaultVersion: "8.0"
@@ -172,6 +180,19 @@ drivers:
       createTableSql: |-
         show create table {quoted_source_table}
       ddlColumnIndex: 2
+      structureOnlySameDatabaseSql: |-
+        create table {quoted_target_table} like {quoted_source_table}
+      structureAndDataSameDatabaseSql: |-
+        create table {quoted_target_table} like {quoted_source_table};
+        insert into {quoted_target_table} select * from {quoted_source_table}
+      structureOnlyCrossDatabaseSql: |-
+        create table {qualified_target_table} like {qualified_source_table}
+      structureAndDataCrossDatabaseSql: |-
+        create table {qualified_target_table} like {qualified_source_table};
+        insert into {qualified_target_table} select * from {qualified_source_table}
+    tableOperations:
+      renameTableSql: |-
+        rename table {quoted_source_table} to {quoted_target_table}
 #  ORACLE:
 #    displayName: "Oracle"
 #    defaultVersion: "19c"
@@ -318,6 +339,9 @@ drivers:
       ingestion: |-
         {sql}
         offset 0 rows fetch next ? rows only
+    tableOperations:
+      renameTableSql: |-
+        exec sp_rename {source_full_name_literal}, {target_table_literal}
 #  HIVE:
 #    displayName: "Hive"
 #    defaultVersion: "3.x"

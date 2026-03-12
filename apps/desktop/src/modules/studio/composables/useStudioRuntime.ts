@@ -533,6 +533,17 @@ const dropTableModalOpen = ref(false);
 
 const dropTableName = ref('');
 
+const renameTableModalOpen = ref(false);
+
+const renameTableSubmitting = ref(false);
+
+const renameTableForm = reactive({
+  connectionId: 0,
+  databaseName: '',
+  sourceTableName: '',
+  targetTableName: '',
+});
+
 const browserDetailCollapsed = ref(false);
 
 const tableCopyClipboard = ref<TableCopyClipboard | null>(null);
@@ -1452,6 +1463,8 @@ function buildConnectionNode(conn: ConnectionVO) {
       key: buildDatabaseNodeKey(conn.id, databaseName),
       title: databaseName,
       nodeType: 'database',
+      connectionId: conn.id,
+      databaseName,
       vectorizeStatus: getDatabaseVectorizeStatus(conn.id, databaseName),
       selectable: databaseName !== '未发现数据库',
       children: buildCategoryChildren(conn.id, databaseName),
@@ -1460,6 +1473,7 @@ function buildConnectionNode(conn: ConnectionVO) {
       key: `conn-${conn.id}`,
       title: conn.name,
       nodeType: 'connection',
+      connectionId: conn.id,
       env: conn.env,
       dbType: conn.dbType,
       children: databaseNodes,
@@ -1471,6 +1485,7 @@ function buildConnectionNode(conn: ConnectionVO) {
     key: `conn-${conn.id}`,
     title: conn.name,
     nodeType: 'connection',
+    connectionId: conn.id,
     env: conn.env,
     dbType: conn.dbType,
     children: buildCategoryChildren(conn.id, configuredDbName),
@@ -1488,6 +1503,8 @@ function buildCategoryChildren(connectionId: number, databaseName: string) {
     key: buildCategoryNodeKey(connectionId, databaseName, category.suffix),
     title: category.title,
     nodeType: category.nodeType,
+    connectionId,
+    databaseName,
     selectable: true,
     children: getCategoryChildren(connectionId, databaseName, category.suffix),
   }));
@@ -1499,6 +1516,8 @@ function getCategoryChildren(connectionId: number, databaseName: string, categor
       key: buildObjectNodeKey(connectionId, databaseName, category, item.title),
       title: item.title,
       nodeType: category,
+      connectionId,
+      databaseName,
       objectType: category,
       objectName: item.title,
     }));
@@ -1510,6 +1529,8 @@ function getCategoryChildren(connectionId: number, databaseName: string, categor
     key: buildObjectNodeKey(connectionId, databaseName, category, name),
     title: name,
     nodeType: category,
+    connectionId,
+    databaseName,
     objectType: category,
     objectName: name,
   }));
@@ -7190,6 +7211,9 @@ function resetConnectionModalState() {
     truncateTableName,
     dropTableModalOpen,
     dropTableName,
+    renameTableModalOpen,
+    renameTableSubmitting,
+    renameTableForm,
     browserDetailCollapsed,
     tableCopyClipboard,
     tablePasteModalOpen,

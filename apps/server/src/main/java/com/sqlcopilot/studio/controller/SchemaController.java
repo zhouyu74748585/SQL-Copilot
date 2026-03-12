@@ -115,6 +115,16 @@ public class SchemaController {
         return ApiResponse.success(schemaService.alterTable(req));
     }
 
+    @PostMapping("/table/rename")
+    public ApiResponse<TableRenameVO> renameTable(@Valid @RequestBody TableRenameReq req) {
+        TableRenameVO result = schemaService.renameTable(req);
+        if (result.isSuccess()) {
+            schemaService.refreshSchemaCache(req.getConnectionId(), req.getDatabaseName());
+            ragVectorizeQueueService.enqueue(req.getConnectionId(), req.getDatabaseName());
+        }
+        return ApiResponse.success(result);
+    }
+
     @PostMapping("/table/copy")
     public ApiResponse<TableCopyVO> copyTable(@Valid @RequestBody TableCopyReq req) {
         return ApiResponse.success(tableCopyService.copyTable(req));

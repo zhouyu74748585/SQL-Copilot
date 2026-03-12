@@ -287,7 +287,7 @@
               @rightClick="handleTreeRightClick"
             >
               <template #title="{ title, dataRef }">
-                <div class="tree-title-row">
+                <div class="tree-title-row" @dblclick.stop="handleTreeNodeDblclick(dataRef)">
                   <img v-if="dataRef.nodeType === 'connection'" class="tree-icon-img" :src="dbIconUrl(dataRef.dbType)" alt="db" />
                   <component v-else :is="nodeIconComponent(dataRef)" class="tree-icon-font" />
                   <span class="tree-title-text">{{ title }}</span>
@@ -2413,6 +2413,13 @@
         <button
           class="context-menu-item"
           :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
+          @click="triggerContextAction('renameTable')"
+        >
+          重命名
+        </button>
+        <button
+          class="context-menu-item"
+          :disabled="contextMenu.objectType !== 'tables' || !contextMenu.databaseName"
           @click="triggerContextAction('vectorizeTable')"
         >
           向量化
@@ -2463,6 +2470,30 @@
         </button>
       </template>
     </div>
+
+    <a-modal
+      v-model:open="renameTableModalOpen"
+      title="重命名表"
+      ok-text="确认重命名"
+      cancel-text="取消"
+      :confirm-loading="renameTableSubmitting"
+      @ok="confirmRenameTable"
+      @cancel="closeRenameTableModal"
+    >
+      <a-form layout="vertical">
+        <a-form-item label="当前表名">
+          <a-input :value="renameTableForm.sourceTableName" disabled />
+        </a-form-item>
+        <a-form-item label="新表名">
+          <a-input
+            v-model:value="renameTableForm.targetTableName"
+            maxlength="128"
+            placeholder="请输入新表名"
+            @pressEnter="confirmRenameTable"
+          />
+        </a-form-item>
+      </a-form>
+    </a-modal>
 
     <!-- 清空表确认弹窗 -->
     <a-modal
@@ -2803,6 +2834,9 @@ const {
     tablePasteForm,
     tableCopyTaskModalOpen,
     tableCopyTaskInfo,
+    renameTableModalOpen,
+    renameTableSubmitting,
+    renameTableForm,
     aiConfigModalOpen,
     aiConfigActiveTab,
     uiTheme,
@@ -3143,11 +3177,14 @@ const {
     handleTreeSelect,
     handleTreeExpand,
     handleTreeRightClick,
+    handleTreeNodeDblclick,
     closeContextMenu,
     triggerContextAction,
     confirmTablePaste,
     closeTablePasteModal,
     closeTableCopyTaskModal,
+    confirmRenameTable,
+    closeRenameTableModal,
     openVectorizeOverview,
     enqueueDatabaseRevectorize,
     vectorizeSingleTable,

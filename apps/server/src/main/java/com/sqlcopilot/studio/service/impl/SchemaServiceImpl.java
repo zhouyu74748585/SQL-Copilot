@@ -361,6 +361,53 @@ public class SchemaServiceImpl implements SchemaService {
     }
 
     @Override
+    public TableRenameVO renameTable(TableRenameReq req) {
+        String sourceTableName = normalize(req.getSourceTableName());
+        String targetTableName = normalize(req.getTargetTableName());
+        if (sourceTableName.isBlank()) {
+            throw new BusinessException(400, "原表名不能为空");
+        }
+        if (targetTableName.isBlank()) {
+            throw new BusinessException(400, "新表名不能为空");
+        }
+        if (sourceTableName.equalsIgnoreCase(targetTableName)) {
+            throw new BusinessException(400, "新表名不能与原表名相同");
+        }
+        ConnectionEntity connectionEntity = connectionService.getConnectionEntity(req.getConnectionId());
+        String dbType = normalize(connectionEntity.getDbType()).toUpperCase(Locale.ROOT);
+        String renameTableSql = jdbcDriverResolver.findRenameTableSql(dbType);
+        if (renameTableSql.isBlank()) {
+            throw new BusinessException(400, "当前数据库未配置表重命名 SQL，请检查 jdbc-drivers.yml");
+        }
+        String databaseName = resolveTargetDatabaseName(connectionEntity, req.getDatabaseName());
+        List<String> tableNames = listObjectNames(req.getConnectionId(), databaseName, "tables");
+        if (tableNames.stream().noneMatch(item -> item.equalsIgnoreCase(sourceTableName))) {
+            throw new BusinessException(404, "原表不存在: " + sourceTableName);
+        }
+        if (tableNames.stream().anyMatch(item -> item.equalsIgnoreCase(targetTableName))) {
+            throw new BusinessException(400, "目标表已存在: " + targetTableName);
+        }
+
+        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId())) {
+            applyDatabaseContext(connection, dbType, databaseName);
+            String sql = renderSchemaOperationSql(renameTableSql, dbType, databaseName, sourceTableName, targetTableName);
+            try (Statement statement = connection.createStatement()) {
+                statement.execute(sql);
+            }
+        } catch (SQLException ex) {
+            throw new BusinessException(500, "重命名表失败: " + ex.getMessage());
+        }
+
+        TableRenameVO vo = new TableRenameVO();
+        vo.setSuccess(Boolean.TRUE);
+        vo.setMessage("表重命名成功");
+        vo.setDatabaseName(databaseName);
+        vo.setSourceTableName(sourceTableName);
+        vo.setTargetTableName(targetTableName);
+        return vo;
+    }
+
+    @Override
     public TableOperationVO dropTable(Long connectionId, String databaseName, String tableName) {
         String normalizedTableName = normalize(tableName);
         if (normalizedTableName.isBlank()) {
@@ -480,6 +527,59 @@ public class SchemaServiceImpl implements SchemaService {
         }
         String prefix = Boolean.TRUE.equals(idx.getUnique()) ? "UNIQUE INDEX " : "INDEX ";
         return prefix + indexName + " (" + String.join(", ", columns) + ")";
+    }
+
+    private String renderSchemaOperationSql(String sqlTemplate,
+                                            String dbType,
+                                            String databaseName,
+                                            String sourceTableName,
+                                            String targetTableName) {
+        return sqlTemplate
+            .replace("{source_table}", sourceTableName)
+            .replace("{target_table}", targetTableName)
+            .replace("{source_table_literal}", toSqlStringLiteral(sourceTableName))
+            .replace("{target_table_literal}", toSqlStringLiteral(targetTableName))
+            .replace("{quoted_source_table}", quoteIdentifier(sourceTableName, dbType))
+            .replace("{quoted_target_table}", quoteIdentifier(targetTableName, dbType))
+            .replace("{qualified_source_table}", qualifyTableName(databaseName, sourceTableName, dbType))
+            .replace("{qualified_target_table}", qualifyTableName(databaseName, targetTableName, dbType))
+            .replace("{source_full_name_literal}", toSqlStringLiteral(buildSourceFullName(databaseName, sourceTableName, dbType)));
+    }
+
+    private String qualifyTableName(String databaseName, String tableName, String dbType) {
+        String normalizedDatabaseName = normalize(databaseName);
+        String quotedTable = quoteIdentifier(tableName, dbType);
+        if (normalizedDatabaseName.isBlank()) {
+            return quotedTable;
+        }
+        return switch (normalize(dbType).toUpperCase(Locale.ROOT)) {
+            case "MYSQL", "POSTGRESQL", "ORACLE" -> quoteIdentifier(normalizedDatabaseName, dbType) + "." + quotedTable;
+            case "SQLSERVER" -> quoteIdentifier(normalizedDatabaseName, dbType) + "." + quotedTable;
+            default -> quotedTable;
+        };
+    }
+
+    private String buildSourceFullName(String databaseName, String tableName, String dbType) {
+        String normalizedDatabaseName = normalize(databaseName);
+        if (normalizedDatabaseName.isBlank()) {
+            return normalize(tableName);
+        }
+        return switch (normalize(dbType).toUpperCase(Locale.ROOT)) {
+            case "SQLSERVER", "POSTGRESQL", "ORACLE" -> normalizedDatabaseName + "." + normalize(tableName);
+            default -> normalize(tableName);
+        };
+    }
+
+    private String quoteIdentifier(String identifier, String dbType) {
+        String normalized = normalize(identifier);
+        if (normalized.isBlank()) {
+            return normalized;
+        }
+        return switch (normalize(dbType).toUpperCase(Locale.ROOT)) {
+            case "SQLSERVER" -> "[" + normalized.replace("]", "]]") + "]";
+            case "POSTGRESQL", "ORACLE" -> "\"" + normalized.replace("\"", "\"\"") + "\"";
+            default -> "`" + normalized.replace("`", "``") + "`";
+        };
     }
 
     private boolean isTypeWithoutSize(String dataType) {

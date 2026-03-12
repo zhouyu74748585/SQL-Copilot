@@ -71,6 +71,21 @@ public class JdbcDriverResolver {
         return spec == null ? null : spec.createTableSpec;
     }
 
+    public TableCopyFastPathSpec findTableCopyFastPathSpec(String dbType) {
+        String type = normalizeType(dbType);
+        DriverSpec spec = specs.get(type);
+        return spec == null ? null : spec.tableCopyFastPathSpec;
+    }
+
+    public String findRenameTableSql(String dbType) {
+        String type = normalizeType(dbType);
+        DriverSpec spec = specs.get(type);
+        if (spec == null || spec.tableOperationSpec == null) {
+            return "";
+        }
+        return trimText(spec.tableOperationSpec.renameTableSql());
+    }
+
     private Map<String, DriverSpec> loadSpecs() {
         ClassPathResource resource = new ClassPathResource("jdbc-drivers.yml");
         if (!resource.exists()) {
@@ -143,6 +158,8 @@ public class JdbcDriverResolver {
 
         Map<String, String> introspectionSqlMap = parseStringMap(node.get("introspection"));
         CreateTableSpec createTableSpec = parseCreateTableSpec(node.get("tableCopy"));
+        TableCopyFastPathSpec tableCopyFastPathSpec = parseTableCopyFastPathSpec(node.get("tableCopy"));
+        TableOperationSpec tableOperationSpec = parseTableOperationSpec(node.get("tableOperations"));
         return new DriverSpec(
             defaultVersion,
             defaultDriver,
@@ -150,7 +167,9 @@ public class JdbcDriverResolver {
             driversByVersion,
             aliases,
             introspectionSqlMap,
-            createTableSpec
+            createTableSpec,
+            tableCopyFastPathSpec,
+            tableOperationSpec
         );
     }
 
@@ -165,6 +184,29 @@ public class JdbcDriverResolver {
         String ddlColumnLabel = trimText(tableCopyMap.get("ddlColumnLabel"));
         Integer ddlColumnIndex = parseInteger(tableCopyMap.get("ddlColumnIndex"));
         return new CreateTableSpec(sql, ddlColumnLabel, ddlColumnIndex == null || ddlColumnIndex <= 0 ? 1 : ddlColumnIndex);
+    }
+
+    private TableCopyFastPathSpec parseTableCopyFastPathSpec(Object node) {
+        if (!(node instanceof Map<?, ?> tableCopyMap)) {
+            return null;
+        }
+        return new TableCopyFastPathSpec(
+            trimText(tableCopyMap.get("structureOnlySameDatabaseSql")),
+            trimText(tableCopyMap.get("structureAndDataSameDatabaseSql")),
+            trimText(tableCopyMap.get("structureOnlyCrossDatabaseSql")),
+            trimText(tableCopyMap.get("structureAndDataCrossDatabaseSql"))
+        );
+    }
+
+    private TableOperationSpec parseTableOperationSpec(Object node) {
+        if (!(node instanceof Map<?, ?> operationMap)) {
+            return null;
+        }
+        String renameTableSql = trimText(operationMap.get("renameTableSql"));
+        if (renameTableSql.isBlank()) {
+            return null;
+        }
+        return new TableOperationSpec(renameTableSql);
     }
 
     private Map<String, String> parseStringMap(Object node) {
@@ -225,6 +267,8 @@ public class JdbcDriverResolver {
         private final Map<String, String> resourceAliases;
         private final Map<String, String> introspectionSqlMap;
         private final CreateTableSpec createTableSpec;
+        private final TableCopyFastPathSpec tableCopyFastPathSpec;
+        private final TableOperationSpec tableOperationSpec;
 
         private DriverSpec(String defaultVersion,
                            String defaultDriver,
@@ -232,7 +276,9 @@ public class JdbcDriverResolver {
                            Map<String, String> driversByVersion,
                            Map<String, String> resourceAliases,
                            Map<String, String> introspectionSqlMap,
-                           CreateTableSpec createTableSpec) {
+                           CreateTableSpec createTableSpec,
+                           TableCopyFastPathSpec tableCopyFastPathSpec,
+                           TableOperationSpec tableOperationSpec) {
             this.defaultVersion = defaultVersion;
             this.defaultDriver = defaultDriver;
             this.resourcePattern = resourcePattern;
@@ -240,12 +286,23 @@ public class JdbcDriverResolver {
             this.resourceAliases = resourceAliases;
             this.introspectionSqlMap = introspectionSqlMap;
             this.createTableSpec = createTableSpec;
+            this.tableCopyFastPathSpec = tableCopyFastPathSpec;
+            this.tableOperationSpec = tableOperationSpec;
         }
     }
 
     public record CreateTableSpec(String sql,
                                   String ddlColumnLabel,
                                   Integer ddlColumnIndex) {
+    }
+
+    public record TableCopyFastPathSpec(String structureOnlySameDatabaseSql,
+                                        String structureAndDataSameDatabaseSql,
+                                        String structureOnlyCrossDatabaseSql,
+                                        String structureAndDataCrossDatabaseSql) {
+    }
+
+    public record TableOperationSpec(String renameTableSql) {
     }
 
     public record ResolvedDriver(String dbType,

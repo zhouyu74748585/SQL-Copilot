@@ -169,6 +169,21 @@ export interface TableCopyTaskVO {
   updatedAt?: number;
 }
 
+export interface TableRenameReq {
+  connectionId: number;
+  databaseName?: string;
+  sourceTableName: string;
+  targetTableName: string;
+}
+
+export interface TableRenameVO {
+  success: boolean;
+  message: string;
+  databaseName?: string;
+  sourceTableName: string;
+  targetTableName: string;
+}
+
 export type TableDataFilterOperator =
   | 'EQ'
   | 'NE'

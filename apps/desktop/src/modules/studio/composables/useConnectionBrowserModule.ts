@@ -17,8 +17,18 @@ type ContextAction =
   | 'editTable'
   | 'copyTableStructure'
   | 'copyTableStructureAndData'
+  | 'renameTable'
   | 'dropTable'
   | 'truncateTable';
+
+type TreeNodeData = {
+  nodeType?: string;
+  title?: string;
+  connectionId?: number;
+  databaseName?: string;
+  objectType?: ObjectRow['objectType'];
+  objectName?: string;
+};
 
 export interface ConnectionBrowserModule {
   activateBrowserTab: () => void;
@@ -27,6 +37,7 @@ export interface ConnectionBrowserModule {
   openEditModal: (targetConnectionId?: number) => void;
   closeContextMenu: () => void;
   triggerContextAction: (action: ContextAction) => Promise<void>;
+  handleTreeNodeDblclick: (node: TreeNodeData) => Promise<void>;
   onObjectRow: (record: ObjectRow) => {
     onClick: () => void;
     onDblclick: () => void;
@@ -46,6 +57,11 @@ interface ConnectionBrowserDeps {
     record: ObjectRow,
     options?: { connectionId?: number; databaseName?: string },
   ) => Promise<void>;
+  openRenameTableModal: (source?: {
+    connectionId: number;
+    databaseName: string;
+    tableName: string;
+  } | null) => void;
 }
 
 export function useConnectionBrowserModule(
@@ -190,6 +206,17 @@ export function useConnectionBrowserModule(
       );
       return;
     }
+    if (action === 'renameTable') {
+      if (targetType !== 'object' || !objectName || objectType !== 'tables' || !databaseName) {
+        return;
+      }
+      deps.openRenameTableModal({
+        connectionId: id,
+        databaseName,
+        tableName: objectName,
+      });
+      return;
+    }
     if (action === 'truncateTable') {
       if (targetType !== 'object' || !objectName || objectType !== 'tables' || !databaseName) {
         return;
@@ -230,6 +257,26 @@ export function useConnectionBrowserModule(
       }
       await runtime.openVectorizeOverview(id, databaseName);
     }
+  }
+
+  async function handleTreeNodeDblclick(node: TreeNodeData) {
+    if (node.nodeType !== 'tables' || !node.objectName || !node.connectionId || !node.databaseName) {
+      return;
+    }
+    const rowVectorizeRecord = runtime.getDatabaseVectorizeStatusRecord(node.connectionId, node.databaseName);
+    await deps.openTableDataTabByObject({
+      objectName: node.objectName,
+      objectType: 'tables',
+      rowEstimate: 0,
+      tableSize: '-',
+      description: '',
+      vectorizeStatus: rowVectorizeRecord?.status || 'NOT_VECTORIZED',
+      vectorizeMessage: rowVectorizeRecord?.message,
+      vectorizeUpdatedAt: rowVectorizeRecord?.updatedAt,
+    }, {
+      connectionId: node.connectionId,
+      databaseName: node.databaseName,
+    });
   }
 
   function onObjectRow(record: ObjectRow) {
@@ -278,6 +325,7 @@ export function useConnectionBrowserModule(
     openEditModal,
     closeContextMenu,
     triggerContextAction,
+    handleTreeNodeDblclick,
     onObjectRow,
   };
 }

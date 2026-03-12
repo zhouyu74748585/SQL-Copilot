@@ -39,7 +39,8 @@ import java.util.regex.Pattern;
 public class TableCopyServiceImpl implements TableCopyService {
 
     private static final Logger log = LoggerFactory.getLogger(TableCopyServiceImpl.class);
-    private static final int COPY_BATCH_SIZE = 500;
+    private static final int SOURCE_FETCH_SIZE = 1000;
+    private static final int TARGET_BATCH_SIZE = 1000;
 
     private final ConnectionService connectionService;
     private final SchemaService schemaService;
@@ -70,7 +71,7 @@ public class TableCopyServiceImpl implements TableCopyService {
     @Override
     public TableCopyVO copyTable(TableCopyReq req) {
         CopyContext context = buildCopyContext(req);
-        boolean async = context.crossScope() && context.copyMode() == TableCopyMode.STRUCTURE_AND_DATA;
+        boolean async = context.crossConnection() && context.copyMode() == TableCopyMode.STRUCTURE_AND_DATA;
         if (async) {
             String taskId = UUID.randomUUID().toString();
             TableCopyTaskState taskState = TableCopyTaskState.pending(taskId, context);
@@ -127,12 +128,22 @@ public class TableCopyServiceImpl implements TableCopyService {
             throw new BusinessException(400, "目标表已存在: " + context.targetTableName());
         }
 
+        boolean keepTableOnCopyFailure = context.crossConnection() && context.copyMode() == TableCopyMode.STRUCTURE_AND_DATA;
+        long copiedRows = 0L;
         if (taskState != null) {
             taskState.markRunning("CREATING_TABLE", "创建目标表", 8);
         }
+        if (tryExecuteFastPathCopy(context, taskState)) {
+            if (taskState != null) {
+                taskState.markRunning("FINALIZING", "刷新元数据缓存", 95);
+            }
+            schemaService.refreshSchemaCache(context.targetConnection().getId(), context.targetDatabaseName());
+            ragVectorizeQueueService.enqueue(context.targetConnection().getId(), context.targetDatabaseName());
+            return;
+        }
+
         createTargetTable(context);
 
-        boolean structureCreated = true;
         try {
             if (context.copyMode() == TableCopyMode.STRUCTURE_AND_DATA) {
                 if (taskState != null) {
@@ -144,18 +155,15 @@ public class TableCopyServiceImpl implements TableCopyService {
                     taskState.copiedRows = 0L;
                     taskState.markRunning("COPYING_DATA", "迁移表数据", totalRows <= 0 ? 85 : 20);
                 }
-                if (context.sameScope()) {
-                    long copiedRows = copyDataWithinSameScope(context);
-                    if (taskState != null) {
-                        taskState.copiedRows = copiedRows;
-                        taskState.totalRows = totalRows;
-                        taskState.markRunning("FINALIZING", "刷新元数据缓存", 95);
-                    }
+                if (context.sameConnection() && context.sameDatabase()) {
+                    copiedRows = copyDataWithinSameDatabase(context);
                 } else {
-                    copyDataAcrossConnections(context, taskState, totalRows);
-                    if (taskState != null) {
-                        taskState.markRunning("FINALIZING", "刷新元数据缓存", 95);
-                    }
+                    copiedRows = copyDataAcrossConnections(context, taskState, totalRows);
+                }
+                if (taskState != null) {
+                    taskState.copiedRows = copiedRows;
+                    taskState.totalRows = totalRows;
+                    taskState.markRunning("FINALIZING", "刷新元数据缓存", 95);
                 }
             } else if (taskState != null) {
                 taskState.markRunning("FINALIZING", "刷新元数据缓存", 95);
@@ -164,7 +172,7 @@ public class TableCopyServiceImpl implements TableCopyService {
             schemaService.refreshSchemaCache(context.targetConnection().getId(), context.targetDatabaseName());
             ragVectorizeQueueService.enqueue(context.targetConnection().getId(), context.targetDatabaseName());
         } catch (Exception ex) {
-            if (structureCreated) {
+            if (!keepTableOnCopyFailure) {
                 cleanupTargetTableQuietly(context);
             }
             throw ex;
@@ -241,6 +249,60 @@ public class TableCopyServiceImpl implements TableCopyService {
         return configured;
     }
 
+    private boolean tryExecuteFastPathCopy(CopyContext context, TableCopyTaskState taskState) {
+        if (!context.sameConnection()) {
+            return false;
+        }
+        JdbcDriverResolver.TableCopyFastPathSpec spec = jdbcDriverResolver.findTableCopyFastPathSpec(context.dbType());
+        if (spec == null) {
+            return false;
+        }
+        String sqlTemplate = resolveFastPathSqlTemplate(context, spec);
+        if (normalize(sqlTemplate).isBlank()) {
+            return false;
+        }
+        try (Connection connection = connectionService.openTargetConnection(context.targetConnection().getId())) {
+            applyDatabaseContext(connection, context.dbType(), context.targetDatabaseName());
+            boolean originalAutoCommit = connection.getAutoCommit();
+            connection.setAutoCommit(false);
+            try {
+                List<String> statements = splitSqlStatements(renderCopySqlTemplate(sqlTemplate, context));
+                long totalRows = 0L;
+                if (context.copyMode() == TableCopyMode.STRUCTURE_AND_DATA) {
+                    totalRows = countSourceRows(context);
+                    if (taskState != null) {
+                        taskState.totalRows = totalRows;
+                    }
+                }
+                long affectedRows = executeSqlStatements(connection, statements);
+                connection.commit();
+                if (taskState != null && context.copyMode() == TableCopyMode.STRUCTURE_AND_DATA) {
+                    taskState.copiedRows = affectedRows > 0 ? affectedRows : totalRows;
+                }
+                return true;
+            } catch (Exception ex) {
+                connection.rollback();
+                cleanupTargetTableQuietly(context);
+                throw ex;
+            } finally {
+                connection.setAutoCommit(originalAutoCommit);
+            }
+        } catch (SQLException ex) {
+            throw new BusinessException(500, "执行同连接快速复制失败: " + ex.getMessage());
+        }
+    }
+
+    private String resolveFastPathSqlTemplate(CopyContext context, JdbcDriverResolver.TableCopyFastPathSpec spec) {
+        if (context.sameDatabase()) {
+            return context.copyMode() == TableCopyMode.STRUCTURE_ONLY
+                ? spec.structureOnlySameDatabaseSql()
+                : spec.structureAndDataSameDatabaseSql();
+        }
+        return context.copyMode() == TableCopyMode.STRUCTURE_ONLY
+            ? spec.structureOnlyCrossDatabaseSql()
+            : spec.structureAndDataCrossDatabaseSql();
+    }
+
     private void createTargetTable(CopyContext context) {
         String createTableSql = tryLoadCreateTableSql(context);
         boolean usedSystemDdl = !createTableSql.isBlank();
@@ -295,6 +357,20 @@ public class TableCopyServiceImpl implements TableCopyService {
                 context.sourceDatabaseName(), context.sourceTableName(), ex.getMessage());
             return "";
         }
+    }
+
+    private String renderCopySqlTemplate(String sqlTemplate, CopyContext context) {
+        return sqlTemplate
+            .replace("{source_table}", normalize(context.sourceTableName()))
+            .replace("{target_table}", normalize(context.targetTableName()))
+            .replace("{source_table_literal}", toSqlLiteral(context.sourceTableName()))
+            .replace("{target_table_literal}", toSqlLiteral(context.targetTableName()))
+            .replace("{source_database_literal}", toSqlLiteral(context.sourceDatabaseName()))
+            .replace("{target_database_literal}", toSqlLiteral(context.targetDatabaseName()))
+            .replace("{quoted_source_table}", quoteIdentifier(context.sourceTableName(), context.dbType()))
+            .replace("{quoted_target_table}", quoteIdentifier(context.targetTableName(), context.dbType()))
+            .replace("{qualified_source_table}", qualifyTableName(context.sourceDatabaseName(), context.sourceTableName(), context.dbType()))
+            .replace("{qualified_target_table}", qualifyTableName(context.targetDatabaseName(), context.targetTableName(), context.dbType()));
     }
 
     private String renderCreateTableSql(String sqlTemplate, CopyContext context) {
@@ -363,7 +439,7 @@ public class TableCopyServiceImpl implements TableCopyService {
         }
     }
 
-    private long copyDataWithinSameScope(CopyContext context) {
+    private long copyDataWithinSameDatabase(CopyContext context) {
         List<String> columnNames = extractColumnNames(context.sourceTableDetail());
         String columnSql = joinIdentifiers(columnNames, context.dbType());
         String sql = "INSERT INTO " + quoteIdentifier(context.targetTableName(), context.dbType())
@@ -379,7 +455,7 @@ public class TableCopyServiceImpl implements TableCopyService {
         }
     }
 
-    private void copyDataAcrossConnections(CopyContext context, TableCopyTaskState taskState, long totalRows) {
+    private long copyDataAcrossConnections(CopyContext context, TableCopyTaskState taskState, long totalRows) {
         List<String> columnNames = extractColumnNames(context.sourceTableDetail());
         String selectSql = "SELECT " + joinIdentifiers(columnNames, context.dbType())
             + " FROM " + quoteIdentifier(context.sourceTableName(), context.dbType());
@@ -391,10 +467,16 @@ public class TableCopyServiceImpl implements TableCopyService {
              Connection targetConnection = connectionService.openTargetConnection(context.targetConnection().getId())) {
             applyDatabaseContext(sourceConnection, context.dbType(), context.sourceDatabaseName());
             applyDatabaseContext(targetConnection, context.dbType(), context.targetDatabaseName());
+            boolean sourceOriginalAutoCommit = sourceConnection.getAutoCommit();
+            sourceConnection.setAutoCommit(false);
             targetConnection.setAutoCommit(false);
-            try (PreparedStatement selectStatement = sourceConnection.prepareStatement(selectSql);
+            try (PreparedStatement selectStatement = sourceConnection.prepareStatement(
+                    selectSql,
+                    ResultSet.TYPE_FORWARD_ONLY,
+                    ResultSet.CONCUR_READ_ONLY
+                );
                  PreparedStatement insertStatement = targetConnection.prepareStatement(insertSql)) {
-                selectStatement.setFetchSize(COPY_BATCH_SIZE);
+                selectStatement.setFetchSize(SOURCE_FETCH_SIZE);
                 try (ResultSet resultSet = selectStatement.executeQuery()) {
                     int pendingBatchSize = 0;
                     int columnCount = columnNames.size();
@@ -404,7 +486,7 @@ public class TableCopyServiceImpl implements TableCopyService {
                         }
                         insertStatement.addBatch();
                         pendingBatchSize += 1;
-                        if (pendingBatchSize >= COPY_BATCH_SIZE) {
+                        if (pendingBatchSize >= TARGET_BATCH_SIZE) {
                             copiedRows += executeInsertBatch(insertStatement, targetConnection, pendingBatchSize);
                             pendingBatchSize = 0;
                             updateTaskProgress(taskState, copiedRows, totalRows);
@@ -417,15 +499,19 @@ public class TableCopyServiceImpl implements TableCopyService {
                 }
             } catch (SQLException ex) {
                 targetConnection.rollback();
-                throw ex;
+                throw new BusinessException(500, "建表成功，数据复制失败: " + ex.getMessage());
             } finally {
+                sourceConnection.setAutoCommit(sourceOriginalAutoCommit);
                 targetConnection.setAutoCommit(true);
             }
         } catch (SQLException ex) {
-            throw new BusinessException(500, "跨库复制数据失败: " + ex.getMessage());
+            throw new BusinessException(500, "建表成功，数据复制失败: " + ex.getMessage());
         }
-        taskState.copiedRows = copiedRows;
-        taskState.totalRows = totalRows;
+        if (taskState != null) {
+            taskState.copiedRows = copiedRows;
+            taskState.totalRows = totalRows;
+        }
+        return copiedRows;
     }
 
     private long executeInsertBatch(PreparedStatement insertStatement, Connection targetConnection, int expectedRows) throws SQLException {
@@ -463,6 +549,52 @@ public class TableCopyServiceImpl implements TableCopyService {
             log.warn("复制失败后清理目标表失败, target={}.{}, reason={}",
                 context.targetDatabaseName(), context.targetTableName(), ex.getMessage());
         }
+    }
+
+    private long executeSqlStatements(Connection connection, List<String> statements) throws SQLException {
+        long affectedRows = 0L;
+        try (Statement statement = connection.createStatement()) {
+            for (String sql : statements) {
+                if (sql.isBlank()) {
+                    continue;
+                }
+                statement.execute(sql);
+                int updateCount = statement.getUpdateCount();
+                if (updateCount > 0) {
+                    affectedRows += updateCount;
+                }
+            }
+        }
+        return affectedRows;
+    }
+
+    private List<String> splitSqlStatements(String sqlText) {
+        List<String> statements = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        boolean inSingleQuote = false;
+        boolean inDoubleQuote = false;
+        for (int i = 0; i < sqlText.length(); i += 1) {
+            char ch = sqlText.charAt(i);
+            if (ch == '\'' && !inDoubleQuote) {
+                inSingleQuote = !inSingleQuote;
+            } else if (ch == '"' && !inSingleQuote) {
+                inDoubleQuote = !inDoubleQuote;
+            }
+            if (ch == ';' && !inSingleQuote && !inDoubleQuote) {
+                String segment = current.toString().trim();
+                if (!segment.isBlank()) {
+                    statements.add(segment);
+                }
+                current.setLength(0);
+                continue;
+            }
+            current.append(ch);
+        }
+        String tail = current.toString().trim();
+        if (!tail.isBlank()) {
+            statements.add(tail);
+        }
+        return statements;
     }
 
     private String buildCreateTableSql(String targetTableName, TableDetailVO tableDetail, String dbType) {
@@ -626,6 +758,19 @@ public class TableCopyServiceImpl implements TableCopyService {
         return identifiers.stream().map(identifier -> quoteIdentifier(identifier, dbType)).reduce((left, right) -> left + ", " + right).orElse("");
     }
 
+    private String qualifyTableName(String databaseName, String tableName, String dbType) {
+        String normalizedDatabaseName = normalize(databaseName);
+        String quotedTable = quoteIdentifier(tableName, dbType);
+        if (normalizedDatabaseName.isBlank()) {
+            return quotedTable;
+        }
+        return switch (normalize(dbType).toUpperCase(Locale.ROOT)) {
+            case "MYSQL", "SQLSERVER", "POSTGRESQL", "ORACLE" ->
+                quoteIdentifier(normalizedDatabaseName, dbType) + "." + quotedTable;
+            default -> quotedTable;
+        };
+    }
+
     private String quoteIdentifier(String identifier, String dbType) {
         String normalized = normalize(identifier);
         if (normalized.isBlank()) {
@@ -678,13 +823,16 @@ public class TableCopyServiceImpl implements TableCopyService {
                                TableDetailVO sourceTableDetail,
                                String dbType) {
 
-        boolean crossScope() {
-            return !sameScope();
+        boolean crossConnection() {
+            return !sameConnection();
         }
 
-        boolean sameScope() {
-            return Objects.equals(sourceConnection.getId(), targetConnection.getId())
-                && Objects.equals(normalizeDb(sourceDatabaseName), normalizeDb(targetDatabaseName));
+        boolean sameConnection() {
+            return Objects.equals(sourceConnection.getId(), targetConnection.getId());
+        }
+
+        boolean sameDatabase() {
+            return Objects.equals(normalizeDb(sourceDatabaseName), normalizeDb(targetDatabaseName));
         }
 
         private String normalizeDb(String value) {

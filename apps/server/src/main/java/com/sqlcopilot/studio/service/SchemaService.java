@@ -24,6 +24,8 @@ public interface SchemaService {
 
     TableOperationVO alterTable(TableAlterReq req);
 
+    TableRenameVO renameTable(TableRenameReq req);
+
     TableOperationVO dropTable(Long connectionId, String databaseName, String tableName);
 
     TableOperationVO truncateTable(Long connectionId, String databaseName, String tableName);

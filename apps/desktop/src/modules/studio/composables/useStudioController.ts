@@ -8,6 +8,7 @@ import {useStudioRuntime} from './useStudioRuntime';
 import {useTableCopyModule} from './useTableCopyModule';
 import {useTableEditorModule} from './useTableEditorModule';
 import {useTableDataModule} from './useTableDataModule';
+import {useTableRenameModule} from './useTableRenameModule';
 import {useUiShellModule} from './useUiShellModule';
 
 export function useStudioController() {
@@ -15,10 +16,12 @@ export function useStudioController() {
   const tableCopyModule = useTableCopyModule(runtime);
   const tableEditorModule = useTableEditorModule(runtime);
   const tableDataModule = useTableDataModule(runtime);
+  const tableRenameModule = useTableRenameModule(runtime);
   const connectionBrowserModule = useConnectionBrowserModule(runtime, {
     copyTableWithinCurrentDatabase: tableCopyModule.copyTableWithinCurrentDatabase,
     openEditTableEditor: tableEditorModule.openEditTableEditor,
     openTableDataTabByObject: tableDataModule.openTableDataTabByObject,
+    openRenameTableModal: tableRenameModule.openRenameTableModal,
   });
   const queryModule = useQueryModule(runtime);
   const erModule = useErModule(runtime);
@@ -40,6 +43,7 @@ export function useStudioController() {
     ...knowledgeModule,
     ...tableEditorModule,
     ...tableDataModule,
+    ...tableRenameModule,
     ...uiShellModule,
     connectionBrowserModule,
     queryModule,
@@ -50,6 +54,7 @@ export function useStudioController() {
     tableCopyModule,
     tableEditorModule,
     tableDataModule,
+    tableRenameModule,
     uiShellModule,
   };
 }
