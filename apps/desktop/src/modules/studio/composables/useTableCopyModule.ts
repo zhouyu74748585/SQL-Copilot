@@ -130,6 +130,10 @@ export function useTableCopyModule(runtime: StudioRuntime): TableCopyModule {
     if (!(event.metaKey || event.ctrlKey) || event.altKey) {
       return false;
     }
+    const textSelection = typeof window !== 'undefined' ? window.getSelection()?.toString() ?? '' : '';
+    if (textSelection.trim()) {
+      return false;
+    }
     const target = event.target as HTMLElement | null;
     if (!target) {
       return true;

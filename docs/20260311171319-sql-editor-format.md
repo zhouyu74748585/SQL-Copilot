@@ -45,3 +45,48 @@
 
 ## 备注
 - 默认端口 `18080` 仍被现有 Java 进程占用，本次继续使用 `18081` 完成启动验证。
+
+
+### 2026-03-12 18:05:46
+
+## 本次目标
+- 为 SQL 编辑页补齐字段补全能力。
+- 对象浏览中选中视图时，详情展示视图定义 SQL。
+- 视图/函数定义编辑页补齐 SQL 补全、美化能力，并让编辑器区域占满容器。
+
+## 关键改动
+- `useStudioRuntime.ts` 为 Monaco SQL 补全新增字段候选：支持基于 `FROM/JOIN/UPDATE/INTO` 上下文解析表别名、表名与库表限定名，在 `别名.` / `表名.` 后加载字段元数据并提示列名，同时对已引用表提供非限定字段候选。
+- SQL 格式化动作从查询页专属选择逻辑中拆出，保留 `Alt+Shift+F` 快捷键；对象定义编辑器也能直接触发美化。
+- 对象浏览详情新增视图/函数定义 SQL 展示，复用 `/api/schema/object/definition` 接口并以高亮代码块呈现。
+- `StudioShell.vue` 为对象定义编辑页新增“美化 SQL”按钮，并补充视图/函数详情卡片。
+- `shell.css` 新增对象定义编辑器布局样式，确保无底部执行面板时编辑器区域仍可撑满剩余空间。
+
+## 验证结果
+- 前端类型检查通过：`npm run -w @sqlcopilot/desktop type-check`
+- 前端 clean 构建通过：`npm run -w @sqlcopilot/desktop build -- --emptyOutDir`
+- 前端预览通过：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4177 --strictPort`，`curl -I http://127.0.0.1:4177/` 返回 `HTTP/1.1 200 OK`
+- 后端 clean 启动通过：`mvn -f apps/server/pom.xml clean spring-boot:run "-Dspring-boot.run.arguments=--server.port=18090" "-Dfile.encoding=UTF-8"`
+- 后端健康检查通过：`curl http://127.0.0.1:18090/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`
+
+## 遗留项
+- 当前字段补全以表别名/表名与常见 SQL 子句为主，复杂 CTE、子查询嵌套和极端方言语法仍可能需要后续增强。
+
+
+### 2026-03-12 18:17:00
+
+## 本次目标
+- 为视图/函数对象页补齐新建入口，并增加“新建查询”按钮。
+- 让对象详情中的视图/函数定义 SQL 自动美化后展示。
+- 约束复制表快捷键：左侧树节点选中表或对象列表选中表时可触发；存在文本选区时回退到默认复制/粘贴。
+
+## 关键改动
+- `useStudioRuntime.ts` 新增 `canCreateView`、`canCreateFunction` 能力判断；对象详情中的定义 SQL 改为按当前数据库方言调用格式化器后再高亮展示。
+- `StudioShell.vue` 在表、视图、函数、查询浏览页左上角补齐“新建查询”按钮；视图/函数页分别补齐“新建视图”“新建函数”按钮。
+- `useTableCopyModule.ts` 在浏览态快捷键判断中新增文本选区检测，若用户已选择文本，则 `Cmd/Ctrl+C/V` 不再触发表复制/粘贴逻辑。
+
+## 验证结果
+- 前端类型检查通过：`npm run -w @sqlcopilot/desktop type-check`
+- 前端 clean 构建通过：`npm run -w @sqlcopilot/desktop build -- --emptyOutDir`
+- 前端预览通过：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4178 --strictPort`，`curl -I http://127.0.0.1:4178/` 返回 `HTTP/1.1 200 OK`
+- 后端 clean 启动通过：`mvn -f apps/server/pom.xml clean spring-boot:run "-Dspring-boot.run.arguments=--server.port=18091" "-Dfile.encoding=UTF-8"`
+- 后端健康检查通过：`curl http://127.0.0.1:18091/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`

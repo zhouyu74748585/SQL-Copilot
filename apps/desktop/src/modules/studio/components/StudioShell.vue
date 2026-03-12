@@ -354,12 +354,52 @@
                   <template #icon><plus-outlined /></template>
                   新建表
                 </a-button>
+                <a-button size="small" :disabled="!workflow.connectionId" @click="openAiQueryTab()">
+                  <template #icon><plus-outlined /></template>
+                  新建查询
+                </a-button>
                 <a-tooltip :title="browserErEntryTooltip">
                   <a-button size="small" :disabled="!canOpenBrowserErFeature" @click="openErTableSelectModal()">
                     <template #icon><apartment-outlined /></template>
                     智能ER图
                   </a-button>
                 </a-tooltip>
+              </div>
+              <div v-else-if="currentObjectType === 'views'" class="center-toolbar-left">
+                <a-button
+                  size="small"
+                  type="primary"
+                  :disabled="!canCreateView"
+                  @click="openNewObjectDefinitionEditor(workflow.connectionId, getActiveDatabaseName(workflow.connectionId), 'views')"
+                >
+                  <template #icon><plus-outlined /></template>
+                  新建视图
+                </a-button>
+                <a-button size="small" :disabled="!workflow.connectionId" @click="openAiQueryTab()">
+                  <template #icon><plus-outlined /></template>
+                  新建查询
+                </a-button>
+              </div>
+              <div v-else-if="currentObjectType === 'functions'" class="center-toolbar-left">
+                <a-button
+                  size="small"
+                  type="primary"
+                  :disabled="!canCreateFunction"
+                  @click="openNewObjectDefinitionEditor(workflow.connectionId, getActiveDatabaseName(workflow.connectionId), 'functions')"
+                >
+                  <template #icon><plus-outlined /></template>
+                  新建函数
+                </a-button>
+                <a-button size="small" :disabled="!workflow.connectionId" @click="openAiQueryTab()">
+                  <template #icon><plus-outlined /></template>
+                  新建查询
+                </a-button>
+              </div>
+              <div v-else-if="currentObjectType === 'queries'" class="center-toolbar-left">
+                <a-button size="small" type="primary" :disabled="!workflow.connectionId" @click="openAiQueryTab()">
+                  <template #icon><plus-outlined /></template>
+                  新建查询
+                </a-button>
               </div>
               <div class="center-toolbar-right">
                 <a-input v-model:value="tableKeyword" size="small" :placeholder="currentObjectType === 'queries' ? '搜索保存查询' : '搜索表名'" allow-clear>
@@ -471,6 +511,19 @@
                     </a-button>
                   </div>
                   <pre class="detail-code-block"><code v-html="createTableSqlHighlighted"></code></pre>
+                </a-spin>
+              </div>
+
+              <div v-else-if="selectedObjectRecord.objectType === 'views' || selectedObjectRecord.objectType === 'functions'" class="detail-table-panel">
+                <a-spin :spinning="objectDefinitionDetailLoading">
+                  <div class="detail-code-head">
+                    <span>{{ selectedObjectRecord.objectType === 'views' ? '视图定义 SQL' : '函数定义 SQL' }}</span>
+                    <a-button size="small" type="text" :disabled="objectDefinitionDetailLoading" @click="copyTextContent(objectDefinitionSqlText, 'SQL 已复制')">
+                      <template #icon><copy-outlined /></template>
+                      复制
+                    </a-button>
+                  </div>
+                  <pre class="detail-code-block"><code v-html="objectDefinitionSqlHighlighted"></code></pre>
                 </a-spin>
               </div>
 
@@ -1257,7 +1310,7 @@
           :database-disabled="true"
         />
 
-        <section class="pane pane-center">
+        <section class="pane pane-center object-definition-pane">
           <div class="pane-title pane-title-with-action">
             <div class="table-data-title-main">
               <span>定义编辑 · {{ activeObjectDefinitionEditorTab.title }}</span>
@@ -1285,6 +1338,16 @@
                   <template #icon><play-circle-outlined /></template>
                   保存
                 </a-button>
+                <a-button
+                  size="small"
+                  type="text"
+                  class="btn-mini"
+                  :disabled="activeObjectDefinitionEditorTab.loading || activeObjectDefinitionEditorTab.saving"
+                  @click="formatObjectDefinitionSql(activeObjectDefinitionEditorTab)"
+                >
+                  <template #icon><highlight-outlined /></template>
+                  美化 SQL
+                </a-button>
                 <a-button size="small" type="text" class="btn-mini" @click="copyObjectDefinitionSql(activeObjectDefinitionEditorTab)">
                   <template #icon><copy-outlined /></template>
                   复制
@@ -1295,7 +1358,7 @@
           <div v-if="activeObjectDefinitionEditorTab.errorMessage" class="table-data-error-tip">
             {{ activeObjectDefinitionEditorTab.errorMessage }}
           </div>
-          <div class="editor-group">
+          <div class="editor-group object-definition-editor-group">
             <MonacoEditor
               :value="activeObjectDefinitionEditorTab.sqlText"
               language="sql"
@@ -2982,6 +3045,7 @@ const {
     sessionTitleOverrides,
     tableDetail,
     tableDetailLoading,
+    objectDefinitionDetailLoading,
     sqlEditorContainerRef,
     queryChatScrollRef,
     queryChatMessageElementMap,
@@ -3059,6 +3123,8 @@ const {
     canOpenBrowserErFeature,
     browserErEntryTooltip,
     canCreateTable,
+    canCreateView,
+    canCreateFunction,
     connectionSelectOptions,
     isMultiDatabaseFormType,
     connectionPreviewSelectOptions,
@@ -3073,6 +3139,8 @@ const {
     selectedTreeDatabaseColumnCount,
     createTableSqlText,
     createTableSqlHighlighted,
+    objectDefinitionSqlText,
+    objectDefinitionSqlHighlighted,
     tableEditorSqlHighlighted,
     filteredObjectRows,
     objectColumns,
@@ -3146,6 +3214,7 @@ const {
     closeTableDataTab,
     closeObjectDefinitionEditorTab,
     openNewTableEditor,
+    openNewObjectDefinitionEditor,
     openEditTableEditor,
     openTableDataTabByObject,
     handleTableEditorChange,
@@ -3322,6 +3391,7 @@ const {
     handleTableEditorDatabaseChange,
     handleTableDataConnectionSelectorChange,
     handleTableDataDatabaseSelectorChange,
+    formatObjectDefinitionSql,
     handleObjectDefinitionSqlChange,
     saveObjectDefinition,
     reloadObjectDefinition,

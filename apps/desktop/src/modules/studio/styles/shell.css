@@ -1688,6 +1688,25 @@ body {
   border-bottom: 1px solid var(--line);
 }
 
+.object-definition-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.object-definition-editor-group {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+}
+
+.object-definition-editor-group .sql-editor {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .query-memory-title-actions {
   font-size: 12px;
   flex-shrink: 0;

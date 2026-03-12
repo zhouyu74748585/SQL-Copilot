@@ -97,6 +97,7 @@ import type {
   RagVectorizeOverviewVO,
   RagVectorizeTableVO,
   RiskEvaluateVO,
+  SchemaObjectDefinitionVO,
   SchemaObjectType,
   SavedQuerySaveReq,
   SavedQueryVO,
@@ -714,6 +715,10 @@ const tableDetail = ref<TableDetailVO | null>(null);
 
 const tableDetailLoading = ref(false);
 
+const objectDefinitionDetail = ref<SchemaObjectDefinitionVO | null>(null);
+
+const objectDefinitionDetailLoading = ref(false);
+
 const sqlEditorContainerRef = ref<HTMLElement | null>(null);
 
 const queryChatScrollRef = ref<HTMLElement | null>(null);
@@ -1072,6 +1077,22 @@ const canCreateTable = computed(() => {
   return !!(connectionId && databaseName && spec?.supportsTableCreate !== false);
 });
 
+const canCreateView = computed(() => {
+  const connectionId = workflow.connectionId;
+  const databaseName = getActiveDatabaseName(connectionId);
+  const connection = connections.value.find((item) => item.id === connectionId) ?? null;
+  const spec = connection ? findSupportedDbType(connection.dbType) : null;
+  return !!(connectionId && databaseName && spec?.supportsViewCreate);
+});
+
+const canCreateFunction = computed(() => {
+  const connectionId = workflow.connectionId;
+  const databaseName = getActiveDatabaseName(connectionId);
+  const connection = connections.value.find((item) => item.id === connectionId) ?? null;
+  const spec = connection ? findSupportedDbType(connection.dbType) : null;
+  return !!(connectionId && databaseName && spec?.supportsFunctionCreate);
+});
+
 const connectionSelectOptions = computed(() =>
   connections.value.map((item) => ({ label: `${item.name} (${item.env})`, value: item.id })),
 );
@@ -1286,6 +1307,25 @@ const createTableSqlText = computed(() => {
 });
 
 const createTableSqlHighlighted = computed(() => highlightSqlForDisplay(createTableSqlText.value));
+
+const objectDefinitionSqlText = computed(() => {
+  if (!selectedObjectRecord.value || (selectedObjectRecord.value.objectType !== 'views' && selectedObjectRecord.value.objectType !== 'functions')) {
+    return '-- 当前对象不支持定义 SQL 展示';
+  }
+  const sqlText = String(objectDefinitionDetail.value?.definitionSql || '').trim();
+  if (sqlText) {
+    try {
+      const dbType = selectedConnection.value?.dbType ?? selectedTreeConnection.value?.dbType ?? 'MYSQL';
+      return formatSqlText(sqlText, dbType);
+    } catch {
+      return sqlText;
+    }
+  }
+  const objectLabel = selectedObjectRecord.value.objectType === 'views' ? '视图' : '函数';
+  return `-- 未读取到${objectLabel} ${selectedObjectRecord.value.objectName} 的定义 SQL`;
+});
+
+const objectDefinitionSqlHighlighted = computed(() => highlightSqlForDisplay(objectDefinitionSqlText.value));
 
 const tableEditorSqlHighlighted = computed(() => {
   const sql = activeTableEditorTab.value?.previewSql || '-- 在右侧预览区展示结构变更 SQL';
@@ -3973,6 +4013,314 @@ async function ensureQueryTableDetailLoaded(connectionId: number, databaseName: 
   return task;
 }
 
+const sqlIdentifierSegmentPattern = '(?:`[^`]+`|"[^"]+"|\\[[^\\]]+\\]|[A-Za-z_][A-Za-z0-9_$]*)';
+
+const sqlPartialIdentifierPattern = '(?:`[^`]*`|"[^"]*"|\\[[^\\]]*\\]|[A-Za-z_][A-Za-z0-9_$]*)?';
+
+const sqlQualifiedColumnContextPattern = new RegExp(
+  `(${sqlIdentifierSegmentPattern}(?:\\s*\\.\\s*${sqlIdentifierSegmentPattern})*)\\s*\\.\\s*(${sqlPartialIdentifierPattern})$`,
+);
+
+const sqlTableReferencePattern = new RegExp(
+  `\\b(?:from|join|update|into|delete\\s+from)\\s+(${sqlIdentifierSegmentPattern}(?:\\s*\\.\\s*${sqlIdentifierSegmentPattern}){0,2})(?:\\s+(?:as\\s+)?(${sqlIdentifierSegmentPattern}))?`,
+  'gi',
+);
+
+const sqlAliasStopWords = new Set([
+  'where', 'join', 'left', 'right', 'inner', 'outer', 'full', 'cross', 'on',
+  'group', 'order', 'having', 'limit', 'offset', 'union', 'set', 'values',
+  'returning', 'using',
+]);
+
+interface SqlTableReference {
+  tableName: string;
+  databaseName: string;
+  alias: string;
+}
+
+interface SqlQualifiedColumnContext {
+  qualifierParts: string[];
+  prefix: string;
+  replaceStartColumn: number;
+}
+
+function normalizeSqlIdentifier(value: string) {
+  const text = String(value || '').trim();
+  if (!text) {
+    return '';
+  }
+  if ((text.startsWith('`') && text.endsWith('`'))
+    || (text.startsWith('"') && text.endsWith('"'))
+    || (text.startsWith('[') && text.endsWith(']'))) {
+    return text.slice(1, -1).trim();
+  }
+  return text;
+}
+
+function splitSqlIdentifierChain(value: string) {
+  const matched = value.match(new RegExp(sqlIdentifierSegmentPattern, 'g')) ?? [];
+  return matched.map((item) => normalizeSqlIdentifier(item)).filter((item) => !!item);
+}
+
+function normalizeAliasCandidate(value: string) {
+  const normalized = normalizeSqlIdentifier(value).trim();
+  if (!normalized) {
+    return '';
+  }
+  if (sqlAliasStopWords.has(normalized.toLowerCase())) {
+    return '';
+  }
+  return normalized;
+}
+
+function parseQualifiedColumnContext(linePrefix: string): SqlQualifiedColumnContext | null {
+  const matched = linePrefix.match(sqlQualifiedColumnContextPattern);
+  if (!matched) {
+    return null;
+  }
+  const qualifierParts = splitSqlIdentifierChain(matched[1] || '');
+  if (!qualifierParts.length) {
+    return null;
+  }
+  const suffix = matched[2] || '';
+  return {
+    qualifierParts,
+    prefix: normalizeSqlIdentifier(suffix),
+    replaceStartColumn: linePrefix.length - suffix.length + 1,
+  };
+}
+
+function findMatchingName(names: string[], target: string) {
+  const keyword = String(target || '').trim().toLowerCase();
+  if (!keyword) {
+    return '';
+  }
+  return names.find((item) => item.toLowerCase() === keyword) ?? '';
+}
+
+function extractSqlTableReferences(sqlText: string, defaultDatabaseName: string) {
+  const references: SqlTableReference[] = [];
+  const seen = new Set<string>();
+  Array.from(sqlText.matchAll(sqlTableReferencePattern)).forEach((matched) => {
+    const objectParts = splitSqlIdentifierChain(matched[1] || '');
+    if (!objectParts.length) {
+      return;
+    }
+    const tableName = objectParts[objectParts.length - 1];
+    const databaseName = objectParts.length >= 2
+      ? objectParts[objectParts.length - 2]
+      : defaultDatabaseName;
+    if (!tableName || !databaseName) {
+      return;
+    }
+    const alias = normalizeAliasCandidate(matched[2] || '') || tableName;
+    const cacheKey = `${databaseName.toLowerCase()}|${tableName.toLowerCase()}|${alias.toLowerCase()}`;
+    if (seen.has(cacheKey)) {
+      return;
+    }
+    seen.add(cacheKey);
+    references.push({
+      tableName,
+      databaseName,
+      alias,
+    });
+  });
+  return references;
+}
+
+function resolveQualifiedTableReference(
+  qualifierParts: string[],
+  references: SqlTableReference[],
+  availableTableNames: string[],
+  defaultDatabaseName: string,
+) {
+  if (!qualifierParts.length) {
+    return null;
+  }
+  if (qualifierParts.length >= 2) {
+    const tableNameCandidate = qualifierParts[qualifierParts.length - 1];
+    const databaseNameCandidate = qualifierParts[qualifierParts.length - 2] || defaultDatabaseName;
+    const tableName = findMatchingName(availableTableNames, tableNameCandidate) || tableNameCandidate;
+    if (!tableName || !databaseNameCandidate) {
+      return null;
+    }
+    return {
+      tableName,
+      databaseName: databaseNameCandidate,
+      sourceLabel: `${databaseNameCandidate}.${tableName}`,
+    };
+  }
+
+  const qualifier = qualifierParts[0];
+  const qualifierLower = qualifier.toLowerCase();
+  const aliasMatched = references.find((item) => item.alias.toLowerCase() === qualifierLower);
+  if (aliasMatched) {
+    return {
+      tableName: aliasMatched.tableName,
+      databaseName: aliasMatched.databaseName,
+      sourceLabel: aliasMatched.alias === aliasMatched.tableName
+        ? aliasMatched.tableName
+        : `${aliasMatched.tableName} AS ${aliasMatched.alias}`,
+    };
+  }
+  const tableMatched = references.find((item) => item.tableName.toLowerCase() === qualifierLower);
+  if (tableMatched) {
+    return {
+      tableName: tableMatched.tableName,
+      databaseName: tableMatched.databaseName,
+      sourceLabel: tableMatched.tableName,
+    };
+  }
+  const tableName = findMatchingName(availableTableNames, qualifier);
+  if (!tableName || !defaultDatabaseName) {
+    return null;
+  }
+  return {
+    tableName,
+    databaseName: defaultDatabaseName,
+    sourceLabel: tableName,
+  };
+}
+
+function columnSuggestions(
+  monaco: typeof MonacoApi,
+  columns: TableDetailVO['columns'],
+  range: MonacoApi.IRange,
+  prefix: string,
+  sourceLabel: string,
+) {
+  const keyword = prefix.trim().toLowerCase();
+  const seen = new Set<string>();
+  const matchedColumns = columns.filter((item) => {
+    const columnName = String(item.columnName || '').trim();
+    if (!columnName) {
+      return false;
+    }
+    const key = columnName.toLowerCase();
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    if (!keyword) {
+      return true;
+    }
+    return key.includes(keyword);
+  });
+  return matchedColumns.slice(0, 300).map((item) => {
+    const columnName = item.columnName;
+    const lowerColumnName = columnName.toLowerCase();
+    const startsWithPrefix = keyword && lowerColumnName.startsWith(keyword);
+    const comment = String(item.columnComment || '').trim();
+    const dataType = String(item.dataType || '').trim();
+    return {
+      label: columnName,
+      kind: monaco.languages.CompletionItemKind.Field,
+      insertText: columnName,
+      range,
+      detail: `字段 · ${sourceLabel}`,
+      documentation: comment || dataType || undefined,
+      sortText: `${startsWithPrefix ? '0' : '1'}_column_${sourceLabel}_${columnName}`,
+    };
+  });
+}
+
+async function resolveSqlColumnSuggestions(
+  monaco: typeof MonacoApi,
+  model: MonacoApi.editor.ITextModel,
+  position: MonacoApi.Position,
+  context: SqlEditorContext,
+  defaultRange: MonacoApi.IRange,
+  wordPrefix: string,
+) {
+  const databaseName = String(context.databaseName || '').trim();
+  if (!context.connectionId || !databaseName || databaseName === '未发现数据库') {
+    return {
+      qualified: false,
+      suggestions: [] as ReturnType<typeof columnSuggestions>,
+    };
+  }
+
+  const linePrefix = model.getLineContent(position.lineNumber).slice(0, position.column - 1);
+  const sqlBeforeCursor = model.getValueInRange({
+    startLineNumber: 1,
+    startColumn: 1,
+    endLineNumber: position.lineNumber,
+    endColumn: position.column,
+  });
+  const tableReferences = extractSqlTableReferences(sqlBeforeCursor, databaseName);
+  const qualifiedContext = parseQualifiedColumnContext(linePrefix);
+
+  if (qualifiedContext) {
+    const availableTableNames = await ensureTableNamesLoaded(context.connectionId, databaseName);
+    const target = resolveQualifiedTableReference(
+      qualifiedContext.qualifierParts,
+      tableReferences,
+      availableTableNames,
+      databaseName,
+    );
+    if (!target) {
+      return {
+        qualified: true,
+        suggestions: [] as ReturnType<typeof columnSuggestions>,
+      };
+    }
+    const detail = await ensureQueryTableDetailLoaded(context.connectionId, target.databaseName, target.tableName);
+    if (!detail?.columns?.length) {
+      return {
+        qualified: true,
+        suggestions: [] as ReturnType<typeof columnSuggestions>,
+      };
+    }
+    const range = {
+      startLineNumber: position.lineNumber,
+      endLineNumber: position.lineNumber,
+      startColumn: qualifiedContext.replaceStartColumn,
+      endColumn: position.column,
+    };
+    return {
+      qualified: true,
+      suggestions: columnSuggestions(monaco, detail.columns, range, qualifiedContext.prefix, target.sourceLabel),
+    };
+  }
+
+  if (!wordPrefix || !tableReferences.length) {
+    return {
+      qualified: false,
+      suggestions: [] as ReturnType<typeof columnSuggestions>,
+    };
+  }
+
+  const uniqueTargets = Array.from(
+    new Map(
+      tableReferences.map((item) => [`${item.databaseName.toLowerCase()}|${item.tableName.toLowerCase()}`, item]),
+    ).values(),
+  ).slice(0, 8);
+
+  const details = await Promise.all(
+    uniqueTargets.map((item) => ensureQueryTableDetailLoaded(context.connectionId, item.databaseName, item.tableName)),
+  );
+
+  const suggestionMap = new Map<string, ReturnType<typeof columnSuggestions>[number]>();
+  details.forEach((detail, index) => {
+    if (!detail?.columns?.length) {
+      return;
+    }
+    const target = uniqueTargets[index];
+    columnSuggestions(monaco, detail.columns, defaultRange, wordPrefix, target.tableName).forEach((item) => {
+      const key = String(item.label || '').toLowerCase();
+      if (!key || suggestionMap.has(key)) {
+        return;
+      }
+      suggestionMap.set(key, item);
+    });
+  });
+
+  return {
+    qualified: false,
+    suggestions: Array.from(suggestionMap.values()),
+  };
+}
+
 function tableNameSuggestions(
   monaco: typeof MonacoApi,
   names: string[],
@@ -4116,9 +4464,6 @@ function registerSqlCompletionProvider(monaco: typeof MonacoApi) {
     provideCompletionItems: async (model, position) => {
       const word = model.getWordUntilPosition(position);
       const wordPrefix = (word.word || '').trim();
-      if (!wordPrefix) {
-        return undefined;
-      }
       const context = resolveSqlEditorContextForModel(model)
         ?? (() => {
           const tab = activeQueryTab.value;
@@ -4136,18 +4481,23 @@ function registerSqlCompletionProvider(monaco: typeof MonacoApi) {
         startColumn: word.startColumn,
         endColumn: word.endColumn,
       };
-      const keywordSuggestions = sqlKeywordSuggestions(monaco, range, wordPrefix);
+      const keywordSuggestions = wordPrefix ? sqlKeywordSuggestions(monaco, range, wordPrefix) : [];
       if (!context?.connectionId) {
         return keywordSuggestions.length ? { suggestions: keywordSuggestions } : undefined;
       }
-      const tab = context as QueryWorkspaceTab;
-      const databaseName = resolveQueryDatabaseName(tab);
+      const databaseName = String(context.databaseName || '').trim();
       if (!databaseName || databaseName === '未发现数据库') {
         return keywordSuggestions.length ? { suggestions: keywordSuggestions } : undefined;
       }
-      const tableNames = await ensureTableNamesLoaded(tab.connectionId, databaseName);
-      const tableSuggestions = tableNameSuggestions(monaco, tableNames, range, wordPrefix, databaseName);
-      const suggestions = [...tableSuggestions, ...keywordSuggestions];
+      const columnCompletion = await resolveSqlColumnSuggestions(monaco, model, position, context, range, wordPrefix);
+      if (columnCompletion.qualified) {
+        return columnCompletion.suggestions.length ? { suggestions: columnCompletion.suggestions } : undefined;
+      }
+      const tableNames = await ensureTableNamesLoaded(context.connectionId, databaseName);
+      const tableSuggestions = wordPrefix
+        ? tableNameSuggestions(monaco, tableNames, range, wordPrefix, databaseName)
+        : [];
+      const suggestions = [...columnCompletion.suggestions, ...tableSuggestions, ...keywordSuggestions];
       if (!suggestions.length) {
         return undefined;
       }
@@ -4332,19 +4682,24 @@ function handleSqlEditorMount(
   registerSqlCompletionProvider(monaco);
   registerSqlEditorContext(editor, getContext);
   registerSqlAutoSuggest(editor, getContext);
+  editor.addAction({
+    id: 'sql-copilot.format-sql',
+    label: '美化 SQL',
+    contextMenuGroupId: '1_modification',
+    keybindings: [monaco.KeyMod.Alt | monaco.KeyMod.Shift | monaco.KeyCode.KeyF],
+    run: () => {
+      const queryTab = activeQueryTab.value;
+      if (queryTab && activeWorkbenchTab.value === queryTab.key) {
+        formatSqlForTab(queryTab);
+        return;
+      }
+      const objectDefinitionTab = activeObjectDefinitionEditorTab.value;
+      if (objectDefinitionTab && activeWorkbenchTab.value === objectDefinitionTab.key) {
+        formatObjectDefinitionSql(objectDefinitionTab);
+      }
+    },
+  });
   if (enableSelectionActions) {
-    editor.addAction({
-      id: 'sql-copilot.format-sql',
-      label: '美化 SQL',
-      contextMenuGroupId: '1_modification',
-      keybindings: [monaco.KeyMod.Alt | monaco.KeyMod.Shift | monaco.KeyCode.KeyF],
-      run: () => {
-        const tab = activeQueryTab.value;
-        if (tab) {
-          formatSqlForTab(tab);
-        }
-      },
-    });
     registerSqlSelectionTracker(editor);
     registerSqlSelectionPopoverTrigger(editor);
     registerSqlScrollTracker(editor);
@@ -4834,24 +5189,40 @@ async function loadObjectDetail(
   objectName: string,
 ) {
   tableDetail.value = null;
+  tableDetailLoading.value = false;
+  objectDefinitionDetail.value = null;
+  objectDefinitionDetailLoading.value = false;
 
-  if (objectType !== 'tables') {
+  if (objectType === 'tables') {
+    tableDetailLoading.value = true;
+    try {
+      const query = databaseName
+        ? `/api/schema/tableDetail?connectionId=${connectionId}&databaseName=${encodeURIComponent(databaseName)}&tableName=${encodeURIComponent(objectName)}`
+        : `/api/schema/tableDetail?connectionId=${connectionId}&tableName=${encodeURIComponent(objectName)}`;
+      tableDetail.value = await getApi<TableDetailVO>(query);
+    } finally {
+      tableDetailLoading.value = false;
+    }
     return;
   }
 
-  tableDetailLoading.value = true;
-  try {
-    const query = databaseName
-      ? `/api/schema/tableDetail?connectionId=${connectionId}&databaseName=${encodeURIComponent(databaseName)}&tableName=${encodeURIComponent(objectName)}`
-      : `/api/schema/tableDetail?connectionId=${connectionId}&tableName=${encodeURIComponent(objectName)}`;
-    tableDetail.value = await getApi<TableDetailVO>(query);
-  } finally {
-    tableDetailLoading.value = false;
+  if (objectType === 'views' || objectType === 'functions') {
+    objectDefinitionDetailLoading.value = true;
+    try {
+      objectDefinitionDetail.value = await getApi<SchemaObjectDefinitionVO>(
+        `/api/schema/object/definition?connectionId=${connectionId}&databaseName=${encodeURIComponent(databaseName)}&objectType=${encodeURIComponent(objectType)}&objectName=${encodeURIComponent(objectName)}`,
+      );
+    } finally {
+      objectDefinitionDetailLoading.value = false;
+    }
   }
 }
 
 function clearObjectDetail() {
   tableDetail.value = null;
+  tableDetailLoading.value = false;
+  objectDefinitionDetail.value = null;
+  objectDefinitionDetailLoading.value = false;
 }
 
 function openQueryTabByObject(record: ObjectRow, autoExecute = false) {
@@ -5144,6 +5515,15 @@ function sqlFormatterLanguage(dbTypeRaw: string): SqlLanguage {
   return 'mysql';
 }
 
+function formatSqlText(sourceSql: string, dbTypeRaw: string) {
+  return sqlFormat(sourceSql, {
+    language: sqlFormatterLanguage(dbTypeRaw),
+    keywordCase: 'upper',
+    linesBetweenQueries: 1,
+    tabWidth: 2,
+  });
+}
+
 function formatSqlForTab(tab: QueryWorkspaceTab) {
   const isActiveTab = activeQueryTab.value?.key === tab.key;
   const editor = isActiveTab ? activeSqlEditorInstance : null;
@@ -5157,12 +5537,7 @@ function formatSqlForTab(tab: QueryWorkspaceTab) {
   }
 
   try {
-    const formattedSql = sqlFormat(sourceSql, {
-      language: sqlFormatterLanguage(queryTabDbType(tab)),
-      keywordCase: 'upper',
-      linesBetweenQueries: 1,
-      tabWidth: 2,
-    });
+    const formattedSql = formatSqlText(sourceSql, queryTabDbType(tab));
     if (editor && model) {
       const targetRange = hasSelection ? selection : model.getFullModelRange();
       editor.pushUndoStop();
@@ -5182,6 +5557,44 @@ function formatSqlForTab(tab: QueryWorkspaceTab) {
     tab.selectedSqlText = '';
     hideSqlSelectionPopover();
     touchQueryTab(tab);
+    message.success(hasSelection ? '所选 SQL 已美化' : 'SQL 已美化');
+  } catch (error) {
+    message.error(`SQL 美化失败：${getErrorMessage(error)}`);
+  }
+}
+
+function formatObjectDefinitionSql(tab: ObjectDefinitionEditorTab) {
+  const isActiveTab = activeObjectDefinitionEditorTab.value?.key === tab.key;
+  const editor = isActiveTab ? activeSqlEditorInstance : null;
+  const model = editor?.getModel() ?? null;
+  const selection = editor?.getSelection() ?? null;
+  const hasSelection = !!model && !!selection && !selection.isEmpty();
+  const sourceSql = hasSelection ? model.getValueInRange(selection).trim() : tab.sqlText.trim();
+  if (!sourceSql) {
+    message.info('请先输入 SQL');
+    return;
+  }
+
+  try {
+    const formattedSql = formatSqlText(sourceSql, tab.dbType);
+    if (editor && model) {
+      const targetRange = hasSelection ? selection : model.getFullModelRange();
+      editor.pushUndoStop();
+      editor.executeEdits('sql-copilot.format-object-definition', [
+        {
+          range: targetRange,
+          text: formattedSql,
+          forceMoveMarkers: true,
+        },
+      ]);
+      editor.pushUndoStop();
+      tab.sqlText = model.getValue();
+      editor.focus();
+    } else {
+      tab.sqlText = formattedSql;
+    }
+    tab.dirty = tab.sqlText.trim() !== tab.baselineSql.trim();
+    tab.updatedAt = Date.now();
     message.success(hasSelection ? '所选 SQL 已美化' : 'SQL 已美化');
   } catch (error) {
     message.error(`SQL 美化失败：${getErrorMessage(error)}`);
@@ -7676,6 +8089,8 @@ function resetConnectionModalState() {
     sessionTitleOverrides,
     tableDetail,
     tableDetailLoading,
+    objectDefinitionDetail,
+    objectDefinitionDetailLoading,
     sqlEditorContainerRef,
     queryChatScrollRef,
     queryChatMessageElementMap,
@@ -7751,6 +8166,8 @@ function resetConnectionModalState() {
     canOpenBrowserErFeature,
     browserErEntryTooltip,
     canCreateTable,
+    canCreateView,
+    canCreateFunction,
     connectionSelectOptions,
     isMultiDatabaseFormType,
     connectionPreviewSelectOptions,
@@ -7765,6 +8182,8 @@ function resetConnectionModalState() {
     selectedTreeDatabaseColumnCount,
     createTableSqlText,
     createTableSqlHighlighted,
+    objectDefinitionSqlText,
+    objectDefinitionSqlHighlighted,
     tableEditorSqlHighlighted,
     filteredObjectRows,
     objectColumns,
@@ -7935,6 +8354,7 @@ function resetConnectionModalState() {
     resolveSqlForAction,
     resolveSelectedSqlSnippet,
     formatSqlForTab,
+    formatObjectDefinitionSql,
     extractThinkingContentFromTrace,
     saveConversationHistory,
     buildStructuredContextForTab,
