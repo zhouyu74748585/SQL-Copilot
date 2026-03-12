@@ -137,14 +137,15 @@ public class RagIngestionServiceImpl implements RagIngestionService {
                              String databaseName,
                              List<SchemaTableCacheEntity> tableMetaList,
                              List<SchemaColumnCacheEntity> columnMetaList) {
-        if (!ragEnabled) {
-            return;
-        }
-        if (tableMetaList == null || tableMetaList.isEmpty()) {
+        if (!ragEnabled || connectionId == null) {
             return;
         }
 
         String normalizedDatabaseName = normalizeDatabaseName(databaseName);
+        removeSchemaVectorsByDatabase(connectionId, normalizedDatabaseName);
+        if (tableMetaList == null || tableMetaList.isEmpty()) {
+            return;
+        }
 
         try {
             List<SchemaColumnCacheEntity> safeColumnMetaList = columnMetaList == null ? List.of() : columnMetaList;
@@ -300,6 +301,67 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         filters.add(new QdrantPayloadFilter("table_name", safeText(tableName)));
         qdrantClientService.deletePointsByFilters(collectionNames.getSchemaTable(), filters);
         qdrantClientService.deletePointsByFilters(collectionNames.getSchemaColumn(), filters);
+    }
+
+    @Override
+    public void removeTableArtifacts(Long connectionId, String databaseName, String tableName) {
+        if (!ragEnabled || connectionId == null || isBlank(tableName)) {
+            return;
+        }
+        String normalizedDatabaseName = normalizeDatabaseName(databaseName);
+        String normalizedTableName = safeText(tableName);
+        removeSchemaTable(connectionId, normalizedDatabaseName, normalizedTableName);
+
+        List<QdrantPayloadFilter> historyFilters = new ArrayList<>();
+        historyFilters.add(new QdrantPayloadFilter("connection_id", connectionId));
+        if (!normalizedDatabaseName.isBlank() && !"__default__".equals(normalizedDatabaseName)) {
+            historyFilters.add(new QdrantPayloadFilter("database_name", normalizedDatabaseName));
+        }
+        historyFilters.add(new QdrantPayloadFilter("tables", normalizedTableName));
+        qdrantClientService.deletePointsByFilters(collectionNames.getSqlHistory(), historyFilters);
+        qdrantClientService.deletePointsByFilters(collectionNames.getSqlFragment(), historyFilters);
+    }
+
+    @Override
+    public void removeDatabaseArtifacts(Long connectionId, String databaseName) {
+        if (!ragEnabled || connectionId == null) {
+            return;
+        }
+        String normalizedDatabaseName = normalizeDatabaseName(databaseName);
+        List<QdrantPayloadFilter> filters = new ArrayList<>();
+        filters.add(new QdrantPayloadFilter("connection_id", connectionId));
+        if (!normalizedDatabaseName.isBlank() && !"__default__".equals(normalizedDatabaseName)) {
+            filters.add(new QdrantPayloadFilter("database_name", normalizedDatabaseName));
+        }
+        deleteScopedArtifacts(filters);
+    }
+
+    @Override
+    public void removeConnectionArtifacts(Long connectionId) {
+        if (!ragEnabled || connectionId == null) {
+            return;
+        }
+        deleteScopedArtifacts(List.of(new QdrantPayloadFilter("connection_id", connectionId)));
+    }
+
+    private void removeSchemaVectorsByDatabase(Long connectionId, String databaseName) {
+        List<QdrantPayloadFilter> filters = new ArrayList<>();
+        filters.add(new QdrantPayloadFilter("connection_id", connectionId));
+        if (!isBlank(databaseName) && !"__default__".equals(databaseName)) {
+            filters.add(new QdrantPayloadFilter("database_name", databaseName));
+        }
+        qdrantClientService.deletePointsByFilters(collectionNames.getSchemaTable(), filters);
+        qdrantClientService.deletePointsByFilters(collectionNames.getSchemaColumn(), filters);
+    }
+
+    private void deleteScopedArtifacts(List<QdrantPayloadFilter> filters) {
+        if (filters == null || filters.isEmpty()) {
+            return;
+        }
+        qdrantClientService.deletePointsByFilters(collectionNames.getSchemaTable(), filters);
+        qdrantClientService.deletePointsByFilters(collectionNames.getSchemaColumn(), filters);
+        qdrantClientService.deletePointsByFilters(collectionNames.getSqlHistory(), filters);
+        qdrantClientService.deletePointsByFilters(collectionNames.getSqlFragment(), filters);
     }
 
     private void ingestSqlHistoryInternal(QueryHistoryEntity historyEntity) {

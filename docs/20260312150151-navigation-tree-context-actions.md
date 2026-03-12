@@ -32,3 +32,22 @@
 ## 遗留项
 - PostgreSQL/Oracle/SQL Server 的 namespace 操作依赖当前连接权限和数据库本身限制，建议后续结合真实实例做回归验证。
 - 后端现有两条测试失败会阻断不带 `-DskipTests` 的完整 Maven 打包，本次未在该范围内修复。
+
+
+### 2026-03-12 15:18:36
+
+## 2026-03-12 库节点新建二级菜单悬浮修复
+
+### 本次目标
+- 修复库/Schema 节点右键菜单中“新建”二级菜单鼠标移入即消失的问题。
+
+### 关键改动
+- 调整 `apps/desktop/src/modules/studio/styles/shell.css` 中 `.context-menu-submenu-panel` 的定位，从右侧留空隙改为紧贴父菜单项显示。
+- 为二级菜单面板新增透明 hover 桥接区 `::before`，保证鼠标从父项横向移动到子菜单时不会掉出 hover 命中区域。
+- 保持现有菜单样式、阴影和主题变量不变，仅修复交互命中链路。
+
+### 验证结果
+- 前端类型检查：`npm run type-check` 通过。
+- 前端 clean 构建：`npm run build -- --emptyOutDir` 通过。
+- 后端 clean 启动：`mvn -f apps/server/pom.xml clean spring-boot:run "-Dspring-boot.run.arguments=--server.port=18089"` 成功，`http://127.0.0.1:18089/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+- 前端预览：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6063 --strictPort` 成功，`http://127.0.0.1:6063/` 返回 `HTTP/1.1 200 OK`。

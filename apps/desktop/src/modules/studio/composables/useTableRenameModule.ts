@@ -141,6 +141,7 @@ export function useTableRenameModule(runtime: StudioRuntime): TableRenameModule 
     try {
       const result = await postApi<TableRenameVO>('/api/schema/table/rename', req);
       applyRenamedTableState(result, req);
+      runtime.invalidateDatabaseMetadataCaches(req.connectionId, req.databaseName);
       await runtime.prepareConnectionTreeData(req.connectionId);
       if (runtime.workflow.connectionId === req.connectionId
         && runtime.getActiveDatabaseName(req.connectionId) === req.databaseName

@@ -28,4 +28,10 @@ public interface RagIngestionService {
     void rebuildKnowledgeVectors(List<KnowledgeTermEntity> terms, List<KnowledgeExampleSqlEntity> examples);
 
     void removeSchemaTable(Long connectionId, String databaseName, String tableName);
+
+    void removeTableArtifacts(Long connectionId, String databaseName, String tableName);
+
+    void removeDatabaseArtifacts(Long connectionId, String databaseName);
+
+    void removeConnectionArtifacts(Long connectionId);
 }

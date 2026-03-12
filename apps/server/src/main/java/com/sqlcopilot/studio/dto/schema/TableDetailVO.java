@@ -27,6 +27,7 @@ public class TableDetailVO {
         private Boolean primaryKey;
         private Boolean defaultCurrentTimestamp;
         private Boolean onUpdateCurrentTimestamp;
+        private Boolean generated;
     }
 
     @Data

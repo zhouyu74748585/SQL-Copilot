@@ -43,6 +43,7 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
     private final LinkedBlockingQueue<VectorizeTask> taskQueue = new LinkedBlockingQueue<>();
     private final Set<String> dedupeKeys = ConcurrentHashMap.newKeySet();
     private final Set<String> interruptedKeys = ConcurrentHashMap.newKeySet();
+    private final Set<String> suppressedTaskKeys = ConcurrentHashMap.newKeySet();
     private final ConcurrentHashMap<String, VectorizeStatusRecord> statusMap = new ConcurrentHashMap<>();
     private final Object taskControlLock = new Object();
     private volatile Thread workerThread;
@@ -480,6 +481,32 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
         return vo;
     }
 
+    @Override
+    public void clearDatabaseState(Long connectionId, String databaseName) {
+        String normalizedDatabaseName = normalizeDatabaseName(databaseName);
+        if (connectionId == null || normalizedDatabaseName.isBlank()) {
+            return;
+        }
+        String taskKey = buildTaskKey(connectionId, normalizedDatabaseName);
+        suppressMatchingTasks(task -> taskKey.equals(task.taskKey()));
+        dedupeKeys.remove(taskKey);
+        interruptedKeys.remove(taskKey);
+        statusMap.remove(taskKey);
+        ragVectorizeStatusMapper.deleteOne(connectionId, normalizedDatabaseName);
+    }
+
+    @Override
+    public void clearConnectionState(Long connectionId) {
+        if (connectionId == null) {
+            return;
+        }
+        suppressMatchingTasks(task -> Objects.equals(connectionId, task.connectionId()));
+        dedupeKeys.removeIf(key -> key.startsWith(connectionId + "|"));
+        interruptedKeys.removeIf(key -> key.startsWith(connectionId + "|"));
+        statusMap.entrySet().removeIf(entry -> Objects.equals(connectionId, entry.getValue().connectionId()));
+        ragVectorizeStatusMapper.deleteByConnectionId(connectionId);
+    }
+
     private void processLoop() {
         workerThread = Thread.currentThread();
         while (!Thread.currentThread().isInterrupted()) {
@@ -496,6 +523,11 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
                 // 关键操作：执行队列任务时直接触发 Schema 同步，复用现有元数据读取与向量化链路。
                 long fullVectorizeStartAt = System.currentTimeMillis();
                 schemaService.syncSchema(task.connectionId(), task.databaseName());
+                if (suppressedTaskKeys.contains(task.taskKey())) {
+                    log.info("数据库向量化任务结果已忽略, connectionId={}, databaseName={}",
+                        task.connectionId(), task.databaseName());
+                    continue;
+                }
                 if (interruptedKeys.remove(task.taskKey())) {
                     interruptedByRequest = true;
                     log.info("数据库向量化任务已中断, connectionId={}, databaseName={}",
@@ -516,6 +548,11 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
                         task.connectionId(), task.databaseName(), durationMs, runtimeProvider);
                 }
             } catch (InterruptedException ex) {
+                if (task != null && suppressedTaskKeys.contains(task.taskKey())) {
+                    log.info("数据库向量化任务已因元数据变更取消, connectionId={}, databaseName={}",
+                        task.connectionId(), task.databaseName());
+                    interruptedByRequest = true;
+                }
                 if (task != null && interruptedKeys.remove(task.taskKey())) {
                     interruptedByRequest = true;
                     log.info("数据库向量化任务中断完成, connectionId={}, databaseName={}",
@@ -526,6 +563,10 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
                 }
             } catch (Exception ex) {
                 if (task != null) {
+                    if (suppressedTaskKeys.contains(task.taskKey())) {
+                        log.info("数据库向量化任务异常结果已忽略, connectionId={}, databaseName={}, reason={}",
+                            task.connectionId(), task.databaseName(), ex.getMessage());
+                    } else
                     if (interruptedKeys.remove(task.taskKey())) {
                         interruptedByRequest = true;
                         log.info("数据库向量化任务已中断, connectionId={}, databaseName={}",
@@ -542,6 +583,7 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
             } finally {
                 if (task != null) {
                     dedupeKeys.remove(task.taskKey());
+                    suppressedTaskKeys.remove(task.taskKey());
                     synchronized (taskControlLock) {
                         if (runningTask != null && task.taskKey().equals(runningTask.taskKey())) {
                             runningTask = null;
@@ -580,6 +622,23 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
 
     private String buildTaskKey(Long connectionId, String databaseName) {
         return connectionId + "|" + databaseName.toLowerCase();
+    }
+
+    private void suppressMatchingTasks(java.util.function.Predicate<VectorizeTask> predicate) {
+        if (predicate == null) {
+            return;
+        }
+        synchronized (taskControlLock) {
+            taskQueue.removeIf(predicate::test);
+            if (runningTask != null && predicate.test(runningTask)) {
+                suppressedTaskKeys.add(runningTask.taskKey());
+                interruptedKeys.add(runningTask.taskKey());
+                Thread workerRef = workerThread;
+                if (workerRef != null) {
+                    workerRef.interrupt();
+                }
+            }
+        }
     }
 
     private String normalizeDatabaseName(String databaseName) {

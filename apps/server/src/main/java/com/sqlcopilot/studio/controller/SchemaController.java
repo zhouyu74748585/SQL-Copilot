@@ -4,6 +4,7 @@ import com.sqlcopilot.studio.dto.common.ApiResponse;
 import com.sqlcopilot.studio.dto.rag.RagDatabaseVectorizeStatusVO;
 import com.sqlcopilot.studio.dto.schema.*;
 import com.sqlcopilot.studio.service.ErDiagramService;
+import com.sqlcopilot.studio.service.MetadataChangeSyncService;
 import com.sqlcopilot.studio.service.RagVectorizeQueueService;
 import com.sqlcopilot.studio.service.SchemaService;
 import com.sqlcopilot.studio.service.TableCopyService;
@@ -26,15 +27,18 @@ public class SchemaController {
     private final ErDiagramService erDiagramService;
     private final RagVectorizeQueueService ragVectorizeQueueService;
     private final TableCopyService tableCopyService;
+    private final MetadataChangeSyncService metadataChangeSyncService;
 
     public SchemaController(SchemaService schemaService,
                             ErDiagramService erDiagramService,
                             RagVectorizeQueueService ragVectorizeQueueService,
-                            TableCopyService tableCopyService) {
+                            TableCopyService tableCopyService,
+                            MetadataChangeSyncService metadataChangeSyncService) {
         this.schemaService = schemaService;
         this.erDiagramService = erDiagramService;
         this.ragVectorizeQueueService = ragVectorizeQueueService;
         this.tableCopyService = tableCopyService;
+        this.metadataChangeSyncService = metadataChangeSyncService;
     }
 
     @PostMapping("/sync")
@@ -115,35 +119,77 @@ public class SchemaController {
 
     @PostMapping("/table/create")
     public ApiResponse<TableOperationVO> createTable(@Valid @RequestBody TableCreateReq req) {
-        return ApiResponse.success(schemaService.createTable(req));
+        TableOperationVO result = schemaService.createTable(req);
+        if (result.isSuccess()) {
+            metadataChangeSyncService.onTableCreatedOrAltered(
+                req.getConnectionId(),
+                result.getDatabaseName(),
+                result.getTableName()
+            );
+        }
+        return ApiResponse.success(result);
     }
 
     @PostMapping("/table/alter")
     public ApiResponse<TableOperationVO> alterTable(@Valid @RequestBody TableAlterReq req) {
-        return ApiResponse.success(schemaService.alterTable(req));
+        TableOperationVO result = schemaService.alterTable(req);
+        if (result.isSuccess()) {
+            metadataChangeSyncService.onTableCreatedOrAltered(
+                req.getConnectionId(),
+                result.getDatabaseName(),
+                result.getTableName()
+            );
+        }
+        return ApiResponse.success(result);
     }
 
     @PostMapping("/namespace/create")
     public ApiResponse<SchemaNamespaceOperationVO> createNamespace(@Valid @RequestBody SchemaNamespaceCreateReq req) {
-        return ApiResponse.success(schemaService.createNamespace(req));
+        SchemaNamespaceOperationVO result = schemaService.createNamespace(req);
+        if (result.isSuccess()) {
+            metadataChangeSyncService.onDatabaseCreated(
+                req.getConnectionId(),
+                normalizeNamespaceName(result.getTargetNamespaceName(), req.getTargetNamespaceName())
+            );
+        }
+        return ApiResponse.success(result);
     }
 
     @PostMapping("/namespace/rename")
     public ApiResponse<SchemaNamespaceOperationVO> renameNamespace(@Valid @RequestBody SchemaNamespaceRenameReq req) {
-        return ApiResponse.success(schemaService.renameNamespace(req));
+        SchemaNamespaceOperationVO result = schemaService.renameNamespace(req);
+        if (result.isSuccess()) {
+            metadataChangeSyncService.onDatabaseRenamed(
+                req.getConnectionId(),
+                normalizeNamespaceName(result.getSourceNamespaceName(), req.getSourceNamespaceName()),
+                normalizeNamespaceName(result.getTargetNamespaceName(), req.getTargetNamespaceName())
+            );
+        }
+        return ApiResponse.success(result);
     }
 
     @PostMapping("/namespace/drop")
     public ApiResponse<SchemaNamespaceOperationVO> dropNamespace(@Valid @RequestBody SchemaNamespaceDropReq req) {
-        return ApiResponse.success(schemaService.dropNamespace(req));
+        SchemaNamespaceOperationVO result = schemaService.dropNamespace(req);
+        if (result.isSuccess()) {
+            metadataChangeSyncService.onDatabaseDropped(
+                req.getConnectionId(),
+                normalizeNamespaceName(result.getSourceNamespaceName(), req.getSourceNamespaceName())
+            );
+        }
+        return ApiResponse.success(result);
     }
 
     @PostMapping("/table/rename")
     public ApiResponse<TableRenameVO> renameTable(@Valid @RequestBody TableRenameReq req) {
         TableRenameVO result = schemaService.renameTable(req);
         if (result.isSuccess()) {
-            schemaService.refreshSchemaCache(req.getConnectionId(), req.getDatabaseName());
-            ragVectorizeQueueService.enqueue(req.getConnectionId(), req.getDatabaseName());
+            metadataChangeSyncService.onTableRenamed(
+                req.getConnectionId(),
+                result.getDatabaseName(),
+                result.getSourceTableName(),
+                result.getTargetTableName()
+            );
         }
         return ApiResponse.success(result);
     }
@@ -152,8 +198,7 @@ public class SchemaController {
     public ApiResponse<SchemaObjectDefinitionSaveVO> saveObjectDefinition(@Valid @RequestBody SchemaObjectDefinitionSaveReq req) {
         SchemaObjectDefinitionSaveVO result = schemaService.saveObjectDefinition(req);
         if (result.isSuccess()) {
-            schemaService.refreshSchemaCache(req.getConnectionId(), req.getDatabaseName());
-            ragVectorizeQueueService.enqueue(req.getConnectionId(), req.getDatabaseName());
+            metadataChangeSyncService.onDatabaseMetadataChanged(req.getConnectionId(), result.getDatabaseName());
         }
         return ApiResponse.success(result);
     }
@@ -162,8 +207,7 @@ public class SchemaController {
     public ApiResponse<SchemaObjectDropVO> dropObject(@Valid @RequestBody SchemaObjectDropReq req) {
         SchemaObjectDropVO result = schemaService.dropObject(req);
         if (result.isSuccess()) {
-            schemaService.refreshSchemaCache(req.getConnectionId(), req.getDatabaseName());
-            ragVectorizeQueueService.enqueue(req.getConnectionId(), req.getDatabaseName());
+            metadataChangeSyncService.onDatabaseMetadataChanged(req.getConnectionId(), result.getDatabaseName());
         }
         return ApiResponse.success(result);
     }
@@ -182,8 +226,11 @@ public class SchemaController {
     public ApiResponse<TableOperationVO> dropTable(@Valid @RequestBody TableDropReq req) {
         TableOperationVO result = schemaService.dropTable(req.getConnectionId(), req.getDatabaseName(), req.getTableName());
         if (result.isSuccess()) {
-            schemaService.refreshSchemaCache(req.getConnectionId(), req.getDatabaseName());
-            ragVectorizeQueueService.enqueue(req.getConnectionId(), req.getDatabaseName());
+            metadataChangeSyncService.onTableDropped(
+                req.getConnectionId(),
+                result.getDatabaseName(),
+                result.getTableName()
+            );
         }
         return ApiResponse.success(result);
     }
@@ -192,7 +239,7 @@ public class SchemaController {
     public ApiResponse<TableOperationVO> truncateTable(@Valid @RequestBody TableTruncateReq req) {
         TableOperationVO result = schemaService.truncateTable(req.getConnectionId(), req.getDatabaseName(), req.getTableName());
         if (result.isSuccess()) {
-            schemaService.refreshSchemaCache(req.getConnectionId(), req.getDatabaseName());
+            schemaService.refreshSchemaCache(req.getConnectionId(), result.getDatabaseName());
         }
         return ApiResponse.success(result);
     }
@@ -222,5 +269,10 @@ public class SchemaController {
 
     private String normalizeDatabaseName(String value) {
         return Objects.toString(value, "").trim().toLowerCase(Locale.ROOT);
+    }
+
+    private String normalizeNamespaceName(String preferred, String fallback) {
+        String normalized = Objects.toString(preferred, "").trim();
+        return normalized.isBlank() ? Objects.toString(fallback, "").trim() : normalized;
     }
 }

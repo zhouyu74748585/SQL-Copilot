@@ -135,7 +135,7 @@ export function useTableEditorModule(runtime: StudioRuntime): TableEditorModule 
     tab.saved = true;
     tab.updatedAt = Date.now();
     message.success(tab.mode === 'create' ? '表创建成功' : '表结构更新成功');
-    await refreshSchemaMetadata(tab.connectionId, tab.databaseName);
+    runtime.invalidateDatabaseMetadataCaches(tab.connectionId, tab.databaseName);
     await runtime.refreshCurrentObjects();
   }
 
@@ -146,14 +146,8 @@ export function useTableEditorModule(runtime: StudioRuntime): TableEditorModule 
   }
 
   async function refreshSchemaMetadata(connectionId: number, databaseName: string) {
-    try {
-      await postApi('/api/schema/cache/refresh', {
-        connectionId,
-        databaseName,
-      });
-    } catch (e) {
-      console.warn('刷新缓存失败:', e);
-    }
+    runtime.invalidateDatabaseMetadataCaches(connectionId, databaseName);
+    await runtime.refreshCurrentObjects();
   }
 
   async function confirmTruncateTable() {
@@ -169,7 +163,7 @@ export function useTableEditorModule(runtime: StudioRuntime): TableEditorModule 
         tableName,
       });
       message.success('表数据已清空');
-      await refreshSchemaMetadata(connId, dbName);
+      runtime.invalidateDatabaseMetadataCaches(connId, dbName);
       await runtime.refreshCurrentObjects();
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -190,7 +184,7 @@ export function useTableEditorModule(runtime: StudioRuntime): TableEditorModule 
         tableName,
       });
       message.success('表已删除');
-      await refreshSchemaMetadata(connId, dbName);
+      runtime.invalidateDatabaseMetadataCaches(connId, dbName);
       await runtime.refreshCurrentObjects();
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -226,16 +220,7 @@ export function useTableEditorModule(runtime: StudioRuntime): TableEditorModule 
         ddl,
       });
       const nextTableName = tab.draft?.tableName || tab.tableName;
-      await refreshSchemaMetadata(tab.connectionId, tab.databaseName);
-      try {
-        await postApi('/api/rag/table/manual', {
-          connectionId: tab.connectionId,
-          databaseName: tab.databaseName,
-          tableName: nextTableName,
-        });
-      } catch (e) {
-        console.warn('向量化请求失败:', e);
-      }
+      runtime.invalidateDatabaseMetadataCaches(tab.connectionId, tab.databaseName);
       message.success(tab.mode === 'create' ? '表创建成功' : '表结构更新成功');
       tab.saved = true;
       tab.dirty = false;

@@ -7,6 +7,8 @@ public class TableOperationVO {
 
     private boolean success;
     private String message;
+    private String databaseName;
+    private String tableName;
     private String executedSql;
 
     public static TableOperationVO success(String message, String executedSql) {

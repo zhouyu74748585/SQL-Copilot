@@ -168,6 +168,7 @@ export function useTableCopyModule(runtime: StudioRuntime): TableCopyModule {
       [connectionId]: databaseName,
     };
     runtime.currentObjectType.value = 'tables';
+    runtime.invalidateDatabaseMetadataCaches(connectionId, databaseName);
     runtime.expandConnectionNode(connectionId);
     runtime.expandCategoryNode(connectionId, databaseName, 'tables');
     await runtime.prepareConnectionTreeData(connectionId);

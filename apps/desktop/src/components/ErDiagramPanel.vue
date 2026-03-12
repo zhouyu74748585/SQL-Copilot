@@ -175,7 +175,18 @@
               +
             </button>
           </div>
-          <div v-if="table.moreCount > 0" class="er-table-more">{{ table.moreCount }} more columns...</div>
+          <button
+            v-if="table.canToggleColumns"
+            type="button"
+            class="er-table-more"
+            :class="{'is-relation-endpoint': hasHiddenRelationEndpoint(table)}"
+            data-er-interactive="true"
+            @mousedown.stop
+            @click.stop="toggleTableColumns(table.key)"
+          >
+            <span class="er-table-more-label">{{ table.moreLabel }}</span>
+            <span class="er-table-more-action">{{ table.expanded ? '收起' : '展开' }}</span>
+          </button>
         </div>
       </div>
     </div>
@@ -306,8 +317,13 @@ interface TableViewModel {
   centerX: number;
   centerY: number;
   columns: ErColumnNodeVO[];
+  allColumns: TableColumnView[];
   displayColumns: TableColumnView[];
-  moreCount: number;
+  hiddenColumns: TableColumnView[];
+  collapsedColumnCount: number;
+  canToggleColumns: boolean;
+  expanded: boolean;
+  moreLabel: string;
 }
 
 type RelationDirection = 'SOURCE_TO_TARGET' | 'TARGET_TO_SOURCE' | 'BIDIRECTIONAL';
@@ -374,6 +390,7 @@ const layoutCanvas = reactive<LayoutCanvasState>({
 const manualNodePositions = reactive<Record<string, NodePosition>>({});
 const manualRouteLaneX = reactive<Record<string, number>>({});
 const manualRouteAnchorOffsets = reactive<Record<string, RouteAnchorOffsets>>({});
+const expandedTableState = reactive<Record<string, boolean>>({});
 
 const activeRelationKey = ref('');
 const hoveredRelationKey = ref('');
@@ -600,10 +617,22 @@ function truncateText(text: string, max: number) {
   return source.length > max ? `${source.slice(0, max)}...` : source;
 }
 
-function nodeHeight(table: ErTableNodeVO) {
-  const rowCount = Math.max(NODE_MIN_BODY_ROWS, Math.min(NODE_MAX_COLUMNS, table.columns?.length || 0));
-  const moreRow = (table.columns?.length || 0) > NODE_MAX_COLUMNS ? 1 : 0;
+function visibleColumnCount(totalColumns: number, expanded: boolean) {
+  if (expanded) {
+    return totalColumns;
+  }
+  return Math.min(NODE_MAX_COLUMNS, totalColumns);
+}
+
+function nodeHeight(table: ErTableNodeVO, expanded = false) {
+  const totalColumns = table.columns?.length || 0;
+  const rowCount = Math.max(NODE_MIN_BODY_ROWS, visibleColumnCount(totalColumns, expanded));
+  const moreRow = !expanded && totalColumns > NODE_MAX_COLUMNS ? 1 : 0;
   return headerHeight() + NODE_BODY_TOP_PADDING + (rowCount + moreRow) * NODE_ROW_HEIGHT + NODE_BODY_BOTTOM_PADDING;
+}
+
+function resolvedNodeHeight(table: ErTableNodeVO) {
+  return nodeHeight(table, expandedTableState[normalizeIdentifier(table.tableName)] === true);
 }
 
 function hashString(input: string) {
@@ -736,7 +765,7 @@ function buildGridPositions(tables: ErTableNodeVO[], canvasWidth: number, cardWi
   for (let row = 0; row * columnCount < tables.length; row += 1) {
     const rowStart = row * columnCount;
     const rowTables = tables.slice(rowStart, rowStart + columnCount);
-    const rowMaxHeight = Math.max(...rowTables.map((table) => nodeHeight(table)));
+    const rowMaxHeight = Math.max(...rowTables.map((table) => resolvedNodeHeight(table)));
     const rowWidth = rowTables.length * cardWidth + (rowTables.length - 1) * NODE_HORIZONTAL_GAP;
     const startX = Math.max(paddingLeft, (canvasWidth - rowWidth) / 2);
     rowTables.forEach((table, col) => {
@@ -763,7 +792,7 @@ function buildCirclePositions(
     positions[normalizeIdentifier(tables[0].tableName)] = {x: centerX, y: centerY};
     return positions;
   }
-  const maxNodeHeight = Math.max(...tables.map((table) => nodeHeight(table)));
+  const maxNodeHeight = Math.max(...tables.map((table) => resolvedNodeHeight(table)));
   const radius = Math.max(100, Math.min(canvasWidth, canvasHeight) / 2 - Math.max(cardWidth, maxNodeHeight) / 2 - 30);
   tables.forEach((table, index) => {
     const angle = (-Math.PI / 2) + (Math.PI * 2 * index) / tables.length;
@@ -902,6 +931,15 @@ function clearRecord(record: Record<string, unknown>) {
   });
 }
 
+function syncExpandedTableState() {
+  const validKeys = new Set((props.graph?.tables || []).map((table) => normalizeIdentifier(table.tableName)));
+  Object.keys(expandedTableState).forEach((key) => {
+    if (!validKeys.has(key)) {
+      delete expandedTableState[key];
+    }
+  });
+}
+
 function cloneLayoutCanvas(): ErLayoutCanvasVO | undefined {
   if (!(layoutCanvas.width > 0) || !(layoutCanvas.height > 0)) {
     return undefined;
@@ -983,12 +1021,13 @@ const tableViews = computed<TableViewModel[]>(() => {
   }
   return graph.tables.map((table) => {
     const key = normalizeIdentifier(table.tableName);
+    const expanded = expandedTableState[key] === true;
     const defaultCenter = defaultNodeCenters.value[key] || {x: 160, y: 120};
     const center = manualNodePositions[key] || defaultCenter;
-    const height = nodeHeight(table);
+    const height = nodeHeight(table, expanded);
     const width = nodeCardWidth();
     const columns = table.columns || [];
-    const displayColumns = columns.slice(0, NODE_MAX_COLUMNS).map((column) => {
+    const allColumns = columns.map((column) => {
       const columnName = safeText(column.columnName) || '-';
       const dataType = safeText(column.dataType) || '-';
       const comment = safeText(column.columnComment);
@@ -1005,6 +1044,10 @@ const tableViews = computed<TableViewModel[]>(() => {
         fullTitle: `${columnName}${markText}: ${dataType}${commentText}`,
       };
     });
+    const displayColumns = expanded ? allColumns : allColumns.slice(0, NODE_MAX_COLUMNS);
+    const hiddenColumns = expanded ? [] : allColumns.slice(NODE_MAX_COLUMNS);
+    const collapsedColumnCount = hiddenColumns.length;
+    const canToggleColumns = allColumns.length > NODE_MAX_COLUMNS;
     return {
       key,
       tableName: table.tableName,
@@ -1016,8 +1059,15 @@ const tableViews = computed<TableViewModel[]>(() => {
       centerX: center.x,
       centerY: center.y,
       columns,
+      allColumns,
       displayColumns,
-      moreCount: Math.max(0, columns.length - NODE_MAX_COLUMNS),
+      hiddenColumns,
+      collapsedColumnCount,
+      canToggleColumns,
+      expanded,
+      moreLabel: expanded
+        ? `已展开全部 ${allColumns.length} 个字段`
+        : `还有 ${collapsedColumnCount} 个字段未显示`,
     };
   });
 });
@@ -1035,7 +1085,17 @@ function resolveFieldAnchorPoint(tableKey: string, columnKey: string, oppositeX?
   if (!table) {
     return {x: 0, y: 0};
   }
-  const rowIndex = Math.max(0, table.displayColumns.findIndex((field) => field.key === columnKey));
+  const visibleIndex = table.displayColumns.findIndex((field) => field.key === columnKey);
+  const hiddenIndex = table.hiddenColumns.findIndex((field) => field.key === columnKey);
+  let rowIndex = 0;
+  if (visibleIndex >= 0) {
+    rowIndex = visibleIndex;
+  } else if (!table.expanded && hiddenIndex >= 0 && table.canToggleColumns) {
+    rowIndex = table.displayColumns.length;
+  } else {
+    const fullIndex = table.allColumns.findIndex((field) => field.key === columnKey);
+    rowIndex = Math.max(0, fullIndex);
+  }
   const bodyStartY = table.top + headerHeight() + NODE_BODY_TOP_PADDING;
   const y = bodyStartY + rowIndex * NODE_ROW_HEIGHT + NODE_ROW_HEIGHT / 2;
   const useRightSide = oppositeX == null ? true : oppositeX >= table.centerX;
@@ -1196,6 +1256,27 @@ function isRelationEndpointField(tableKey: string, columnKey: string) {
     return false;
   }
   return highlightedFieldKeys.value.has(`${tableKey}|${columnKey}`);
+}
+
+function hiddenRelationEndpointCount(table: TableViewModel) {
+  if (table.expanded || !table.hiddenColumns.length) {
+    return 0;
+  }
+  return table.hiddenColumns.reduce((count, field) => (
+    isRelationEndpointField(table.key, field.key) ? count + 1 : count
+  ), 0);
+}
+
+function hasHiddenRelationEndpoint(table: TableViewModel) {
+  return hiddenRelationEndpointCount(table) > 0;
+}
+
+function toggleTableColumns(tableKey: string) {
+  if (!tableKey) {
+    return;
+  }
+  expandedTableState[tableKey] = expandedTableState[tableKey] !== true;
+  hideTooltip();
 }
 
 const activeRelationHandle = computed(() => {
@@ -1403,6 +1484,7 @@ function maybeResetLayoutState() {
   clearRecord(manualNodePositions);
   clearRecord(manualRouteLaneX);
   clearRecord(manualRouteAnchorOffsets);
+  clearRecord(expandedTableState);
   layoutCanvas.width = 0;
   layoutCanvas.height = 0;
   setActiveRelationKey('');
@@ -1471,6 +1553,7 @@ function syncRouteAnchorOffsetsFromGraph() {
 }
 
 function syncLayoutStateFromGraph() {
+  syncExpandedTableState();
   syncLayoutCanvasFromGraph();
   syncNodePositionsFromGraph();
   syncRouteAnchorOffsetsFromGraph();
@@ -2049,12 +2132,12 @@ async function exportPngDataUrl(options?: ExportPngOptions) {
       ctx.restore();
     });
 
-    if (table.moreCount > 0) {
+    if (table.canToggleColumns) {
       const y = bodyStartY + table.displayColumns.length * (NODE_ROW_HEIGHT * viewport.scale);
       ctx.save();
-      ctx.fillStyle = '#5f7391';
+      ctx.fillStyle = hasHiddenRelationEndpoint(table) ? '#915400' : '#5f7391';
       ctx.font = `${bodyFont}px sans-serif`;
-      ctx.fillText(`${table.moreCount} more columns...`, topLeft.x + 7 * viewport.scale, y + 11 * viewport.scale);
+      ctx.fillText(truncateText(`${table.moreLabel} · ${table.expanded ? '收起' : '展开'}`, 54), topLeft.x + 7 * viewport.scale, y + 11 * viewport.scale);
       ctx.restore();
     }
   });
@@ -2272,21 +2355,25 @@ onBeforeUnmount(() => {
 }
 
 .er-table-field-link-handle {
-  width: 14px;
-  height: 14px;
-  border: 1px solid #9ec0ef;
-  border-radius: 999px;
+  width: 12px;
+  height: 12px;
+  border: none;
+  border-radius: 0;
   padding: 0;
-  background: #eef5ff;
+  background: transparent;
   color: #2f69b4;
-  font-size: 10px;
-  line-height: 12px;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
   cursor: crosshair;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .er-table-field-link-handle:hover {
-  background: #dcecff;
-  border-color: #6e9fe3;
+  color: #0f62c6;
+  text-shadow: 0 0 6px rgba(79, 138, 225, 0.28);
 }
 
 .er-field-mark {
@@ -2314,11 +2401,47 @@ onBeforeUnmount(() => {
 }
 
 .er-table-more {
-  height: 15px;
-  line-height: 15px;
+  height: 18px;
+  line-height: 18px;
+  width: calc(100% - 10px);
+  margin: 2px 5px 0;
   padding: 0 7px;
   font-size: 10px;
   color: #5f7391;
+  border: 1px dashed #c4d4ea;
+  border-radius: 6px;
+  background: rgba(237, 244, 255, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  text-align: left;
+  cursor: pointer;
+}
+
+.er-table-more:hover {
+  border-color: #8eb3e2;
+  background: rgba(225, 237, 255, 0.92);
+}
+
+.er-table-more.is-relation-endpoint {
+  color: #8a5200;
+  border-color: #e0b770;
+  background: rgba(255, 233, 189, 0.82);
+}
+
+.er-table-more-label,
+.er-table-more-action {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.er-table-more-action {
+  margin-left: 8px;
+  flex-shrink: 0;
+  color: #2f69b4;
+  font-weight: 700;
 }
 
 .er-relation-group {

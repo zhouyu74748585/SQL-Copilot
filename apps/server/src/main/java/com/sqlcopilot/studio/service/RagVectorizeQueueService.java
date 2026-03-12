@@ -17,4 +17,8 @@ public interface RagVectorizeQueueService {
     RagDatabaseVectorizeStatusVO getStatus(Long connectionId, String databaseName);
 
     RagVectorizeOverviewVO getOverview(Long connectionId, String databaseName);
+
+    void clearDatabaseState(Long connectionId, String databaseName);
+
+    void clearConnectionState(Long connectionId);
 }

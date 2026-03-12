@@ -101,6 +101,28 @@
   - 后端：`mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18081` 启动成功，`/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
   - 前端：`npm run -w @sqlcopilot/desktop build -- --emptyOutDir` 后 `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6046` 启动成功，HTTP 状态码 `200`。
 
+## 追加记录（2026-03-12 15:46）- ER 连线加号去圈与折叠字段处理
+
+### 本次目标
+- 调整 ER 图字段连线入口样式，去掉 `+` 图标外圈。
+- 处理大表字段折叠后隐藏字段不易发现、无法直观发起连线的问题。
+
+### 关键改动
+- 修改文件：`apps/desktop/src/components/ErDiagramPanel.vue`
+  - 将字段连线手柄从“圆形按钮”改为裸 `+` 图标，仅保留文字命中区与 hover 高亮，不再显示外围圆圈。
+  - 为字段过多的表卡增加“展开/收起字段”行，折叠态显示“还有 N 个字段未显示”，点击后可展开完整字段列表，便于从隐藏字段发起手工连线。
+  - 新增表级展开状态 `expandedTableState`，折叠/展开会实时重算卡片高度与默认布局高度。
+  - 折叠态下若当前高亮关系命中了隐藏字段，会将“更多字段”聚合行标记为关联提示态，避免用户误以为关系丢失。
+  - 手工连线锚点解析补充隐藏字段兜底：当目标字段在折叠区时，聚合到“更多字段”行；展开后则恢复到真实字段行。
+  - 导出 PNG 时同步绘制新的“展开/收起字段”聚合行文案。
+
+### 验证结果
+- 前端类型检查：`npm run type-check` 通过。
+- 前端构建：`npm run build -- --emptyOutDir` 通过。
+- 启动验证（clean）：
+  - 后端：`mvn -f apps/server/pom.xml clean spring-boot:run "-Dspring-boot.run.arguments=--server.port=18091"` 启动成功，`/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+  - 前端：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6065 --strictPort` 启动成功，HTTP 状态码 `200`。
+
 ## 追加记录（2026-03-12 11:58）- ER快照绝对布局持久化
 
 ### 本次目标

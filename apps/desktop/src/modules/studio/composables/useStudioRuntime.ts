@@ -1699,6 +1699,147 @@ function vectorizeStatusCacheKey(connectionId: number, databaseName: string) {
   return `${connectionId}|${databaseName.trim().toLowerCase()}`;
 }
 
+function invalidateConnectionMetadataCaches(connectionId: number) {
+  if (!connectionId) {
+    return;
+  }
+  const nextDatabaseListCache = {...databaseListCache.value};
+  delete nextDatabaseListCache[connectionId];
+  databaseListCache.value = nextDatabaseListCache;
+
+  const nextActiveDatabaseMap = {...activeDatabaseMap.value};
+  delete nextActiveDatabaseMap[connectionId];
+  activeDatabaseMap.value = nextActiveDatabaseMap;
+
+  tableNameCache.value = Object.fromEntries(
+    Object.entries(tableNameCache.value).filter(([key]) => !key.startsWith(`${connectionId}|`)),
+  );
+  tableNameLoadedCache.value = Object.fromEntries(
+    Object.entries(tableNameLoadedCache.value).filter(([key]) => !key.startsWith(`${connectionId}|`)),
+  );
+  objectNameCache.value = Object.fromEntries(
+    Object.entries(objectNameCache.value).filter(([key]) => !key.startsWith(`${connectionId}|`)),
+  );
+  queryTableDetailCache.value = Object.fromEntries(
+    Object.entries(queryTableDetailCache.value).filter(([key]) => !key.startsWith(`${connectionId}|`)),
+  );
+  tableStatsCache.value = Object.fromEntries(
+    Object.entries(tableStatsCache.value).filter(([key]) => !key.startsWith(`${connectionId}|`)),
+  );
+  tableStatsLoadingState.value = Object.fromEntries(
+    Object.entries(tableStatsLoadingState.value).filter(([key]) => !key.startsWith(`${connectionId}|`)),
+  );
+  tableStatsLastRequestAt.value = Object.fromEntries(
+    Object.entries(tableStatsLastRequestAt.value).filter(([key]) => !key.startsWith(`${connectionId}|`)),
+  );
+  databaseVectorizeStatusMap.value = Object.fromEntries(
+    Object.entries(databaseVectorizeStatusMap.value).filter(([key]) => !key.startsWith(`${connectionId}|`)),
+  );
+
+  Array.from(tableStatsPollingTimers.keys()).forEach((key) => {
+    if (key.startsWith(`${connectionId}|`)) {
+      clearTableStatsPollingTimer(key);
+    }
+  });
+  Array.from(pendingTableNameLoads.keys()).forEach((key) => {
+    if (key.startsWith(`${connectionId}|`)) {
+      pendingTableNameLoads.delete(key);
+    }
+  });
+  Array.from(pendingTableDetailLoads.keys()).forEach((key) => {
+    if (key.startsWith(`${connectionId}|`)) {
+      pendingTableDetailLoads.delete(key);
+    }
+  });
+
+  if (workflow.connectionId === connectionId) {
+    schemaOverview.value = null;
+    selectedObjectName.value = '';
+    clearObjectDetail();
+  }
+}
+
+function invalidateDatabaseMetadataCaches(connectionId: number, databaseName: string) {
+  if (!connectionId) {
+    return;
+  }
+  const normalizedDatabaseName = (databaseName || '').trim();
+  if (!normalizedDatabaseName) {
+    invalidateConnectionMetadataCaches(connectionId);
+    return;
+  }
+  const tableKey = tableCacheKey(connectionId, normalizedDatabaseName);
+  const tablePrefix = `${connectionId}|${normalizedDatabaseName}|`;
+  const objectPrefix = `${connectionId}|${normalizedDatabaseName}|`;
+
+  const nextTableNameCache = {...tableNameCache.value};
+  delete nextTableNameCache[tableKey];
+  tableNameCache.value = nextTableNameCache;
+
+  const nextTableNameLoadedCache = {...tableNameLoadedCache.value};
+  delete nextTableNameLoadedCache[tableKey];
+  tableNameLoadedCache.value = nextTableNameLoadedCache;
+
+  objectNameCache.value = Object.fromEntries(
+    Object.entries(objectNameCache.value).filter(([key]) => !key.startsWith(objectPrefix)),
+  );
+  queryTableDetailCache.value = Object.fromEntries(
+    Object.entries(queryTableDetailCache.value).filter(([key]) => !key.startsWith(tablePrefix)),
+  );
+
+  const nextTableStatsCache = {...tableStatsCache.value};
+  delete nextTableStatsCache[tableKey];
+  tableStatsCache.value = nextTableStatsCache;
+
+  const nextTableStatsLoadingState = {...tableStatsLoadingState.value};
+  delete nextTableStatsLoadingState[tableKey];
+  tableStatsLoadingState.value = nextTableStatsLoadingState;
+
+  const nextTableStatsLastRequestAt = {...tableStatsLastRequestAt.value};
+  delete nextTableStatsLastRequestAt[tableKey];
+  tableStatsLastRequestAt.value = nextTableStatsLastRequestAt;
+
+  const nextDatabaseVectorizeStatusMap = {...databaseVectorizeStatusMap.value};
+  delete nextDatabaseVectorizeStatusMap[vectorizeStatusCacheKey(connectionId, normalizedDatabaseName)];
+  databaseVectorizeStatusMap.value = nextDatabaseVectorizeStatusMap;
+
+  clearTableStatsPollingTimer(tableKey);
+  pendingTableNameLoads.delete(tableKey);
+  Array.from(pendingTableDetailLoads.keys()).forEach((key) => {
+    if (key.startsWith(tablePrefix)) {
+      pendingTableDetailLoads.delete(key);
+    }
+  });
+
+  if (workflow.connectionId === connectionId && getActiveDatabaseName(connectionId) === normalizedDatabaseName) {
+    schemaOverview.value = null;
+  }
+}
+
+function invalidateDatabaseListCache(connectionId: number) {
+  if (!connectionId) {
+    return;
+  }
+  const nextDatabaseListCache = {...databaseListCache.value};
+  delete nextDatabaseListCache[connectionId];
+  databaseListCache.value = nextDatabaseListCache;
+  databaseVectorizeStatusMap.value = Object.fromEntries(
+    Object.entries(databaseVectorizeStatusMap.value).filter(([key]) => !key.startsWith(`${connectionId}|`)),
+  );
+}
+
+function handleDatabaseRenamedLocally(connectionId: number, sourceDatabaseName: string, targetDatabaseName: string) {
+  invalidateDatabaseMetadataCaches(connectionId, sourceDatabaseName);
+  invalidateDatabaseMetadataCaches(connectionId, targetDatabaseName);
+  invalidateDatabaseListCache(connectionId);
+  if ((activeDatabaseMap.value[connectionId] || '').trim() === (sourceDatabaseName || '').trim()) {
+    activeDatabaseMap.value = {
+      ...activeDatabaseMap.value,
+      [connectionId]: (targetDatabaseName || '').trim(),
+    };
+  }
+}
+
 function getDatabaseVectorizeStatus(connectionId: number, databaseName: string) {
   if (!databaseName || databaseName === '未发现数据库') {
     return 'NOT_VECTORIZED';
@@ -3484,6 +3625,7 @@ async function removeConnection(id: number) {
   await runSafely(async () => {
     await postApi<boolean>('/api/connection/remove', { id });
     message.success('连接已删除');
+    invalidateConnectionMetadataCaches(id);
     if (workflow.connectionId === id) {
       workflow.connectionId = 0;
       schemaOverview.value = null;
@@ -7557,6 +7699,10 @@ function resetConnectionModalState() {
     tableCacheKey,
     objectCacheKey,
     vectorizeStatusCacheKey,
+    invalidateConnectionMetadataCaches,
+    invalidateDatabaseMetadataCaches,
+    invalidateDatabaseListCache,
+    handleDatabaseRenamedLocally,
     getDatabaseVectorizeStatus,
     getDatabaseVectorizeStatusRecord,
     canUseErFeature,

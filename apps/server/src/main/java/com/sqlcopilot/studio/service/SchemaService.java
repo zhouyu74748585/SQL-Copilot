@@ -43,4 +43,6 @@ public interface SchemaService {
     TableOperationVO truncateTable(Long connectionId, String databaseName, String tableName);
 
     void refreshSchemaCache(Long connectionId, String databaseName);
+
+    void refreshConnectionSchemaCaches(Long connectionId);
 }

@@ -1,6 +1,7 @@
 package com.sqlcopilot.studio.mapper;
 
 import com.sqlcopilot.studio.entity.RagVectorizeStatusEntity;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
@@ -55,4 +56,17 @@ public interface RagVectorizeStatusMapper {
                 COALESCE(excluded.last_full_vectorize_provider, rag_vectorize_status.last_full_vectorize_provider)
         """)
     int upsert(RagVectorizeStatusEntity entity);
+
+    @Delete("""
+        DELETE FROM rag_vectorize_status
+        WHERE connection_id = #{connectionId}
+          AND database_name = #{databaseName}
+        """)
+    int deleteOne(@Param("connectionId") Long connectionId, @Param("databaseName") String databaseName);
+
+    @Delete("""
+        DELETE FROM rag_vectorize_status
+        WHERE connection_id = #{connectionId}
+        """)
+    int deleteByConnectionId(@Param("connectionId") Long connectionId);
 }

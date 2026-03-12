@@ -253,6 +253,9 @@ public class TableCopyServiceImpl implements TableCopyService {
         if (!context.sameConnection()) {
             return false;
         }
+        if (context.copyMode() == TableCopyMode.STRUCTURE_AND_DATA && hasGeneratedColumns(context.sourceTableDetail())) {
+            return false;
+        }
         JdbcDriverResolver.TableCopyFastPathSpec spec = jdbcDriverResolver.findTableCopyFastPathSpec(context.dbType());
         if (spec == null) {
             return false;
@@ -444,7 +447,10 @@ public class TableCopyServiceImpl implements TableCopyService {
     }
 
     private long copyDataWithinSameDatabase(CopyContext context) {
-        List<String> columnNames = extractColumnNames(context.sourceTableDetail());
+        List<String> columnNames = extractInsertableColumnNames(context.sourceTableDetail());
+        if (columnNames.isEmpty()) {
+            throw new BusinessException(400, "源表不存在可写入的普通列，无法复制数据");
+        }
         String columnSql = joinIdentifiers(columnNames, context.dbType());
         String sql = "INSERT INTO " + quoteIdentifier(context.targetTableName(), context.dbType())
             + " (" + columnSql + ") SELECT " + columnSql
@@ -460,7 +466,10 @@ public class TableCopyServiceImpl implements TableCopyService {
     }
 
     private long copyDataAcrossConnections(CopyContext context, TableCopyTaskState taskState, long totalRows) {
-        List<String> columnNames = extractColumnNames(context.sourceTableDetail());
+        List<String> columnNames = extractInsertableColumnNames(context.sourceTableDetail());
+        if (columnNames.isEmpty()) {
+            throw new BusinessException(400, "源表不存在可写入的普通列，无法复制数据");
+        }
         String selectSql = "SELECT " + joinIdentifiers(columnNames, context.dbType())
             + " FROM " + quoteIdentifier(context.sourceTableName(), context.dbType());
         String insertSql = "INSERT INTO " + quoteIdentifier(context.targetTableName(), context.dbType())
@@ -751,11 +760,16 @@ public class TableCopyServiceImpl implements TableCopyService {
         return baseType + "(" + columnSize + ")";
     }
 
-    private List<String> extractColumnNames(TableDetailVO tableDetail) {
+    private List<String> extractInsertableColumnNames(TableDetailVO tableDetail) {
         return tableDetail.getColumns().stream()
+            .filter(column -> !Boolean.TRUE.equals(column.getGenerated()))
             .map(TableDetailVO.ColumnDetailVO::getColumnName)
             .filter(Objects::nonNull)
             .toList();
+    }
+
+    private boolean hasGeneratedColumns(TableDetailVO tableDetail) {
+        return tableDetail.getColumns().stream().anyMatch(column -> Boolean.TRUE.equals(column.getGenerated()));
     }
 
     private String joinIdentifiers(List<String> identifiers, String dbType) {

@@ -237,6 +237,7 @@ export function useObjectDefinitionEditorModule(runtime: StudioRuntime): ObjectD
       tab.dirty = false;
       tab.errorMessage = '';
       tab.updatedAt = Date.now();
+      runtime.invalidateDatabaseMetadataCaches(tab.connectionId, tab.databaseName);
       await runtime.prepareConnectionTreeData(tab.connectionId);
       if (runtime.workflow.connectionId === tab.connectionId
         && runtime.getActiveDatabaseName(tab.connectionId) === tab.databaseName

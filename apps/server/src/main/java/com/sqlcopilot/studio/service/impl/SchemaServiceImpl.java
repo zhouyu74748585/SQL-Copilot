@@ -228,6 +228,7 @@ public class SchemaServiceImpl implements SchemaService {
             detail.setDefaultCurrentTimestamp(isCurrentTimestampDefault(item.getColumnDefault()));
             String extra = finalMysqlColumnExtraMap.getOrDefault(normalize(item.getColumnName()).toLowerCase(Locale.ROOT), "");
             detail.setOnUpdateCurrentTimestamp(hasOnUpdateCurrentTimestamp(extra));
+            detail.setGenerated(isGeneratedColumn(extra));
             return detail;
         }).toList();
         vo.setColumns(columnDetails);
@@ -397,7 +398,9 @@ public class SchemaServiceImpl implements SchemaService {
         if (ddl == null || ddl.isBlank()) {
             ddl = buildCreateTableDDL(req);
         }
-        return executeDDL(req.getConnectionId(), req.getDatabaseName(), ddl, "表创建成功");
+        TableOperationVO result = executeDDL(req.getConnectionId(), req.getDatabaseName(), ddl, "表创建成功");
+        fillTableOperationContext(result, req.getConnectionId(), req.getDatabaseName(), req.getTableName());
+        return result;
     }
 
     @Override
@@ -406,7 +409,9 @@ public class SchemaServiceImpl implements SchemaService {
         if (ddl == null || ddl.isBlank()) {
             return TableOperationVO.failure("暂不支持自动生成ALTER TABLE，请手动编写DDL");
         }
-        return executeDDL(req.getConnectionId(), req.getDatabaseName(), ddl, "表结构更新成功");
+        TableOperationVO result = executeDDL(req.getConnectionId(), req.getDatabaseName(), ddl, "表结构更新成功");
+        fillTableOperationContext(result, req.getConnectionId(), req.getDatabaseName(), req.getTableName());
+        return result;
     }
 
     @Override
@@ -663,7 +668,9 @@ public class SchemaServiceImpl implements SchemaService {
             return TableOperationVO.failure("表名不能为空");
         }
         String ddl = "DROP TABLE `" + normalizedTableName + "`";
-        return executeDDL(connectionId, databaseName, ddl, "表删除成功");
+        TableOperationVO result = executeDDL(connectionId, databaseName, ddl, "表删除成功");
+        fillTableOperationContext(result, connectionId, databaseName, normalizedTableName);
+        return result;
     }
 
     @Override
@@ -673,7 +680,9 @@ public class SchemaServiceImpl implements SchemaService {
             return TableOperationVO.failure("表名不能为空");
         }
         String ddl = "TRUNCATE TABLE `" + normalizedTableName + "`";
-        return executeDDL(connectionId, databaseName, ddl, "表清空成功");
+        TableOperationVO result = executeDDL(connectionId, databaseName, ddl, "表清空成功");
+        fillTableOperationContext(result, connectionId, databaseName, normalizedTableName);
+        return result;
     }
 
     @Override
@@ -688,6 +697,17 @@ public class SchemaServiceImpl implements SchemaService {
         tableStatsSnapshotCache.remove(cacheKey);
         tableStatsRefreshingKeys.remove(cacheKey);
         log.info("Schema缓存已刷新, connectionId={}, databaseName={}", connectionId, databaseName);
+    }
+
+    @Override
+    public void refreshConnectionSchemaCaches(Long connectionId) {
+        if (connectionId == null) {
+            return;
+        }
+        schemaSnapshotCache.keySet().removeIf(key -> Objects.equals(connectionId, key.connectionId()));
+        tableStatsSnapshotCache.keySet().removeIf(key -> Objects.equals(connectionId, key.connectionId()));
+        tableStatsRefreshingKeys.removeIf(key -> Objects.equals(connectionId, key.connectionId()));
+        log.info("连接级Schema缓存已刷新, connectionId={}", connectionId);
     }
 
     private String buildCreateTableDDL(TableCreateReq req) {
@@ -853,6 +873,15 @@ public class SchemaServiceImpl implements SchemaService {
             log.error("执行DDL失败: {}", ddl, ex);
             return TableOperationVO.failure("执行失败: " + ex.getMessage());
         }
+    }
+
+    private void fillTableOperationContext(TableOperationVO vo, Long connectionId, String databaseName, String tableName) {
+        if (vo == null || !vo.isSuccess() || connectionId == null) {
+            return;
+        }
+        ConnectionEntity connectionEntity = connectionService.getConnectionEntity(connectionId);
+        vo.setDatabaseName(resolveTargetDatabaseName(connectionEntity, databaseName));
+        vo.setTableName(normalize(tableName));
     }
 
     @Scheduled(
@@ -1746,6 +1775,11 @@ public class SchemaServiceImpl implements SchemaService {
 
     private boolean hasOnUpdateCurrentTimestamp(String extra) {
         return normalize(extra).toUpperCase(Locale.ROOT).contains("ON UPDATE CURRENT_TIMESTAMP");
+    }
+
+    private boolean isGeneratedColumn(String extra) {
+        String normalized = normalize(extra).toUpperCase(Locale.ROOT);
+        return normalized.contains("GENERATED");
     }
 
     private List<String> readTableLikeObjects(DatabaseMetaData metaData, String catalog, String schemaPattern, String type)

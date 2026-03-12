@@ -45,3 +45,23 @@
 ### 说明
 - 当前“函数”仍按现有对象树中的 `functions` 对象处理，不扩展到 `procedures`。
 - 若用户在定义编辑页直接改对象名，后端会阻止保存，不支持通过定义页改名。
+
+
+### 2026-03-12 15:16:16
+
+## 2026-03-12 新建视图/函数页面布局修复
+
+### 本次目标
+- 修复新建视图、新建函数定义编辑页布局异常，被拆成四格的问题。
+
+### 关键改动
+- 调整 `apps/desktop/src/modules/studio/styles/shell.css`，为 `workbench-object-definition` 补齐与其他编辑页一致的桌面端两行网格规则。
+- 明确定义对象定义编辑页左侧连接树、左侧分隔条的跨行布局，避免顶部上下文条出现后左侧区域只占首行。
+- 为对象定义编辑区补充 `grid-column: 3 / 6`、`grid-row: 2` 定位，让编辑器稳定占据右侧主工作区，不再触发隐式列导致“四格”布局。
+- 同步补齐响应式断点下 `workbench-object-definition` 的列配置与移动端回退规则，保证桌面和窄屏表现一致。
+
+### 验证结果
+- 前端类型检查：`npm run type-check` 通过。
+- 前端 clean 构建：`npm run build -- --emptyOutDir` 通过。
+- 后端 clean 启动：`mvn -f apps/server/pom.xml clean spring-boot:run "-Dspring-boot.run.arguments=--server.port=18088"` 成功，`http://127.0.0.1:18088/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+- 前端预览：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6062 --strictPort` 成功，`http://127.0.0.1:6062/` 返回 `HTTP/1.1 200 OK`。

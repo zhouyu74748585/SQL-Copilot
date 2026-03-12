@@ -3,6 +3,7 @@ package com.sqlcopilot.studio.controller;
 import com.sqlcopilot.studio.dto.common.ApiResponse;
 import com.sqlcopilot.studio.dto.connection.*;
 import com.sqlcopilot.studio.service.ConnectionService;
+import com.sqlcopilot.studio.service.MetadataChangeSyncService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
 
@@ -13,9 +14,12 @@ import java.util.List;
 public class ConnectionController {
 
     private final ConnectionService connectionService;
+    private final MetadataChangeSyncService metadataChangeSyncService;
 
-    public ConnectionController(ConnectionService connectionService) {
+    public ConnectionController(ConnectionService connectionService,
+                                MetadataChangeSyncService metadataChangeSyncService) {
         this.connectionService = connectionService;
+        this.metadataChangeSyncService = metadataChangeSyncService;
     }
 
     @GetMapping("/db-types")
@@ -48,6 +52,7 @@ public class ConnectionController {
     @PostMapping("/remove")
     public ApiResponse<Boolean> remove(@Valid @RequestBody ConnectionRemoveReq req) {
         connectionService.removeConnection(req.getId());
+        metadataChangeSyncService.onConnectionRemoved(req.getId());
         return ApiResponse.success(Boolean.TRUE);
     }
 

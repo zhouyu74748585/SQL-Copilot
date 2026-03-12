@@ -236,10 +236,22 @@ export function useConnectionBrowserModule(
         } satisfies SchemaNamespaceRenameReq);
       closeNamespaceModal();
       message.success(result.message || `${namespaceLabelValue}操作成功`);
+      runtime.invalidateDatabaseListCache(connectionId);
+      if (mode === 'rename') {
+        runtime.handleDatabaseRenamedLocally(
+          connectionId,
+          sourceNamespaceName,
+          result.targetNamespaceName || targetNamespaceName,
+        );
+      }
       await runtime.prepareConnectionTreeData(connectionId);
       runtime.selectedTreeKeys.value = mode === 'create'
         ? [runtime.buildDatabaseNodeKey(connectionId, targetNamespaceName)]
         : [runtime.buildDatabaseNodeKey(connectionId, result.targetNamespaceName || targetNamespaceName)];
+      if (runtime.workflow.connectionId === connectionId
+        && runtime.getActiveDatabaseName(connectionId) === (result.targetNamespaceName || targetNamespaceName)) {
+        await runtime.refreshCurrentObjects();
+      }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       message.error(msg);
@@ -271,8 +283,19 @@ export function useConnectionBrowserModule(
           sourceNamespaceName,
         } satisfies SchemaNamespaceDropReq);
         message.success(result.message || `${label}删除成功`);
+        runtime.invalidateDatabaseMetadataCaches(connectionId, sourceNamespaceName);
+        runtime.invalidateDatabaseListCache(connectionId);
         await runtime.prepareConnectionTreeData(connectionId);
         runtime.selectedTreeKeys.value = [`conn-${connectionId}`];
+        if (runtime.workflow.connectionId === connectionId
+          && runtime.getActiveDatabaseName(connectionId) === sourceNamespaceName) {
+          runtime.activeDatabaseMap.value = {
+            ...runtime.activeDatabaseMap.value,
+            [connectionId]: '',
+          };
+          runtime.selectedObjectName.value = '';
+          runtime.clearObjectDetail();
+        }
       },
     });
   }
@@ -292,6 +315,7 @@ export function useConnectionBrowserModule(
           objectName,
         } satisfies SchemaObjectDropReq);
         message.success(result.message || '对象删除成功');
+        runtime.invalidateDatabaseMetadataCaches(connectionId, databaseName);
         await runtime.prepareConnectionTreeData(connectionId);
         if (runtime.workflow.connectionId === connectionId && runtime.getActiveDatabaseName(connectionId) === databaseName) {
           await runtime.refreshCurrentObjects();
@@ -360,14 +384,17 @@ export function useConnectionBrowserModule(
       return [];
     }
     if (menu.targetType === 'connection') {
-      return [
+      const actions: ContextMenuActionItem[] = [
         { id: 'createConnection', label: '新建连接' },
-        ...(spec?.supportsNamespaceCreate ? [{ id: 'createNamespace' as const, label: `新建${namespaceLabel()}` }] : []),
         { id: 'editConnection', label: '编辑连接' },
         { id: 'testConnection', label: '测试连接' },
         { id: 'syncSchema', label: '同步 Schema' },
         { id: 'deleteConnection', label: '删除连接', danger: true },
       ];
+      if (spec?.supportsNamespaceCreate) {
+        actions.splice(1, 0, { id: 'createNamespace', label: `新建${namespaceLabel()}` });
+      }
+      return actions;
     }
     if (menu.targetType === 'database') {
       const actions: ContextMenuActionItem[] = [];
@@ -411,8 +438,8 @@ export function useConnectionBrowserModule(
     }
     if (menu.objectType === 'tables') {
       return [
-        { id: 'createTable', label: '新建表' },
         { id: 'querySql', label: 'SQL查询' },
+        { id: 'createTable', label: '新建表' },
         { id: 'editTable', label: '编辑表结构' },
         { id: 'browseData', label: '数据浏览' },
         { id: 'renameTable', label: '重命名表' },
@@ -430,20 +457,32 @@ export function useConnectionBrowserModule(
       ];
     }
     if (menu.objectType === 'views') {
-      return [
-        ...(spec?.supportsViewCreate ? [{ id: 'createView' as const, label: '新建视图' }] : []),
-        { id: 'querySql', label: 'SQL查询' },
+      const actions: ContextMenuActionItem[] = [
         { id: 'editDefinition', label: '编辑视图定义' },
         { id: 'browseData', label: '数据浏览' },
-        ...(spec?.supportsViewDrop ? [{ id: 'dropObject' as const, label: '删除视图', danger: true }] : []),
       ];
+      if (spec?.supportsViewCreate) {
+        actions.unshift(
+          { id: 'querySql', label: 'SQL查询' },
+          { id: 'createView', label: '新建视图' },
+        );
+      }
+      if (spec?.supportsViewDrop) {
+        actions.push({ id: 'dropObject', label: '删除视图', danger: true });
+      }
+      return actions;
     }
     if (menu.objectType === 'functions') {
-      return [
-        ...(spec?.supportsFunctionCreate ? [{ id: 'createFunction' as const, label: '新建函数' }] : []),
+      const actions: ContextMenuActionItem[] = [
         { id: 'editDefinition', label: '编辑函数定义' },
-        ...(spec?.supportsFunctionDrop ? [{ id: 'dropObject' as const, label: '删除函数', danger: true }] : []),
       ];
+      if (spec?.supportsFunctionCreate) {
+        actions.unshift({ id: 'createFunction', label: '新建函数' });
+      }
+      if (spec?.supportsFunctionDrop) {
+        actions.push({ id: 'dropObject', label: '删除函数', danger: true });
+      }
+      return actions;
     }
     if (menu.objectType === 'queries') {
       return [
