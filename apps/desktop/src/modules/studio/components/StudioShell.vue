@@ -2029,101 +2029,162 @@
             </template>
             <template v-else>
               <div class="query-chart-manual-panel">
-                <a-space wrap size="small">
-                  <a-select
-                    :value="activeQueryTab.manualChartConfig.chartType"
-                    @update:value="handleManualChartTypeChange(activeQueryTab, String($event || 'LINE'))"
-                    size="small"
-                    style="width: 104px"
-                    :options="chartTypeOptions"
-                  />
-                  <a-select
+                <div class="query-chart-manual-grid">
+                  <div class="query-chart-control">
+                    <a-tooltip title="选择图表类型；折线图、柱状图和趋势图支持按分组字段拆成多系列。">
+                      <span class="query-chart-control-label">图表类型</span>
+                    </a-tooltip>
+                    <a-select
+                      :value="activeQueryTab.manualChartConfig.chartType"
+                      @update:value="handleManualChartTypeChange(activeQueryTab, String($event || 'LINE'))"
+                      size="small"
+                      style="width: 100%"
+                      :options="chartTypeOptions"
+                    />
+                  </div>
+                  <div
                     v-if="['LINE', 'BAR', 'SCATTER', 'TREND'].includes(activeQueryTab.manualChartConfig.chartType || '')"
-                    :value="activeQueryTab.manualChartConfig.xField"
-                    @update:value="handleManualChartXAxisChange(activeQueryTab, String($event || ''))"
-                    size="small"
-                    style="width: 132px"
-                    :options="activeChartFieldOptions"
-                    placeholder="X 轴"
-                  />
-                  <a-select
-                    v-if="['LINE', 'BAR', 'TREND'].includes(activeQueryTab.manualChartConfig.chartType || '') && !activeQueryTab.manualChartConfig.seriesField"
-                    :value="activeQueryTab.manualChartConfig.yFields"
-                    @update:value="handleManualChartYFieldsChange(activeQueryTab, Array.isArray($event) ? $event.map((item) => String(item)) : [])"
-                    size="small"
-                    mode="multiple"
-                    :max-tag-count="2"
-                    style="width: 184px"
-                    :options="activeNumericFieldOptions"
-                    placeholder="Y 轴（多选）"
-                  />
-                  <a-select
+                    class="query-chart-control"
+                  >
+                    <a-tooltip title="X 轴通常选择时间、分类或排序维度字段。">
+                      <span class="query-chart-control-label">X 轴</span>
+                    </a-tooltip>
+                    <a-select
+                      :value="activeQueryTab.manualChartConfig.xField"
+                      @update:value="handleManualChartXAxisChange(activeQueryTab, String($event || ''))"
+                      size="small"
+                      style="width: 100%"
+                      :options="activeChartFieldOptions"
+                      placeholder="X 轴"
+                    />
+                  </div>
+                  <div
                     v-if="['LINE', 'BAR', 'TREND'].includes(activeQueryTab.manualChartConfig.chartType || '')"
-                    :value="activeQueryTab.manualChartConfig.seriesField"
-                    @update:value="handleManualChartSeriesFieldChange(activeQueryTab, String($event || ''))"
-                    size="small"
-                    allow-clear
-                    style="width: 148px"
-                    :options="activeSeriesFieldOptions"
-                    placeholder="分组字段"
-                  />
-                  <a-select
-                    v-if="['LINE', 'BAR', 'TREND'].includes(activeQueryTab.manualChartConfig.chartType || '') && !!activeQueryTab.manualChartConfig.seriesField"
-                    :value="activeQueryTab.manualChartConfig.yFields?.[0] || ''"
-                    @update:value="handleManualChartSingleYFieldChange(activeQueryTab, String($event || ''))"
-                    size="small"
-                    style="width: 148px"
-                    :options="activeNumericFieldOptions"
-                    placeholder="Y 轴（单值）"
-                  />
-                  <a-select
+                    class="query-chart-control query-chart-control-wide"
+                  >
+                    <a-tooltip :title="activeQueryTab.manualChartConfig.seriesField ? '启用分组字段后，只保留一个数值字段，系统会按分组字段自动拆成多条系列。' : '未设置分组字段时，可同时选择多个数值字段作为多条系列。'">
+                      <span class="query-chart-control-label">{{ activeQueryTab.manualChartConfig.seriesField ? 'Y 轴（单值）' : 'Y 轴（多选）' }}</span>
+                    </a-tooltip>
+                    <a-select
+                      v-if="activeQueryTab.manualChartConfig.seriesField"
+                      :value="activeQueryTab.manualChartConfig.yFields?.[0] || ''"
+                      @update:value="handleManualChartSingleYFieldChange(activeQueryTab, String($event || ''))"
+                      size="small"
+                      style="width: 100%"
+                      :options="activeNumericFieldOptions"
+                      placeholder="Y 轴（单值）"
+                    />
+                    <a-select
+                      v-else
+                      :value="activeQueryTab.manualChartConfig.yFields"
+                      @update:value="handleManualChartYFieldsChange(activeQueryTab, Array.isArray($event) ? $event.map((item) => String(item)) : [])"
+                      size="small"
+                      mode="multiple"
+                      :max-tag-count="2"
+                      style="width: 100%"
+                      :options="activeNumericFieldOptions"
+                      placeholder="Y 轴（多选）"
+                    />
+                  </div>
+                  <div
+                    v-if="['LINE', 'BAR', 'TREND'].includes(activeQueryTab.manualChartConfig.chartType || '')"
+                    class="query-chart-control"
+                  >
+                    <a-tooltip title="按该字段拆分系列；像 model_id 这类 ID 字段也可以用来生成多条线。">
+                      <span class="query-chart-control-label">分组字段</span>
+                    </a-tooltip>
+                    <a-select
+                      :value="activeQueryTab.manualChartConfig.seriesField"
+                      @update:value="handleManualChartSeriesFieldChange(activeQueryTab, String($event || ''))"
+                      size="small"
+                      allow-clear
+                      style="width: 100%"
+                      :options="activeSeriesFieldOptions"
+                      placeholder="分组字段"
+                    />
+                  </div>
+                  <div
                     v-if="activeQueryTab.manualChartConfig.chartType === 'SCATTER'"
-                    :value="activeQueryTab.manualChartConfig.yFields"
-                    @update:value="handleManualChartYFieldsChange(activeQueryTab, Array.isArray($event) ? $event.map((item) => String(item)) : [])"
-                    size="small"
-                    mode="multiple"
-                    style="width: 148px"
-                    :options="activeNumericFieldOptions"
-                    placeholder="Y 轴"
-                    :max-tag-count="1"
-                    :max-count="1"
-                  />
-                  <a-select
+                    class="query-chart-control"
+                  >
+                    <a-tooltip title="散点图需要 1 个数值型 Y 轴字段。">
+                      <span class="query-chart-control-label">Y 轴</span>
+                    </a-tooltip>
+                    <a-select
+                      :value="activeQueryTab.manualChartConfig.yFields"
+                      @update:value="handleManualChartYFieldsChange(activeQueryTab, Array.isArray($event) ? $event.map((item) => String(item)) : [])"
+                      size="small"
+                      mode="multiple"
+                      style="width: 100%"
+                      :options="activeNumericFieldOptions"
+                      placeholder="Y 轴"
+                      :max-tag-count="1"
+                      :max-count="1"
+                    />
+                  </div>
+                  <div
                     v-if="activeQueryTab.manualChartConfig.chartType === 'PIE'"
-                    v-model:value="activeQueryTab.manualChartConfig.categoryField"
-                    size="small"
-                    style="width: 128px"
-                    :options="activeChartFieldOptions"
-                    placeholder="分类字段"
-                  />
-                  <a-select
+                    class="query-chart-control"
+                  >
+                    <a-tooltip title="饼图按该字段聚合分类。">
+                      <span class="query-chart-control-label">分类字段</span>
+                    </a-tooltip>
+                    <a-select
+                      v-model:value="activeQueryTab.manualChartConfig.categoryField"
+                      size="small"
+                      style="width: 100%"
+                      :options="activeChartFieldOptions"
+                      placeholder="分类字段"
+                    />
+                  </div>
+                  <div
                     v-if="activeQueryTab.manualChartConfig.chartType === 'PIE'"
-                    v-model:value="activeQueryTab.manualChartConfig.valueField"
-                    size="small"
-                    style="width: 128px"
-                    :options="activeNumericFieldOptions"
-                    placeholder="数值字段"
-                  />
-                  <a-select
-                    v-model:value="activeQueryTab.manualChartConfig.sortField"
-                    size="small"
-                    style="width: 132px"
-                    :options="activeChartFieldOptions"
-                    placeholder="排序字段"
-                    allow-clear
-                  />
-                  <a-select
-                    v-model:value="activeQueryTab.manualChartConfig.sortDirection"
-                    size="small"
-                    style="width: 94px"
-                    :options="chartSortDirectionOptions"
-                  />
-                  <a-tooltip title="按当前配置生成图表">
-                    <a-button size="small" type="primary" class="sql-action-icon-btn" @click="generateManualChartForTab(activeQueryTab)">
+                    class="query-chart-control"
+                  >
+                    <a-tooltip title="饼图使用该数值字段作为占比或总量。">
+                      <span class="query-chart-control-label">数值字段</span>
+                    </a-tooltip>
+                    <a-select
+                      v-model:value="activeQueryTab.manualChartConfig.valueField"
+                      size="small"
+                      style="width: 100%"
+                      :options="activeNumericFieldOptions"
+                      placeholder="数值字段"
+                    />
+                  </div>
+                  <div class="query-chart-control">
+                    <a-tooltip title="设置后会在渲染前先按该字段排序，时间趋势图建议与 X 轴保持一致。">
+                      <span class="query-chart-control-label">排序字段</span>
+                    </a-tooltip>
+                    <a-select
+                      v-model:value="activeQueryTab.manualChartConfig.sortField"
+                      size="small"
+                      style="width: 100%"
+                      :options="activeChartFieldOptions"
+                      placeholder="排序字段"
+                      allow-clear
+                    />
+                  </div>
+                  <div class="query-chart-control query-chart-control-compact">
+                    <a-tooltip title="控制排序方向；趋势图一般使用升序。">
+                      <span class="query-chart-control-label">排序方向</span>
+                    </a-tooltip>
+                    <a-select
+                      v-model:value="activeQueryTab.manualChartConfig.sortDirection"
+                      size="small"
+                      style="width: 100%"
+                      :options="chartSortDirectionOptions"
+                    />
+                  </div>
+                  <div class="query-chart-control query-chart-control-action">
+                    <a-tooltip title="按当前配置生成图表">
+                      <span class="query-chart-control-label">生成图表</span>
+                    </a-tooltip>
+                    <a-button size="small" type="primary" class="sql-action-icon-btn query-chart-generate-btn" @click="generateManualChartForTab(activeQueryTab)">
                       <template #icon><area-chart-outlined /></template>
                     </a-button>
-                  </a-tooltip>
-                </a-space>
+                  </div>
+                </div>
               </div>
               <div class="query-chart-render-panel">
                 <QueryChartPanel

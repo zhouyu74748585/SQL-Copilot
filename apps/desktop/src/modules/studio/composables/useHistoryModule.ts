@@ -198,10 +198,11 @@ export function useHistoryModule(runtime: StudioRuntime): HistoryModule {
       const hasAssistantPayload = !!assistantContent || !!sqlText || !!item.chartConfig || !!item.chartImageCacheKey;
       if (hasAssistantPayload) {
         const thinkingContent = runtime.extractThinkingContentFromTrace(item.trace);
+        const chartConfigSummary = assistantContent || undefined;
         messages.push({
           id: `chat-history-assistant-${connectionId}-${encodeURIComponent(sessionId)}-${item.id ?? index}`,
           role: 'assistant',
-          content: assistantContent,
+          content: runtime.dedupeChartMessageContent(assistantContent, item.chartConfig, chartConfigSummary),
           streaming: false,
           finalized: true,
           thinkingContent: thinkingContent || undefined,
@@ -209,7 +210,7 @@ export function useHistoryModule(runtime: StudioRuntime): HistoryModule {
           sqlText: sqlText || undefined,
           actionType,
           chartConfig: item.chartConfig ?? undefined,
-          chartConfigSummary: assistantContent || undefined,
+          chartConfigSummary,
           chartImageCacheKey: (item.chartImageCacheKey || '').trim() || undefined,
           trace: item.trace ?? undefined,
           traceExpanded: false,

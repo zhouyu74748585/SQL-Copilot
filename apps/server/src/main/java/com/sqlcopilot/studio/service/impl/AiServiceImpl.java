@@ -114,6 +114,7 @@ public class AiServiceImpl implements AiService {
         2) 若样例 SQL 与当前 schema、字段、术语定义冲突，必须以当前 schema 和术语定义为准。
         3) SQL必须可执行，不要使用 markdown 代码块。
         4) 输出的SQL的语法需要匹配上下文中的数据库类型 
+        5) 一次仅输出一条最满足要求的SQL
         """;
     private static final String GENERATE_CHART_SYSTEM_PROMPT = """
         你是数据库图表方案助手。请基于用户需求和数据库上下文，输出严格 JSON，不要输出任何额外文本。
@@ -143,6 +144,7 @@ public class AiServiceImpl implements AiService {
         6) chartType=SCATTER 时必须提供 xField + yFields(仅1项)
         7) SQL 必须可执行，不要使用 markdown 代码块。
         8) 输出的SQL的语法需要匹配上下文中的数据库类型 
+        9) 一次仅输出一条最满足要求的SQL
         """;
     private static final String EXPLAIN_SQL_SYSTEM_PROMPT = """
         你是数据库讲解助手。请用中文解释 SQL 的业务含义。
@@ -770,7 +772,9 @@ public class AiServiceImpl implements AiService {
         timer.mark("parse_chart_response");
         String sqlText = safe(parsed.sqlText());
         ChartConfigVO chartConfig = parsed.chartConfig();
+        ChartConfigVO parsedChartConfig = chartConfig;
         String configSummary = safe(parsed.configSummary());
+        String chartConfigValidationMessage = chartConfig == null ? "未解析到图表配置" : "未校验";
         if (!parsed.parsed()) {
             fallbackUsed = true;
             if (!reasoning.isBlank()) {
@@ -808,6 +812,7 @@ public class AiServiceImpl implements AiService {
         if (chartConfig != null) {
             ChartConfigValidationResult validationResult = validateChartConfig(chartConfig);
             timer.mark("validate_chart_config");
+            chartConfigValidationMessage = validationResult.message();
             if (!validationResult.valid()) {
                 fallbackUsed = true;
                 chartConfig = null;
@@ -834,11 +839,12 @@ public class AiServiceImpl implements AiService {
                 fallbackUsed ? "fallback" : "success",
                 0L,
                 List.of(
-                    buildTraceField("rawContent", "原始输入", rawContent),
-
-                    buildTraceField("parsedChartConfig", "解析后图表配置", chartConfig)
+                    buildTraceField("rawContent", "原始内容", rawContent),
+                    buildTraceField("parsedChartConfig", "解析得到的图表配置", parsedChartConfig)
                 ),
                 List.of(
+                    buildTraceField("returnedChartConfig", "返回给前端的图表配置", chartConfig),
+                    buildTraceField("chartConfigValidation", "图表配置校验结果", chartConfigValidationMessage),
                     buildTraceField("sqlText", "SQL内容", sqlText),
                     buildTraceField("configSummary", "配置总结", configSummary),
                     buildTraceField("fallbackUsed", "是否使用了回退", fallbackUsed)
@@ -2746,12 +2752,12 @@ public class AiServiceImpl implements AiService {
             return;
         }
         chartConfig.setChartType(safe(chartConfig.getChartType()).toUpperCase(Locale.ROOT));
-        chartConfig.setXField(safe(chartConfig.getXField()));
-        chartConfig.setSeriesField(safe(chartConfig.getSeriesField()));
-        chartConfig.setCategoryField(safe(chartConfig.getCategoryField()));
-        chartConfig.setValueField(safe(chartConfig.getValueField()));
         chartConfig.setSortField(safe(chartConfig.getSortField()));
         chartConfig.setSortDirection(safe(chartConfig.getSortDirection()).toUpperCase(Locale.ROOT));
+        chartConfig.setCategoryField(safe(chartConfig.getCategoryField()));
+        chartConfig.setValueField(safe(chartConfig.getValueField()));
+        chartConfig.setXField(resolveChartXAxis(chartConfig));
+        chartConfig.setSeriesField(safe(chartConfig.getSeriesField()));
         chartConfig.setTitle(safe(chartConfig.getTitle()));
         chartConfig.setDescription(safe(chartConfig.getDescription()));
         if (chartConfig.getYFields() != null) {
@@ -2763,6 +2769,35 @@ public class AiServiceImpl implements AiService {
                     .toList()
             );
         }
+        if ((chartConfig.getYFields() == null || chartConfig.getYFields().isEmpty())
+            && !chartConfig.getValueField().isBlank()
+            && Set.of("LINE", "BAR", "TREND", "SCATTER").contains(chartConfig.getChartType())) {
+            chartConfig.setYFields(List.of(chartConfig.getValueField()));
+        }
+    }
+
+    private String resolveChartXAxis(ChartConfigVO chartConfig) {
+        if (chartConfig == null) {
+            return "";
+        }
+        return firstNonBlank(
+            chartConfig.getXField(),
+            chartConfig.getSortField(),
+            chartConfig.getCategoryField()
+        );
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null || values.length == 0) {
+            return "";
+        }
+        for (String value : values) {
+            String normalized = safe(value);
+            if (!normalized.isBlank()) {
+                return normalized;
+            }
+        }
+        return "";
     }
 
     private ChartConfigValidationResult validateChartConfig(ChartConfigVO chartConfig) {

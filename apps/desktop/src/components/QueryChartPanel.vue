@@ -65,6 +65,37 @@ function sortedRows(rows: ChartRow[], config: ChartConfigVO): ChartRow[] {
   return copied;
 }
 
+function buildCartesianSeries(
+  name: string,
+  chartType: 'LINE' | 'BAR' | 'TREND',
+  data: Array<number | null>,
+) {
+  const seriesType: 'bar' | 'line' = chartType === 'BAR' ? 'bar' : 'line';
+  const smooth = chartType === 'TREND';
+  const validPointCount = data.filter((item) => item != null).length;
+  if (seriesType === 'bar') {
+    return {
+      type: 'bar' as const,
+      name,
+      data,
+      barMaxWidth: 36,
+    };
+  }
+  return {
+    type: 'line' as const,
+    name,
+    smooth,
+    connectNulls: false,
+    showSymbol: true,
+    showAllSymbol: validPointCount <= 12,
+    symbol: 'circle',
+    symbolSize: validPointCount <= 1 ? 10 : 7,
+    lineStyle: { width: 2.5 },
+    emphasis: { focus: 'series' as const },
+    data,
+  };
+}
+
 function buildGroupedSeriesOption(
   rows: ChartRow[],
   config: ChartConfigVO,
@@ -115,17 +146,9 @@ function buildGroupedSeriesOption(
     return null;
   }
 
-  const seriesType: 'bar' | 'line' = chartType === 'BAR' ? 'bar' : 'line';
-  const smooth = chartType === 'TREND';
   const series = seriesOrder.map((name) => {
     const bucket = seriesValueMap.get(name);
-    return {
-      type: seriesType,
-      name,
-      smooth,
-      showSymbol: !smooth,
-      data: xData.map((xValue) => bucket?.get(xValue) ?? null),
-    };
+    return buildCartesianSeries(name, chartType, xData.map((xValue) => bucket?.get(xValue) ?? null));
   });
 
   return {
@@ -229,15 +252,11 @@ function buildChartOption(rows: ChartRow[], config: ChartConfigVO): echarts.ECha
     return buildGroupedSeriesOption(rows, config, chartType as 'LINE' | 'BAR' | 'TREND');
   }
   const xData = dataRows.map((row) => String(row[xField] ?? ''));
-  const seriesType: 'bar' | 'line' = chartType === 'BAR' ? 'bar' : 'line';
-  const smooth = chartType === 'TREND';
-  const series = yFields.map((field) => ({
-    type: seriesType,
-    name: field,
-    smooth,
-    showSymbol: !smooth,
-    data: dataRows.map((row) => parseNumber(row[field])),
-  }));
+  const series = yFields.map((field) => buildCartesianSeries(
+    field,
+    chartType as 'LINE' | 'BAR' | 'TREND',
+    dataRows.map((row) => parseNumber(row[field])),
+  ));
   return {
     title: { text: config.title || '', left: 'center', top: 10 },
     tooltip: { trigger: 'axis' },

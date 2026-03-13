@@ -2775,6 +2775,42 @@ body {
   background: #fbfdff;
 }
 
+.query-chart-manual-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 8px 10px;
+  align-items: end;
+}
+
+.query-chart-control {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.query-chart-control-wide {
+  grid-column: span 2;
+}
+
+.query-chart-control-compact {
+  max-width: 120px;
+}
+
+.query-chart-control-action {
+  max-width: 92px;
+}
+
+.query-chart-control-label {
+  font-size: 11px;
+  line-height: 1.2;
+  color: #5d6f89;
+  cursor: help;
+}
+
+.query-chart-generate-btn {
+  width: 100%;
+}
+
 .query-chart-render-panel {
   flex: 1;
   min-height: 0;

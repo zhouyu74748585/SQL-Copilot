@@ -1,5 +1,7 @@
 package com.sqlcopilot.studio.dto.ai;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
 
 import java.util.List;
@@ -12,24 +14,33 @@ public class ChartConfigVO {
     private String chartType;
 
     /** X 轴字段。 */
+    @JsonProperty("xField")
+    @JsonAlias({"xAxis", "x_axis", "x", "dimensionField", "dateField", "timeField"})
     private String xField;
 
     /** Y 轴字段列表（支持多字段）。 */
+    @JsonProperty("yFields")
+    @JsonAlias({"yAxis", "y_axis", "y", "valueFields", "measureFields", "metrics"})
     private List<String> yFields;
 
     /** 多系列分组字段（折线/柱状/趋势图可选）。 */
+    @JsonAlias({"groupField", "groupByField", "legendField", "splitField", "series"})
     private String seriesField;
 
     /** 饼图分类字段。 */
+    @JsonAlias({"nameField", "labelField"})
     private String categoryField;
 
     /** 饼图数值字段。 */
+    @JsonAlias({"metricField", "amountField", "measureField"})
     private String valueField;
 
     /** 排序字段。 */
+    @JsonAlias({"orderField", "sortBy", "xSortField"})
     private String sortField;
 
     /** 排序方向：NONE/ASC/DESC。 */
+    @JsonAlias({"orderDirection", "sortOrder"})
     private String sortDirection;
 
     /** 图表标题。 */

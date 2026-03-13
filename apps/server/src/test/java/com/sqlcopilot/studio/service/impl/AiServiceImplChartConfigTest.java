@@ -1,5 +1,6 @@
 package com.sqlcopilot.studio.service.impl;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sqlcopilot.studio.dto.ai.ChartConfigVO;
 import com.sqlcopilot.studio.service.AiConfigService;
@@ -16,8 +17,10 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.lang.reflect.Method;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @ExtendWith(MockitoExtension.class)
@@ -109,6 +112,39 @@ class AiServiceImplChartConfigTest {
         assertEquals("TREND", config.getChartType());
         assertEquals("product_name", config.getSeriesField());
         assertEquals(List.of("sales_amount", "profit_amount"), config.getYFields());
+    }
+
+    @Test
+    void chartConfigJacksonMapping_supportsCamelCaseXFieldAndYFields() {
+        Map<String, Object> payload = Map.of(
+            "chartType", "TREND",
+            "xField", "stat_month",
+            "yFields", List.of("dispatch_count"),
+            "seriesField", "model_id",
+            "sortField", "stat_month",
+            "sortDirection", "ASC"
+        );
+
+        ChartConfigVO config = new ObjectMapper().convertValue(payload, ChartConfigVO.class);
+
+        assertEquals("stat_month", config.getXField());
+        assertEquals(List.of("dispatch_count"), config.getYFields());
+        assertEquals("model_id", config.getSeriesField());
+    }
+
+    @Test
+    void chartConfigJacksonSerialization_preservesCamelCaseXFieldAndYFields() {
+        ChartConfigVO config = new ChartConfigVO();
+        config.setChartType("TREND");
+        config.setXField("stat_month");
+        config.setYFields(List.of("dispatch_count"));
+
+        Map<String, Object> json = new ObjectMapper().convertValue(config, new TypeReference<Map<String, Object>>() {});
+
+        assertEquals("stat_month", json.get("xField"));
+        assertEquals(List.of("dispatch_count"), json.get("yFields"));
+        assertNotNull(json.get("xField"));
+        assertNotNull(json.get("yFields"));
     }
 
     private boolean readBoolean(Object target, String methodName) throws Exception {

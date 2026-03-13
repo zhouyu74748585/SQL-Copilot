@@ -1529,11 +1529,10 @@ const activeNumericFieldOptions = computed(() => {
 });
 
 const activeSeriesFieldOptions = computed(() => {
-  const numericFields = new Set(activeNumericFieldOptions.value.map((item) => String(item.value)));
   const currentXField = activeQueryTab.value?.manualChartConfig.xField || '';
   return activeChartFieldOptions.value.filter((item) => {
     const value = String(item.value);
-    return !numericFields.has(value) && value !== currentXField;
+    return value !== currentXField;
   });
 });
 
@@ -3300,10 +3299,14 @@ function appendAssistantSqlMessage(
     createdAt: now,
   };
   prepareAssistantMessage(messageItem, actionType, now);
-  messageItem.content = content.trim();
   messageItem.sqlText = sqlText;
   messageItem.chartConfig = chartConfig ? cloneChartConfig(chartConfig) : undefined;
   messageItem.chartConfigSummary = (chartConfigSummary || '').trim() || undefined;
+  messageItem.content = dedupeChartMessageContent(
+    content,
+    messageItem.chartConfig,
+    messageItem.chartConfigSummary,
+  );
   messageItem.chartImageCacheKey = (chartImageCacheKey || '').trim() || undefined;
   messageItem.trace = resolvedTrace;
   messageItem.traceExpanded = false;
@@ -6487,6 +6490,25 @@ function chartSummaryText(config?: ChartConfigVO | null) {
   return `${type} · X: ${config.xField || '-'} · Y: ${y}`;
 }
 
+function dedupeChartMessageContent(
+  content?: string,
+  chartConfig?: ChartConfigVO | null,
+  chartConfigSummary?: string,
+) {
+  const normalizedContent = (content || '').trim();
+  if (!normalizedContent) {
+    return '';
+  }
+  if (!chartConfig) {
+    return normalizedContent;
+  }
+  const normalizedSummary = (chartConfigSummary || '').trim() || chartSummaryText(chartConfig).trim();
+  if (normalizedSummary && normalizedContent === normalizedSummary) {
+    return '';
+  }
+  return normalizedContent;
+}
+
 function isChartConfigRenderable(config: ChartConfigVO | null | undefined, rows: Array<Record<string, string | null>>) {
   if (!config) {
     return false;
@@ -8542,6 +8564,7 @@ function resetConnectionModalState() {
     buildChartPrompt,
     chartTypeLabel,
     chartSummaryText,
+    dedupeChartMessageContent,
     isChartConfigRenderable,
     buildExecutionPreview,
     chatExecutionColumns,
