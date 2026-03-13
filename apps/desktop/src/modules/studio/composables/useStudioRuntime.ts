@@ -995,8 +995,12 @@ const monacoTheme = computed(() => (isDarkTheme.value ? 'vs-dark' : 'vs'));
 const antdThemeConfig = computed(() => ({
   algorithm: isDarkTheme.value ? darkAlgorithm : defaultAlgorithm,
   token: {
-    colorPrimary: '#3b82f6',
-    borderRadius: 10,
+    colorPrimary: isDarkTheme.value ? '#5aa2ff' : '#1677ff',
+    colorInfo: isDarkTheme.value ? '#5aa2ff' : '#1677ff',
+    colorSuccess: isDarkTheme.value ? '#33c2a0' : '#16a085',
+    colorWarning: isDarkTheme.value ? '#efb24f' : '#d9902b',
+    colorError: isDarkTheme.value ? '#ee7b96' : '#d65b78',
+    borderRadius: 0,
     wireframe: false,
   },
   components: {

@@ -6,3 +6,134 @@
 @import './modules/studio/styles/table-editor.css';
 @import './modules/studio/styles/table-data.css';
 @import './modules/studio/styles/modals.css';
+
+body {
+  background:
+    radial-gradient(960px 320px at 12% -6%, rgba(22, 119, 255, 0.08) 0%, transparent 58%),
+    radial-gradient(760px 280px at 100% 0%, rgba(49, 182, 170, 0.06) 0%, transparent 62%),
+    #dbe7f2;
+}
+
+.studio-root {
+  background:
+    radial-gradient(1080px 360px at 18% -8%, rgba(22, 119, 255, 0.08) 0%, transparent 60%),
+    radial-gradient(720px 300px at 100% 0%, rgba(49, 182, 170, 0.06) 0%, transparent 62%),
+    var(--bg-app);
+}
+
+.studio-root .top-chrome {
+  background: color-mix(in srgb, var(--surface-0) 82%, transparent);
+  backdrop-filter: blur(12px);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--line-soft) 90%, transparent);
+}
+
+.studio-root.theme-dark .top-chrome {
+  background: color-mix(in srgb, var(--surface-0) 76%, transparent);
+}
+
+.studio-root .tool-item,
+.studio-root .top-chrome .top-action-btn,
+.studio-root .top-chrome-tab-add {
+  border: 1px solid color-mix(in srgb, var(--line-soft) 88%, transparent);
+  background: color-mix(in srgb, var(--surface-0) 86%, transparent);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+
+.studio-root.theme-dark .tool-item,
+.studio-root.theme-dark .top-chrome .top-action-btn,
+.studio-root.theme-dark .top-chrome-tab-add {
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
+}
+
+.studio-root .workspace-tab {
+  background: color-mix(in srgb, var(--surface-0) 86%, transparent);
+}
+
+.studio-root .workspace-tab.is-active {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent-soft) 100%, var(--surface-0) 0%) 0%, color-mix(in srgb, var(--surface-0) 94%, transparent) 100%);
+}
+
+.studio-root .pane,
+.studio-root .query-editor-pane,
+.studio-root .query-chat-pane,
+.studio-root .query-pane-right,
+.studio-root .table-editor-structure-pane,
+.studio-root .table-editor-preview-pane,
+.studio-root .history-menu-panel,
+.studio-root .context-menu,
+.studio-root .query-chat-assistant-card,
+.studio-root .vectorize-overview-kpi-card,
+.studio-root .vectorize-overview-item,
+.studio-root .ant-modal-content {
+  border: 1px solid color-mix(in srgb, var(--line-soft) 95%, transparent);
+  background: color-mix(in srgb, var(--surface-0) 88%, transparent);
+  backdrop-filter: blur(16px);
+  box-shadow:
+    0 1px 0 color-mix(in srgb, #ffffff 58%, transparent) inset,
+    0 16px 34px rgba(15, 23, 42, 0.08);
+}
+
+.studio-root.theme-dark .pane,
+.studio-root.theme-dark .query-editor-pane,
+.studio-root.theme-dark .query-chat-pane,
+.studio-root.theme-dark .query-pane-right,
+.studio-root.theme-dark .table-editor-structure-pane,
+.studio-root.theme-dark .table-editor-preview-pane,
+.studio-root.theme-dark .history-menu-panel,
+.studio-root.theme-dark .context-menu,
+.studio-root.theme-dark .query-chat-assistant-card,
+.studio-root.theme-dark .vectorize-overview-kpi-card,
+.studio-root.theme-dark .vectorize-overview-item,
+.studio-root.theme-dark .ant-modal-content {
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.03) inset,
+    0 18px 38px rgba(0, 0, 0, 0.24);
+}
+
+.studio-root .pane-title,
+.studio-root .pane-search,
+.studio-root .center-toolbar,
+.studio-root .editor-actions,
+.studio-root .query-result-title,
+.studio-root .query-shared-meta,
+.studio-root .pane-footer,
+.studio-root .center-status,
+.studio-root .er-toolbar {
+  background: color-mix(in srgb, var(--surface-1) 88%, transparent);
+}
+
+.studio-root .history-menu-item,
+.studio-root .query-chat-sql,
+.studio-root .query-chat-text,
+.studio-root .query-chat-thinking-panel,
+.studio-root .query-chat-chart-summary,
+.studio-root .query-chat-chart-image-wrap,
+.studio-root .query-chat-execution-summary,
+.studio-root .query-chat-execution-table,
+.studio-root .query-chat-prompt-assist,
+.studio-root .query-chat-prompt-assist-item,
+.studio-root .vectorize-overview-note,
+.studio-root .er-rel-item,
+.studio-root .er-select-table-list,
+.studio-root .risk-confirm-pre,
+.studio-root .detail-code-block,
+.studio-root .knowledge-card,
+.studio-root .knowledge-editor-group {
+  background: color-mix(in srgb, var(--surface-1) 90%, transparent);
+  border-color: color-mix(in srgb, var(--line-soft) 90%, transparent);
+}
+
+.studio-root .ant-input,
+.studio-root .ant-input-affix-wrapper,
+.studio-root .ant-input-number,
+.studio-root .ant-select-selector,
+.studio-root .ant-picker {
+  background: color-mix(in srgb, var(--surface-1) 92%, transparent) !important;
+  border-color: color-mix(in srgb, var(--line-soft) 90%, transparent) !important;
+  box-shadow: none !important;
+}
+
+.studio-root .ant-btn-primary {
+  border-color: color-mix(in srgb, var(--accent) 72%, transparent);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 88%, white 12%) 0%, var(--accent) 100%);
+}

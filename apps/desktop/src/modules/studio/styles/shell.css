@@ -18,7 +18,7 @@ body,
 
 body {
   margin: 0;
-  background: #cae0ea;
+  background: #dbe7f2;
 }
 
 #app {
@@ -27,34 +27,34 @@ body {
 }
 
 .studio-root {
-  --bg-app: #dbebf7;
+  --bg-app: #e7eff8;
   --surface-0: #ffffff;
-  --surface-1: #f7f9fc;
-  --surface-2: #e7effa;
-  --text-1: #1d2738;
-  --text-2: #5f6f87;
-  --text-3: #8a98ad;
+  --surface-1: #f5f9ff;
+  --surface-2: #e4edf8;
+  --text-1: #18263a;
+  --text-2: #5a6f8d;
+  --text-3: #8396b1;
   --text-inverse: #f8fbff;
-  --accent: #3b82f6;
-  --accent-soft: rgba(59, 130, 246, 0.14);
-  --hover: rgba(59, 130, 246, 0.08);
-  --line-soft: rgba(28, 39, 55, 0.08);
-  --line-strong: rgba(28, 39, 55, 0.16);
+  --accent: #1677ff;
+  --accent-soft: rgba(22, 119, 255, 0.14);
+  --hover: rgba(22, 119, 255, 0.08);
+  --line-soft: rgba(35, 54, 86, 0.08);
+  --line-strong: rgba(35, 54, 86, 0.16);
   --tab-active-border: var(--bg-app);
   --shadow-1: 0 8px 24px rgba(15, 23, 42, 0.08);
   --shadow-2: 0 14px 32px rgba(15, 23, 42, 0.16);
-  --success: #12a05c;
-  --success-soft: rgba(18, 160, 92, 0.16);
-  --warning: #cf7b13;
-  --warning-soft: rgba(207, 123, 19, 0.16);
-  --error: #d84c5f;
-  --error-soft: rgba(216, 76, 95, 0.16);
-  --info: #3b82f6;
-  --info-soft: rgba(59, 130, 246, 0.16);
-  --bubble-generate: linear-gradient(180deg, #6e9dff 0%, #5a8af1 100%);
-  --bubble-explain: linear-gradient(180deg, #4ca78d 0%, #3b937a 100%);
-  --bubble-analyze: linear-gradient(180deg, #e7aa5f 0%, #d69543 100%);
-  --bubble-repair: linear-gradient(180deg, #bb73a1 0%, #a65b8b 100%);
+  --success: #16a085;
+  --success-soft: rgba(22, 160, 133, 0.16);
+  --warning: #d9902b;
+  --warning-soft: rgba(217, 144, 43, 0.16);
+  --error: #d65b78;
+  --error-soft: rgba(214, 91, 120, 0.16);
+  --info: #1677ff;
+  --info-soft: rgba(22, 119, 255, 0.16);
+  --bubble-generate: linear-gradient(180deg, #4296ff 0%, #1677ff 100%);
+  --bubble-explain: linear-gradient(180deg, #31b6aa 0%, #169b90 100%);
+  --bubble-analyze: linear-gradient(180deg, #e5ad55 0%, #d48b2d 100%);
+  --bubble-repair: linear-gradient(180deg, #d97ca1 0%, #c55f89 100%);
   --panel: var(--surface-0);
   --panel-soft: var(--surface-1);
   --line: var(--line-soft);
@@ -65,8 +65,8 @@ body {
   inset: 0;
   overflow: hidden;
   background:
-    radial-gradient(1300px 380px at 20% -8%, rgba(59, 130, 246, 0.08) 0%, transparent 60%),
-    radial-gradient(920px 320px at 100% 0%, rgba(11, 110, 230, 0.06) 0%, transparent 62%),
+    radial-gradient(1300px 380px at 20% -8%, rgba(22, 119, 255, 0.08) 0%, transparent 60%),
+    radial-gradient(920px 320px at 100% 0%, rgba(56, 189, 248, 0.06) 0%, transparent 62%),
     var(--bg-app);
   border: none;
   border-radius: 0;
@@ -83,34 +83,34 @@ body {
 
 .studio-root.theme-dark {
   color-scheme: dark;
-  --bg-app: #0f1726;
-  --surface-0: #151f2f;
-  --surface-1: #1a2537;
-  --surface-2: #223048;
-  --text-1: #e8eefb;
-  --text-2: #a2b2cc;
-  --text-3: #7b8da9;
-  --text-inverse: #0f1726;
-  --accent: #62a1ff;
-  --accent-soft: rgba(98, 161, 255, 0.2);
-  --hover: rgba(98, 161, 255, 0.12);
-  --line-soft: rgba(194, 210, 233, 0.12);
-  --line-strong: rgba(194, 210, 233, 0.24);
+  --bg-app: #0c1422;
+  --surface-0: #121c2d;
+  --surface-1: #172235;
+  --surface-2: #1f2d44;
+  --text-1: #e7effb;
+  --text-2: #9cafca;
+  --text-3: #788aa5;
+  --text-inverse: #0c1422;
+  --accent: #5aa2ff;
+  --accent-soft: rgba(90, 162, 255, 0.2);
+  --hover: rgba(90, 162, 255, 0.12);
+  --line-soft: rgba(182, 201, 228, 0.12);
+  --line-strong: rgba(182, 201, 228, 0.24);
   --tab-active-border: var(--bg-app);
   --shadow-1: 0 10px 26px rgba(0, 0, 0, 0.28);
   --shadow-2: 0 18px 40px rgba(0, 0, 0, 0.4);
-  --success: #3fcf8e;
-  --success-soft: rgba(63, 207, 142, 0.2);
-  --warning: #f0b24d;
-  --warning-soft: rgba(240, 178, 77, 0.2);
-  --error: #f07c8b;
-  --error-soft: rgba(240, 124, 139, 0.2);
-  --info: #62a1ff;
-  --info-soft: rgba(98, 161, 255, 0.2);
-  --bubble-generate: linear-gradient(180deg, #5c82d4 0%, #4f72bc 100%);
-  --bubble-explain: linear-gradient(180deg, #3f8975 0%, #356f5f 100%);
-  --bubble-analyze: linear-gradient(180deg, #ba8643 0%, #9b6f36 100%);
-  --bubble-repair: linear-gradient(180deg, #8d5f87 0%, #754f70 100%);
+  --success: #33c2a0;
+  --success-soft: rgba(51, 194, 160, 0.2);
+  --warning: #efb24f;
+  --warning-soft: rgba(239, 178, 79, 0.2);
+  --error: #ee7b96;
+  --error-soft: rgba(238, 123, 150, 0.2);
+  --info: #5aa2ff;
+  --info-soft: rgba(90, 162, 255, 0.2);
+  --bubble-generate: linear-gradient(180deg, #6eb2ff 0%, #4a86f0 100%);
+  --bubble-explain: linear-gradient(180deg, #39b7aa 0%, #2d9287 100%);
+  --bubble-analyze: linear-gradient(180deg, #d29d4d 0%, #af7d35 100%);
+  --bubble-repair: linear-gradient(180deg, #b979a4 0%, #965d85 100%);
 }
 
 .tool-ribbon {
