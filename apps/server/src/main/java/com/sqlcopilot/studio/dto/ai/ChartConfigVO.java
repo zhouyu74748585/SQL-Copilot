@@ -17,6 +17,9 @@ public class ChartConfigVO {
     /** Y 轴字段列表（支持多字段）。 */
     private List<String> yFields;
 
+    /** 多系列分组字段（折线/柱状/趋势图可选）。 */
+    private String seriesField;
+
     /** 饼图分类字段。 */
     private String categoryField;
 

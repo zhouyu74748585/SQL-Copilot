@@ -2013,22 +2013,25 @@
               <div class="query-chart-manual-panel">
                 <a-space wrap size="small">
                   <a-select
-                    v-model:value="activeQueryTab.manualChartConfig.chartType"
+                    :value="activeQueryTab.manualChartConfig.chartType"
+                    @update:value="handleManualChartTypeChange(activeQueryTab, String($event || 'LINE'))"
                     size="small"
                     style="width: 104px"
                     :options="chartTypeOptions"
                   />
                   <a-select
                     v-if="['LINE', 'BAR', 'SCATTER', 'TREND'].includes(activeQueryTab.manualChartConfig.chartType || '')"
-                    v-model:value="activeQueryTab.manualChartConfig.xField"
+                    :value="activeQueryTab.manualChartConfig.xField"
+                    @update:value="handleManualChartXAxisChange(activeQueryTab, String($event || ''))"
                     size="small"
                     style="width: 132px"
                     :options="activeChartFieldOptions"
                     placeholder="X 轴"
                   />
                   <a-select
-                    v-if="['LINE', 'BAR', 'TREND'].includes(activeQueryTab.manualChartConfig.chartType || '')"
-                    v-model:value="activeQueryTab.manualChartConfig.yFields"
+                    v-if="['LINE', 'BAR', 'TREND'].includes(activeQueryTab.manualChartConfig.chartType || '') && !activeQueryTab.manualChartConfig.seriesField"
+                    :value="activeQueryTab.manualChartConfig.yFields"
+                    @update:value="handleManualChartYFieldsChange(activeQueryTab, Array.isArray($event) ? $event.map((item) => String(item)) : [])"
                     size="small"
                     mode="multiple"
                     :max-tag-count="2"
@@ -2037,8 +2040,28 @@
                     placeholder="Y 轴（多选）"
                   />
                   <a-select
+                    v-if="['LINE', 'BAR', 'TREND'].includes(activeQueryTab.manualChartConfig.chartType || '')"
+                    :value="activeQueryTab.manualChartConfig.seriesField"
+                    @update:value="handleManualChartSeriesFieldChange(activeQueryTab, String($event || ''))"
+                    size="small"
+                    allow-clear
+                    style="width: 148px"
+                    :options="activeSeriesFieldOptions"
+                    placeholder="分组字段"
+                  />
+                  <a-select
+                    v-if="['LINE', 'BAR', 'TREND'].includes(activeQueryTab.manualChartConfig.chartType || '') && !!activeQueryTab.manualChartConfig.seriesField"
+                    :value="activeQueryTab.manualChartConfig.yFields?.[0] || ''"
+                    @update:value="handleManualChartSingleYFieldChange(activeQueryTab, String($event || ''))"
+                    size="small"
+                    style="width: 148px"
+                    :options="activeNumericFieldOptions"
+                    placeholder="Y 轴（单值）"
+                  />
+                  <a-select
                     v-if="activeQueryTab.manualChartConfig.chartType === 'SCATTER'"
-                    v-model:value="activeQueryTab.manualChartConfig.yFields"
+                    :value="activeQueryTab.manualChartConfig.yFields"
+                    @update:value="handleManualChartYFieldsChange(activeQueryTab, Array.isArray($event) ? $event.map((item) => String(item)) : [])"
                     size="small"
                     mode="multiple"
                     style="width: 148px"
@@ -3195,9 +3218,15 @@ const {
     activeChartRows,
     activeChartFieldOptions,
     activeNumericFieldOptions,
+    activeSeriesFieldOptions,
     emptyManualChartConfig,
     cloneChartConfig,
     isNumericField,
+    handleManualChartTypeChange,
+    handleManualChartXAxisChange,
+    handleManualChartYFieldsChange,
+    handleManualChartSingleYFieldChange,
+    handleManualChartSeriesFieldChange,
     setupManualChartConfigByResult,
     buildConnectionNode,
     buildCategoryChildren,

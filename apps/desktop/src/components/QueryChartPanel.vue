@@ -41,6 +41,15 @@ function parseNumber(value: string | null | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function compareFieldValues(a: string | null | undefined, b: string | null | undefined): number {
+  const an = parseNumber(a);
+  const bn = parseNumber(b);
+  if (an != null && bn != null) {
+    return an - bn;
+  }
+  return String(a ?? '').localeCompare(String(b ?? ''));
+}
+
 function sortedRows(rows: ChartRow[], config: ChartConfigVO): ChartRow[] {
   const limited = rows.slice(0, props.maxPoints);
   const sortField = (config.sortField || '').trim();
@@ -50,19 +59,89 @@ function sortedRows(rows: ChartRow[], config: ChartConfigVO): ChartRow[] {
   }
   const copied = [...limited];
   copied.sort((a, b) => {
-    const av = a[sortField];
-    const bv = b[sortField];
-    const an = parseNumber(av);
-    const bn = parseNumber(bv);
-    let compareResult = 0;
-    if (an != null && bn != null) {
-      compareResult = an - bn;
-    } else {
-      compareResult = String(av ?? '').localeCompare(String(bv ?? ''));
-    }
+    const compareResult = compareFieldValues(a[sortField], b[sortField]);
     return sortDirection === 'DESC' ? -compareResult : compareResult;
   });
   return copied;
+}
+
+function buildGroupedSeriesOption(
+  rows: ChartRow[],
+  config: ChartConfigVO,
+  chartType: 'LINE' | 'BAR' | 'TREND',
+): echarts.EChartsOption | null {
+  const xField = (config.xField || '').trim();
+  const seriesField = (config.seriesField || '').trim();
+  const yField = (config.yFields?.[0] || '').trim();
+  if (!xField || !seriesField || !yField) {
+    emptyText.value = tt('当前图表需要 X 字段、Y 字段和分组字段。');
+    return null;
+  }
+
+  const limitedRows = rows.slice(0, props.maxPoints);
+  const sortField = (config.sortField || '').trim() || xField;
+  const requestedDirection = (config.sortDirection || 'NONE').toUpperCase();
+  const sortDirection = requestedDirection === 'DESC' ? 'DESC' : 'ASC';
+  const dataRows = [...limitedRows].sort((a, b) => {
+    const compareResult = compareFieldValues(a[sortField], b[sortField]);
+    return sortDirection === 'DESC' ? -compareResult : compareResult;
+  });
+
+  const xData: string[] = [];
+  const xIndexMap = new Map<string, number>();
+  const seriesOrder: string[] = [];
+  const seriesValueMap = new Map<string, Map<string, number>>();
+  dataRows.forEach((row) => {
+    const xValue = String(row[xField] ?? '');
+    if (!xIndexMap.has(xValue)) {
+      xIndexMap.set(xValue, xData.length);
+      xData.push(xValue);
+    }
+    const seriesName = String(row[seriesField] ?? '').trim() || '-';
+    if (!seriesValueMap.has(seriesName)) {
+      seriesValueMap.set(seriesName, new Map<string, number>());
+      seriesOrder.push(seriesName);
+    }
+    const numericValue = parseNumber(row[yField]);
+    if (numericValue == null) {
+      return;
+    }
+    const bucket = seriesValueMap.get(seriesName)!;
+    bucket.set(xValue, (bucket.get(xValue) ?? 0) + numericValue);
+  });
+
+  if (!xData.length || !seriesOrder.length) {
+    emptyText.value = tt('当前图表缺少可用的分组数值数据，请更换字段。');
+    return null;
+  }
+
+  const seriesType: 'bar' | 'line' = chartType === 'BAR' ? 'bar' : 'line';
+  const smooth = chartType === 'TREND';
+  const series = seriesOrder.map((name) => {
+    const bucket = seriesValueMap.get(name);
+    return {
+      type: seriesType,
+      name,
+      smooth,
+      showSymbol: !smooth,
+      data: xData.map((xValue) => bucket?.get(xValue) ?? null),
+    };
+  });
+
+  return {
+    title: { text: config.title || '', left: 'center', top: 10 },
+    tooltip: { trigger: 'axis' },
+    legend: { top: 36, left: 'center' },
+    grid: { left: 56, right: 24, top: 72, bottom: 44 },
+    xAxis: {
+      type: 'category',
+      data: xData,
+      name: xField,
+      axisLabel: { rotate: xData.length > 12 ? 20 : 0 },
+    },
+    yAxis: { type: 'value', name: yField },
+    series,
+  };
 }
 
 function buildChartOption(rows: ChartRow[], config: ChartConfigVO): echarts.EChartsOption | null {
@@ -145,6 +224,9 @@ function buildChartOption(rows: ChartRow[], config: ChartConfigVO): echarts.ECha
   if (!xField || !yFields.length) {
     emptyText.value = tt('当前图表需要 X 字段和至少一个 Y 字段。');
     return null;
+  }
+  if (['LINE', 'BAR', 'TREND'].includes(chartType) && (config.seriesField || '').trim()) {
+    return buildGroupedSeriesOption(rows, config, chartType as 'LINE' | 'BAR' | 'TREND');
   }
   const xData = dataRows.map((row) => String(row[xField] ?? ''));
   const seriesType: 'bar' | 'line' = chartType === 'BAR' ? 'bar' : 'line';

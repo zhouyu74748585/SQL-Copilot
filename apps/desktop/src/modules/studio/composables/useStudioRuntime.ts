@@ -1505,11 +1505,49 @@ const activeNumericFieldOptions = computed(() => {
   }));
 });
 
+const activeSeriesFieldOptions = computed(() => {
+  const numericFields = new Set(activeNumericFieldOptions.value.map((item) => String(item.value)));
+  const currentXField = activeQueryTab.value?.manualChartConfig.xField || '';
+  return activeChartFieldOptions.value.filter((item) => {
+    const value = String(item.value);
+    return !numericFields.has(value) && value !== currentXField;
+  });
+});
+
+function supportsGroupedSeriesChart(chartType?: string) {
+  return ['LINE', 'BAR', 'TREND'].includes((chartType || '').toUpperCase());
+}
+
+function normalizeManualChartConfig(config: ChartConfigVO): ChartConfigVO {
+  const chartType = ((config.chartType || 'LINE').toUpperCase() || 'LINE') as ChartType;
+  config.chartType = chartType;
+  config.xField = config.xField || '';
+  config.seriesField = config.seriesField || '';
+  config.categoryField = config.categoryField || '';
+  config.valueField = config.valueField || '';
+  config.sortField = config.sortField || '';
+  config.sortDirection = (config.sortDirection || 'NONE') as SortDirection;
+  config.title = config.title || '';
+  config.description = config.description || '';
+  config.yFields = [...new Set((config.yFields || []).map((item) => (item || '').trim()).filter((item) => !!item))];
+  if (!supportsGroupedSeriesChart(chartType)) {
+    config.seriesField = '';
+  }
+  if (config.seriesField && config.seriesField === config.xField) {
+    config.seriesField = '';
+  }
+  if (chartType === 'SCATTER' || (supportsGroupedSeriesChart(chartType) && !!config.seriesField)) {
+    config.yFields = config.yFields.slice(0, 1);
+  }
+  return config;
+}
+
 function emptyManualChartConfig(): ChartConfigVO {
   return {
     chartType: 'LINE',
     xField: '',
     yFields: [],
+    seriesField: '',
     categoryField: '',
     valueField: '',
     sortField: '',
@@ -1523,17 +1561,18 @@ function cloneChartConfig(config: ChartConfigVO | null | undefined): ChartConfig
   if (!config) {
     return emptyManualChartConfig();
   }
-  return {
+  return normalizeManualChartConfig({
     chartType: (config.chartType || 'LINE') as ChartType,
     xField: config.xField || '',
     yFields: [...(config.yFields || [])],
+    seriesField: config.seriesField || '',
     categoryField: config.categoryField || '',
     valueField: config.valueField || '',
     sortField: config.sortField || '',
     sortDirection: (config.sortDirection || 'NONE') as SortDirection,
     title: config.title || '',
     description: config.description || '',
-  };
+  });
 }
 
 function isNumericField(rows: Array<Record<string, string | null>>, field: string) {
@@ -1571,6 +1610,7 @@ function setupManualChartConfigByResult(tab: QueryWorkspaceTab) {
     chartType: 'LINE',
     xField: fields[0],
     yFields: fallbackY ? [fallbackY] : [],
+    seriesField: '',
     categoryField: fields[0],
     valueField: numericFields[0] || '',
     sortField: '',
@@ -1578,6 +1618,32 @@ function setupManualChartConfigByResult(tab: QueryWorkspaceTab) {
     title: '',
     description: '',
   };
+  normalizeManualChartConfig(tab.manualChartConfig);
+}
+
+function handleManualChartTypeChange(tab: QueryWorkspaceTab, value: string) {
+  tab.manualChartConfig.chartType = (value || 'LINE') as ChartType;
+  normalizeManualChartConfig(tab.manualChartConfig);
+}
+
+function handleManualChartXAxisChange(tab: QueryWorkspaceTab, value: string) {
+  tab.manualChartConfig.xField = value || '';
+  normalizeManualChartConfig(tab.manualChartConfig);
+}
+
+function handleManualChartYFieldsChange(tab: QueryWorkspaceTab, value: string[]) {
+  tab.manualChartConfig.yFields = Array.isArray(value) ? value : [];
+  normalizeManualChartConfig(tab.manualChartConfig);
+}
+
+function handleManualChartSingleYFieldChange(tab: QueryWorkspaceTab, value: string) {
+  tab.manualChartConfig.yFields = value ? [value] : [];
+  normalizeManualChartConfig(tab.manualChartConfig);
+}
+
+function handleManualChartSeriesFieldChange(tab: QueryWorkspaceTab, value: string) {
+  tab.manualChartConfig.seriesField = value || '';
+  normalizeManualChartConfig(tab.manualChartConfig);
 }
 
 function buildConnectionNode(conn: ConnectionVO) {
@@ -6368,6 +6434,10 @@ function chartSummaryText(config?: ChartConfigVO | null) {
   if ((config.chartType || '').toUpperCase() === 'PIE') {
     return `${type} · Category: ${config.categoryField || '-'} · Value: ${config.valueField || '-'}`;
   }
+  if (supportsGroupedSeriesChart(config.chartType) && config.seriesField) {
+    const y = config.yFields?.[0] || '-';
+    return `${type} · X: ${config.xField || '-'} · Y: ${y} · Series: ${config.seriesField || '-'}`;
+  }
   const y = (config.yFields || []).join(', ') || '-';
   return `${type} · X: ${config.xField || '-'} · Y: ${y}`;
 }
@@ -6384,6 +6454,13 @@ function isChartConfigRenderable(config: ChartConfigVO | null | undefined, rows:
   }
   if (chartType === 'SCATTER') {
     return hasField(config.xField) && !!config.yFields?.[0] && hasField(config.yFields[0]);
+  }
+  if (supportsGroupedSeriesChart(chartType) && config.seriesField) {
+    return hasField(config.xField)
+      && !!config.yFields?.[0]
+      && config.yFields.length === 1
+      && hasField(config.yFields[0])
+      && hasField(config.seriesField);
   }
   return hasField(config.xField) && !!config.yFields?.length && config.yFields.every((field) => hasField(field));
 }
@@ -8231,9 +8308,15 @@ function resetConnectionModalState() {
     activeChartRows,
     activeChartFieldOptions,
     activeNumericFieldOptions,
+    activeSeriesFieldOptions,
     emptyManualChartConfig,
     cloneChartConfig,
     isNumericField,
+    handleManualChartTypeChange,
+    handleManualChartXAxisChange,
+    handleManualChartYFieldsChange,
+    handleManualChartSingleYFieldChange,
+    handleManualChartSeriesFieldChange,
     setupManualChartConfigByResult,
     buildConnectionNode,
     buildCategoryChildren,

@@ -68,6 +68,7 @@ export interface ChartConfigVO {
   chartType: ChartType;
   xField?: string;
   yFields?: string[];
+  seriesField?: string;
   categoryField?: string;
   valueField?: string;
   sortField?: string;

@@ -123,6 +123,7 @@ public class AiServiceImpl implements AiService {
             "chartType": "LINE|BAR|PIE|SCATTER|TREND",
             "xField": "x轴字段(折线/柱状/散点/趋势必填)",
             "yFields": ["y轴字段1","y轴字段2"],
+            "seriesField": "多系列分组字段(折线/柱状/趋势图按分类拆多系列时填写)",
             "categoryField": "饼图分类字段",
             "valueField": "饼图数值字段",
             "sortField": "排序字段",
@@ -135,6 +136,7 @@ public class AiServiceImpl implements AiService {
         约束：
         1）重要!!如果存在样例SQL，则优先参考样例SQL
         2) chartType=LINE/BAR/TREND 时必须提供 xField + yFields(至少1项)；
+        3) 若 chartType=LINE/BAR/TREND 且需要“按分类拆多系列”展示，必须额外提供 seriesField，且 yFields 仅允许 1 项；
         3) chartType=PIE 时必须提供 categoryField + valueField；
         4) chartType=SCATTER 时必须提供 xField + yFields(仅1项)；
         5) SQL 必须可执行，不要使用 markdown 代码块。
@@ -2754,6 +2756,7 @@ public class AiServiceImpl implements AiService {
         }
         chartConfig.setChartType(safe(chartConfig.getChartType()).toUpperCase(Locale.ROOT));
         chartConfig.setXField(safe(chartConfig.getXField()));
+        chartConfig.setSeriesField(safe(chartConfig.getSeriesField()));
         chartConfig.setCategoryField(safe(chartConfig.getCategoryField()));
         chartConfig.setValueField(safe(chartConfig.getValueField()));
         chartConfig.setSortField(safe(chartConfig.getSortField()));
@@ -2786,6 +2789,9 @@ public class AiServiceImpl implements AiService {
                 }
                 if (chartConfig.getYFields() == null || chartConfig.getYFields().isEmpty()) {
                     return new ChartConfigValidationResult(false, chartType + " 缺少 yFields");
+                }
+                if (!safe(chartConfig.getSeriesField()).isBlank() && chartConfig.getYFields().size() != 1) {
+                    return new ChartConfigValidationResult(false, chartType + " 在 seriesField 模式下需要且仅支持 1 个 yField");
                 }
                 return new ChartConfigValidationResult(true, "ok");
             }
@@ -2820,6 +2826,11 @@ public class AiServiceImpl implements AiService {
                 + "，数值字段: " + safe(chartConfig.getValueField());
         }
         String yFields = chartConfig.getYFields() == null ? "" : String.join(", ", chartConfig.getYFields());
+        if (!safe(chartConfig.getSeriesField()).isBlank()) {
+            return "图表类型: " + type + "，X轴: " + safe(chartConfig.getXField())
+                + "，Y轴: " + yFields
+                + "，分组字段: " + safe(chartConfig.getSeriesField());
+        }
         return "图表类型: " + type + "，X轴: " + safe(chartConfig.getXField())
             + "，Y轴: " + yFields;
     }
