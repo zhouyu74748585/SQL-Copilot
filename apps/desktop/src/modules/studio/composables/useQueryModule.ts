@@ -316,6 +316,7 @@ export function useQueryModule(runtime: StudioRuntime): QueryModule {
     }
     runtime.sqlExecutionAbortReasonMap.set(tab.key, 'manual');
     controller.abort();
+    void runtime.requestSqlExecutionInterrupt(tab);
   }
 
   function handleChatComposerInput(event: Event, tab: QueryTab) {

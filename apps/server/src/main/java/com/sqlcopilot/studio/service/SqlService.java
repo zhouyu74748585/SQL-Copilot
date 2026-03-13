@@ -9,4 +9,6 @@ public interface SqlService {
     RiskEvaluateVO evaluateRisk(RiskEvaluateReq req);
 
     SqlExecuteVO execute(SqlExecuteReq req);
+
+    SqlInterruptVO interrupt(SqlInterruptReq req);
 }

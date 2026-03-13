@@ -7,11 +7,30 @@ import com.sqlcopilot.studio.entity.QueryHistoryEntity;
 import com.sqlcopilot.studio.mapper.AuditLogMapper;
 import com.sqlcopilot.studio.mapper.QueryHistoryMapper;
 import com.sqlcopilot.studio.service.ConnectionService;
+import com.sqlcopilot.studio.service.SchemaService;
 import com.sqlcopilot.studio.service.SqlService;
 import com.sqlcopilot.studio.service.rag.RagIngestionService;
 import com.sqlcopilot.studio.util.BusinessException;
 import com.sqlcopilot.studio.util.ResultSetConverter;
 import com.sqlcopilot.studio.util.SqlClassifier;
+import net.sf.jsqlparser.expression.DoubleValue;
+import net.sf.jsqlparser.expression.Expression;
+import net.sf.jsqlparser.expression.HexValue;
+import net.sf.jsqlparser.expression.LongValue;
+import net.sf.jsqlparser.expression.Parenthesis;
+import net.sf.jsqlparser.expression.SignedExpression;
+import net.sf.jsqlparser.expression.StringValue;
+import net.sf.jsqlparser.parser.CCJSqlParserUtil;
+import net.sf.jsqlparser.schema.Column;
+import net.sf.jsqlparser.statement.Statements;
+import net.sf.jsqlparser.statement.select.PlainSelect;
+import net.sf.jsqlparser.statement.select.Select;
+import net.sf.jsqlparser.statement.select.SetOperationList;
+import net.sf.jsqlparser.expression.operators.conditional.AndExpression;
+import net.sf.jsqlparser.expression.operators.conditional.OrExpression;
+import net.sf.jsqlparser.expression.operators.relational.EqualsTo;
+import net.sf.jsqlparser.expression.operators.relational.NotEqualsTo;
+import net.sf.jsqlparser.util.TablesNamesFinder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -21,10 +40,17 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Service
 public class SqlServiceImpl implements SqlService {
@@ -32,19 +58,30 @@ public class SqlServiceImpl implements SqlService {
     private static final long ACK_TOKEN_TTL_MS = 5 * 60 * 1000;
     private static final int DEFAULT_QUERY_MAX_ROWS = 5000;
     private static final int ABSOLUTE_QUERY_MAX_ROWS = 5000;
+    private static final long LARGE_FULL_SCAN_ROW_THRESHOLD = 10_000L;
+    private static final Executor JDBC_ABORT_EXECUTOR = Runnable::run;
+    private static final Pattern LIMIT_PATTERN = Pattern.compile("\\blimit\\s+(\\d+)\\b");
+    private static final Pattern LIMIT_OFFSET_PATTERN = Pattern.compile("\\blimit\\s+(\\d+)\\s+offset\\s+\\d+\\b");
+    private static final Pattern LIMIT_COMMA_PATTERN = Pattern.compile("\\blimit\\s+\\d+\\s*,\\s*(\\d+)\\b");
+    private static final Pattern FETCH_PATTERN = Pattern.compile("\\bfetch\\s+(?:first|next)\\s+(\\d+)\\s+rows?\\s+only\\b");
+    private static final Pattern TOP_PATTERN = Pattern.compile("^select\\s+(?:distinct\\s+)?top\\s*\\(?\\s*(\\d+)\\s*\\)?\\b");
     private static final Logger log = LoggerFactory.getLogger(SqlServiceImpl.class);
 
     private final ConnectionService connectionService;
+    private final SchemaService schemaService;
     private final QueryHistoryMapper queryHistoryMapper;
     private final AuditLogMapper auditLogMapper;
     private final RagIngestionService ragIngestionService;
     private final ConcurrentHashMap<String, RiskAckPayload> riskAckStore = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, RunningSqlExecution> runningExecutionStore = new ConcurrentHashMap<>();
 
     public SqlServiceImpl(ConnectionService connectionService,
+                          SchemaService schemaService,
                           QueryHistoryMapper queryHistoryMapper,
                           AuditLogMapper auditLogMapper,
                           RagIngestionService ragIngestionService) {
         this.connectionService = connectionService;
+        this.schemaService = schemaService;
         this.queryHistoryMapper = queryHistoryMapper;
         this.auditLogMapper = auditLogMapper;
         this.ragIngestionService = ragIngestionService;
@@ -81,7 +118,13 @@ public class SqlServiceImpl implements SqlService {
     public RiskEvaluateVO evaluateRisk(RiskEvaluateReq req) {
         log.info("[SQL-RISK] connectionId={}, sql={}", req.getConnectionId(), req.getSqlText());
         ConnectionEntity connection = connectionService.getConnectionEntity(req.getConnectionId());
-        List<RiskItemVO> items = evaluateRiskItems(req.getSqlText(), connection.getDbType());
+        String targetDatabaseName = resolveTargetDatabaseName(connection.getDatabaseName(), req.getDatabaseName());
+        List<RiskItemVO> items = evaluateRiskItems(
+            req.getSqlText(),
+            connection.getDbType(),
+            req.getConnectionId(),
+            targetDatabaseName
+        );
         String riskLevel = decideRiskLevel(items);
         boolean confirmRequired = requiresRiskConfirm(connection.getEnv(), riskLevel);
 
@@ -108,7 +151,7 @@ public class SqlServiceImpl implements SqlService {
         log.info("[SQL-EXECUTE] connectionId={}, sessionId={}, databaseName={}, sql={}",
             req.getConnectionId(), req.getSessionId(), targetDatabaseName, sql);
 
-        List<RiskItemVO> items = evaluateRiskItems(sql, connection.getDbType());
+        List<RiskItemVO> items = evaluateRiskItems(sql, connection.getDbType(), req.getConnectionId(), targetDatabaseName);
         String riskLevel = decideRiskLevel(items);
 
         // 关键拦截：只读连接禁止 DML。
@@ -125,6 +168,7 @@ public class SqlServiceImpl implements SqlService {
         try (Connection jdbcConnection = connectionService.openTargetConnection(req.getConnectionId())) {
             applyDatabaseContext(jdbcConnection, connection.getDbType(), targetDatabaseName);
             try (Statement statement = jdbcConnection.createStatement()) {
+                registerRunningExecution(req, targetDatabaseName, jdbcConnection, statement);
                 if (SqlClassifier.isQuery(sql)) {
                     int maxRows = normalizeQueryMaxRows(req.getMaxRows());
                     log.info("[SQL-EXECUTE] connectionId={}, databaseName={}, querySql={}",
@@ -152,13 +196,42 @@ public class SqlServiceImpl implements SqlService {
             result.setSuccess(Boolean.TRUE);
             result.setMessage("执行成功");
         } catch (Exception ex) {
-            throw new BusinessException(500, "SQL 执行失败: " + ex.getMessage());
+            if (isExecutionInterrupted(req.getSessionId(), ex)) {
+                result.setSuccess(Boolean.FALSE);
+                result.setMessage("SQL 执行已中断");
+                result.setRows(new ArrayList<>());
+                result.setColumns(new ArrayList<>());
+                throw new BusinessException(499, "SQL 执行已中断");
+            }
+            result.setSuccess(Boolean.FALSE);
+            result.setMessage("SQL 执行失败: " + ex.getMessage());
+            throw new BusinessException(500, result.getMessage());
         } finally {
+            clearRunningExecution(req.getSessionId());
             result.setExecutionMs(System.currentTimeMillis() - start);
             appendHistory(req, result, targetDatabaseName);
             appendAudit(req, riskLevel, "EXECUTE");
         }
         return result;
+    }
+
+    @Override
+    public SqlInterruptVO interrupt(SqlInterruptReq req) {
+        SqlInterruptVO vo = new SqlInterruptVO();
+        RunningSqlExecution running = runningExecutionStore.get(req.getSessionId());
+        if (running == null || !req.getConnectionId().equals(running.connectionId())) {
+            vo.setInterrupted(Boolean.FALSE);
+            vo.setMessage("当前会话没有正在执行的 SQL");
+            return vo;
+        }
+        log.info("[SQL-INTERRUPT] connectionId={}, sessionId={}, databaseName={}",
+            req.getConnectionId(), req.getSessionId(), running.databaseName());
+        running.markInterrupted();
+        cancelStatementQuietly(running);
+        abortConnectionQuietly(running);
+        vo.setInterrupted(Boolean.TRUE);
+        vo.setMessage("已发送 SQL 中断信号");
+        return vo;
     }
 
     private String buildExplainSql(String dbType, String sql) {
@@ -222,7 +295,7 @@ public class SqlServiceImpl implements SqlService {
         log.info("[SQL-RISK-ACK] env={}, riskLevel={}, digest={}", normalizeEnv(env), riskLevel, SqlClassifier.digest(sql));
     }
 
-    private List<RiskItemVO> evaluateRiskItems(String sql, String dbType) {
+    private List<RiskItemVO> evaluateRiskItems(String sql, String dbType, Long connectionId, String targetDatabaseName) {
         String normalized = SqlClassifier.normalize(sql);
         List<RiskItemVO> items = new ArrayList<>();
 
@@ -231,8 +304,9 @@ public class SqlServiceImpl implements SqlService {
             items.add(risk("NO_WHERE_DML", "update/delete 无 where 条件", "HIGH"));
         }
 
-        if (normalized.startsWith("select") && !normalized.contains(" where ")) {
-            items.add(risk("FULL_SCAN", "查询缺少 where 条件，可能触发全表扫描", "MEDIUM"));
+        if (isSelectWithoutEffectiveFilter(sql)) {
+            items.add(risk("FULL_SCAN", "查询缺少有效过滤条件，可能触发全表扫描", "MEDIUM"));
+            raiseRiskForLargeTableFullScan(items, sql, connectionId, targetDatabaseName);
         }
 
         if (normalized.startsWith("select") && !hasPaginationClause(normalized, dbType)) {
@@ -248,6 +322,265 @@ public class SqlServiceImpl implements SqlService {
         }
 
         return items;
+    }
+
+    /**
+     * 关键操作：无条件全表查询命中时，结合表行数统计二次判断，大表直接提升为 HIGH 风险。
+     */
+    private void raiseRiskForLargeTableFullScan(List<RiskItemVO> items,
+                                                String sql,
+                                                Long connectionId,
+                                                String targetDatabaseName) {
+        if (connectionId == null || normalize(targetDatabaseName).isBlank()) {
+            return;
+        }
+        OptionalLong rowLimit = resolveQueryRowLimit(sql);
+        if (rowLimit.isPresent() && rowLimit.getAsLong() <= LARGE_FULL_SCAN_ROW_THRESHOLD) {
+            log.info("[SQL-RISK] connectionId={}, databaseName={}, skipLargeFullScanUpgrade=true, rowLimit={}",
+                connectionId, targetDatabaseName, rowLimit.getAsLong());
+            return;
+        }
+        List<String> relatedTables = extractRelatedTables(sql);
+        if (relatedTables.isEmpty()) {
+            return;
+        }
+        Optional<LargeFullScanRiskContext> riskContext = resolveLargeFullScanRiskContext(
+            connectionId,
+            targetDatabaseName,
+            relatedTables
+        );
+        if (riskContext.isEmpty()) {
+            return;
+        }
+        LargeFullScanRiskContext context = riskContext.get();
+        items.add(risk(
+            "LARGE_FULL_SCAN",
+            "查询缺少有效过滤条件，且涉及大表 " + context.tableName()
+                + "（约 " + context.rowEstimate() + " 行），风险提升为 HIGH",
+            "HIGH"
+        ));
+        log.info("[SQL-RISK] connectionId={}, databaseName={}, largeFullScanTable={}, rowEstimate={}",
+            connectionId, targetDatabaseName, context.tableName(), context.rowEstimate());
+    }
+
+    /**
+     * 关键操作：无条件查询若已被 LIMIT/TOP/FETCH 明确限制在 10000 行以内，则不再提升为高风险。
+     */
+    private OptionalLong resolveQueryRowLimit(String sql) {
+        String normalized = SqlClassifier.normalize(sql);
+        OptionalLong mysqlLikeLimit = matchLong(LIMIT_OFFSET_PATTERN, normalized);
+        if (mysqlLikeLimit.isPresent()) {
+            return mysqlLikeLimit;
+        }
+        OptionalLong mysqlCommaLimit = matchLong(LIMIT_COMMA_PATTERN, normalized);
+        if (mysqlCommaLimit.isPresent()) {
+            return mysqlCommaLimit;
+        }
+        OptionalLong plainLimit = matchLong(LIMIT_PATTERN, normalized);
+        if (plainLimit.isPresent()) {
+            return plainLimit;
+        }
+        OptionalLong fetchLimit = matchLong(FETCH_PATTERN, normalized);
+        if (fetchLimit.isPresent()) {
+            return fetchLimit;
+        }
+        return matchLong(TOP_PATTERN, normalized);
+    }
+
+    /**
+     * 关键操作：存在 where 关键字但条件整体恒真时，仍按“等同无过滤”处理。
+     */
+    private boolean isSelectWithoutEffectiveFilter(String sql) {
+        String normalized = SqlClassifier.normalize(sql);
+        if (!normalized.startsWith("select")) {
+            return false;
+        }
+        try {
+            Statements statements = CCJSqlParserUtil.parseStatements(sql);
+            if (statements == null || statements.getStatements() == null || statements.getStatements().size() != 1) {
+                return !normalized.contains(" where ");
+            }
+            net.sf.jsqlparser.statement.Statement parsedStatement = statements.getStatements().get(0);
+            if (!(parsedStatement instanceof Select select)) {
+                return !normalized.contains(" where ");
+            }
+            return isSelectWithoutEffectiveFilter(select);
+        } catch (Exception ex) {
+            log.debug("[SQL-RISK] 解析 where 条件失败，回退关键字判断. reason={}", ex.getMessage());
+            return !normalized.contains(" where ");
+        }
+    }
+
+    private boolean isSelectWithoutEffectiveFilter(Select select) {
+        PlainSelect plainSelect = select.getPlainSelect();
+        if (plainSelect != null) {
+            return isWhereMissingOrTautology(plainSelect.getWhere());
+        }
+        SetOperationList setOperationList = select.getSetOperationList();
+        if (setOperationList != null && setOperationList.getSelects() != null && !setOperationList.getSelects().isEmpty()) {
+            return setOperationList.getSelects().stream().allMatch(this::isSelectWithoutEffectiveFilter);
+        }
+        return false;
+    }
+
+    private boolean isWhereMissingOrTautology(Expression where) {
+        return where == null || isTautologyExpression(where);
+    }
+
+    private boolean isTautologyExpression(Expression expression) {
+        if (expression == null) {
+            return true;
+        }
+        if (expression instanceof Parenthesis parenthesis) {
+            return isTautologyExpression(parenthesis.getExpression());
+        }
+        if (expression instanceof AndExpression andExpression) {
+            return isTautologyExpression(andExpression.getLeftExpression())
+                && isTautologyExpression(andExpression.getRightExpression());
+        }
+        if (expression instanceof OrExpression orExpression) {
+            return isTautologyExpression(orExpression.getLeftExpression())
+                || isTautologyExpression(orExpression.getRightExpression());
+        }
+        if (expression instanceof EqualsTo equalsTo) {
+            return areEquivalentOperands(equalsTo.getLeftExpression(), equalsTo.getRightExpression());
+        }
+        if (expression instanceof NotEqualsTo notEqualsTo) {
+            Optional<String> leftLiteral = resolveLiteralValue(notEqualsTo.getLeftExpression());
+            Optional<String> rightLiteral = resolveLiteralValue(notEqualsTo.getRightExpression());
+            return leftLiteral.isPresent() && rightLiteral.isPresent() && !leftLiteral.get().equals(rightLiteral.get());
+        }
+        return normalize(expression.toString()).equalsIgnoreCase("true");
+    }
+
+    private boolean areEquivalentOperands(Expression left, Expression right) {
+        if (left instanceof Column leftColumn && right instanceof Column rightColumn) {
+            return normalize(leftColumn.getFullyQualifiedName()).equalsIgnoreCase(normalize(rightColumn.getFullyQualifiedName()));
+        }
+        Optional<String> leftLiteral = resolveLiteralValue(left);
+        Optional<String> rightLiteral = resolveLiteralValue(right);
+        if (leftLiteral.isPresent() && rightLiteral.isPresent()) {
+            return leftLiteral.get().equals(rightLiteral.get());
+        }
+        return normalize(left.toString()).equalsIgnoreCase(normalize(right.toString()));
+    }
+
+    private Optional<String> resolveLiteralValue(Expression expression) {
+        if (expression instanceof Parenthesis parenthesis) {
+            return resolveLiteralValue(parenthesis.getExpression());
+        }
+        if (expression instanceof SignedExpression signedExpression) {
+            Optional<String> nested = resolveLiteralValue(signedExpression.getExpression());
+            if (nested.isEmpty()) {
+                return Optional.empty();
+            }
+            return Optional.of(signedExpression.getSign() + nested.get());
+        }
+        if (expression instanceof LongValue longValue) {
+            return Optional.of(String.valueOf(longValue.getValue()));
+        }
+        if (expression instanceof DoubleValue doubleValue) {
+            return Optional.of(String.valueOf(doubleValue.getValue()));
+        }
+        if (expression instanceof StringValue stringValue) {
+            return Optional.of(stringValue.getValue());
+        }
+        if (expression instanceof HexValue hexValue) {
+            return Optional.of(hexValue.getValue());
+        }
+        return Optional.empty();
+    }
+
+    private OptionalLong matchLong(Pattern pattern, String normalizedSql) {
+        Matcher matcher = pattern.matcher(normalizedSql);
+        if (!matcher.find()) {
+            return OptionalLong.empty();
+        }
+        try {
+            return OptionalLong.of(Long.parseLong(matcher.group(1)));
+        } catch (Exception ex) {
+            return OptionalLong.empty();
+        }
+    }
+
+    private Optional<LargeFullScanRiskContext> resolveLargeFullScanRiskContext(Long connectionId,
+                                                                               String targetDatabaseName,
+                                                                               List<String> relatedTables) {
+        Map<String, Long> statsByTable = new LinkedHashMap<>();
+        try {
+            List<com.sqlcopilot.studio.dto.schema.SchemaTableStatsVO.TableStatVO> tableStats =
+                Optional.ofNullable(schemaService.getTableStats(connectionId, targetDatabaseName).getTableStats())
+                    .orElse(List.of());
+            tableStats.forEach(item -> {
+                String normalizedTableName = normalizeTableNameForStatsMatch(item.getTableName());
+                if (!normalizedTableName.isBlank()) {
+                    statsByTable.put(normalizedTableName, Math.max(0L, item.getRowEstimate() == null ? 0L : item.getRowEstimate()));
+                }
+            });
+        } catch (Exception ex) {
+            log.debug("[SQL-RISK] 读取表统计失败，将回退到 schema 概览. connectionId={}, databaseName={}, reason={}",
+                connectionId, targetDatabaseName, ex.getMessage());
+        }
+        if (statsByTable.isEmpty()) {
+            try {
+                List<com.sqlcopilot.studio.dto.schema.SchemaOverviewVO.TableSummaryVO> tableSummaries =
+                    Optional.ofNullable(schemaService.getOverview(connectionId, targetDatabaseName).getTableSummaries())
+                        .orElse(List.of());
+                tableSummaries.forEach(item -> {
+                    String normalizedTableName = normalizeTableNameForStatsMatch(item.getTableName());
+                    if (!normalizedTableName.isBlank()) {
+                        statsByTable.put(normalizedTableName, Math.max(0L, item.getRowEstimate() == null ? 0L : item.getRowEstimate()));
+                    }
+                });
+            } catch (Exception ex) {
+                log.debug("[SQL-RISK] 读取 schema 概览失败，跳过大表全扫升级. connectionId={}, databaseName={}, reason={}",
+                    connectionId, targetDatabaseName, ex.getMessage());
+            }
+        }
+        LargeFullScanRiskContext candidate = null;
+        for (String relatedTable : relatedTables) {
+            String tableKey = normalizeTableNameForStatsMatch(relatedTable);
+            long rowEstimate = statsByTable.getOrDefault(tableKey, 0L);
+            if (rowEstimate < LARGE_FULL_SCAN_ROW_THRESHOLD) {
+                continue;
+            }
+            if (candidate == null || rowEstimate > candidate.rowEstimate()) {
+                candidate = new LargeFullScanRiskContext(relatedTable, rowEstimate);
+            }
+        }
+        return Optional.ofNullable(candidate);
+    }
+
+    private List<String> extractRelatedTables(String sql) {
+        try {
+            Statements statements = CCJSqlParserUtil.parseStatements(sql);
+            if (statements == null || statements.getStatements() == null || statements.getStatements().size() != 1) {
+                return List.of();
+            }
+            net.sf.jsqlparser.statement.Statement parsedStatement = statements.getStatements().get(0);
+            TablesNamesFinder finder = new TablesNamesFinder();
+            return finder.getTableList(parsedStatement).stream()
+                .map(this::normalizeTableNameForStatsMatch)
+                .filter(item -> !item.isBlank())
+                .distinct()
+                .toList();
+        } catch (Exception ex) {
+            log.debug("[SQL-RISK] 解析关联表失败，将跳过大表全扫升级. reason={}", ex.getMessage());
+            return List.of();
+        }
+    }
+
+    private String normalizeTableNameForStatsMatch(String tableName) {
+        String normalized = normalize(tableName)
+            .replace("`", "")
+            .replace("\"", "")
+            .replace("[", "")
+            .replace("]", "");
+        if (normalized.isBlank()) {
+            return "";
+        }
+        String[] parts = normalized.split("\\.");
+        return parts[parts.length - 1].trim().toLowerCase(Locale.ROOT);
     }
 
     private String decideRiskLevel(List<RiskItemVO> items) {
@@ -339,6 +672,64 @@ public class SqlServiceImpl implements SqlService {
         return item;
     }
 
+    /**
+     * 关键操作：执行 SQL 前登记 JDBC Statement/Connection，便于前端点击停止时真正中断数据库侧执行。
+     */
+    private void registerRunningExecution(SqlExecuteReq req,
+                                          String targetDatabaseName,
+                                          Connection jdbcConnection,
+                                          Statement statement) {
+        runningExecutionStore.put(req.getSessionId(), new RunningSqlExecution(
+            req.getConnectionId(),
+            req.getSessionId(),
+            normalize(targetDatabaseName),
+            jdbcConnection,
+            statement
+        ));
+    }
+
+    private void clearRunningExecution(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return;
+        }
+        runningExecutionStore.remove(sessionId);
+    }
+
+    private boolean isExecutionInterrupted(String sessionId, Exception ex) {
+        RunningSqlExecution running = sessionId == null ? null : runningExecutionStore.get(sessionId);
+        if (running != null && running.interrupted()) {
+            return true;
+        }
+        String message = normalize(ex == null ? "" : ex.getMessage()).toLowerCase(Locale.ROOT);
+        return message.contains("cancel")
+            || message.contains("interrupt")
+            || message.contains("closed")
+            || message.contains("statement is closed")
+            || message.contains("connection is closed");
+    }
+
+    private void cancelStatementQuietly(RunningSqlExecution running) {
+        try {
+            running.statement().cancel();
+        } catch (Exception ex) {
+            log.debug("[SQL-INTERRUPT] Statement.cancel 失败, sessionId={}, reason={}", running.sessionId(), ex.getMessage());
+        }
+    }
+
+    private void abortConnectionQuietly(RunningSqlExecution running) {
+        try {
+            running.connection().abort(JDBC_ABORT_EXECUTOR);
+            return;
+        } catch (Exception ex) {
+            log.debug("[SQL-INTERRUPT] Connection.abort 不可用, sessionId={}, reason={}", running.sessionId(), ex.getMessage());
+        }
+        try {
+            running.connection().close();
+        } catch (Exception ex) {
+            log.debug("[SQL-INTERRUPT] Connection.close 失败, sessionId={}, reason={}", running.sessionId(), ex.getMessage());
+        }
+    }
+
     private void appendHistory(SqlExecuteReq req, SqlExecuteVO result, String targetDatabaseName) {
         boolean memoryEnabled = resolveExecuteMemoryEnabled(req);
         QueryHistoryEntity history = new QueryHistoryEntity();
@@ -392,5 +783,59 @@ public class SqlServiceImpl implements SqlService {
     }
 
     private record RiskAckPayload(String sqlDigest, long expiredAt) {
+    }
+
+    private static final class RunningSqlExecution {
+
+        private final Long connectionId;
+        private final String sessionId;
+        private final String databaseName;
+        private final Connection connection;
+        private final Statement statement;
+        private volatile boolean interrupted;
+
+        private RunningSqlExecution(Long connectionId,
+                                    String sessionId,
+                                    String databaseName,
+                                    Connection connection,
+                                    Statement statement) {
+            this.connectionId = connectionId;
+            this.sessionId = sessionId;
+            this.databaseName = databaseName;
+            this.connection = connection;
+            this.statement = statement;
+            this.interrupted = false;
+        }
+
+        private Long connectionId() {
+            return connectionId;
+        }
+
+        private String sessionId() {
+            return sessionId;
+        }
+
+        private String databaseName() {
+            return databaseName;
+        }
+
+        private Connection connection() {
+            return connection;
+        }
+
+        private Statement statement() {
+            return statement;
+        }
+
+        private boolean interrupted() {
+            return interrupted;
+        }
+
+        private void markInterrupted() {
+            this.interrupted = true;
+        }
+    }
+
+    private record LargeFullScanRiskContext(String tableName, long rowEstimate) {
     }
 }

@@ -2351,10 +2351,12 @@ function closeQueryTab(tabKey: string) {
   if (index < 0) {
     return;
   }
+  const targetTab = queryTabs.value[index];
   const sqlController = sqlExecutionAbortControllerMap.get(tabKey);
   if (sqlController) {
     sqlExecutionAbortReasonMap.set(tabKey, 'manual');
     sqlController.abort();
+    void requestSqlExecutionInterrupt(targetTab);
   }
   const aiController = aiRequestAbortControllerMap.get(tabKey);
   if (aiController) {
@@ -2367,6 +2369,20 @@ function closeQueryTab(tabKey: string) {
   if (activeWorkbenchTab.value === tabKey) {
     activeWorkbenchTab.value = tabs[index]?.key || tabs[index - 1]?.key || browserTabKey;
     ensureActiveWorkbenchTab();
+  }
+}
+
+async function requestSqlExecutionInterrupt(tab: QueryWorkspaceTab | null | undefined) {
+  if (!tab?.connectionId || !tab.sessionId) {
+    return;
+  }
+  try {
+    await postApi<{ interrupted: boolean; message: string }>('/api/sql/interrupt', {
+      connectionId: tab.connectionId,
+      sessionId: tab.sessionId,
+    });
+  } catch {
+    // 关键策略：本地停止优先保证交互立即返回，后端中断请求失败时不额外打断用户操作。
   }
 }
 
@@ -7013,6 +7029,7 @@ function connectionEnvLabel(connectionId: number) {
 async function ensureRiskConfirmedBeforeExecute(tab: QueryWorkspaceTab, sqlText: string, signal?: AbortSignal) {
   const result = await postApi<RiskEvaluateVO>('/api/sql/risk/evaluate', {
     connectionId: tab.connectionId,
+    databaseName: tab.databaseName || undefined,
     sqlText,
   }, {
     signal,
@@ -8379,6 +8396,7 @@ function resetConnectionModalState() {
     getActiveDatabaseName,
     openAiQueryTab,
     closeQueryTab,
+    requestSqlExecutionInterrupt,
     tableEditorSaving,
     hasWorkbenchTab,
     ensureActiveWorkbenchTab,

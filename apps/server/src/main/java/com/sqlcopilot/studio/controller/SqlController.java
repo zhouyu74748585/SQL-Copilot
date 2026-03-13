@@ -34,4 +34,9 @@ public class SqlController {
         // 关键操作：执行前统一进行风险校验与只读策略拦截。
         return ApiResponse.success(sqlService.execute(req));
     }
+
+    @PostMapping("/interrupt")
+    public ApiResponse<SqlInterruptVO> interrupt(@Valid @RequestBody SqlInterruptReq req) {
+        return ApiResponse.success(sqlService.interrupt(req));
+    }
 }

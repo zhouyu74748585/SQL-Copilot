@@ -4,18 +4,15 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 
-/** SQL 风险评估请求对象。 */
+/** SQL 中断请求对象。 */
 @Data
-public class RiskEvaluateReq {
+public class SqlInterruptReq {
 
     /** 连接主键 ID。 */
     @NotNull
     private Long connectionId;
 
-    /** 目标数据库名称（可选，未传时使用连接默认库）。 */
-    private String databaseName;
-
-    /** 待评估 SQL。 */
+    /** 查询页签会话 ID。 */
     @NotBlank
-    private String sqlText;
+    private String sessionId;
 }
