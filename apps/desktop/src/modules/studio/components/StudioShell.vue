@@ -271,7 +271,7 @@
                 <template #icon>
                   <link-outlined />
                 </template>
-                新建链接
+                新建连接
               </a-button>
               <a-button size="small" type="text" :loading="connectionRefreshing" @click="refreshConnections" title="刷新连接列表">
                 <template #icon>

@@ -1408,16 +1408,16 @@ const workbenchStyle = computed(() => {
   }
   if (activeWorkbenchTab.value === browserTabKey || activeKnowledgeTab.value) {
     return {
-      gridTemplateColumns: `${leftPaneWidth.value}px 4px minmax(460px, 1fr) 4px ${browserRightPaneWidth.value}px`,
+      gridTemplateColumns: `${leftPaneWidth.value}px 1px minmax(460px, 1fr) 1px ${browserRightPaneWidth.value}px`,
     };
   }
   if (activeErTab.value) {
     return {
-      gridTemplateColumns: `${leftPaneWidth.value}px 4px minmax(560px, 1fr) 4px ${erRightPaneWidth.value}px`,
+      gridTemplateColumns: `${leftPaneWidth.value}px 1px minmax(560px, 1fr) 1px ${erRightPaneWidth.value}px`,
     };
   }
   return {
-    gridTemplateColumns: `${leftPaneWidth.value}px 4px minmax(520px, 1fr) 4px ${queryRightPaneWidth.value}px`,
+    gridTemplateColumns: `${leftPaneWidth.value}px 1px minmax(520px, 1fr) 1px ${queryRightPaneWidth.value}px`,
   };
 });
 

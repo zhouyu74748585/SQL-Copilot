@@ -41,6 +41,7 @@ const zhToEnExact: Record<string, string> = {
   '切换到浅色': 'Switch to light theme',
   '切换到深色': 'Switch to dark theme',
   '我的连接': 'My Connections',
+  '新建链接': 'New Connection',
   '新建连接': 'New Connection',
   '刷新连接列表': 'Refresh Connections',
   '搜索连接': 'Search Connections',

@@ -86,3 +86,52 @@
 - 启动验证（clean）：
   - 后端：`mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18081` 启动成功，`/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
   - 前端：`npm run -w @sqlcopilot/desktop build -- --emptyOutDir` 后 `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6046` 启动成功，`HTTP/1.1 200 OK`。
+
+
+### 2026-03-13 09:57:35
+
+## 本次目标
+- 取消工作台各主模块之间的间距，仅保留顶部页签到内容区的垂直间距。
+
+## 关键改动
+- 前端 `apps/desktop/src/modules/studio/styles/shell.css`
+  - 将 `.studio-root .workbench` 的模块间距从 `gap: 10px` 调整为 `gap: 0`，避免主题覆盖残留模块缝隙。
+  - 将桌面工作台布局的 `row-gap: 4px` 调整为 `0`，保留 `padding-top: 4px`，只保留页签与内容区之间的间距。
+  - 将 `@media (max-width: 1200px)` 下的 `.studio-root .workbench` 间距同步调整为 `gap: 0`，保证窄屏布局一致。
+
+## 验证结果
+- 前端类型检查：`npm run -w @sqlcopilot/desktop type-check` 通过。
+- 前端 clean 构建：`npm run -w @sqlcopilot/desktop build -- --emptyOutDir` 通过。
+- 后端 clean 打包并启动：
+  - `mvn -f apps/server/pom.xml clean package -DskipTests -Dfile.encoding=UTF-8` 通过。
+  - `java -Dfile.encoding=UTF-8 -jar apps/server/target/sql-copilot-server-0.1.0.jar --server.port=18113` 启动成功。
+  - `http://127.0.0.1:18113/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+- 前端预览：
+  - `npx vite preview --host 127.0.0.1 --port 6063 --strictPort` 启动成功。
+  - `http://127.0.0.1:6063` 返回 `HTTP 200`。
+
+
+### 2026-03-13 10:04:18
+
+## 本次目标
+- 收窄左侧导航树、中间模块、右侧详情模块之间的可见间距。
+- 取消顶部页签与内容区之间的间隙。
+
+## 关键改动
+- 前端 `apps/desktop/src/modules/studio/composables/useStudioRuntime.ts`
+  - 将工作台动态网格中的左右 splitter 列宽从 `4px` 收窄为 `1px`，覆盖对象浏览、知识库、ER、查询、表编辑、表数据等主布局。
+- 前端 `apps/desktop/src/modules/studio/styles/shell.css`
+  - 将 `.studio-root .pane-splitter` 宽度从 `4px` 收窄为 `1px`，并改为细分隔线样式，保留拖拽能力但不再形成明显空隙。
+  - 将 `.studio-root .workbench` 的 `padding` 调整为 `0`，取消顶部页签与内容区之间的垂直间隔。
+  - 将 `@media (max-width: 1200px)` 下 `.studio-root .workbench` 的 `padding` 也同步调整为 `0`。
+
+## 验证结果
+- 前端类型检查：`npm run -w @sqlcopilot/desktop type-check` 通过。
+- 前端 clean 构建：`npm run -w @sqlcopilot/desktop build -- --emptyOutDir` 通过。
+- 后端 clean 打包并启动：
+  - `mvn -f apps/server/pom.xml clean package -DskipTests -Dfile.encoding=UTF-8` 通过。
+  - `java -Dfile.encoding=UTF-8 -jar apps/server/target/sql-copilot-server-0.1.0.jar --server.port=18114` 启动成功。
+  - `http://127.0.0.1:18114/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+- 前端预览：
+  - `npx vite preview --host 127.0.0.1 --port 6064 --strictPort` 启动成功。
+  - `http://127.0.0.1:6064` 返回 `HTTP 200`。

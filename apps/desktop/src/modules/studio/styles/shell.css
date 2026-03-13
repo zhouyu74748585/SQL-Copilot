@@ -3384,7 +3384,7 @@ body {
 
 .studio-root .workbench {
   padding: 10px;
-  gap: 10px;
+  gap: 0;
   background: transparent;
 }
 
@@ -3413,13 +3413,13 @@ body {
 }
 
 .studio-root .pane-splitter {
-  width: 4px;
-  background: transparent;
+  width: 1px;
+  background: var(--line-soft);
   border: none;
 }
 
 .studio-root .pane-splitter:hover {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  background: color-mix(in srgb, var(--accent) 40%, var(--line-soft) 60%);
 }
 
 .studio-root .history-menu-panel,
@@ -3964,8 +3964,8 @@ body {
 
 @media (max-width: 1200px) {
   .studio-root .workbench {
-    padding: 4px 0 0;
-    gap: 4px;
+    padding: 0;
+    gap: 0;
   }
 
   .studio-root .pane {
@@ -4200,8 +4200,8 @@ body {
 
 .studio-root .workbench {
   height: calc(100% - var(--chrome-height));
-  padding: 4px 0 0;
-  row-gap: 4px;
+  padding: 0;
+  row-gap: 0;
   column-gap: 0;
   background: var(--bg-app);
   margin-top: 0;
