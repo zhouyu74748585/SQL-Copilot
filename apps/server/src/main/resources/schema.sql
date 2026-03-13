@@ -141,6 +141,11 @@ CREATE TABLE IF NOT EXISTS knowledge_term (
     database_name TEXT NOT NULL DEFAULT '',
     term TEXT NOT NULL,
     description TEXT,
+    aliases_json TEXT,
+    metric_expression TEXT,
+    related_tables_json TEXT,
+    related_columns_json TEXT,
+    term_type TEXT DEFAULT 'TERM',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -153,6 +158,20 @@ CREATE TABLE IF NOT EXISTS knowledge_example_sql (
     sql_text TEXT NOT NULL,
     description TEXT,
     term_ids_json TEXT,
+    question_text TEXT,
+    question_variants_json TEXT,
+    semantic_summary TEXT,
+    normalized_sql TEXT,
+    sql_template TEXT,
+    sql_ast_json TEXT,
+    table_names_json TEXT,
+    column_names_json TEXT,
+    metric_tags_json TEXT,
+    time_tags_json TEXT,
+    verified_flag INTEGER DEFAULT 1,
+    quality_score REAL DEFAULT 0.95,
+    source_type TEXT DEFAULT 'MANUAL',
+    sql_operation_type TEXT DEFAULT 'SELECT',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );

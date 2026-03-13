@@ -150,3 +150,56 @@
 - 后端 clean 启动已尝试：
   - `mvn -f apps/server/pom.xml clean spring-boot:run "-Dspring-boot.run.arguments=--server.port=18103"`
   - 当前会话执行超时，未拿到健康检查结果；本次修改仅涉及 prompt 文本拼装与测试，不涉及启动链路代码。
+
+
+### 2026-03-13 10:58:45
+
+## 追加记录（2026-03-13）- RAG 召回与 Prompt 重构
+
+### 本次目标
+- 落地“schema 真值优先、样例 SQL 条件参考、先锚定再扩展、预算化 prompt”这一轮 RAG 重构。
+- 修复知识中心术语/样例 SQL 的结构化元数据生产与消费不一致问题。
+- 为后续离线评测和召回调参补齐 trace、门控和测试基线。
+
+### 关键改动
+- 知识元数据建模与落库
+  - 新增 `KnowledgeMetadataUtil`，统一派生术语与样例 SQL 的结构化元数据。
+  - `knowledge_term` 扩展为：`aliases_json`、`metric_expression`、`related_tables_json`、`related_columns_json`、`term_type`。
+  - `knowledge_example_sql` 扩展为：`question_text`、`question_variants_json`、`semantic_summary`、`normalized_sql`、`sql_template`、`sql_ast_json`、`table_names_json`、`column_names_json`、`metric_tags_json`、`time_tags_json`、`verified_flag`、`quality_score`、`source_type`、`sql_operation_type`。
+  - `schema.sql`、Mapper、实体、`KnowledgeServiceImpl`、`EditorKnowledgeSchemaMigrationRunner` 同步更新，允许直接重建/升级本地 SQLite 结构。
+- 向量入库重构
+  - `RagIngestionServiceImpl` 的表文档不再塞 30 个字段预览，改为主键/索引/时间/度量/维度等角色摘要。
+  - schema table/column、knowledge term/example、query history payload 统一增加 `entity_id/entity_type/trust_level/entity_version/sql_operation_type` 等路由字段。
+  - SQL history 文档增强为“问题 + SQL + 操作类型 + 可信度 + 来源类型 + 语义标签”。
+- 检索链路重构
+  - `RagRetrievalServiceImpl` 增加锚点表选择、表内字段二次筛选、样例 SQL 强门控、预算化 prompt 组装。
+  - 最终 prompt 固定为 5 段：`用户目标与硬约束`、`确认的表锚点`、`相关字段`、`口径与术语`、`参考 SQL`。
+  - 参考 SQL 改为“可参考但不可直接照搬”，并在 prompt 中显式声明以当前 schema/术语为准。
+  - `RagPromptContext` 新增 `selectionDetails`、`promptBudgetUsed`，trace 能看到 anchor filter、example gate、prompt assembly 的决策细节。
+  - 新增样例 SQL 门控规则：质量分、作用域、SQL 操作类型、表重叠、验证状态共同决定是否进入 prompt。
+- Rerank 文档重构
+  - `OnnxLocalRerankServiceImpl` 与 `OpenAiCompatRerankServiceImpl` 改为按 bucket 输出更完整的结构化文档，不再只看旧字段。
+  - 表桶包含主键/索引/时间/度量/维度；列桶包含字段角色；术语桶包含 aliases/related tables；样例/历史桶包含 question/semantic/sql template/operation/trust 等信息。
+- Prompt 与测试修正
+  - `AiServiceImpl` 删除“优先参考样例 SQL”的强指令，改为“样例 SQL 仅作参考，冲突时以 schema/术语为准”。
+  - 生成提示词去掉重复拼接的关联索引块，避免和新的 RAG prompt 重复稀释用户问题。
+  - 修复 `buildRepairPrompt`，仅保留动态修复上下文。
+  - 新增回归测试：错误样例 SQL 因与锚点表无重叠被门控丢弃，且 trace/prompt budget 会输出。
+  - ONNX rerank 测试在本地模型缺失时改为跳过，避免环境差异导致构建失败。
+
+### 验证结果
+- 后端 Maven：`mvn -f apps/server/pom.xml clean package` 成功。
+- 后端单测：10 个测试通过，1 个测试因本地缺少 `models/BgeRerankerBaseOnnxO4` 被跳过。
+- 后端启动：
+  - 使用 `java -jar apps/server/target/sql-copilot-server-0.1.0.jar --server.port=18081 --spring.datasource.url=jdbc:sqlite:/tmp/sql-copilot-validation-03f3.db` 启动成功。
+  - 由于本机已有 Java 进程占用默认 `18080`，本次验证改用 `18081` 独立端口；Tomcat 成功监听且 HTTP 返回 200。
+- 前端验证：
+  - 先执行 `npm ci` 补齐当前工作树依赖。
+  - `npm run build` 成功。
+  - `npm run type-check` 成功。
+  - `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4173` 启动成功，`curl -I http://127.0.0.1:4173/` 返回 200。
+
+### 遗留项
+- 当前 bucket-specific rerank 已完成文档输入和规则分增强，但 `alpha/beta/gamma` 仍是全局参数，后续可继续按 bucket 拆分配置。
+- query history 侧虽然补了 `trust_level/source_type/reuse_count/sql_operation_type`，但还没有完整的离线评测集与自动调参闭环。
+- `sql_fragment` 仍保留旧集合，后续可以继续评估是否改造成 AST pattern 文档或直接下线。

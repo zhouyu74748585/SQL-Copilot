@@ -4,7 +4,9 @@ import com.sqlcopilot.studio.dto.rag.RagConfigVO;
 import com.sqlcopilot.studio.service.RagConfigService;
 import com.sqlcopilot.studio.service.rag.model.QdrantScoredPoint;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Assumptions;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -18,10 +20,15 @@ class OnnxLocalRerankServiceImplTest {
 
     @Test
     void score_acceptsCrossEncoderModelInputs() {
+        Path modelDir = Path.of("models/BgeRerankerBaseOnnxO4").toAbsolutePath().normalize();
+        Assumptions.assumeTrue(
+            Files.exists(modelDir.resolve("model.onnx")) && Files.exists(modelDir.resolve("tokenizer.json")),
+            "本地 ONNX rerank 模型不存在，跳过测试"
+        );
         RagConfigService ragConfigService = mock(RagConfigService.class);
         RagConfigVO config = new RagConfigVO();
         config.setRagRerankEnabled(true);
-        config.setRagRerankModelDir(Path.of("models/BgeRerankerBaseOnnxO4").toAbsolutePath().normalize().toString());
+        config.setRagRerankModelDir(modelDir.toString());
         when(ragConfigService.getConfig()).thenReturn(config);
 
         OnnxLocalRerankServiceImpl service = new OnnxLocalRerankServiceImpl(
