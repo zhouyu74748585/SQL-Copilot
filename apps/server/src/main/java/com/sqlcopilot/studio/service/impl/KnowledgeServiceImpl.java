@@ -10,6 +10,7 @@ import com.sqlcopilot.studio.mapper.KnowledgeTermMapper;
 import com.sqlcopilot.studio.service.KnowledgeService;
 import com.sqlcopilot.studio.service.rag.RagIngestionService;
 import com.sqlcopilot.studio.util.BusinessException;
+import com.sqlcopilot.studio.util.KnowledgeMetadataUtil;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -71,6 +72,17 @@ public class KnowledgeServiceImpl implements KnowledgeService {
         entity.setDatabaseName(scopeContext.databaseName());
         entity.setTerm(term);
         entity.setDescription(normalizeText(req.getDescription()));
+        // 关键操作：术语结构化元数据统一在保存阶段派生，避免向量入库和检索消费字段长期错位。
+        KnowledgeMetadataUtil.DerivedTermMetadata derivedTermMetadata = KnowledgeMetadataUtil.deriveTermMetadata(
+            entity.getTerm(),
+            entity.getDescription(),
+            objectMapper
+        );
+        entity.setAliasesJson(derivedTermMetadata.aliasesJson());
+        entity.setMetricExpression(derivedTermMetadata.metricExpression());
+        entity.setRelatedTablesJson(derivedTermMetadata.relatedTablesJson());
+        entity.setRelatedColumnsJson(derivedTermMetadata.relatedColumnsJson());
+        entity.setTermType(derivedTermMetadata.termType());
 
         if (req.getId() != null) {
             knowledgeTermMapper.update(entity);
@@ -135,7 +147,27 @@ public class KnowledgeServiceImpl implements KnowledgeService {
         entity.setDatabaseName(scopeContext.databaseName());
         entity.setSqlText(sqlText);
         entity.setDescription(normalizeText(req.getDescription()));
-        entity.setTermIdsJson(writeTermIds(termIds));
+        KnowledgeMetadataUtil.DerivedExampleMetadata derivedExampleMetadata = KnowledgeMetadataUtil.deriveExampleMetadata(
+            sqlText,
+            entity.getDescription(),
+            termIds,
+            objectMapper
+        );
+        entity.setTermIdsJson(derivedExampleMetadata.termIdsNormalizedJson());
+        entity.setQuestionText(derivedExampleMetadata.questionText());
+        entity.setQuestionVariantsJson(derivedExampleMetadata.questionVariantsJson());
+        entity.setSemanticSummary(derivedExampleMetadata.semanticSummary());
+        entity.setNormalizedSql(derivedExampleMetadata.normalizedSql());
+        entity.setSqlTemplate(derivedExampleMetadata.sqlTemplate());
+        entity.setSqlAstJson(derivedExampleMetadata.sqlAstJson());
+        entity.setTableNamesJson(derivedExampleMetadata.tableNamesJson());
+        entity.setColumnNamesJson(derivedExampleMetadata.columnNamesJson());
+        entity.setMetricTagsJson(derivedExampleMetadata.metricTagsJson());
+        entity.setTimeTagsJson(derivedExampleMetadata.timeTagsJson());
+        entity.setVerifiedFlag(derivedExampleMetadata.verifiedFlag());
+        entity.setQualityScore(derivedExampleMetadata.qualityScore());
+        entity.setSourceType(derivedExampleMetadata.sourceType());
+        entity.setSqlOperationType(derivedExampleMetadata.sqlOperationType());
 
         if (req.getId() != null) {
             knowledgeExampleSqlMapper.update(entity);

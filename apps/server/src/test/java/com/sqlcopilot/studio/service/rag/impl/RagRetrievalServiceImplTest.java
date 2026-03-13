@@ -217,4 +217,115 @@ class RagRetrievalServiceImplTest {
                 .orElse("")
         );
     }
+
+    @Test
+    void retrievePromptContext_dropsWrongExampleSqlAndKeepsPromptBudgetTrace() {
+        RagConfigVO config = new RagConfigVO();
+        config.setRagRerankEnabled(false);
+        when(ragConfigService.getConfig()).thenReturn(config);
+        when(ragEmbeddingService.embedText(eq("distribution_callback_log 查询\n重点表: distribution_callback_log")))
+            .thenReturn(List.of(0.1F, 0.2F));
+        when(qdrantClientService.searchPoints(eq("schema_table"), anyList(), anyInt(), eq(1L), eq("mdm")))
+            .thenReturn(List.of(new QdrantScoredPoint(
+                "table-1",
+                0.82D,
+                Map.of(
+                    "table_name", "distribution_callback_log",
+                    "table_comment", "callback log",
+                    "primary_keys", List.of("id"),
+                    "time_columns", List.of("event_time")
+                )
+            )));
+        when(qdrantClientService.searchPoints(eq("schema_column"), anyList(), anyInt(), eq(1L), eq("mdm")))
+            .thenReturn(List.of(new QdrantScoredPoint(
+                "column-1",
+                0.75D,
+                Map.of(
+                    "table_name", "distribution_callback_log",
+                    "column_name", "event_time",
+                    "column_roles", List.of("time")
+                )
+            )));
+        when(qdrantClientService.searchPoints(eq("sql_history"), anyList(), anyInt(), eq(1L), eq("mdm")))
+            .thenReturn(List.of());
+        when(qdrantClientService.searchPointsByFilters(eq("metric_term"), anyList(), anyInt(), anyList()))
+            .thenReturn(List.of());
+        when(qdrantClientService.searchPointsByFilters(eq("example_sql"), anyList(), anyInt(), anyList()))
+            .thenReturn(List.of(
+                new QdrantScoredPoint(
+                    "example-wrong",
+                    0.86D,
+                    Map.of(
+                        "entity_id", 101L,
+                        "scope", "DATABASE",
+                        "tables", List.of("other_table"),
+                        "sql_operation_type", "SELECT",
+                        "quality_score", 0.96D,
+                        "verified_flag", true,
+                        "question_text", "错误样例",
+                        "semantic_description", "不相关样例",
+                        "sql_text", "SELECT * FROM other_table"
+                    )
+                ),
+                new QdrantScoredPoint(
+                    "example-right",
+                    0.84D,
+                    Map.of(
+                        "entity_id", 102L,
+                        "scope", "DATABASE",
+                        "tables", List.of("distribution_callback_log"),
+                        "sql_operation_type", "SELECT",
+                        "quality_score", 0.91D,
+                        "verified_flag", true,
+                        "question_text", "正确样例",
+                        "semantic_description", "当前锚点表相关",
+                        "sql_text", "SELECT event_time FROM distribution_callback_log LIMIT 10"
+                    )
+                )
+            ));
+
+        RagRetrievalServiceImpl service = new RagRetrievalServiceImpl(
+            true,
+            "schema_table",
+            "schema_column",
+            "sql_history",
+            "metric_term",
+            "example_sql",
+            "sql_fragment",
+            10,
+            20,
+            8,
+            6,
+            6,
+            false,
+            0.65D,
+            0.30D,
+            0.05D,
+            ragConfigService,
+            schemaService,
+            ragEmbeddingService,
+            qdrantClientService,
+            ragRerankService
+        );
+
+        RagPromptContext context = service.retrievePromptContext(
+            1L,
+            "mdm",
+            """
+            distribution_callback_log 查询
+            补充上下文:
+            检索关键词: distribution_callback_log 查询
+            重点表: distribution_callback_log
+            """
+        );
+
+        assertTrue(context.getPromptContext().contains("正确样例"));
+        assertFalse(context.getPromptContext().contains("SELECT * FROM other_table"));
+        assertTrue(context.getPromptContext().contains("【确认的表锚点】"));
+        assertTrue(context.getPromptBudgetUsed() > 0);
+        assertTrue(context.getSelectionDetails().stream()
+            .anyMatch(detail -> "example_sql".equals(detail.get("bucket"))
+                && "dropped".equals(detail.get("decision"))
+                && "样例表集合与表锚点无重叠".equals(detail.get("reason"))));
+    }
 }

@@ -57,7 +57,7 @@ public class OpenAiCompatRerankServiceImpl implements RagRerankService {
         payload.put("return_documents", false);
         ArrayNode documents = payload.putArray("documents");
         for (QdrantScoredPoint hit : hits) {
-            documents.add(buildDocument(hit));
+            documents.add(buildDocument(bucket, hit));
         }
 
         JsonNode root = openAiCompatRagHttpClient.postJson(
@@ -158,19 +158,74 @@ public class OpenAiCompatRerankServiceImpl implements RagRerankService {
         return Math.min(1D, sigmoid);
     }
 
-    private String buildDocument(QdrantScoredPoint hit) {
+    private String buildDocument(String bucket, QdrantScoredPoint hit) {
         if (hit == null || hit.getPayload() == null || hit.getPayload().isEmpty()) {
             return "";
         }
         Map<String, Object> payload = hit.getPayload();
         StringBuilder builder = new StringBuilder();
-        appendIfPresent(builder, payload, "table_name");
-        appendIfPresent(builder, payload, "column_name");
-        appendIfPresent(builder, payload, "term");
-        appendIfPresent(builder, payload, "definition");
-        appendIfPresent(builder, payload, "metric_expression");
-        appendIfPresent(builder, payload, "sql_text");
-        appendIfPresent(builder, payload, "prompt_text");
+        switch (bucket) {
+            case "table" -> {
+                appendIfPresent(builder, payload, "table_name");
+                appendIfPresent(builder, payload, "table_comment");
+                appendListIfPresent(builder, payload, "primary_keys");
+                appendListIfPresent(builder, payload, "indexed_columns");
+                appendListIfPresent(builder, payload, "time_columns");
+                appendListIfPresent(builder, payload, "metric_columns");
+                appendListIfPresent(builder, payload, "dimension_columns");
+            }
+            case "column" -> {
+                appendIfPresent(builder, payload, "table_name");
+                appendIfPresent(builder, payload, "column_name");
+                appendIfPresent(builder, payload, "data_type");
+                appendIfPresent(builder, payload, "column_comment");
+                appendListIfPresent(builder, payload, "column_roles");
+            }
+            case "metric_term" -> {
+                appendIfPresent(builder, payload, "term");
+                appendIfPresent(builder, payload, "term_type");
+                appendIfPresent(builder, payload, "definition");
+                appendIfPresent(builder, payload, "metric_expression");
+                appendListIfPresent(builder, payload, "aliases");
+                appendListIfPresent(builder, payload, "related_tables");
+                appendListIfPresent(builder, payload, "related_columns");
+            }
+            case "example_sql" -> {
+                appendIfPresent(builder, payload, "question_text");
+                appendIfPresent(builder, payload, "semantic_description");
+                appendIfPresent(builder, payload, "sql_text");
+                appendIfPresent(builder, payload, "normalized_sql_text");
+                appendIfPresent(builder, payload, "sql_template");
+                appendListIfPresent(builder, payload, "tables");
+                appendListIfPresent(builder, payload, "columns");
+                appendListIfPresent(builder, payload, "metric_tags");
+                appendListIfPresent(builder, payload, "time_tags");
+                appendIfPresent(builder, payload, "sql_operation_type");
+                appendIfPresent(builder, payload, "verified_flag");
+                appendIfPresent(builder, payload, "quality_score");
+            }
+            case "query_history" -> {
+                appendIfPresent(builder, payload, "question_text");
+                appendIfPresent(builder, payload, "semantic_description");
+                appendIfPresent(builder, payload, "sql_text");
+                appendListIfPresent(builder, payload, "tables");
+                appendListIfPresent(builder, payload, "columns");
+                appendIfPresent(builder, payload, "sql_operation_type");
+                appendIfPresent(builder, payload, "source_type");
+                appendIfPresent(builder, payload, "trust_level");
+                appendIfPresent(builder, payload, "execution_ms");
+                appendIfPresent(builder, payload, "success");
+            }
+            default -> {
+                appendIfPresent(builder, payload, "table_name");
+                appendIfPresent(builder, payload, "column_name");
+                appendIfPresent(builder, payload, "term");
+                appendIfPresent(builder, payload, "definition");
+                appendIfPresent(builder, payload, "metric_expression");
+                appendIfPresent(builder, payload, "sql_text");
+                appendIfPresent(builder, payload, "prompt_text");
+            }
+        }
         return builder.toString().trim();
     }
 
@@ -186,6 +241,30 @@ public class OpenAiCompatRerankServiceImpl implements RagRerankService {
             builder.append(" | ");
         }
         builder.append(key).append('=').append(value);
+    }
+
+    private void appendListIfPresent(StringBuilder builder, Map<String, Object> payload, String key) {
+        if (payload == null) {
+            return;
+        }
+        Object rawValue = payload.get(key);
+        if (!(rawValue instanceof List<?> rawList) || rawList.isEmpty()) {
+            return;
+        }
+        List<String> values = new ArrayList<>();
+        for (Object item : rawList) {
+            String value = Objects.toString(item, "").trim();
+            if (!value.isBlank()) {
+                values.add(value);
+            }
+        }
+        if (values.isEmpty()) {
+            return;
+        }
+        if (builder.length() > 0) {
+            builder.append(" | ");
+        }
+        builder.append(key).append('=').append(String.join(",", values));
     }
 
     private String resolveRerankEndpoint(String baseUrl) {

@@ -271,23 +271,93 @@ public class OnnxLocalRerankServiceImpl implements LocalRagRerankService {
             return "";
         }
         Map<String, Object> payload = hit.getPayload();
-        return switch (bucket) {
-            case "table" -> "table=" + payloadString(payload, "table_name")
-                + "\ncomment=" + payloadString(payload, "table_comment")
-                + "\ncolumns=" + String.join(",", payloadStringList(payload, "columns"));
-            case "column" -> "table=" + payloadString(payload, "table_name")
-                + "\ncolumn=" + payloadString(payload, "column_name")
-                + "\ntype=" + payloadString(payload, "data_type")
-                + "\ncomment=" + payloadString(payload, "column_comment");
-            case "metric_term" -> "term=" + payloadString(payload, "term")
-                + "\ndefinition=" + payloadString(payload, "definition")
-                + "\nexpression=" + payloadString(payload, "metric_expression");
-            case "example_sql", "query_history" -> "sql=" + payloadString(payload, "sql_text")
-                + "\nsemantic=" + payloadString(payload, "semantic_description")
-                + "\nprompt=" + payloadString(payload, "prompt_text")
-                + "\ntables=" + String.join(",", payloadStringList(payload, "tables"));
-            default -> payload.toString();
-        };
+        StringBuilder builder = new StringBuilder();
+        switch (bucket) {
+            case "table" -> {
+                appendField(builder, "table", payloadString(payload, "table_name"));
+                appendField(builder, "comment", payloadString(payload, "table_comment"));
+                appendListField(builder, "primary_keys", payloadStringList(payload, "primary_keys"));
+                appendListField(builder, "indexed_columns", payloadStringList(payload, "indexed_columns"));
+                appendListField(builder, "time_columns", payloadStringList(payload, "time_columns"));
+                appendListField(builder, "metric_columns", payloadStringList(payload, "metric_columns"));
+                appendListField(builder, "dimension_columns", payloadStringList(payload, "dimension_columns"));
+            }
+            case "column" -> {
+                appendField(builder, "table", payloadString(payload, "table_name"));
+                appendField(builder, "column", payloadString(payload, "column_name"));
+                appendField(builder, "type", payloadString(payload, "data_type"));
+                appendField(builder, "comment", payloadString(payload, "column_comment"));
+                appendListField(builder, "roles", payloadStringList(payload, "column_roles"));
+                appendField(builder, "indexed", payloadString(payload, "indexed"));
+                appendField(builder, "primary_key", payloadString(payload, "primary_key"));
+            }
+            case "metric_term" -> {
+                appendField(builder, "term", payloadString(payload, "term"));
+                appendField(builder, "term_type", payloadString(payload, "term_type"));
+                appendField(builder, "definition", payloadString(payload, "definition"));
+                appendField(builder, "expression", payloadString(payload, "metric_expression"));
+                appendListField(builder, "aliases", payloadStringList(payload, "aliases"));
+                appendListField(builder, "related_tables", payloadStringList(payload, "related_tables"));
+                appendListField(builder, "related_columns", payloadStringList(payload, "related_columns"));
+            }
+            case "example_sql" -> {
+                appendField(builder, "question", payloadString(payload, "question_text"));
+                appendField(builder, "semantic", payloadString(payload, "semantic_description"));
+                appendField(builder, "sql", payloadString(payload, "sql_text"));
+                appendField(builder, "normalized_sql", payloadString(payload, "normalized_sql_text"));
+                appendField(builder, "sql_template", payloadString(payload, "sql_template"));
+                appendListField(builder, "tables", payloadStringList(payload, "tables"));
+                appendListField(builder, "columns", payloadStringList(payload, "columns"));
+                appendListField(builder, "metric_tags", payloadStringList(payload, "metric_tags"));
+                appendListField(builder, "time_tags", payloadStringList(payload, "time_tags"));
+                appendField(builder, "operation", payloadString(payload, "sql_operation_type"));
+                appendField(builder, "verified", payloadString(payload, "verified_flag"));
+                appendField(builder, "quality", payloadString(payload, "quality_score"));
+            }
+            case "query_history" -> {
+                appendField(builder, "question", firstNonBlank(payloadString(payload, "question_text"), payloadString(payload, "prompt_text")));
+                appendField(builder, "semantic", payloadString(payload, "semantic_description"));
+                appendField(builder, "sql", payloadString(payload, "sql_text"));
+                appendListField(builder, "tables", payloadStringList(payload, "tables"));
+                appendListField(builder, "columns", payloadStringList(payload, "columns"));
+                appendField(builder, "operation", payloadString(payload, "sql_operation_type"));
+                appendField(builder, "source_type", payloadString(payload, "source_type"));
+                appendField(builder, "trust", payloadString(payload, "trust_level"));
+                appendField(builder, "execution_ms", payloadString(payload, "execution_ms"));
+                appendField(builder, "success", payloadString(payload, "success"));
+            }
+            default -> builder.append(payload);
+        }
+        return builder.toString().trim();
+    }
+
+    private void appendField(StringBuilder builder, String key, String value) {
+        if (builder == null) {
+            return;
+        }
+        String normalized = safe(value);
+        if (normalized.isBlank()) {
+            return;
+        }
+        if (builder.length() > 0) {
+            builder.append('\n');
+        }
+        builder.append(key).append('=').append(normalized);
+    }
+
+    private void appendListField(StringBuilder builder, String key, List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return;
+        }
+        appendField(builder, key, String.join(",", values));
+    }
+
+    private String firstNonBlank(String first, String second) {
+        String firstValue = safe(first);
+        if (!firstValue.isBlank()) {
+            return firstValue;
+        }
+        return safe(second);
     }
 
     private List<Double> normalizeScores(Object value, int size) {

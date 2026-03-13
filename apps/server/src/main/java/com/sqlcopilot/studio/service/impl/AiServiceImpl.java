@@ -110,9 +110,10 @@ public class AiServiceImpl implements AiService {
     private static final String OPENAI_SYSTEM_PROMPT = """
         你是数据库 SQL 专家。基于提供的上下文生成 SQL。仅返回可执行 SQL，不要输出解释。
         约束：
-        1）重要!!如果存在样例SQL，则优先参考样例SQL
-        2) SQL必须可执行，不要使用 markdown 代码块。
-        3) 输出的SQL的语法需要匹配上下文中的数据库类型 
+        1) 当前 schema 真值优先级最高，术语/口径次之；样例 SQL 仅作参考，不能覆盖当前 schema 真值。
+        2) 若样例 SQL 与当前 schema、字段、术语定义冲突，必须以当前 schema 和术语定义为准。
+        3) SQL必须可执行，不要使用 markdown 代码块。
+        4) 输出的SQL的语法需要匹配上下文中的数据库类型 
         """;
     private static final String GENERATE_CHART_SYSTEM_PROMPT = """
         你是数据库图表方案助手。请基于用户需求和数据库上下文，输出严格 JSON，不要输出任何额外文本。
@@ -134,13 +135,14 @@ public class AiServiceImpl implements AiService {
           "configSummary": "配置摘要"
         }
         约束：
-        1）重要!!如果存在样例SQL，则优先参考样例SQL
-        2) chartType=LINE/BAR/TREND 时必须提供 xField + yFields(至少1项)；
-        3) 若 chartType=LINE/BAR/TREND 且需要“按分类拆多系列”展示，必须额外提供 seriesField，且 yFields 仅允许 1 项；
-        3) chartType=PIE 时必须提供 categoryField + valueField；
-        4) chartType=SCATTER 时必须提供 xField + yFields(仅1项)；
-        5) SQL 必须可执行，不要使用 markdown 代码块。
-        6) 输出的SQL的语法需要匹配上下文中的数据库类型 
+        1) 当前 schema 真值优先级最高，术语/口径次之；样例 SQL 仅作参考，不能覆盖当前 schema 真值。
+        2) 若样例 SQL 与当前 schema、字段、术语定义冲突，必须以当前 schema 和术语定义为准。
+        3) chartType=LINE/BAR/TREND 时必须提供 xField + yFields(至少1项)；
+        4) 若 chartType=LINE/BAR/TREND 且需要“按分类拆多系列”展示，必须额外提供 seriesField，且 yFields 仅允许 1 项；
+        5) chartType=PIE 时必须提供 categoryField + valueField；
+        6) chartType=SCATTER 时必须提供 xField + yFields(仅1项)
+        7) SQL 必须可执行，不要使用 markdown 代码块。
+        8) 输出的SQL的语法需要匹配上下文中的数据库类型 
         """;
     private static final String EXPLAIN_SQL_SYSTEM_PROMPT = """
         你是数据库讲解助手。请用中文解释 SQL 的业务含义。
@@ -1434,18 +1436,11 @@ public class AiServiceImpl implements AiService {
 
     private String buildRepairPrompt(String sqlText, String errorMessage) {
         return """
-            Repair the failed SQL according to the execution error.
-            Keep business intent unchanged while making it executable.
-
             Execution error:
             %s
 
             Original SQL:
             %s
-
-            Return strict JSON with keys:
-            errorExplanation
-            repairedSql
             """.formatted(safe(errorMessage), safe(sqlText));
     }
 
@@ -2518,7 +2513,6 @@ public class AiServiceImpl implements AiService {
     private String buildProviderUserPrompt(AiGenerateSqlReq req,
                                            AiConversationContextManager.ConversationGenerationContext context) {
         DatabaseBasicInfo basicInfo = loadDatabaseBasicInfo(req.getConnectionId(), req.getDatabaseName());
-        String relatedIndexInfo = buildRelatedTableIndexInfo(req.getConnectionId(), req.getDatabaseName(), context.relatedTables());
         StringBuilder builder = new StringBuilder();
         builder.append("数据库基本信息:\n")
             .append("- 类型: ").append(basicInfo.dbType()).append('\n')
@@ -2526,9 +2520,6 @@ public class AiServiceImpl implements AiService {
             .append("- 连接默认库: ").append(basicInfo.configuredDatabaseName());
         if (!basicInfo.requestDatabaseName().isBlank()) {
             builder.append('\n').append("- 本次目标库: ").append(basicInfo.requestDatabaseName());
-        }
-        if (!relatedIndexInfo.isBlank()) {
-            builder.append("\n\n关联表索引字段:\n").append(relatedIndexInfo);
         }
         builder.append("\n\n");
         builder.append("用户需求:\n").append(req.getPrompt());
@@ -3352,6 +3343,8 @@ public class AiServiceImpl implements AiService {
                 buildTraceField("rerankEnabled", "rerankEnabled", ragPromptContext == null ? null : ragPromptContext.getRerankEnabled()),
                 buildTraceField("rerankProvider", "rerankProvider", ragPromptContext == null ? "" : ragPromptContext.getRerankProvider()),
                 buildTraceField("rerankDetails", "rerankDetails", ragPromptContext == null ? List.of() : ragPromptContext.getRerankDetails()),
+                buildTraceField("selectionDetails", "selectionDetails", ragPromptContext == null ? List.of() : ragPromptContext.getSelectionDetails()),
+                buildTraceField("promptBudgetUsed", "promptBudgetUsed", ragPromptContext == null ? 0 : ragPromptContext.getPromptBudgetUsed()),
                 buildTraceField("relatedTables", "relatedTables", ragPromptContext == null ? List.of() : ragPromptContext.getRelatedTables()),
                 buildTraceField("relatedColumns", "relatedColumns", ragPromptContext == null ? List.of() : ragPromptContext.getRelatedColumns()),
                 buildTraceField("historySqlSamples", "historySqlSamples", ragPromptContext == null ? List.of() : ragPromptContext.getHistorySqlSamples()),

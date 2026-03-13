@@ -15,6 +15,11 @@ public interface KnowledgeTermMapper {
             database_name,
             term,
             description,
+            aliases_json,
+            metric_expression,
+            related_tables_json,
+            related_columns_json,
+            term_type,
             created_at,
             updated_at
         ) VALUES (
@@ -23,6 +28,11 @@ public interface KnowledgeTermMapper {
             #{databaseName},
             #{term},
             #{description},
+            #{aliasesJson},
+            #{metricExpression},
+            #{relatedTablesJson},
+            #{relatedColumnsJson},
+            #{termType},
             #{createdAt},
             #{updatedAt}
         )
@@ -37,6 +47,11 @@ public interface KnowledgeTermMapper {
             database_name = #{databaseName},
             term = #{term},
             description = #{description},
+            aliases_json = #{aliasesJson},
+            metric_expression = #{metricExpression},
+            related_tables_json = #{relatedTablesJson},
+            related_columns_json = #{relatedColumnsJson},
+            term_type = #{termType},
             updated_at = #{updatedAt}
         WHERE id = #{id}
         """)

@@ -31,6 +31,12 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
     private static final int SUPPLEMENT_TABLE_COLUMNS_PREVIEW_LIMIT = 30;
     private static final int SUPPLEMENT_COLUMN_PER_TABLE_LIMIT = 12;
     private static final double SUPPLEMENT_SCORE_STEP = 0.001D;
+    private static final int PROMPT_TABLE_LIMIT = 4;
+    private static final int PROMPT_TERM_LIMIT = 3;
+    private static final int PROMPT_EXAMPLE_LIMIT = 2;
+    private static final int PROMPT_HISTORY_LIMIT = 1;
+    private static final int PROMPT_COLUMNS_PER_TABLE_LIMIT = 6;
+    private static final int PROMPT_CONTEXT_TOKEN_BUDGET = 900;
     private static final Pattern TABLE_PATTERN = Pattern.compile("(?i)\\b(?:from|join|update|into|table)\\s+([a-zA-Z0-9_$.`\"]+)");
     private static final Pattern RETRIEVAL_QUERY_PATTERN = Pattern.compile("(?m)^检索关键词:\\s*(.+)$");
     private static final Pattern FOCUS_TABLES_PATTERN = Pattern.compile("(?m)^重点表:\\s*(.+)$");
@@ -237,172 +243,78 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         exampleSqlHits = exampleRerank.hits();
         rerankDetails.add(exampleRerank.traceDetail());
         String rerankProvider = currentRerankProvider(rerankEnabled, initialRerankProvider);
-        Set<String> tableConstraints = collectConstraintTables(tableHits);
-        tableConstraints.addAll(retrievalQuery.focusTables());
-        if (!tableConstraints.isEmpty()) {
+        List<Map<String, Object>> selectionDetails = new ArrayList<>();
+        LinkedHashSet<String> anchorTables = buildAnchorTables(retrievalQuery, tableHits, metricTermHits);
+        if (!anchorTables.isEmpty()) {
             int columnBefore = columnHits.size();
             int historyBefore = historyHits.size();
             int metricBefore = metricTermHits.size();
-            columnHits = filterColumnHitsByTables(columnHits, tableConstraints);
-            historyHits = filterHistoryHitsByTables(historyHits, tableConstraints);
-            metricTermHits = filterHitsByTables(metricTermHits, tableConstraints);
-            log.info(
-                "[RAG-RETRIEVE-TABLE-CONSTRAINT] connectionId={}, databaseName={}, tableConstraintCount={}, columnBefore={}, columnAfter={}, historyBefore={}, historyAfter={}, metricBefore={}, metricAfter={}, exampleCount={}",
-                connectionId,
-                normalizedDatabaseName,
-                tableConstraints.size(),
-                columnBefore,
-                columnHits.size(),
-                historyBefore,
-                historyHits.size(),
-                metricBefore,
-                metricTermHits.size(),
-                exampleSqlHits.size()
-            );
+            columnHits = filterColumnHitsByTables(columnHits, anchorTables);
+            historyHits = filterHistoryHitsByTables(historyHits, anchorTables);
+            metricTermHits = filterHitsByTables(metricTermHits, anchorTables);
+            selectionDetails.add(buildSelectionDetail(
+                "anchor_filter",
+                "accepted",
+                "按表锚点约束字段/历史/术语",
+                Map.of(
+                    "anchorTables", new ArrayList<>(anchorTables),
+                    "columnBefore", columnBefore,
+                    "columnAfter", columnHits.size(),
+                    "historyBefore", historyBefore,
+                    "historyAfter", historyHits.size(),
+                    "metricBefore", metricBefore,
+                    "metricAfter", metricTermHits.size()
+                )
+            ));
         }
-        ExampleSqlSupplementResult supplementResult = supplementSchemaHitsByExampleSql(
-            connectionId,
-            normalizedDatabaseName,
-            exampleSqlHits,
-            tableHits,
-            columnHits
+
+        ExampleGateResult exampleGateResult = gateExampleSqlHits(exampleSqlHits, retrievalQuery, anchorTables, metricTermHits);
+        exampleSqlHits = exampleGateResult.acceptedHits();
+        selectionDetails.addAll(exampleGateResult.traceDetails());
+
+        List<QdrantScoredPoint> selectedTableHits = selectAnchorTableHits(tableHits, anchorTables);
+        List<QdrantScoredPoint> selectedTermHits = metricTermHits.stream().limit(PROMPT_TERM_LIMIT).toList();
+        List<QdrantScoredPoint> selectedColumnHits = selectPromptColumnHits(columnHits, selectedTableHits);
+        List<QdrantScoredPoint> selectedExampleHits = exampleSqlHits.stream().limit(PROMPT_EXAMPLE_LIMIT).toList();
+        List<QdrantScoredPoint> selectedHistoryHits = historyHits.stream().limit(PROMPT_HISTORY_LIMIT).toList();
+        PromptBuildResult promptBuildResult = buildPromptContext(
+            retrievalQuery,
+            selectedTableHits,
+            selectedColumnHits,
+            selectedTermHits,
+            selectedExampleHits,
+            selectedHistoryHits,
+            exampleGateResult.acceptedById()
         );
-        tableHits = supplementResult.tableHits();
-        columnHits = supplementResult.columnHits();
-        if (supplementResult.supplementedTableCount() > 0 || supplementResult.supplementedColumnCount() > 0) {
-            log.info(
-                "[RAG-RETRIEVE-EXAMPLE-SUPPLEMENT] connectionId={}, databaseName={}, supplementedTableCount={}, supplementedColumnCount={}, tableHitCount={}, columnHitCount={}",
-                connectionId,
-                normalizedDatabaseName,
-                supplementResult.supplementedTableCount(),
-                supplementResult.supplementedColumnCount(),
-                tableHits.size(),
-                columnHits.size()
-            );
-        }
-
-        Set<String> relatedTables = new LinkedHashSet<>();
-        Set<String> relatedColumns = new LinkedHashSet<>();
-        List<String> historySqlSamples = new ArrayList<>();
-
-        StringBuilder contextBuilder = new StringBuilder();
-        contextBuilder.append("【用户输入】\n").append(userInput.trim()).append("\n\n");
-
-        if (!tableHits.isEmpty()) {
-            contextBuilder.append("【命中表】\n");
-            int idx = 1;
-            for (QdrantScoredPoint hit : tableHits) {
-                Map<String, Object> payload = hit.getPayload();
-                String tableName = payloadString(payload, "table_name");
-                String tableComment = payloadString(payload, "table_comment");
-                String columns = String.join(", ", payloadStringList(payload, "columns"));
-                if (!isBlank(tableName)) {
-                    relatedTables.add(tableName);
-                }
-                contextBuilder.append(idx++)
-                    .append(". ")
-                    .append(tableName)
-                    .append(isBlank(tableComment) ? "" : "（" + tableComment + "）")
-                    .append(isBlank(columns) ? "" : " 字段: " + columns)
-                    .append("\n");
-            }
-            contextBuilder.append("\n");
-        }
-
-        if (!columnHits.isEmpty()) {
-            contextBuilder.append("【命中字段】\n");
-            int idx = 1;
-            for (QdrantScoredPoint hit : columnHits) {
-                Map<String, Object> payload = hit.getPayload();
-                String tableName = payloadString(payload, "table_name");
-                String columnName = payloadString(payload, "column_name");
-                String dataType = payloadString(payload, "data_type");
-                String columnComment = payloadString(payload, "column_comment");
-                if (!isBlank(tableName)) {
-                    relatedTables.add(tableName);
-                }
-                if (!isBlank(tableName) && !isBlank(columnName)) {
-                    relatedColumns.add(tableName + "." + columnName);
-                }
-                contextBuilder.append(idx++)
-                    .append(". ")
-                    .append(tableName)
-                    .append(".")
-                    .append(columnName)
-                    .append(isBlank(dataType) ? "" : " ")
-                    .append(dataType)
-                    .append(isBlank(columnComment) ? "" : "（" + columnComment + "）")
-                    .append("\n");
-            }
-            contextBuilder.append("\n");
-        }
-
-        if (!metricTermHits.isEmpty()) {
-            contextBuilder.append("【命中业务术语】\n");
-            int idx = 1;
-            for (QdrantScoredPoint hit : metricTermHits) {
-                Map<String, Object> payload = hit.getPayload();
-                String term = payloadString(payload, "term");
-                String definition = payloadString(payload, "definition");
-                String expression = payloadString(payload, "metric_expression");
-                contextBuilder.append(idx++)
-                    .append(". ")
-                    .append(term.isBlank() ? "术语" : term)
-                    .append(definition.isBlank() ? "" : "：" + definition)
-                    .append(expression.isBlank() ? "" : "（口径=" + expression + "）")
-                    .append("\n");
-            }
-            contextBuilder.append("\n");
-        }
-
-        if (!exampleSqlHits.isEmpty()) {
-            contextBuilder.append("【命中SQL样例】\n");
-            int idx = 1;
-            for (QdrantScoredPoint hit : exampleSqlHits) {
-                Map<String, Object> payload = hit.getPayload();
-                String sqlText = payloadString(payload, "sql_text");
-                String nlQuestion = payloadString(payload, "nl_question");
-                if (!isBlank(sqlText)) {
-                    historySqlSamples.add(sqlText);
-                }
-                contextBuilder.append(idx++)
-                    .append(". ")
-                    .append(nlQuestion.isBlank() ? "" : ("问法=" + nlQuestion + "；"))
-                    .append(sqlText.isBlank() ? payloadString(payload, "sql_semantic") : sqlText)
-                    .append("\n");
-            }
-            contextBuilder.append("\n");
-        }
-
-        if (!historyHits.isEmpty()) {
-            contextBuilder.append("【命中历史SQL】\n");
-            int idx = 1;
-            for (QdrantScoredPoint hit : historyHits) {
-                Map<String, Object> payload = hit.getPayload();
-                String sqlText = payloadString(payload, "sql_text");
-                if (isBlank(sqlText)) {
-                    String tables = String.join(",", payloadStringList(payload, "tables"));
-                    String columns = String.join(",", payloadStringList(payload, "columns"));
-                    sqlText = "tables=[" + tables + "], columns=[" + columns + "]";
-                }
-                historySqlSamples.add(sqlText);
-                contextBuilder.append(idx++).append(". ").append(sqlText).append("\n");
-            }
-        }
+        selectionDetails.add(buildSelectionDetail(
+            "prompt",
+            "assembled",
+            "完成预算化上下文组装",
+            Map.of(
+                "tableCount", selectedTableHits.size(),
+                "columnCount", selectedColumnHits.size(),
+                "termCount", selectedTermHits.size(),
+                "exampleCount", selectedExampleHits.size(),
+                "historyCount", selectedHistoryHits.size(),
+                "promptBudgetUsed", promptBuildResult.promptBudgetUsed()
+            )
+        ));
 
         RagPromptContext context = new RagPromptContext();
-        context.setPromptContext(contextBuilder.toString().trim());
-        context.setRelatedTables(new ArrayList<>(relatedTables));
-        context.setRelatedColumns(new ArrayList<>(relatedColumns));
-        context.setHistorySqlSamples(historySqlSamples);
+        context.setPromptContext(promptBuildResult.promptContext());
+        context.setRelatedTables(promptBuildResult.relatedTables());
+        context.setRelatedColumns(promptBuildResult.relatedColumns());
+        context.setHistorySqlSamples(promptBuildResult.historySqlSamples());
         context.setHit(!tableHits.isEmpty() || !columnHits.isEmpty() || !historyHits.isEmpty()
             || !metricTermHits.isEmpty() || !exampleSqlHits.isEmpty());
         context.setRerankEnabled(rerankEnabled);
         context.setRerankProvider(rerankProvider);
         context.setRerankDetails(rerankDetails);
+        context.setSelectionDetails(selectionDetails);
+        context.setPromptBudgetUsed(promptBuildResult.promptBudgetUsed());
 
         log.info(
-            "[RAG-RETRIEVE-RESP] connectionId={}, databaseName={}, hit={}, tableHitCount={}, columnHitCount={}, historyHitCount={}, metricHitCount={}, exampleHitCount={}, relatedTableCount={}, relatedColumnCount={}, historyCount={}, contextLength={}",
+            "[RAG-RETRIEVE-RESP] connectionId={}, databaseName={}, hit={}, tableHitCount={}, columnHitCount={}, historyHitCount={}, metricHitCount={}, exampleHitCount={}, anchorTableCount={}, relatedTableCount={}, relatedColumnCount={}, historyCount={}, contextLength={}, promptBudgetUsed={}",
             connectionId,
             normalizedDatabaseName,
             context.getHit(),
@@ -411,10 +323,12 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             historyHits.size(),
             metricTermHits.size(),
             exampleSqlHits.size(),
+            anchorTables.size(),
             context.getRelatedTables().size(),
             context.getRelatedColumns().size(),
             context.getHistorySqlSamples().size(),
-            context.getPromptContext().length()
+            context.getPromptContext().length(),
+            context.getPromptBudgetUsed()
         );
         return context;
     }
@@ -496,6 +410,437 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         }
     }
 
+    private LinkedHashSet<String> buildAnchorTables(RetrievalQuery query,
+                                                    List<QdrantScoredPoint> tableHits,
+                                                    List<QdrantScoredPoint> termHits) {
+        LinkedHashSet<String> anchorTables = new LinkedHashSet<>();
+        if (query != null && query.focusTables() != null) {
+            anchorTables.addAll(query.focusTables());
+        }
+        if (tableHits != null) {
+            for (QdrantScoredPoint hit : tableHits) {
+                String tableName = normalizeTableName(payloadString(hit.getPayload(), "table_name"));
+                if (!tableName.isBlank()) {
+                    anchorTables.add(tableName);
+                }
+                if (anchorTables.size() >= PROMPT_TABLE_LIMIT) {
+                    break;
+                }
+            }
+        }
+        if (termHits != null && anchorTables.size() < PROMPT_TABLE_LIMIT) {
+            for (QdrantScoredPoint hit : termHits) {
+                for (String table : payloadStringList(hit.getPayload(), "related_tables")) {
+                    String normalized = normalizeTableName(table);
+                    if (!normalized.isBlank()) {
+                        anchorTables.add(normalized);
+                    }
+                    if (anchorTables.size() >= PROMPT_TABLE_LIMIT) {
+                        break;
+                    }
+                }
+                if (anchorTables.size() >= PROMPT_TABLE_LIMIT) {
+                    break;
+                }
+            }
+        }
+        return anchorTables;
+    }
+
+    private List<QdrantScoredPoint> selectAnchorTableHits(List<QdrantScoredPoint> tableHits, Set<String> anchorTables) {
+        if (tableHits == null || tableHits.isEmpty()) {
+            return List.of();
+        }
+        List<QdrantScoredPoint> selected = new ArrayList<>();
+        Set<String> accepted = new LinkedHashSet<>();
+        for (QdrantScoredPoint hit : tableHits) {
+            String tableName = normalizeTableName(payloadString(hit.getPayload(), "table_name"));
+            if (tableName.isBlank()) {
+                continue;
+            }
+            if (anchorTables != null && !anchorTables.isEmpty() && !anchorTables.contains(tableName)) {
+                continue;
+            }
+            if (accepted.add(tableName)) {
+                selected.add(hit);
+            }
+            if (selected.size() >= PROMPT_TABLE_LIMIT) {
+                break;
+            }
+        }
+        return selected;
+    }
+
+    private List<QdrantScoredPoint> selectPromptColumnHits(List<QdrantScoredPoint> columnHits, List<QdrantScoredPoint> selectedTableHits) {
+        if (columnHits == null || columnHits.isEmpty() || selectedTableHits == null || selectedTableHits.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<String> selectedTables = new LinkedHashSet<>();
+        for (QdrantScoredPoint hit : selectedTableHits) {
+            String tableName = normalizeTableName(payloadString(hit.getPayload(), "table_name"));
+            if (!tableName.isBlank()) {
+                selectedTables.add(tableName);
+            }
+        }
+        Map<String, Integer> perTableCount = new LinkedHashMap<>();
+        List<QdrantScoredPoint> sorted = new ArrayList<>(columnHits);
+        sorted.sort(Comparator.comparingInt(this::columnPromptPriority)
+            .thenComparing((QdrantScoredPoint hit) -> safeScore(hit), Comparator.reverseOrder()));
+        List<QdrantScoredPoint> selected = new ArrayList<>();
+        for (QdrantScoredPoint hit : sorted) {
+            String tableName = normalizeTableName(payloadString(hit.getPayload(), "table_name"));
+            String columnName = normalizeColumnName(payloadString(hit.getPayload(), "column_name"));
+            if (tableName.isBlank() || columnName.isBlank() || !selectedTables.contains(tableName)) {
+                continue;
+            }
+            int count = perTableCount.getOrDefault(tableName, 0);
+            if (count >= PROMPT_COLUMNS_PER_TABLE_LIMIT) {
+                continue;
+            }
+            selected.add(hit);
+            perTableCount.put(tableName, count + 1);
+        }
+        return selected;
+    }
+
+    private int columnPromptPriority(QdrantScoredPoint hit) {
+        if (hit == null || hit.getPayload() == null) {
+            return Integer.MAX_VALUE;
+        }
+        List<String> roles = payloadStringList(hit.getPayload(), "column_roles");
+        if (roles.contains("join") || roles.contains("primary_key")) {
+            return 0;
+        }
+        if (roles.contains("time")) {
+            return 1;
+        }
+        if (roles.contains("metric")) {
+            return 2;
+        }
+        if (roles.contains("indexed")) {
+            return 3;
+        }
+        return 4;
+    }
+
+    private ExampleGateResult gateExampleSqlHits(List<QdrantScoredPoint> hits,
+                                                 RetrievalQuery query,
+                                                 Set<String> anchorTables,
+                                                 List<QdrantScoredPoint> termHits) {
+        if (hits == null || hits.isEmpty()) {
+            return new ExampleGateResult(List.of(), Map.of(), List.of(
+                buildSelectionDetail("example_sql", "skipped", "无样例 SQL 候选", Map.of())
+            ));
+        }
+        Set<Long> termIds = new LinkedHashSet<>();
+        if (termHits != null) {
+            for (QdrantScoredPoint hit : termHits) {
+                Object entityId = hit == null || hit.getPayload() == null ? null : hit.getPayload().get("entity_id");
+                if (entityId instanceof Number number) {
+                    termIds.add(number.longValue());
+                }
+            }
+        }
+        List<ExampleSelectionInfo> accepted = new ArrayList<>();
+        List<Map<String, Object>> traceDetails = new ArrayList<>();
+        for (QdrantScoredPoint hit : hits) {
+            if (hit == null) {
+                continue;
+            }
+            Map<String, Object> payload = hit.getPayload();
+            String sqlOperationType = safeOperationType(payloadString(payload, "sql_operation_type"));
+            String queryOperationType = query == null ? "" : safeOperationType(query.operationType());
+            double qualityScore = payloadDouble(payload, "quality_score", payloadDouble(payload, "trust_level", 0.0D));
+            List<String> exampleTables = payloadStringList(payload, "tables");
+            double tableOverlap = calculateTableOverlap(anchorTables, exampleTables);
+            boolean operationMatch = queryOperationType.isBlank() || queryOperationType.equals(sqlOperationType) || "SELECT".equals(queryOperationType);
+            boolean tableMatch = anchorTables == null || anchorTables.isEmpty() || tableOverlap > 0D;
+            boolean qualityMatch = qualityScore >= 0.55D;
+            boolean verified = payloadBoolean(payload, "verified_flag");
+            int scopePriority = resolveScopePriority(payloadString(payload, "scope"));
+            boolean termMatched = hasTermOverlap(payload.get("term_ids"), termIds);
+            boolean scopeMatch = scopePriority > 0;
+            String decision = "accepted";
+            String reason = "通过门控";
+            if (!qualityMatch) {
+                decision = "dropped";
+                reason = "质量分过低";
+            } else if (!operationMatch) {
+                decision = "dropped";
+                reason = "SQL 操作类型不匹配";
+            } else if (!tableMatch) {
+                decision = "dropped";
+                reason = "样例表集合与表锚点无重叠";
+            } else if (!verified && scopePriority <= 1) {
+                decision = "dropped";
+                reason = "低作用域且未验证样例";
+            }
+            Map<String, Object> detailExtra = new LinkedHashMap<>();
+            detailExtra.put("entityId", payload.get("entity_id"));
+            detailExtra.put("scope", payloadString(payload, "scope"));
+            detailExtra.put("scopePriority", scopePriority);
+            detailExtra.put("scopeMatch", scopeMatch);
+            detailExtra.put("qualityScore", qualityScore);
+            detailExtra.put("trustLevel", qualityScore);
+            detailExtra.put("tableOverlap", tableOverlap);
+            detailExtra.put("queryOperationType", queryOperationType);
+            detailExtra.put("sqlOperationType", sqlOperationType);
+            detailExtra.put("termMatched", termMatched);
+            detailExtra.put("verified", verified);
+            detailExtra.put("dropReason", "accepted".equals(decision) ? "" : reason);
+            Map<String, Object> detail = buildSelectionDetail(
+                "example_sql",
+                decision,
+                reason,
+                detailExtra
+            );
+            traceDetails.add(detail);
+            if ("accepted".equals(decision)) {
+                accepted.add(new ExampleSelectionInfo(hit, tableOverlap, qualityScore, scopePriority, termMatched));
+            }
+        }
+        accepted.sort(Comparator.comparingDouble(ExampleSelectionInfo::tableOverlap).reversed()
+            .thenComparing((left, right) -> Boolean.compare(right.termMatched(), left.termMatched()))
+            .thenComparing(Comparator.comparingInt(ExampleSelectionInfo::scopePriority).reversed())
+            .thenComparing(Comparator.comparingDouble(ExampleSelectionInfo::qualityScore).reversed())
+            .thenComparing(item -> safeScore(item.hit()), Comparator.reverseOrder()));
+        Map<String, ExampleSelectionInfo> acceptedById = new LinkedHashMap<>();
+        List<QdrantScoredPoint> acceptedHits = new ArrayList<>();
+        for (ExampleSelectionInfo info : accepted) {
+            acceptedHits.add(info.hit());
+            acceptedById.put(Objects.toString(info.hit().getId(), ""), info);
+        }
+        traceDetails.add(buildSelectionDetail(
+            "example_sql",
+            "summary",
+            "样例 SQL 门控完成",
+            Map.of("acceptedCount", acceptedHits.size(), "candidateCount", hits.size())
+        ));
+        return new ExampleGateResult(acceptedHits, acceptedById, traceDetails);
+    }
+
+    private boolean hasTermOverlap(Object rawTermIds, Set<Long> termIds) {
+        if (termIds == null || termIds.isEmpty() || !(rawTermIds instanceof List<?> termIdList)) {
+            return false;
+        }
+        for (Object item : termIdList) {
+            if (item instanceof Number number && termIds.contains(number.longValue())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private double calculateTableOverlap(Set<String> anchorTables, List<String> exampleTables) {
+        if (anchorTables == null || anchorTables.isEmpty() || exampleTables == null || exampleTables.isEmpty()) {
+            return 0D;
+        }
+        int overlap = 0;
+        for (String table : exampleTables) {
+            if (anchorTables.contains(normalizeTableName(table))) {
+                overlap++;
+            }
+        }
+        return overlap <= 0 ? 0D : overlap * 1.0D / Math.max(1, exampleTables.size());
+    }
+
+    private int resolveScopePriority(String scope) {
+        String normalized = Objects.toString(scope, "").trim().toUpperCase(Locale.ROOT);
+        return switch (normalized) {
+            case "DATABASE" -> 3;
+            case "CONNECTION" -> 2;
+            case "GLOBAL" -> 1;
+            default -> 0;
+        };
+    }
+
+    private Map<String, Object> buildSelectionDetail(String bucket, String decision, String reason, Map<String, Object> extra) {
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("bucket", bucket);
+        detail.put("decision", decision);
+        detail.put("reason", reason);
+        if (extra != null && !extra.isEmpty()) {
+            detail.putAll(extra);
+        }
+        return detail;
+    }
+
+    private PromptBuildResult buildPromptContext(RetrievalQuery query,
+                                                 List<QdrantScoredPoint> tableHits,
+                                                 List<QdrantScoredPoint> columnHits,
+                                                 List<QdrantScoredPoint> termHits,
+                                                 List<QdrantScoredPoint> exampleHits,
+                                                 List<QdrantScoredPoint> historyHits,
+                                                 Map<String, ExampleSelectionInfo> acceptedExampleById) {
+        StringBuilder builder = new StringBuilder();
+        LinkedHashSet<String> relatedTables = new LinkedHashSet<>();
+        LinkedHashSet<String> relatedColumns = new LinkedHashSet<>();
+        List<String> historySqlSamples = new ArrayList<>();
+
+        StringBuilder goalSection = new StringBuilder();
+        if (query != null && !isBlank(query.semanticQuery())) {
+            goalSection.append("- 用户目标: ").append(query.semanticQuery()).append("\n");
+        }
+        if (query != null && query.focusTables() != null && !query.focusTables().isEmpty()) {
+            goalSection.append("- 重点表: ").append(String.join(", ", query.focusTables())).append("\n");
+        }
+        if (query != null && !isBlank(query.operationType())) {
+            goalSection.append("- SQL 类型: ").append(query.operationType()).append("\n");
+        }
+        appendSection(builder, "用户目标与硬约束", goalSection.toString().trim());
+
+        StringBuilder tableSection = new StringBuilder();
+        for (QdrantScoredPoint hit : tableHits) {
+            Map<String, Object> payload = hit.getPayload();
+            String tableName = payloadString(payload, "table_name");
+            if (tableName.isBlank()) {
+                continue;
+            }
+            relatedTables.add(tableName);
+            tableSection.append("- ").append(tableName);
+            String comment = payloadString(payload, "table_comment");
+            if (!comment.isBlank()) {
+                tableSection.append("（").append(comment).append("）");
+            }
+            appendTableRole(tableSection, "PK", payloadStringList(payload, "primary_keys"));
+            appendTableRole(tableSection, "IDX", payloadStringList(payload, "indexed_columns"));
+            appendTableRole(tableSection, "时间", payloadStringList(payload, "time_columns"));
+            appendTableRole(tableSection, "度量", payloadStringList(payload, "metric_columns"));
+            appendTableRole(tableSection, "维度", payloadStringList(payload, "dimension_columns"));
+            tableSection.append("\n");
+        }
+        appendSection(builder, "确认的表锚点", tableSection.toString().trim());
+
+        StringBuilder columnSection = new StringBuilder();
+        Map<String, List<QdrantScoredPoint>> groupedColumns = new LinkedHashMap<>();
+        for (QdrantScoredPoint tableHit : tableHits) {
+            String tableName = payloadString(tableHit.getPayload(), "table_name");
+            if (!tableName.isBlank()) {
+                groupedColumns.put(tableName, new ArrayList<>());
+            }
+        }
+        for (QdrantScoredPoint hit : columnHits) {
+            String tableName = payloadString(hit.getPayload(), "table_name");
+            if (!tableName.isBlank()) {
+                groupedColumns.computeIfAbsent(tableName, key -> new ArrayList<>()).add(hit);
+            }
+        }
+        for (Map.Entry<String, List<QdrantScoredPoint>> entry : groupedColumns.entrySet()) {
+            columnSection.append("- ").append(entry.getKey()).append(": ");
+            Map<String, List<String>> byRole = new LinkedHashMap<>();
+            for (QdrantScoredPoint hit : entry.getValue()) {
+                String columnName = payloadString(hit.getPayload(), "column_name");
+                if (columnName.isBlank()) {
+                    continue;
+                }
+                relatedColumns.add(entry.getKey() + "." + columnName);
+                List<String> roles = payloadStringList(hit.getPayload(), "column_roles");
+                String majorRole = roles.contains("join") ? "join"
+                    : roles.contains("time") ? "time"
+                    : roles.contains("metric") ? "metric"
+                    : roles.contains("dimension") ? "dimension"
+                    : "filter";
+                byRole.computeIfAbsent(majorRole, key -> new ArrayList<>()).add(columnName);
+            }
+            List<String> roleSegments = new ArrayList<>();
+            for (String role : List.of("join", "filter", "metric", "dimension", "time")) {
+                List<String> columns = byRole.get(role);
+                if (columns == null || columns.isEmpty()) {
+                    continue;
+                }
+                roleSegments.add(role + "=" + String.join(",", columns));
+            }
+            columnSection.append(String.join("; ", roleSegments)).append("\n");
+        }
+        appendSection(builder, "相关字段", columnSection.toString().trim());
+
+        StringBuilder termSection = new StringBuilder();
+        for (QdrantScoredPoint hit : termHits) {
+            Map<String, Object> payload = hit.getPayload();
+            termSection.append("- ").append(payloadString(payload, "term"));
+            if (!payloadString(payload, "definition").isBlank()) {
+                termSection.append(": ").append(payloadString(payload, "definition"));
+            }
+            if (!payloadString(payload, "metric_expression").isBlank()) {
+                termSection.append("（口径=").append(payloadString(payload, "metric_expression")).append("）");
+            }
+            appendListIfPresent(termSection, "别名", payloadStringList(payload, "aliases"));
+            appendListIfPresent(termSection, "关联表", payloadStringList(payload, "related_tables"));
+            termSection.append("\n");
+        }
+        appendSection(builder, "口径与术语", termSection.toString().trim());
+
+        StringBuilder referenceSection = new StringBuilder();
+        for (QdrantScoredPoint hit : exampleHits) {
+            Map<String, Object> payload = hit.getPayload();
+            ExampleSelectionInfo selectionInfo = acceptedExampleById == null ? null : acceptedExampleById.get(Objects.toString(hit.getId(), ""));
+            String scope = payloadString(payload, "scope");
+            double trustLevel = payloadDouble(payload, "quality_score", payloadDouble(payload, "trust_level", 0D));
+            referenceSection.append("- 样例 SQL [scope=").append(scope)
+                .append(", trust=").append(String.format(Locale.ROOT, "%.2f", trustLevel))
+                .append(", overlap=").append(String.format(Locale.ROOT, "%.2f", selectionInfo == null ? 0D : selectionInfo.tableOverlap()))
+                .append("]\n");
+            if (!payloadString(payload, "question_text").isBlank()) {
+                referenceSection.append("  问法: ").append(payloadString(payload, "question_text")).append("\n");
+            }
+            if (!payloadString(payload, "semantic_description").isBlank()) {
+                referenceSection.append("  适用原因: ").append(payloadString(payload, "semantic_description")).append("\n");
+            }
+            referenceSection.append("  不可直接照搬: 仅作结构参考，需以当前 schema 与术语定义为准\n");
+            referenceSection.append("  SQL: ").append(shortenSql(payloadString(payload, "sql_text"))).append("\n");
+            historySqlSamples.add(payloadString(payload, "sql_text"));
+        }
+        for (QdrantScoredPoint hit : historyHits) {
+            Map<String, Object> payload = hit.getPayload();
+            referenceSection.append("- 历史 SQL [fallback, trust=")
+                .append(String.format(Locale.ROOT, "%.2f", payloadDouble(payload, "trust_level", 0.55D)))
+                .append("]\n");
+            if (!payloadString(payload, "semantic_description").isBlank()) {
+                referenceSection.append("  适用原因: ").append(payloadString(payload, "semantic_description")).append("\n");
+            }
+            referenceSection.append("  不可直接照搬: 仅作回退参考，需重新核对当前 schema\n");
+            referenceSection.append("  SQL: ").append(shortenSql(payloadString(payload, "sql_text"))).append("\n");
+            historySqlSamples.add(payloadString(payload, "sql_text"));
+        }
+        appendSection(builder, "参考 SQL", referenceSection.toString().trim());
+
+        String promptContext = builder.toString().trim();
+        int promptBudgetUsed = Math.max(1, promptContext.length() / 4);
+        if (promptBudgetUsed > PROMPT_CONTEXT_TOKEN_BUDGET) {
+            promptContext = shorten(promptContext, PROMPT_CONTEXT_TOKEN_BUDGET * 4);
+            promptBudgetUsed = Math.max(1, promptContext.length() / 4);
+        }
+        return new PromptBuildResult(promptContext, new ArrayList<>(relatedTables), new ArrayList<>(relatedColumns), historySqlSamples, promptBudgetUsed);
+    }
+
+    private void appendSection(StringBuilder builder, String title, String content) {
+        if (builder == null || isBlank(content)) {
+            return;
+        }
+        if (builder.length() > 0) {
+            builder.append("\n\n");
+        }
+        builder.append("【").append(title).append("】\n").append(content);
+    }
+
+    private void appendTableRole(StringBuilder builder, String label, List<String> values) {
+        if (builder == null || values == null || values.isEmpty()) {
+            return;
+        }
+        builder.append(" ").append(label).append("(").append(String.join(",", values.stream().limit(4).toList())).append(")");
+    }
+
+    private void appendListIfPresent(StringBuilder builder, String label, List<String> values) {
+        if (builder == null || values == null || values.isEmpty()) {
+            return;
+        }
+        builder.append("（").append(label).append("=").append(String.join(",", values.stream().limit(4).toList())).append("）");
+    }
+
+    private String shortenSql(String sqlText) {
+        return shorten(Objects.toString(sqlText, "").replaceAll("\\s+", " ").trim(), 360);
+    }
+
     private RetrievalQuery parseRetrievalQuery(String userInput) {
         String rawInput = Objects.toString(userInput, "").trim();
         String semanticQuery = extractPatternValue(RETRIEVAL_QUERY_PATTERN, rawInput);
@@ -535,7 +880,7 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             embeddingBuilder.append("重点表: ").append(String.join(",", focusTables));
         }
         String embeddingText = embeddingBuilder.length() == 0 ? rawInput : embeddingBuilder.toString();
-        return new RetrievalQuery(rawInput, semanticQuery, List.copyOf(focusTables), embeddingText);
+        return new RetrievalQuery(rawInput, semanticQuery, List.copyOf(focusTables), embeddingText, resolveSqlOperationType(rawInput));
     }
 
     private String extractPatternValue(Pattern pattern, String text) {
@@ -645,13 +990,19 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             .filter(hit -> {
                 String tableName = normalizeTableName(payloadString(hit.getPayload(), "table_name"));
                 List<String> tables = payloadStringList(hit.getPayload(), "tables");
-                if (tableName.isBlank() && tables.isEmpty()) {
+                List<String> relatedTables = payloadStringList(hit.getPayload(), "related_tables");
+                if (tableName.isBlank() && tables.isEmpty() && relatedTables.isEmpty()) {
                     return true;
                 }
                 if (!tableName.isBlank() && constraints.contains(tableName)) {
                     return true;
                 }
                 for (String table : tables) {
+                    if (constraints.contains(normalizeTableName(table))) {
+                        return true;
+                    }
+                }
+                for (String table : relatedTables) {
                     if (constraints.contains(normalizeTableName(table))) {
                         return true;
                     }
@@ -884,6 +1235,8 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
                                                             TableDetailVO tableDetail,
                                                             List<TableDetailVO.ColumnDetailVO> columns) {
         Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("entity_type", "schema_table");
+        payload.put("entity_id", tableName);
         payload.put("table_name", tableName);
         String tableComment = tableDetail == null ? "" : trimText(tableDetail.getTableComment());
         if (tableComment.isBlank()) {
@@ -899,18 +1252,71 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             .limit(SUPPLEMENT_TABLE_COLUMNS_PREVIEW_LIMIT)
             .toList();
         payload.put("columns", columnNames);
+        payload.put("primary_keys", columns.stream()
+            .filter(Objects::nonNull)
+            .filter(column -> Boolean.TRUE.equals(column.getPrimaryKey()))
+            .map(TableDetailVO.ColumnDetailVO::getColumnName)
+            .filter(Objects::nonNull)
+            .map(String::trim)
+            .filter(name -> !name.isBlank())
+            .limit(4)
+            .toList());
+        payload.put("indexed_columns", columns.stream()
+            .filter(Objects::nonNull)
+            .filter(column -> Boolean.TRUE.equals(column.getIndexed()))
+            .map(TableDetailVO.ColumnDetailVO::getColumnName)
+            .filter(Objects::nonNull)
+            .map(String::trim)
+            .filter(name -> !name.isBlank())
+            .limit(6)
+            .toList());
+        payload.put("time_columns", columns.stream()
+            .filter(Objects::nonNull)
+            .filter(column -> resolveColumnRoles(column).contains("time"))
+            .map(TableDetailVO.ColumnDetailVO::getColumnName)
+            .filter(Objects::nonNull)
+            .map(String::trim)
+            .filter(name -> !name.isBlank())
+            .limit(4)
+            .toList());
+        payload.put("metric_columns", columns.stream()
+            .filter(Objects::nonNull)
+            .filter(column -> resolveColumnRoles(column).contains("metric"))
+            .map(TableDetailVO.ColumnDetailVO::getColumnName)
+            .filter(Objects::nonNull)
+            .map(String::trim)
+            .filter(name -> !name.isBlank())
+            .limit(4)
+            .toList());
+        payload.put("dimension_columns", columns.stream()
+            .filter(Objects::nonNull)
+            .filter(column -> resolveColumnRoles(column).contains("dimension"))
+            .map(TableDetailVO.ColumnDetailVO::getColumnName)
+            .filter(Objects::nonNull)
+            .map(String::trim)
+            .filter(name -> !name.isBlank())
+            .limit(6)
+            .toList());
+        payload.put("trust_level", 1.0D);
+        payload.put("entity_version", 0L);
         return payload;
     }
 
     private Map<String, Object> buildSupplementColumnPayload(String tableName, TableDetailVO.ColumnDetailVO column) {
         Map<String, Object> payload = new LinkedHashMap<>();
+        String columnName = column == null ? "" : Objects.toString(column.getColumnName(), "").trim();
+        payload.put("entity_type", "schema_column");
+        payload.put("entity_id", tableName + "." + columnName);
         payload.put("table_name", tableName);
-        payload.put("column_name", column == null ? "" : Objects.toString(column.getColumnName(), "").trim());
+        payload.put("column_name", columnName);
         payload.put("data_type", column == null ? "" : Objects.toString(column.getDataType(), "").trim());
         payload.put("column_comment", column == null ? "" : Objects.toString(column.getColumnComment(), "").trim());
         payload.put("indexed", column != null && Boolean.TRUE.equals(column.getIndexed()));
         payload.put("primary_key", column != null && Boolean.TRUE.equals(column.getPrimaryKey()));
         payload.put("nullable", column == null || Boolean.TRUE.equals(column.getNullable()));
+        payload.put("column_roles", resolveColumnRoles(column));
+        payload.put("trust_level", 1.0D);
+        payload.put("entity_version", 0L);
         return payload;
     }
 
@@ -1048,7 +1454,20 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
                 yield isBlank(tableName) || isBlank(columnName) ? Objects.toString(hit.getId(), "") : tableName + "." + columnName;
             }
             case "metric_term" -> payloadString(payload, "term");
-            case "example_sql", "query_history" -> shorten(payloadString(payload, "sql_text"), 96);
+            case "example_sql" -> {
+                String questionText = payloadString(payload, "question_text");
+                if (!questionText.isBlank()) {
+                    yield shorten(questionText, 96);
+                }
+                yield shorten(payloadString(payload, "sql_text"), 96);
+            }
+            case "query_history" -> {
+                String questionText = payloadString(payload, "question_text");
+                if (!questionText.isBlank()) {
+                    yield shorten(questionText, 96);
+                }
+                yield shorten(payloadString(payload, "sql_text"), 96);
+            }
             default -> Objects.toString(hit.getId(), "");
         };
     }
@@ -1113,7 +1532,10 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         double timeBonus = containsStructuredTimeSignal(queryText) ? 0.2 : 0.0;
         double focusTableBonus = focusTableMatchBonus(query, payload);
         double mentionBonus = payloadMentionBonus(queryText, payload);
-        return schemaBonus + timeBonus + focusTableBonus + mentionBonus;
+        double trustBonus = Math.min(1.0D, payloadDouble(payload, "trust_level", 0.0D));
+        double scopeBonus = resolveScopePriority(payloadString(payload, "scope")) * 0.08D;
+        double operationBonus = operationMatchBonus(query, payload);
+        return schemaBonus + timeBonus + focusTableBonus + mentionBonus + trustBonus + scopeBonus + operationBonus;
     }
 
     private double clip01(double score) {
@@ -1143,6 +1565,21 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             }
         }
         return 0.0;
+    }
+
+    private double operationMatchBonus(RetrievalQuery query, Map<String, Object> payload) {
+        if (query == null || payload == null) {
+            return 0.0;
+        }
+        String queryOperation = safeOperationType(query.operationType());
+        if (queryOperation.isBlank()) {
+            return 0.0;
+        }
+        String payloadOperation = safeOperationType(payloadString(payload, "sql_operation_type"));
+        if (payloadOperation.isBlank()) {
+            return "SELECT".equals(queryOperation) ? 0.1D : 0.0D;
+        }
+        return queryOperation.equals(payloadOperation) ? 0.6D : -0.4D;
     }
 
     private double payloadMentionBonus(String queryText, Map<String, Object> payload) {
@@ -1181,13 +1618,33 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
     private record RetrievalQuery(String rawInput,
                                   String semanticQuery,
                                   List<String> focusTables,
-                                  String embeddingText) {
+                                  String embeddingText,
+                                  String operationType) {
     }
 
     private record ExampleSqlSupplementResult(List<QdrantScoredPoint> tableHits,
                                               List<QdrantScoredPoint> columnHits,
                                               int supplementedTableCount,
                                               int supplementedColumnCount) {
+    }
+
+    private record ExampleSelectionInfo(QdrantScoredPoint hit,
+                                        double tableOverlap,
+                                        double qualityScore,
+                                        int scopePriority,
+                                        boolean termMatched) {
+    }
+
+    private record ExampleGateResult(List<QdrantScoredPoint> acceptedHits,
+                                     Map<String, ExampleSelectionInfo> acceptedById,
+                                     List<Map<String, Object>> traceDetails) {
+    }
+
+    private record PromptBuildResult(String promptContext,
+                                     List<String> relatedTables,
+                                     List<String> relatedColumns,
+                                     List<String> historySqlSamples,
+                                     int promptBudgetUsed) {
     }
 
     private RagPromptContext emptyContext(boolean rerankEnabled, String rerankProvider) {
@@ -1200,6 +1657,8 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         context.setRerankEnabled(rerankEnabled);
         context.setRerankProvider(Objects.toString(rerankProvider, "").trim());
         context.setRerankDetails(List.of());
+        context.setSelectionDetails(List.of());
+        context.setPromptBudgetUsed(0);
         return context;
     }
 
@@ -1221,6 +1680,36 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         return values;
     }
 
+    private double payloadDouble(Map<String, Object> payload, String key, double defaultValue) {
+        if (payload == null || payload.get(key) == null) {
+            return defaultValue;
+        }
+        Object value = payload.get(key);
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        try {
+            return Double.parseDouble(Objects.toString(value, ""));
+        } catch (Exception ex) {
+            return defaultValue;
+        }
+    }
+
+    private boolean payloadBoolean(Map<String, Object> payload, String key) {
+        if (payload == null || payload.get(key) == null) {
+            return false;
+        }
+        Object value = payload.get(key);
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        if (value instanceof Number number) {
+            return number.intValue() != 0;
+        }
+        String text = Objects.toString(value, "").trim();
+        return "1".equals(text) || "true".equalsIgnoreCase(text);
+    }
+
     private String payloadString(Map<String, Object> payload, String key) {
         if (payload == null) {
             return "";
@@ -1232,9 +1721,62 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         return Objects.toString(value, "").trim();
     }
 
+    private String safeOperationType(String value) {
+        return Objects.toString(value, "").trim().toUpperCase(Locale.ROOT);
+    }
+
+    private String resolveSqlOperationType(String rawText) {
+        String normalized = Objects.toString(rawText, "").trim().toLowerCase(Locale.ROOT);
+        if (normalized.startsWith("insert") || normalized.contains("插入") || normalized.contains("新增")) {
+            return "INSERT";
+        }
+        if (normalized.startsWith("update") || normalized.contains("更新") || normalized.contains("修改")) {
+            return "UPDATE";
+        }
+        if (normalized.startsWith("delete") || normalized.contains("删除")) {
+            return "DELETE";
+        }
+        if (normalized.startsWith("create") || normalized.startsWith("alter") || normalized.startsWith("drop")) {
+            return "DDL";
+        }
+        return "SELECT";
+    }
+
     private String normalizeDatabaseName(String databaseName) {
         String value = Objects.toString(databaseName, "").trim();
         return value.isBlank() ? "" : value;
+    }
+
+    private List<String> resolveColumnRoles(TableDetailVO.ColumnDetailVO column) {
+        if (column == null) {
+            return List.of();
+        }
+        LinkedHashSet<String> roles = new LinkedHashSet<>();
+        String name = trimText(column.getColumnName()).toLowerCase(Locale.ROOT);
+        String type = trimText(column.getDataType()).toLowerCase(Locale.ROOT);
+        String comment = trimText(column.getColumnComment()).toLowerCase(Locale.ROOT);
+        if (Boolean.TRUE.equals(column.getPrimaryKey())) {
+            roles.add("primary_key");
+        }
+        if (Boolean.TRUE.equals(column.getIndexed())) {
+            roles.add("indexed");
+        }
+        if (name.endsWith("_id") || "id".equals(name) || comment.contains("关联") || comment.contains("主键")) {
+            roles.add("join");
+        }
+        if (name.contains("time") || name.contains("date") || name.contains("day") || name.contains("month")
+            || name.contains("year") || name.contains("created") || comment.contains("时间") || comment.contains("日期")) {
+            roles.add("time");
+        }
+        if (name.contains("amount") || name.contains("price") || name.contains("count") || name.contains("num")
+            || name.contains("qty") || name.contains("rate") || type.contains("int") || type.contains("decimal")
+            || type.contains("number") || type.contains("double") || type.contains("float")) {
+            roles.add("metric");
+        }
+        if (!roles.contains("metric")) {
+            roles.add("dimension");
+        }
+        return new ArrayList<>(roles);
     }
 
     private String normalizeTableName(String tableName) {

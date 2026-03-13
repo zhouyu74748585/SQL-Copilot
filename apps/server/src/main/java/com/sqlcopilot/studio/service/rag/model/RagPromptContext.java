@@ -29,4 +29,10 @@ public class RagPromptContext {
     private String rerankProvider;
 
     private List<Map<String, Object>> rerankDetails;
+
+    /** 召回筛选与门控明细。 */
+    private List<Map<String, Object>> selectionDetails;
+
+    /** 组装到 Prompt 中的上下文 token 估算。 */
+    private Integer promptBudgetUsed;
 }

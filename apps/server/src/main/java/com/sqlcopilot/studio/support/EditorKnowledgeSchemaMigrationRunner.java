@@ -48,6 +48,11 @@ public class EditorKnowledgeSchemaMigrationRunner implements ApplicationRunner {
                     database_name TEXT NOT NULL DEFAULT '',
                     term TEXT NOT NULL,
                     description TEXT,
+                    aliases_json TEXT,
+                    metric_expression TEXT,
+                    related_tables_json TEXT,
+                    related_columns_json TEXT,
+                    term_type TEXT DEFAULT 'TERM',
                     created_at INTEGER NOT NULL,
                     updated_at INTEGER NOT NULL
                 )
@@ -66,6 +71,20 @@ public class EditorKnowledgeSchemaMigrationRunner implements ApplicationRunner {
                     sql_text TEXT NOT NULL,
                     description TEXT,
                     term_ids_json TEXT,
+                    question_text TEXT,
+                    question_variants_json TEXT,
+                    semantic_summary TEXT,
+                    normalized_sql TEXT,
+                    sql_template TEXT,
+                    sql_ast_json TEXT,
+                    table_names_json TEXT,
+                    column_names_json TEXT,
+                    metric_tags_json TEXT,
+                    time_tags_json TEXT,
+                    verified_flag INTEGER DEFAULT 1,
+                    quality_score REAL DEFAULT 0.95,
+                    source_type TEXT DEFAULT 'MANUAL',
+                    sql_operation_type TEXT DEFAULT 'SELECT',
                     created_at INTEGER NOT NULL,
                     updated_at INTEGER NOT NULL
                 )
@@ -84,9 +103,22 @@ public class EditorKnowledgeSchemaMigrationRunner implements ApplicationRunner {
         if (!hasTable(connection, "knowledge_term")) {
             return;
         }
+        boolean hasConnectionId = hasColumn(connection, "knowledge_term", "connection_id");
+        boolean hasDatabaseName = hasColumn(connection, "knowledge_term", "database_name");
+        boolean hasDescription = hasColumn(connection, "knowledge_term", "description");
+        boolean hasAliasesJson = hasColumn(connection, "knowledge_term", "aliases_json");
+        boolean hasMetricExpression = hasColumn(connection, "knowledge_term", "metric_expression");
+        boolean hasRelatedTablesJson = hasColumn(connection, "knowledge_term", "related_tables_json");
+        boolean hasRelatedColumnsJson = hasColumn(connection, "knowledge_term", "related_columns_json");
+        boolean hasTermType = hasColumn(connection, "knowledge_term", "term_type");
         if (hasColumn(connection, "knowledge_term", "connection_id")
             && hasColumn(connection, "knowledge_term", "database_name")
-            && hasColumn(connection, "knowledge_term", "description")) {
+            && hasColumn(connection, "knowledge_term", "description")
+            && hasAliasesJson
+            && hasMetricExpression
+            && hasRelatedTablesJson
+            && hasRelatedColumnsJson
+            && hasTermType) {
             return;
         }
         statement.execute("DROP TABLE IF EXISTS knowledge_term_new");
@@ -98,23 +130,54 @@ public class EditorKnowledgeSchemaMigrationRunner implements ApplicationRunner {
                 database_name TEXT NOT NULL DEFAULT '',
                 term TEXT NOT NULL,
                 description TEXT,
+                aliases_json TEXT,
+                metric_expression TEXT,
+                related_tables_json TEXT,
+                related_columns_json TEXT,
+                term_type TEXT DEFAULT 'TERM',
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             )
             """);
+        String connectionIdExpr = hasConnectionId ? "COALESCE(connection_id, 0)" : "COALESCE(scope_connection_id, 0)";
+        String databaseNameExpr = hasDatabaseName ? "COALESCE(database_name, '')" : "COALESCE(scope_database_name, '')";
+        String descriptionExpr = hasDescription ? "COALESCE(description, '')" : "COALESCE(definition, '')";
+        String aliasesExpr = hasAliasesJson ? "COALESCE(aliases_json, '[]')" : "'[]'";
+        String metricExpressionExpr = hasMetricExpression ? "COALESCE(metric_expression, '')" : descriptionExpr;
+        String relatedTablesExpr = hasRelatedTablesJson ? "COALESCE(related_tables_json, '[]')" : "'[]'";
+        String relatedColumnsExpr = hasRelatedColumnsJson ? "COALESCE(related_columns_json, '[]')" : "'[]'";
+        String termTypeExpr = hasTermType ? "COALESCE(term_type, 'TERM')" : "'TERM'";
         statement.execute("""
-            INSERT INTO knowledge_term_new(id, scope, connection_id, database_name, term, description, created_at, updated_at)
+            INSERT INTO knowledge_term_new(
+                id, scope, connection_id, database_name, term, description,
+                aliases_json, metric_expression, related_tables_json, related_columns_json, term_type,
+                created_at, updated_at
+            )
             SELECT
                 id,
                 scope,
-                COALESCE(scope_connection_id, 0),
-                COALESCE(scope_database_name, ''),
+                %s,
+                %s,
                 term,
-                definition,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
                 created_at,
                 updated_at
             FROM knowledge_term
-            """);
+            """.formatted(
+            connectionIdExpr,
+            databaseNameExpr,
+            descriptionExpr,
+            aliasesExpr,
+            metricExpressionExpr,
+            relatedTablesExpr,
+            relatedColumnsExpr,
+            termTypeExpr
+        ));
         statement.execute("DROP TABLE knowledge_term");
         statement.execute("ALTER TABLE knowledge_term_new RENAME TO knowledge_term");
     }
@@ -123,8 +186,38 @@ public class EditorKnowledgeSchemaMigrationRunner implements ApplicationRunner {
         if (!hasTable(connection, "knowledge_example_sql")) {
             return;
         }
+        boolean hasConnectionId = hasColumn(connection, "knowledge_example_sql", "connection_id");
+        boolean hasDatabaseName = hasColumn(connection, "knowledge_example_sql", "database_name");
+        boolean hasQuestionText = hasColumn(connection, "knowledge_example_sql", "question_text");
+        boolean hasQuestionVariants = hasColumn(connection, "knowledge_example_sql", "question_variants_json");
+        boolean hasSemanticSummary = hasColumn(connection, "knowledge_example_sql", "semantic_summary");
+        boolean hasNormalizedSql = hasColumn(connection, "knowledge_example_sql", "normalized_sql");
+        boolean hasSqlTemplate = hasColumn(connection, "knowledge_example_sql", "sql_template");
+        boolean hasSqlAstJson = hasColumn(connection, "knowledge_example_sql", "sql_ast_json");
+        boolean hasTableNamesJson = hasColumn(connection, "knowledge_example_sql", "table_names_json");
+        boolean hasColumnNamesJson = hasColumn(connection, "knowledge_example_sql", "column_names_json");
+        boolean hasMetricTagsJson = hasColumn(connection, "knowledge_example_sql", "metric_tags_json");
+        boolean hasTimeTagsJson = hasColumn(connection, "knowledge_example_sql", "time_tags_json");
+        boolean hasVerifiedFlag = hasColumn(connection, "knowledge_example_sql", "verified_flag");
+        boolean hasQualityScore = hasColumn(connection, "knowledge_example_sql", "quality_score");
+        boolean hasSourceType = hasColumn(connection, "knowledge_example_sql", "source_type");
+        boolean hasSqlOperationType = hasColumn(connection, "knowledge_example_sql", "sql_operation_type");
         if (hasColumn(connection, "knowledge_example_sql", "connection_id")
-            && hasColumn(connection, "knowledge_example_sql", "database_name")) {
+            && hasColumn(connection, "knowledge_example_sql", "database_name")
+            && hasQuestionText
+            && hasQuestionVariants
+            && hasSemanticSummary
+            && hasNormalizedSql
+            && hasSqlTemplate
+            && hasSqlAstJson
+            && hasTableNamesJson
+            && hasColumnNamesJson
+            && hasMetricTagsJson
+            && hasTimeTagsJson
+            && hasVerifiedFlag
+            && hasQualityScore
+            && hasSourceType
+            && hasSqlOperationType) {
             return;
         }
         statement.execute("DROP TABLE IF EXISTS knowledge_example_sql_new");
@@ -137,24 +230,90 @@ public class EditorKnowledgeSchemaMigrationRunner implements ApplicationRunner {
                 sql_text TEXT NOT NULL,
                 description TEXT,
                 term_ids_json TEXT,
+                question_text TEXT,
+                question_variants_json TEXT,
+                semantic_summary TEXT,
+                normalized_sql TEXT,
+                sql_template TEXT,
+                sql_ast_json TEXT,
+                table_names_json TEXT,
+                column_names_json TEXT,
+                metric_tags_json TEXT,
+                time_tags_json TEXT,
+                verified_flag INTEGER DEFAULT 1,
+                quality_score REAL DEFAULT 0.95,
+                source_type TEXT DEFAULT 'MANUAL',
+                sql_operation_type TEXT DEFAULT 'SELECT',
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             )
             """);
+        String connectionIdExpr = hasConnectionId ? "COALESCE(connection_id, 0)" : "COALESCE(scope_connection_id, 0)";
+        String databaseNameExpr = hasDatabaseName ? "COALESCE(database_name, '')" : "COALESCE(scope_database_name, '')";
+        String questionTextExpr = hasQuestionText ? "COALESCE(question_text, description, '')" : "COALESCE(description, '')";
+        String questionVariantsExpr = hasQuestionVariants ? "COALESCE(question_variants_json, '[]')" : "'[]'";
+        String semanticSummaryExpr = hasSemanticSummary ? "COALESCE(semantic_summary, description, '')" : "COALESCE(description, '')";
+        String normalizedSqlExpr = hasNormalizedSql ? "COALESCE(normalized_sql, LOWER(TRIM(sql_text)))" : "LOWER(TRIM(sql_text))";
+        String sqlTemplateExpr = hasSqlTemplate ? "COALESCE(sql_template, LOWER(TRIM(sql_text)))" : "LOWER(TRIM(sql_text))";
+        String sqlAstExpr = hasSqlAstJson ? "COALESCE(sql_ast_json, '{}')" : "'{}'";
+        String tableNamesExpr = hasTableNamesJson ? "COALESCE(table_names_json, '[]')" : "'[]'";
+        String columnNamesExpr = hasColumnNamesJson ? "COALESCE(column_names_json, '[]')" : "'[]'";
+        String metricTagsExpr = hasMetricTagsJson ? "COALESCE(metric_tags_json, '[]')" : "'[]'";
+        String timeTagsExpr = hasTimeTagsJson ? "COALESCE(time_tags_json, '[]')" : "'[]'";
+        String verifiedExpr = hasVerifiedFlag ? "COALESCE(verified_flag, 1)" : "1";
+        String qualityExpr = hasQualityScore ? "COALESCE(quality_score, 0.95)" : "0.95";
+        String sourceTypeExpr = hasSourceType ? "COALESCE(source_type, 'MANUAL')" : "'MANUAL'";
+        String operationExpr = hasSqlOperationType ? "COALESCE(sql_operation_type, 'SELECT')" : "'SELECT'";
         statement.execute("""
-            INSERT INTO knowledge_example_sql_new(id, scope, connection_id, database_name, sql_text, description, term_ids_json, created_at, updated_at)
+            INSERT INTO knowledge_example_sql_new(
+                id, scope, connection_id, database_name, sql_text, description, term_ids_json,
+                question_text, question_variants_json, semantic_summary, normalized_sql, sql_template,
+                sql_ast_json, table_names_json, column_names_json, metric_tags_json, time_tags_json,
+                verified_flag, quality_score, source_type, sql_operation_type, created_at, updated_at
+            )
             SELECT
                 id,
                 scope,
-                COALESCE(scope_connection_id, 0),
-                COALESCE(scope_database_name, ''),
+                %s,
+                %s,
                 sql_text,
                 description,
                 term_ids_json,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
                 created_at,
                 updated_at
             FROM knowledge_example_sql
-            """);
+            """.formatted(
+            connectionIdExpr,
+            databaseNameExpr,
+            questionTextExpr,
+            questionVariantsExpr,
+            semanticSummaryExpr,
+            normalizedSqlExpr,
+            sqlTemplateExpr,
+            sqlAstExpr,
+            tableNamesExpr,
+            columnNamesExpr,
+            metricTagsExpr,
+            timeTagsExpr,
+            verifiedExpr,
+            qualityExpr,
+            sourceTypeExpr,
+            operationExpr
+        ));
         statement.execute("DROP TABLE knowledge_example_sql");
         statement.execute("ALTER TABLE knowledge_example_sql_new RENAME TO knowledge_example_sql");
     }

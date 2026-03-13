@@ -2,6 +2,7 @@ package com.sqlcopilot.studio.service.rag.impl;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.sqlcopilot.studio.entity.ConnectionEntity;
 import com.sqlcopilot.studio.entity.KnowledgeExampleSqlEntity;
 import com.sqlcopilot.studio.entity.KnowledgeTermEntity;
@@ -20,6 +21,7 @@ import com.sqlcopilot.studio.service.rag.model.QdrantPoint;
 import com.sqlcopilot.studio.service.rag.model.QdrantPayloadFilter;
 import com.sqlcopilot.studio.service.rag.model.RagCollectionNames;
 import com.sqlcopilot.studio.service.rag.model.SqlFeatureMeta;
+import com.sqlcopilot.studio.util.KnowledgeMetadataUtil;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,6 +41,10 @@ import java.util.stream.Collectors;
 public class RagIngestionServiceImpl implements RagIngestionService {
 
     private static final Logger log = LoggerFactory.getLogger(RagIngestionServiceImpl.class);
+    private static final TypeReference<List<String>> STRING_LIST_TYPE = new TypeReference<>() {
+    };
+    private static final TypeReference<List<Long>> LONG_LIST_TYPE = new TypeReference<>() {
+    };
     private static final Pattern TABLE_PATTERN = Pattern.compile("(?i)\\b(?:from|join|update|into|table)\\s+([a-zA-Z0-9_$.`\"]+)");
     private static final Pattern CTE_PATTERN = Pattern.compile("(?is)([a-zA-Z0-9_]+)\\s+as\\s*\\((.*?)\\)");
     private static final Pattern SELECT_SPLIT_PATTERN = Pattern.compile("(?i)\\bselect\\b");
@@ -401,7 +407,11 @@ public class RagIngestionServiceImpl implements RagIngestionService {
                 sqlKeywordTags,
                 "history_query",
                 enrichment.semanticDescription(),
-                enrichment.tags()
+                enrichment.tags(),
+                "HISTORY",
+                0.55D,
+                1,
+                resolveSqlOperationType(historyEntity.getSqlText())
             );
 
             String historyText = buildSqlHistoryDocumentText(payload);
@@ -784,15 +794,7 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         builder.append("数据库: ").append(normalizeDatabaseName(table.getDatabaseName())).append("\n");
         builder.append("表名: ").append(table.getTableName()).append("\n");
         builder.append("备注: ").append(safeText(table.getTableComment())).append("\n");
-        if (!columns.isEmpty()) {
-            builder.append("字段: ");
-            List<String> preview = columns.stream()
-                .sorted(Comparator.comparing(SchemaColumnCacheEntity::getColumnName, String.CASE_INSENSITIVE_ORDER))
-                .limit(30)
-                .map(item -> item.getColumnName() + "(" + safeText(item.getDataType()) + ")")
-                .toList();
-            builder.append(String.join(", ", preview));
-        }
+        builder.append("关键字段角色摘要: ").append(buildTableRoleSummary(columns));
         return builder.toString();
     }
 
@@ -803,17 +805,21 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             + "类型: " + safeText(column.getDataType()) + "\n"
             + "备注: " + safeText(column.getColumnComment()) + "\n"
             + "主键: " + (column.getPrimaryKeyFlag() != null && column.getPrimaryKeyFlag() == 1) + "\n"
-            + "索引: " + (column.getIndexedFlag() != null && column.getIndexedFlag() == 1);
+            + "索引: " + (column.getIndexedFlag() != null && column.getIndexedFlag() == 1) + "\n"
+            + "字段角色: " + String.join(",", resolveColumnRoles(column));
     }
 
     private String buildSqlHistoryDocumentText(SqlHistoryPayload payload) {
         return "连接ID: " + payload.getConnectionId() + "\n"
             + "数据库: " + payload.getDatabaseName() + "\n"
             + "条目类型: " + payload.getEntryType() + "\n"
-            + "Prompt: " + payload.getPromptText() + "\n"
+            + "问题: " + payload.getQuestionText() + "\n"
             + "SQL: " + payload.getSqlText() + "\n"
+            + "操作类型: " + payload.getOperationType() + "\n"
             + "执行耗时: " + payload.getExecutionMs() + "ms\n"
             + "成功: " + payload.getSuccess() + "\n"
+            + "可信度: " + payload.getTrustLevel() + "\n"
+            + "来源类型: " + payload.getSourceType() + "\n"
             + "涉及表: " + String.join(",", payload.getTables()) + "\n"
             + "涉及列: " + String.join(",", payload.getColumns()) + "\n"
             + "JOIN数量: " + payload.getJoinCount() + "\n"
@@ -825,18 +831,28 @@ public class RagIngestionServiceImpl implements RagIngestionService {
     }
 
     private String buildKnowledgeTermDocumentText(KnowledgeTermEntity entity) {
+        KnowledgeMetadataUtil.DerivedTermMetadata metadata = ensureTermMetadata(entity);
         return "知识类型: 术语\n"
             + "作用域: " + safeText(entity.getScope()) + "\n"
             + "数据库: " + safeText(entity.getDatabaseName()) + "\n"
             + "术语: " + safeText(entity.getTerm()) + "\n"
-            + "说明: " + safeText(entity.getDescription());
+            + "类型: " + safeText(safeText(entity.getTermType()).isBlank() ? metadata.termType() : entity.getTermType()) + "\n"
+            + "说明: " + safeText(entity.getDescription()) + "\n"
+            + "别名: " + String.join(",", readStringList(entity.getAliasesJson(), metadata.aliasesJson())) + "\n"
+            + "口径表达式: " + safeText(safeText(entity.getMetricExpression()).isBlank() ? metadata.metricExpression() : entity.getMetricExpression());
     }
 
     private String buildKnowledgeExampleDocumentText(KnowledgeExampleSqlEntity entity) {
+        KnowledgeMetadataUtil.DerivedExampleMetadata metadata = ensureExampleMetadata(entity);
         return "知识类型: SQL样例\n"
             + "作用域: " + safeText(entity.getScope()) + "\n"
             + "数据库: " + safeText(entity.getDatabaseName()) + "\n"
-            + "说明: " + safeText(entity.getDescription()) + "\n"
+            + "问法: " + safeText(safeText(entity.getQuestionText()).isBlank() ? metadata.questionText() : entity.getQuestionText()) + "\n"
+            + "语义摘要: " + safeText(safeText(entity.getSemanticSummary()).isBlank() ? metadata.semanticSummary() : entity.getSemanticSummary()) + "\n"
+            + "操作类型: " + safeText(safeText(entity.getSqlOperationType()).isBlank() ? metadata.sqlOperationType() : entity.getSqlOperationType()) + "\n"
+            + "可信度: " + (entity.getQualityScore() == null
+            ? Objects.toString(metadata.qualityScore(), "")
+            : Objects.toString(entity.getQualityScore(), "")) + "\n"
             + "SQL: " + safeText(entity.getSqlText());
     }
 
@@ -856,8 +872,45 @@ public class RagIngestionServiceImpl implements RagIngestionService {
                                                  String databaseName,
                                                  SchemaTableCacheEntity table,
                                                  List<SchemaColumnCacheEntity> columns) {
-        List<String> columnNames = columns.stream().map(SchemaColumnCacheEntity::getColumnName)
-            .sorted(String.CASE_INSENSITIVE_ORDER)
+        List<String> primaryKeys = columns.stream()
+            .filter(item -> item.getPrimaryKeyFlag() != null && item.getPrimaryKeyFlag() == 1)
+            .map(SchemaColumnCacheEntity::getColumnName)
+            .filter(Objects::nonNull)
+            .map(String::trim)
+            .filter(name -> !name.isBlank())
+            .limit(4)
+            .toList();
+        List<String> indexedColumns = columns.stream()
+            .filter(item -> item.getIndexedFlag() != null && item.getIndexedFlag() == 1)
+            .map(SchemaColumnCacheEntity::getColumnName)
+            .filter(Objects::nonNull)
+            .map(String::trim)
+            .filter(name -> !name.isBlank())
+            .limit(6)
+            .toList();
+        List<String> timeColumns = columns.stream()
+            .filter(item -> resolveColumnRoles(item).contains("time"))
+            .map(SchemaColumnCacheEntity::getColumnName)
+            .filter(Objects::nonNull)
+            .map(String::trim)
+            .filter(name -> !name.isBlank())
+            .limit(4)
+            .toList();
+        List<String> metricColumns = columns.stream()
+            .filter(item -> resolveColumnRoles(item).contains("metric"))
+            .map(SchemaColumnCacheEntity::getColumnName)
+            .filter(Objects::nonNull)
+            .map(String::trim)
+            .filter(name -> !name.isBlank())
+            .limit(4)
+            .toList();
+        List<String> dimensionColumns = columns.stream()
+            .filter(item -> resolveColumnRoles(item).contains("dimension"))
+            .map(SchemaColumnCacheEntity::getColumnName)
+            .filter(Objects::nonNull)
+            .map(String::trim)
+            .filter(name -> !name.isBlank())
+            .limit(6)
             .toList();
         return new SchemaTablePayload(
             connectionId,
@@ -866,7 +919,13 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             safeText(table.getTableComment()),
             table.getRowEstimate() == null ? 0L : table.getRowEstimate(),
             table.getTableSizeBytes() == null ? 0L : table.getTableSizeBytes(),
-            columnNames
+            primaryKeys,
+            indexedColumns,
+            timeColumns,
+            metricColumns,
+            dimensionColumns,
+            1.0D,
+            table.getUpdatedAt() == null ? 0L : table.getUpdatedAt()
         );
     }
 
@@ -886,7 +945,10 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             column.getNullableFlag() == null || column.getNullableFlag() == 1,
             safeText(column.getColumnComment()),
             column.getIndexedFlag() != null && column.getIndexedFlag() == 1,
-            column.getPrimaryKeyFlag() != null && column.getPrimaryKeyFlag() == 1
+            column.getPrimaryKeyFlag() != null && column.getPrimaryKeyFlag() == 1,
+            resolveColumnRoles(column),
+            1.0D,
+            column.getUpdatedAt() == null ? 0L : column.getUpdatedAt()
         );
     }
 
@@ -1044,6 +1106,189 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         return vector.size();
     }
 
+    private String buildTableRoleSummary(List<SchemaColumnCacheEntity> columns) {
+        if (columns == null || columns.isEmpty()) {
+            return "字段详情按需加载";
+        }
+        List<String> primaryKeys = columns.stream()
+            .filter(item -> item.getPrimaryKeyFlag() != null && item.getPrimaryKeyFlag() == 1)
+            .map(SchemaColumnCacheEntity::getColumnName)
+            .filter(Objects::nonNull)
+            .map(String::trim)
+            .filter(name -> !name.isBlank())
+            .limit(4)
+            .toList();
+        List<String> timeColumns = columns.stream()
+            .filter(item -> resolveColumnRoles(item).contains("time"))
+            .map(SchemaColumnCacheEntity::getColumnName)
+            .filter(Objects::nonNull)
+            .map(String::trim)
+            .filter(name -> !name.isBlank())
+            .limit(4)
+            .toList();
+        List<String> metricColumns = columns.stream()
+            .filter(item -> resolveColumnRoles(item).contains("metric"))
+            .map(SchemaColumnCacheEntity::getColumnName)
+            .filter(Objects::nonNull)
+            .map(String::trim)
+            .filter(name -> !name.isBlank())
+            .limit(4)
+            .toList();
+        List<String> dimensionColumns = columns.stream()
+            .filter(item -> resolveColumnRoles(item).contains("dimension"))
+            .map(SchemaColumnCacheEntity::getColumnName)
+            .filter(Objects::nonNull)
+            .map(String::trim)
+            .filter(name -> !name.isBlank())
+            .limit(4)
+            .toList();
+        List<String> segments = new ArrayList<>();
+        if (!primaryKeys.isEmpty()) {
+            segments.add("PK=" + String.join(",", primaryKeys));
+        }
+        if (!timeColumns.isEmpty()) {
+            segments.add("时间字段=" + String.join(",", timeColumns));
+        }
+        if (!metricColumns.isEmpty()) {
+            segments.add("度量字段=" + String.join(",", metricColumns));
+        }
+        if (!dimensionColumns.isEmpty()) {
+            segments.add("维度字段=" + String.join(",", dimensionColumns));
+        }
+        return segments.isEmpty() ? "字段详情按需加载" : String.join("；", segments);
+    }
+
+    private List<String> resolveColumnRoles(SchemaColumnCacheEntity column) {
+        if (column == null) {
+            return List.of();
+        }
+        LinkedHashSet<String> roles = new LinkedHashSet<>();
+        String name = safeText(column.getColumnName()).toLowerCase(Locale.ROOT);
+        String type = safeText(column.getDataType()).toLowerCase(Locale.ROOT);
+        String comment = safeText(column.getColumnComment()).toLowerCase(Locale.ROOT);
+        if (column.getPrimaryKeyFlag() != null && column.getPrimaryKeyFlag() == 1) {
+            roles.add("primary_key");
+        }
+        if (column.getIndexedFlag() != null && column.getIndexedFlag() == 1) {
+            roles.add("indexed");
+        }
+        if (name.endsWith("_id") || "id".equals(name) || comment.contains("关联") || comment.contains("主键")) {
+            roles.add("join");
+        }
+        if (name.contains("time") || name.contains("date") || name.contains("day") || name.contains("month")
+            || name.contains("year") || name.contains("created") || comment.contains("时间") || comment.contains("日期")) {
+            roles.add("time");
+        }
+        if (name.contains("amount") || name.contains("price") || name.contains("count") || name.contains("num")
+            || name.contains("qty") || name.contains("rate") || type.contains("int") || type.contains("decimal")
+            || type.contains("number") || type.contains("double") || type.contains("float")) {
+            roles.add("metric");
+        }
+        if (!roles.contains("metric")) {
+            roles.add("dimension");
+        }
+        return new ArrayList<>(roles);
+    }
+
+    private KnowledgeMetadataUtil.DerivedTermMetadata ensureTermMetadata(KnowledgeTermEntity entity) {
+        if (entity != null
+            && !safeText(entity.getAliasesJson()).isBlank()
+            && !safeText(entity.getMetricExpression()).isBlank()
+            && !safeText(entity.getTermType()).isBlank()) {
+            return new KnowledgeMetadataUtil.DerivedTermMetadata(
+                safeText(entity.getAliasesJson()),
+                safeText(entity.getMetricExpression()),
+                safeText(entity.getRelatedTablesJson()),
+                safeText(entity.getRelatedColumnsJson()),
+                safeText(entity.getTermType())
+            );
+        }
+        return KnowledgeMetadataUtil.deriveTermMetadata(
+            entity == null ? "" : entity.getTerm(),
+            entity == null ? "" : entity.getDescription(),
+            objectMapper
+        );
+    }
+
+    private KnowledgeMetadataUtil.DerivedExampleMetadata ensureExampleMetadata(KnowledgeExampleSqlEntity entity) {
+        if (entity != null
+            && !safeText(entity.getQuestionText()).isBlank()
+            && !safeText(entity.getSemanticSummary()).isBlank()
+            && !safeText(entity.getNormalizedSql()).isBlank()
+            && !safeText(entity.getTableNamesJson()).isBlank()
+            && !safeText(entity.getColumnNamesJson()).isBlank()
+            && entity.getQualityScore() != null
+            && !safeText(entity.getSourceType()).isBlank()
+            && !safeText(entity.getSqlOperationType()).isBlank()) {
+            return new KnowledgeMetadataUtil.DerivedExampleMetadata(
+                safeText(entity.getQuestionText()),
+                safeText(entity.getQuestionVariantsJson()),
+                safeText(entity.getSemanticSummary()),
+                safeText(entity.getNormalizedSql()),
+                safeText(entity.getSqlTemplate()),
+                safeText(entity.getSqlAstJson()),
+                safeText(entity.getTableNamesJson()),
+                safeText(entity.getColumnNamesJson()),
+                safeText(entity.getMetricTagsJson()),
+                safeText(entity.getTimeTagsJson()),
+                entity.getVerifiedFlag(),
+                entity.getQualityScore(),
+                safeText(entity.getSourceType()),
+                safeText(entity.getSqlOperationType()),
+                safeText(entity.getTermIdsJson())
+            );
+        }
+        return KnowledgeMetadataUtil.deriveExampleMetadata(
+            entity == null ? "" : entity.getSqlText(),
+            entity == null ? "" : entity.getDescription(),
+            readLongList(entity == null ? "" : entity.getTermIdsJson(), "[]"),
+            objectMapper
+        );
+    }
+
+    private List<String> readStringList(String rawJson, String fallbackJson) {
+        String json = safeText(rawJson).isBlank() ? safeText(fallbackJson) : safeText(rawJson);
+        if (json.isBlank()) {
+            return List.of();
+        }
+        try {
+            List<String> values = objectMapper.readValue(json, STRING_LIST_TYPE);
+            List<String> normalized = new ArrayList<>();
+            for (String value : values) {
+                String text = safeText(value);
+                if (!text.isBlank()) {
+                    normalized.add(text);
+                }
+            }
+            return normalized;
+        } catch (Exception ex) {
+            return List.of();
+        }
+    }
+
+    private List<Long> readLongList(String rawJson, String fallbackJson) {
+        String json = safeText(rawJson).isBlank() ? safeText(fallbackJson) : safeText(rawJson);
+        if (json.isBlank()) {
+            return List.of();
+        }
+        try {
+            List<Long> values = objectMapper.readValue(json, LONG_LIST_TYPE);
+            List<Long> normalized = new ArrayList<>();
+            for (Long value : values) {
+                if (value != null && value > 0) {
+                    normalized.add(value);
+                }
+            }
+            return normalized;
+        } catch (Exception ex) {
+            return List.of();
+        }
+    }
+
+    private String resolveSqlOperationType(String rawSqlText) {
+        return KnowledgeMetadataUtil.analyzeSql(rawSqlText).operationType();
+    }
+
     private boolean isBlank(String value) {
         return value == null || value.trim().isEmpty();
     }
@@ -1070,27 +1315,52 @@ public class RagIngestionServiceImpl implements RagIngestionService {
     }
 
     private Map<String, Object> buildKnowledgeTermPayload(KnowledgeTermEntity entity) {
+        KnowledgeMetadataUtil.DerivedTermMetadata metadata = ensureTermMetadata(entity);
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("knowledge_id", entity.getId());
+        payload.put("entity_id", entity.getId());
+        payload.put("entity_type", "metric_term");
         payload.put("scope", safeText(entity.getScope()));
         payload.put("connection_id", entity.getConnectionId() == null ? 0L : entity.getConnectionId());
         payload.put("database_name", safeText(entity.getDatabaseName()));
         payload.put("term", safeText(entity.getTerm()));
         payload.put("definition", safeText(entity.getDescription()));
+        payload.put("aliases", readStringList(entity.getAliasesJson(), metadata.aliasesJson()));
+        payload.put("metric_expression", safeText(safeText(entity.getMetricExpression()).isBlank() ? metadata.metricExpression() : entity.getMetricExpression()));
+        payload.put("related_tables", readStringList(entity.getRelatedTablesJson(), metadata.relatedTablesJson()));
+        payload.put("related_columns", readStringList(entity.getRelatedColumnsJson(), metadata.relatedColumnsJson()));
+        payload.put("term_type", safeText(safeText(entity.getTermType()).isBlank() ? metadata.termType() : entity.getTermType()));
+        payload.put("trust_level", 0.92D);
+        payload.put("entity_version", entity.getUpdatedAt() == null ? 0L : entity.getUpdatedAt());
         return payload;
     }
 
     private Map<String, Object> buildKnowledgeExamplePayload(KnowledgeExampleSqlEntity entity) {
-        SqlFeatureMeta featureMeta = extractSqlFeatureMeta(entity.getSqlText());
+        KnowledgeMetadataUtil.DerivedExampleMetadata metadata = ensureExampleMetadata(entity);
+        List<String> tableNames = readStringList(entity.getTableNamesJson(), metadata.tableNamesJson());
+        List<String> columnNames = readStringList(entity.getColumnNamesJson(), metadata.columnNamesJson());
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("knowledge_id", entity.getId());
+        payload.put("entity_id", entity.getId());
+        payload.put("entity_type", "example_sql");
         payload.put("scope", safeText(entity.getScope()));
         payload.put("connection_id", entity.getConnectionId() == null ? 0L : entity.getConnectionId());
         payload.put("database_name", safeText(entity.getDatabaseName()));
         payload.put("sql_text", safeText(entity.getSqlText()));
-        payload.put("tables", featureMeta.getTables());
-        payload.put("sql_semantic", safeText(entity.getDescription()));
-        payload.put("term_ids_json", safeText(entity.getTermIdsJson()));
+        payload.put("question_text", safeText(safeText(entity.getQuestionText()).isBlank() ? metadata.questionText() : entity.getQuestionText()));
+        payload.put("question_variants", readStringList(entity.getQuestionVariantsJson(), metadata.questionVariantsJson()));
+        payload.put("semantic_description", safeText(safeText(entity.getSemanticSummary()).isBlank() ? metadata.semanticSummary() : entity.getSemanticSummary()));
+        payload.put("normalized_sql_text", safeText(safeText(entity.getNormalizedSql()).isBlank() ? metadata.normalizedSql() : entity.getNormalizedSql()));
+        payload.put("sql_template", safeText(safeText(entity.getSqlTemplate()).isBlank() ? metadata.sqlTemplate() : entity.getSqlTemplate()));
+        payload.put("tables", tableNames);
+        payload.put("columns", columnNames);
+        payload.put("metric_tags", readStringList(entity.getMetricTagsJson(), metadata.metricTagsJson()));
+        payload.put("time_tags", readStringList(entity.getTimeTagsJson(), metadata.timeTagsJson()));
+        payload.put("term_ids", readLongList(entity.getTermIdsJson(), metadata.termIdsNormalizedJson()));
+        payload.put("verified_flag", entity.getVerifiedFlag() == null ? metadata.verifiedFlag() : entity.getVerifiedFlag());
+        payload.put("quality_score", entity.getQualityScore() == null ? metadata.qualityScore() : entity.getQualityScore());
+        payload.put("source_type", safeText(safeText(entity.getSourceType()).isBlank() ? metadata.sourceType() : entity.getSourceType()));
+        payload.put("sql_operation_type", safeText(safeText(entity.getSqlOperationType()).isBlank() ? metadata.sqlOperationType() : entity.getSqlOperationType()));
+        payload.put("trust_level", entity.getQualityScore() == null ? metadata.qualityScore() : entity.getQualityScore());
+        payload.put("entity_version", entity.getUpdatedAt() == null ? 0L : entity.getUpdatedAt());
         return payload;
     }
 
@@ -1158,7 +1428,13 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         private final String tableComment;
         private final Long rowEstimate;
         private final Long tableSizeBytes;
-        private final List<String> columns;
+        private final List<String> primaryKeys;
+        private final List<String> indexedColumns;
+        private final List<String> timeColumns;
+        private final List<String> metricColumns;
+        private final List<String> dimensionColumns;
+        private final Double trustLevel;
+        private final Long entityVersion;
 
         SchemaTablePayload(Long connectionId,
                            String databaseName,
@@ -1166,25 +1442,45 @@ public class RagIngestionServiceImpl implements RagIngestionService {
                            String tableComment,
                            Long rowEstimate,
                            Long tableSizeBytes,
-                           List<String> columns) {
+                           List<String> primaryKeys,
+                           List<String> indexedColumns,
+                           List<String> timeColumns,
+                           List<String> metricColumns,
+                           List<String> dimensionColumns,
+                           Double trustLevel,
+                           Long entityVersion) {
             this.connectionId = connectionId;
             this.databaseName = databaseName;
             this.tableName = tableName;
             this.tableComment = tableComment;
             this.rowEstimate = rowEstimate;
             this.tableSizeBytes = tableSizeBytes;
-            this.columns = columns;
+            this.primaryKeys = primaryKeys;
+            this.indexedColumns = indexedColumns;
+            this.timeColumns = timeColumns;
+            this.metricColumns = metricColumns;
+            this.dimensionColumns = dimensionColumns;
+            this.trustLevel = trustLevel;
+            this.entityVersion = entityVersion;
         }
 
         Map<String, Object> toMetadataMap() {
             Map<String, Object> metadata = new HashMap<>();
+            metadata.put("entity_type", "schema_table");
+            metadata.put("entity_id", tableName);
             metadata.put("connection_id", connectionId);
             metadata.put("database_name", databaseName);
             metadata.put("table_name", tableName);
             metadata.put("table_comment", tableComment);
             metadata.put("row_estimate", rowEstimate);
             metadata.put("table_size_bytes", tableSizeBytes);
-            metadata.put("columns", columns);
+            metadata.put("primary_keys", primaryKeys);
+            metadata.put("indexed_columns", indexedColumns);
+            metadata.put("time_columns", timeColumns);
+            metadata.put("metric_columns", metricColumns);
+            metadata.put("dimension_columns", dimensionColumns);
+            metadata.put("trust_level", trustLevel);
+            metadata.put("entity_version", entityVersion);
             return metadata;
         }
     }
@@ -1203,6 +1499,9 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         private final String columnComment;
         private final Boolean indexed;
         private final Boolean primaryKey;
+        private final List<String> columnRoles;
+        private final Double trustLevel;
+        private final Long entityVersion;
 
         SchemaColumnPayload(Long connectionId,
                             String databaseName,
@@ -1216,7 +1515,10 @@ public class RagIngestionServiceImpl implements RagIngestionService {
                             Boolean nullable,
                             String columnComment,
                             Boolean indexed,
-                            Boolean primaryKey) {
+                            Boolean primaryKey,
+                            List<String> columnRoles,
+                            Double trustLevel,
+                            Long entityVersion) {
             this.connectionId = connectionId;
             this.databaseName = databaseName;
             this.tableName = tableName;
@@ -1230,10 +1532,15 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             this.columnComment = columnComment;
             this.indexed = indexed;
             this.primaryKey = primaryKey;
+            this.columnRoles = columnRoles;
+            this.trustLevel = trustLevel;
+            this.entityVersion = entityVersion;
         }
 
         Map<String, Object> toMetadataMap() {
             Map<String, Object> metadata = new HashMap<>();
+            metadata.put("entity_type", "schema_column");
+            metadata.put("entity_id", tableName + "." + columnName);
             metadata.put("connection_id", connectionId);
             metadata.put("database_name", databaseName);
             metadata.put("table_name", tableName);
@@ -1247,6 +1554,9 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             metadata.put("column_comment", columnComment);
             metadata.put("indexed", indexed);
             metadata.put("primary_key", primaryKey);
+            metadata.put("column_roles", columnRoles);
+            metadata.put("trust_level", trustLevel);
+            metadata.put("entity_version", entityVersion);
             return metadata;
         }
     }
@@ -1255,7 +1565,7 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         private final Long connectionId;
         private final String databaseName;
         private final String sessionId;
-        private final String promptText;
+        private final String questionText;
         private final String sqlText;
         private final Long executionMs;
         private final Boolean success;
@@ -1269,11 +1579,15 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         private final String entryType;
         private final String semanticDescription;
         private final Map<String, List<String>> businessTags;
+        private final String sourceType;
+        private final Double trustLevel;
+        private final Integer reuseCount;
+        private final String operationType;
 
         SqlHistoryPayload(Long connectionId,
                           String databaseName,
                           String sessionId,
-                          String promptText,
+                          String questionText,
                           String sqlText,
                           Long executionMs,
                           Boolean success,
@@ -1286,11 +1600,15 @@ public class RagIngestionServiceImpl implements RagIngestionService {
                           List<String> sqlKeywordTags,
                           String entryType,
                           String semanticDescription,
-                          Map<String, List<String>> businessTags) {
+                          Map<String, List<String>> businessTags,
+                          String sourceType,
+                          Double trustLevel,
+                          Integer reuseCount,
+                          String operationType) {
             this.connectionId = connectionId;
             this.databaseName = databaseName;
             this.sessionId = sessionId;
-            this.promptText = promptText;
+            this.questionText = questionText;
             this.sqlText = sqlText;
             this.executionMs = executionMs;
             this.success = success;
@@ -1304,6 +1622,10 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             this.entryType = entryType;
             this.semanticDescription = semanticDescription;
             this.businessTags = businessTags == null ? Map.of() : businessTags;
+            this.sourceType = sourceType;
+            this.trustLevel = trustLevel;
+            this.reuseCount = reuseCount;
+            this.operationType = operationType;
         }
 
         Map<String, Object> toMetadataMap() {
@@ -1312,7 +1634,8 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             metadata.put("database_name", databaseName);
             metadata.put("session_id", sessionId);
             metadata.put("entry_type", entryType);
-            metadata.put("prompt_text", promptText);
+            metadata.put("question_text", questionText);
+            metadata.put("prompt_text", questionText);
             metadata.put("sql_text", sqlText);
             metadata.put("execution_ms", executionMs);
             metadata.put("success", success);
@@ -1325,6 +1648,10 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             metadata.put("sql_keyword_tags", sqlKeywordTags);
             metadata.put("semantic_description", semanticDescription);
             metadata.put("business_tags", businessTags);
+            metadata.put("source_type", sourceType);
+            metadata.put("trust_level", trustLevel);
+            metadata.put("reuse_count", reuseCount);
+            metadata.put("sql_operation_type", operationType);
             metadata.put("metrics", businessTags.getOrDefault("metrics", List.of()));
             metadata.put("dimensions", businessTags.getOrDefault("dimensions", List.of()));
             metadata.put("time_semantics", businessTags.getOrDefault("time_semantics", List.of()));
@@ -1337,7 +1664,7 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         public Long getConnectionId() { return connectionId; }
         public String getDatabaseName() { return databaseName; }
         public String getSessionId() { return sessionId; }
-        public String getPromptText() { return promptText; }
+        public String getQuestionText() { return questionText; }
         public String getSqlText() { return sqlText; }
         public Long getExecutionMs() { return executionMs; }
         public Boolean getSuccess() { return success; }
@@ -1351,6 +1678,10 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         public String getEntryType() { return entryType; }
         public String getSemanticDescription() { return semanticDescription; }
         public Map<String, List<String>> getBusinessTags() { return businessTags; }
+        public String getSourceType() { return sourceType; }
+        public Double getTrustLevel() { return trustLevel; }
+        public Integer getReuseCount() { return reuseCount; }
+        public String getOperationType() { return operationType; }
     }
 
     private static class SqlFragmentPayload {
