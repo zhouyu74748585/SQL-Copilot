@@ -3413,12 +3413,24 @@ body {
 }
 
 .studio-root .pane-splitter {
-  width: 1px;
-  background: var(--line-soft);
+  position: relative;
+  width: 6px;
+  background: transparent;
   border: none;
 }
 
-.studio-root .pane-splitter:hover {
+.studio-root .pane-splitter::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: var(--line-soft);
+}
+
+.studio-root .pane-splitter:hover::before {
   background: color-mix(in srgb, var(--accent) 40%, var(--line-soft) 60%);
 }
 

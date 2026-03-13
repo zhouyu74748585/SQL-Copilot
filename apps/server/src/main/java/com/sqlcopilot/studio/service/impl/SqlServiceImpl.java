@@ -30,6 +30,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public class SqlServiceImpl implements SqlService {
 
     private static final long ACK_TOKEN_TTL_MS = 5 * 60 * 1000;
+    private static final int DEFAULT_QUERY_MAX_ROWS = 5000;
+    private static final int ABSOLUTE_QUERY_MAX_ROWS = 5000;
     private static final Logger log = LoggerFactory.getLogger(SqlServiceImpl.class);
 
     private final ConnectionService connectionService;
@@ -124,11 +126,18 @@ public class SqlServiceImpl implements SqlService {
             applyDatabaseContext(jdbcConnection, connection.getDbType(), targetDatabaseName);
             try (Statement statement = jdbcConnection.createStatement()) {
                 if (SqlClassifier.isQuery(sql)) {
+                    int maxRows = normalizeQueryMaxRows(req.getMaxRows());
                     log.info("[SQL-EXECUTE] connectionId={}, databaseName={}, querySql={}",
                         req.getConnectionId(), targetDatabaseName, sql);
                     try (ResultSet resultSet = statement.executeQuery(sql)) {
                         result.setColumns(ResultSetConverter.readColumns(resultSet.getMetaData()));
-                        result.setRows(ResultSetConverter.readRows(resultSet, 500));
+                        List<QueryRowVO> rows = ResultSetConverter.readRows(resultSet, maxRows + 1);
+                        boolean truncated = rows.size() > maxRows;
+                        if (truncated) {
+                            rows = new ArrayList<>(rows.subList(0, maxRows));
+                        }
+                        result.setRows(rows);
+                        result.setTruncated(truncated);
                         result.setAffectedRows(result.getRows().size());
                     }
                 } else {
@@ -182,6 +191,16 @@ public class SqlServiceImpl implements SqlService {
             return requested;
         }
         return normalize(configuredDatabaseName);
+    }
+
+    /**
+     * 关键操作：查询结果允许前端声明返回上限，但服务端仍统一做最大值保护，避免一次性拉取过大结果集。
+     */
+    private int normalizeQueryMaxRows(Integer requestedMaxRows) {
+        if (requestedMaxRows == null || requestedMaxRows <= 0) {
+            return DEFAULT_QUERY_MAX_ROWS;
+        }
+        return Math.min(requestedMaxRows, ABSOLUTE_QUERY_MAX_ROWS);
     }
 
     private String normalize(String value) {

@@ -57,6 +57,7 @@ export interface SqlExecuteVO {
   affectedRows: number;
   executionMs: number;
   rows: QueryRowVO[];
+  truncated?: boolean;
   message: string;
 }
 

@@ -350,7 +350,12 @@
           <section class="pane pane-center browser-center-pane">
             <div class="center-toolbar">
               <div v-if="currentObjectType === 'tables'" class="center-toolbar-left">
-                <a-button size="small" type="primary" :disabled="!canCreateTable" @click="openNewTableEditor()">
+                <a-button
+                  size="small"
+                  :type="canCreateTable ? 'primary' : 'default'"
+                  :disabled="!canCreateTable"
+                  @click="openNewTableEditor()"
+                >
                   <template #icon><plus-outlined /></template>
                   新建表
                 </a-button>
@@ -368,7 +373,7 @@
               <div v-else-if="currentObjectType === 'views'" class="center-toolbar-left">
                 <a-button
                   size="small"
-                  type="primary"
+                  :type="canCreateView ? 'primary' : 'default'"
                   :disabled="!canCreateView"
                   @click="openNewObjectDefinitionEditor(workflow.connectionId, getActiveDatabaseName(workflow.connectionId), 'views')"
                 >
@@ -383,7 +388,7 @@
               <div v-else-if="currentObjectType === 'functions'" class="center-toolbar-left">
                 <a-button
                   size="small"
-                  type="primary"
+                  :type="canCreateFunction ? 'primary' : 'default'"
                   :disabled="!canCreateFunction"
                   @click="openNewObjectDefinitionEditor(workflow.connectionId, getActiveDatabaseName(workflow.connectionId), 'functions')"
                 >
@@ -1999,14 +2004,27 @@
               <a-button size="small" type="primary" danger @click="repairSqlForTab(activeQueryTab)">修复 SQL</a-button>
             </div>
             <template v-if="activeQueryTab.resultViewMode === 'table'">
-              <a-table
-                size="small"
-                class="query-result-table"
-                :pagination="false"
+              <TableDataVirtualGrid
+                class="query-result-virtual-grid"
+                :tab="{
+                  key: activeQueryTab.key,
+                  editable: false,
+                  selectedRowKey: '',
+                  editingCellKey: '',
+                  pageNo: 1,
+                  pageSize: activeResultRows.length,
+                }"
                 :columns="activeResultColumns"
-                :data-source="activeResultRows"
-                :scroll="{ x: queryResultScrollX, y: queryResultScrollY }"
-                row-key="__rowKey"
+                :rows="activeResultRows"
+                :scroll-x="queryResultScrollX"
+                :scroll-y="queryResultScrollY"
+                :reset-key="`${activeQueryTab.key}:${activeQueryTab.updatedAt}:${activeResultRows.length}:${activeResultColumns.length}`"
+                :is-primary-key-column="() => false"
+                :column-editor-type="() => 'text'"
+                @select-row="() => undefined"
+                @start-edit="() => undefined"
+                @stop-edit="() => undefined"
+                @update-cell="() => undefined"
               />
             </template>
             <template v-else>
@@ -2118,7 +2136,10 @@
                 </div>
               </div>
             </template>
-            <div class="query-result-footer">共 {{ activeResultRows.length }} 行</div>
+            <div class="query-result-footer">
+              共 {{ activeResultRows.length }} 行
+              <span v-if="activeQueryTab.executeResult?.truncated">，当前仅展示前 {{ activeResultRows.length }} 行</span>
+            </div>
           </div>
         </aside>
       </template>

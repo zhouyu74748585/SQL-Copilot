@@ -248,6 +248,8 @@ export function useHistoryModule(runtime: StudioRuntime): HistoryModule {
       sqlExecuting: false,
       selectedSqlText: '',
       chatMessages: messages,
+      resultTableRows: [],
+      resultTableColumns: [],
       lastExecuteFailed: false,
       lastExecuteErrorMessage: '',
       lastFailedSqlText: '',

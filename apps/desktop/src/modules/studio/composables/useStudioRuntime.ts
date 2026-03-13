@@ -241,6 +241,14 @@ interface QueryWorkspaceTab {
   sqlExecuting: boolean;
   selectedSqlText: string;
   chatMessages: QueryChatMessage[];
+  resultTableRows: Array<Record<string, string | null> & { __rowKey: string; __rowState: string }>;
+  resultTableColumns: Array<{
+    title: string;
+    dataIndex: string;
+    key: string;
+    width: number;
+    ellipsis: boolean;
+  }>;
   lastExecuteFailed: boolean;
   lastExecuteErrorMessage: string;
   lastFailedSqlText: string;
@@ -1399,6 +1407,8 @@ const queryResultScrollY = computed(() => {
   return Math.max(180, available);
 });
 
+const QUERY_RESULT_MAX_ROWS = 5000;
+
 const aiModelOptions = computed(() =>
   (aiConfigForm.modelOptions ?? []).map((item) => ({
     label: `${item.name || item.id || '-'} · ${item.providerType === 'LOCAL_CLI' ? 'CLI' : (item.openaiModel || 'OPENAI')}`,
@@ -1427,36 +1437,45 @@ const workbenchStyle = computed(() => {
 
 const activeResultRows = computed(() => {
   if (!activeQueryTab.value) {
-    return [] as Array<Record<string, string | null> & { __rowKey: string }>;
+    return [] as Array<Record<string, string | null> & { __rowKey: string; __rowState: string }>;
   }
-  const rows = activeQueryTab.value.executeResult?.rows ?? activeQueryTab.value.explainResult?.rows ?? [];
-  return rows.map((row, index) => {
-    const result: Record<string, string | null> & { __rowKey: string } = { __rowKey: `${index}` };
-    row.cells.forEach((cell) => {
-      result[cell.columnName] = cell.cellValue;
-    });
-    return result;
-  });
+  return activeQueryTab.value.resultTableRows;
 });
 
 const activeResultColumns = computed(() => {
   if (!activeQueryTab.value) {
     return [];
   }
-  const rows = activeQueryTab.value.executeResult?.rows ?? activeQueryTab.value.explainResult?.rows ?? [];
+  return activeQueryTab.value.resultTableColumns;
+});
+
+const queryResultScrollX = computed(() => Math.max(activeResultColumns.value.length * 180, 960));
+
+function rebuildQueryResultTableCache(tab: QueryWorkspaceTab) {
+  const rows = tab.executeResult?.rows ?? tab.explainResult?.rows ?? [];
   if (!rows.length) {
-    return [];
+    tab.resultTableRows = [];
+    tab.resultTableColumns = [];
+    return;
   }
-  return rows[0].cells.map((cell) => ({
+  tab.resultTableColumns = rows[0].cells.map((cell) => ({
     title: cell.columnName,
     dataIndex: cell.columnName,
     key: cell.columnName,
     width: 180,
     ellipsis: true,
   }));
-});
-
-const queryResultScrollX = computed(() => Math.max(activeResultColumns.value.length * 180, 960));
+  tab.resultTableRows = rows.map((row, index) => {
+    const result: Record<string, string | null> & { __rowKey: string; __rowState: string } = {
+      __rowKey: `${index}`,
+      __rowState: 'clean',
+    };
+    row.cells.forEach((cell) => {
+      result[cell.columnName] = cell.cellValue;
+    });
+    return result;
+  });
+}
 
 const chartTypeOptions = [
   { label: '折线图', value: 'LINE' as ChartType },
@@ -2168,6 +2187,8 @@ function createQueryTab(options?: {
     sqlExecuting: false,
     selectedSqlText: '',
     chatMessages: [],
+    resultTableRows: [],
+    resultTableColumns: [],
     lastExecuteFailed: false,
     lastExecuteErrorMessage: '',
     lastFailedSqlText: '',
@@ -5517,6 +5538,7 @@ async function handleQueryConnectionChange(tab: QueryWorkspaceTab) {
     tab.riskInfo = null;
     tab.executeResult = null;
     tab.explainResult = null;
+    rebuildQueryResultTableCache(tab);
     tab.lastExecuteFailed = false;
     tab.lastExecuteErrorMessage = '';
     tab.lastFailedSqlText = '';
@@ -5537,6 +5559,9 @@ function handleQueryDatabaseChange(tab: QueryWorkspaceTab) {
   tab.lastExecuteFailed = false;
   tab.lastExecuteErrorMessage = '';
   tab.lastFailedSqlText = '';
+  tab.executeResult = null;
+  tab.explainResult = null;
+  rebuildQueryResultTableCache(tab);
   tab.resultViewMode = 'table';
   tab.manualChartConfig = emptyManualChartConfig();
   tab.activeChartConfig = null;
@@ -6494,7 +6519,7 @@ function buildExecutionPreview(result: SqlExecuteVO, maxRows = 20, maxColumns = 
     executionMs: result.executionMs ?? 0,
     columns,
     rows,
-    truncated: sourceRows.length > maxRows || allColumns.length > maxColumns,
+    truncated: Boolean(result.truncated) || sourceRows.length > maxRows || allColumns.length > maxColumns,
   };
 }
 
@@ -6970,6 +6995,7 @@ async function explainSqlForTab(tab: QueryWorkspaceTab, sqlOverride?: string) {
       databaseName: tab.databaseName || undefined,
     });
     tab.executeResult = null;
+    rebuildQueryResultTableCache(tab);
     touchQueryTab(tab);
     message.success('EXPLAIN 完成');
   });
@@ -7077,6 +7103,7 @@ async function executeSqlForTab(
         sessionId: tab.sessionId,
         sqlText,
         databaseName: tab.databaseName || undefined,
+        maxRows: QUERY_RESULT_MAX_ROWS,
         memoryEnabled: tab.sqlMemoryEnabled,
         riskAckToken: riskAckToken || undefined,
         operatorName: 'desktop-user',
@@ -7085,6 +7112,7 @@ async function executeSqlForTab(
       });
       tab.executeResult = result;
       tab.explainResult = null;
+      rebuildQueryResultTableCache(tab);
       tab.riskAckToken = '';
       tab.lastExecuteFailed = false;
       tab.lastExecuteErrorMessage = '';
@@ -7111,6 +7139,7 @@ async function executeSqlForTab(
       const errMsg = error instanceof Error ? error.message : String(error);
       tab.executeResult = null;
       tab.explainResult = null;
+      rebuildQueryResultTableCache(tab);
       tab.riskAckToken = '';
       tab.lastExecuteFailed = true;
       tab.lastExecuteErrorMessage = errMsg;

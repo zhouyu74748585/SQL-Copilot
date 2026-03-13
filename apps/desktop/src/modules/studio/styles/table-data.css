@@ -312,6 +312,10 @@
   overflow-x: auto !important;
 }
 
+.query-result-virtual-grid.table-data-virtual-grid {
+  border-radius: 0;
+}
+
 @media (max-width: 1199px) {
   .table-data-toolbar {
     flex-direction: column;

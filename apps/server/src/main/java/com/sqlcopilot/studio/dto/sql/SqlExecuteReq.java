@@ -1,6 +1,8 @@
 package com.sqlcopilot.studio.dto.sql;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 
@@ -25,6 +27,11 @@ public class SqlExecuteReq {
 
     /** 记忆理解开关：开启后执行成功 SQL 才提交向量化。 */
     private Boolean memoryEnabled;
+
+    /** 查询结果最大返回行数，范围 1-5000，未传时使用系统默认值。 */
+    @Min(1)
+    @Max(5000)
+    private Integer maxRows;
 
     /** 风险确认令牌，当前风险策略要求确认时必填。 */
     private String riskAckToken;

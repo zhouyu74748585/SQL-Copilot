@@ -23,6 +23,9 @@ public class SqlExecuteVO {
     /** 结果行列表。 */
     private List<QueryRowVO> rows;
 
+    /** 是否因系统行数上限而仅返回部分结果。 */
+    private Boolean truncated;
+
     /** 结果说明。 */
     private String message;
 }
