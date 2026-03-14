@@ -96,6 +96,14 @@ function resolveChartCacheBaseDir() {
   return path.resolve(app.getPath('userData'), 'chart-cache');
 }
 
+function resolveBackendDataDir() {
+  const envDir = process.env.SQLCOPILOT_DATA_DIR;
+  if (envDir && envDir.trim()) {
+    return path.resolve(envDir.trim());
+  }
+  return path.resolve(app.getPath('userData'));
+}
+
 function toPngDataUrl(bytes) {
   return `data:image/png;base64,${bytes.toString('base64')}`;
 }
@@ -488,10 +496,15 @@ async function startBackend() {
   const runtimeDir = resolveBackendRuntimeDir();
   const profile = resolveDefaultBackendProfile(runtimeDir);
   const launchSpec = resolveBackendLaunchSpec(runtimeDir, profile);
+  const backendDataDir = resolveBackendDataDir();
+  fs.mkdirSync(backendDataDir, { recursive: true });
 
   backendProcess = spawn(launchSpec.command, launchSpec.args, {
     cwd: runtimeDir,
-    env: process.env,
+    env: {
+      ...process.env,
+      SQLCOPILOT_DATA_DIR: backendDataDir,
+    },
     stdio: 'pipe',
   });
 
@@ -507,7 +520,7 @@ async function startBackend() {
   });
 
   await waitForBackendReady(baseUrl);
-  console.log(`[backend] ready at ${baseUrl}, profile=${profile}`);
+  console.log(`[backend] ready at ${baseUrl}, profile=${profile}, dataDir=${backendDataDir}`);
 }
 
 function stopBackend() {

@@ -15,6 +15,8 @@ const RELEASE_DIR = path.join(ROOT_DIR, 'release');
 const TEMP_DIR = path.join(RELEASE_DIR, '.jlink-temp');
 const DEFAULT_VARIANTS = ['minimal', 'medium', 'full'];
 const EXTRA_MODULES_ENV = 'SQLCOPILOT_JLINK_EXTRA_MODULES';
+const RETRY_DELETE_COUNT = 6;
+const RETRY_DELETE_DELAY_MS = 1000;
 const MANDATORY_JLINK_MODULES = [
   'java.base',
   'java.compiler',
@@ -65,6 +67,18 @@ function resolveShellCommand(command) {
 }
 
 function runCommand(command, args, options = {}) {
+  const result = executeCommand(command, args, options);
+  if (result.error) {
+    const commandLine = [command, ...args].join(' ');
+    throw new Error(`${commandLine}\n${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    throw new Error(formatCommandFailure(command, args, result, options.captureOutput === true));
+  }
+  return result;
+}
+
+function executeCommand(command, args, options = {}) {
   const {
     cwd = ROOT_DIR,
     env,
@@ -78,18 +92,79 @@ function runCommand(command, args, options = {}) {
     stdio: captureOutput ? 'pipe' : 'inherit',
     shell: useShell,
   });
-  if (result.error) {
-    const commandLine = [command, ...args].join(' ');
-    throw new Error(`${commandLine}\n${result.error.message}`);
-  }
-  if (result.status !== 0) {
-    const commandLine = [command, ...args].join(' ');
-    const stderr = captureOutput ? (result.stderr || '').trim() : '';
-    const stdout = captureOutput ? (result.stdout || '').trim() : '';
-    const detail = [stdout, stderr].filter(Boolean).join('\n');
-    throw new Error(detail ? `${commandLine}\n${detail}` : `${commandLine}\nExit code ${result.status ?? 'unknown'}`);
-  }
   return result;
+}
+
+function formatCommandFailure(command, args, result, captured) {
+  const commandLine = [command, ...args].join(' ');
+  if (!captured) {
+    return `${commandLine}\nExit code ${result.status ?? 'unknown'}`;
+  }
+  const stderr = (result.stderr || '').trim();
+  const stdout = (result.stdout || '').trim();
+  const detail = [stdout, stderr].filter(Boolean).join('\n');
+  return detail ? `${commandLine}\n${detail}` : `${commandLine}\nExit code ${result.status ?? 'unknown'}`;
+}
+
+function relayCapturedOutput(result) {
+  if (result.stdout) {
+    process.stdout.write(result.stdout);
+  }
+  if (result.stderr) {
+    process.stderr.write(result.stderr);
+  }
+}
+
+function hasWindowsRceditCommitIssue(logText) {
+  return process.platform === 'win32'
+    && logText.includes('rcedit-x64.exe')
+    && logText.includes('Unable to commit changes');
+}
+
+function runElectronBuilderCommand(variant, args, options, desktopOutputDir) {
+  const maxAttempts = process.platform === 'win32' && variant === 'full' ? 2 : 1;
+  let lastFailure = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const result = executeCommand(resolveShellCommand('npx'), args, {
+      ...options,
+      captureOutput: true,
+    });
+    relayCapturedOutput(result);
+
+    const combinedOutput = `${result.stdout || ''}\n${result.stderr || ''}`;
+    const commitIssueDetected = hasWindowsRceditCommitIssue(combinedOutput);
+
+    if (result.error || result.status !== 0) {
+      const failureMessage = result.error
+        ? `${[resolveShellCommand('npx'), ...args].join(' ')}\n${result.error.message}`
+        : formatCommandFailure(resolveShellCommand('npx'), args, result, true);
+      lastFailure = new Error(failureMessage);
+      if (commitIssueDetected && attempt < maxAttempts) {
+        console.warn(`[windows-rcedit] Detected commit issue for ${variant}, rebuilding executable from a clean output directory (attempt ${attempt + 1}/${maxAttempts})`);
+        ensureCleanDir(desktopOutputDir);
+        continue;
+      }
+      throw lastFailure;
+    }
+
+    if (commitIssueDetected) {
+      if (attempt < maxAttempts) {
+        console.warn(`[windows-rcedit] Detected commit issue for ${variant}, rebuilding executable from a clean output directory (attempt ${attempt + 1}/${maxAttempts})`);
+        ensureCleanDir(desktopOutputDir);
+        continue;
+      }
+      console.warn(`[windows-rcedit] Commit issue still detected for ${variant} after ${maxAttempts} attempts; keeping the last successful artifact for manual verification.`);
+    }
+
+    return result;
+  }
+
+  if (lastFailure) {
+    throw lastFailure;
+  }
+
+  throw new Error(`electron-builder failed for ${variant}`);
 }
 
 function normalizeVariant(raw) {
@@ -118,15 +193,108 @@ function parseVariants(argv) {
 }
 
 function ensureCleanDir(targetDir) {
-  fs.rmSync(targetDir, { recursive: true, force: true });
+  removePathWithRetry(targetDir);
   fs.mkdirSync(targetDir, { recursive: true });
 }
 
 function ensureEmptyDir(targetDir) {
   fs.mkdirSync(targetDir, { recursive: true });
   for (const entry of fs.readdirSync(targetDir)) {
-    fs.rmSync(path.join(targetDir, entry), { recursive: true, force: true });
+    removePathWithRetry(path.join(targetDir, entry));
   }
+}
+
+function sleep(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function escapePowerShellSingleQuoted(value) {
+  return value.replace(/'/g, "''");
+}
+
+function releaseWindowsDirLocks(targetDir) {
+  if (process.platform !== 'win32' || !fs.existsSync(targetDir)) {
+    return false;
+  }
+
+  const normalizedPath = path.resolve(targetDir);
+  const stat = fs.statSync(normalizedPath);
+  const lockRoot = stat.isDirectory() ? normalizedPath : path.dirname(normalizedPath);
+  const psDir = escapePowerShellSingleQuoted(lockRoot);
+  const script = `
+$targetDir = '${psDir}'
+$killed = @()
+Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+  Where-Object {
+    $_.ExecutablePath -and $_.ExecutablePath.StartsWith($targetDir, [System.StringComparison]::OrdinalIgnoreCase)
+  } |
+  ForEach-Object {
+    try {
+      Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop
+      $killed += $_.ExecutablePath
+    } catch {
+    }
+  }
+if ($killed.Count -gt 0) {
+  $killed | Sort-Object -Unique | ForEach-Object { Write-Output $_ }
+}
+`.trim();
+
+  const result = spawnSync('powershell.exe', [
+    '-NoLogo',
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    script,
+  ], {
+    cwd: ROOT_DIR,
+    encoding: 'utf8',
+    stdio: 'pipe',
+  });
+
+  if (result.error || result.status !== 0) {
+    return false;
+  }
+
+  const killedItems = (result.stdout || '')
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (killedItems.length > 0) {
+    console.warn(`[windows-lock] Closed packaged app processes under ${lockRoot}`);
+  }
+  return killedItems.length > 0;
+}
+
+function removePathWithRetry(targetPath) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= RETRY_DELETE_COUNT; attempt += 1) {
+    try {
+      fs.rmSync(targetPath, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (process.platform === 'win32' && ['EBUSY', 'EPERM', 'ENOTEMPTY'].includes(error.code)) {
+        const released = releaseWindowsDirLocks(targetPath);
+        if (attempt < RETRY_DELETE_COUNT) {
+          if (released || attempt > 1) {
+            console.warn(`[windows-lock] Retry ${attempt}/${RETRY_DELETE_COUNT} removing ${targetPath}`);
+          }
+          sleep(RETRY_DELETE_DELAY_MS);
+          continue;
+        }
+      }
+      throw error;
+    }
+  }
+
+  if (lastError) {
+    throw lastError;
+  }
+}
+
+function isWindowsBusyError(error) {
+  return process.platform === 'win32' && ['EBUSY', 'EPERM', 'ENOTEMPTY'].includes(error?.code);
 }
 
 function cleanupStageDir() {
@@ -294,6 +462,7 @@ set -euo pipefail
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROFILE="\${1:-${variant}}"
 JAVA_BIN="\${JAVA_BIN:-$BASE_DIR/jre/bin/java}"
+DATA_ROOT="\${SQLCOPILOT_DATA_DIR:-\${XDG_DATA_HOME:-$HOME/.local/share}/sql-copilot}"
 
 if [[ ! -x "$JAVA_BIN" ]]; then
   echo "Bundled Java runtime not found: $JAVA_BIN" >&2
@@ -306,6 +475,9 @@ if [[ -z "$JAR_FILE" ]]; then
   exit 1
 fi
 
+mkdir -p "$DATA_ROOT"
+export SQLCOPILOT_DATA_DIR="$DATA_ROOT"
+
 exec "$JAVA_BIN" -Dfile.encoding=UTF-8 -jar "$JAR_FILE" --spring.profiles.active="$PROFILE"
 `;
 
@@ -316,11 +488,14 @@ set "PROFILE=%~1"
 if "%PROFILE%"=="" set "PROFILE=${variant}"
 set "JAVA_BIN=%BASE_DIR%jre\\bin\\java.exe"
 if defined SQLCOPILOT_JAVA_BIN set "JAVA_BIN=%SQLCOPILOT_JAVA_BIN%"
+if not defined SQLCOPILOT_DATA_DIR set "SQLCOPILOT_DATA_DIR=%LOCALAPPDATA%\\SQL Copilot"
 
 if not exist "%JAVA_BIN%" (
   echo Bundled Java runtime not found: %JAVA_BIN%
   exit /b 1
 )
+
+if not exist "%SQLCOPILOT_DATA_DIR%" mkdir "%SQLCOPILOT_DATA_DIR%"
 
 for %%f in ("%BASE_DIR%*.jar") do (
   "%JAVA_BIN%" -Dfile.encoding=UTF-8 -jar "%%f" --spring.profiles.active=%PROFILE%
@@ -375,6 +550,27 @@ function buildDesktopTypeCheckOnce() {
   runCommand(resolveShellCommand('npm'), ['run', '-w', '@sqlcopilot/desktop', 'type-check']);
 }
 
+function prepareDesktopOutputDir(variant) {
+  const desktopReleaseDir = path.join(RELEASE_DIR, variant, 'desktop');
+  try {
+    ensureCleanDir(desktopReleaseDir);
+    return desktopReleaseDir;
+  } catch (error) {
+    if (!isWindowsBusyError(error)) {
+      throw error;
+    }
+
+    const fallbackDir = path.join(
+      RELEASE_DIR,
+      variant,
+      `desktop-${new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14)}`,
+    );
+    console.warn(`[windows-lock] ${desktopReleaseDir} is still locked, fallback to ${fallbackDir}`);
+    ensureCleanDir(fallbackDir);
+    return fallbackDir;
+  }
+}
+
 function buildDesktopVariant(variant) {
   if (!INCLUDE_DESKTOP) {
     return;
@@ -383,8 +579,17 @@ function buildDesktopVariant(variant) {
   console.log(`==> [${variant}] desktop build`);
   runCommand(resolveShellCommand('npm'), ['run', '-w', '@sqlcopilot/desktop', `build:${variant}`]);
 
+  console.log(`==> [${variant}] desktop output cleanup`);
+  const desktopOutputDir = prepareDesktopOutputDir(variant);
+
   console.log(`==> [${variant}] electron-builder`);
-  const args = ['electron-builder'];
+  const args = [
+    'electron-builder',
+    `--config.directories.output=${desktopOutputDir}`,
+  ];
+  if (process.platform === 'win32' && variant === 'full') {
+    args.push('--win', 'zip');
+  }
   if (ELECTRON_DIST) {
     args.push(`--config.electronDist=${ELECTRON_DIST}`);
   }
@@ -394,18 +599,18 @@ function buildDesktopVariant(variant) {
   if (SHOULD_DISABLE_MAC_SIGN) {
     env.CSC_IDENTITY_AUTO_DISCOVERY = 'false';
   }
-  runCommand(resolveShellCommand('npx'), args, {
+  runElectronBuilderCommand(variant, args, {
     cwd: DESKTOP_DIR,
     env,
-  });
+  }, desktopOutputDir);
 }
 
 function removeReleaseDirIfDisabled(variant) {
   if (!EXPORT_BACKEND) {
-    fs.rmSync(path.join(RELEASE_DIR, variant, 'backend'), { recursive: true, force: true });
+    removePathWithRetry(path.join(RELEASE_DIR, variant, 'backend'));
   }
   if (!INCLUDE_DESKTOP) {
-    fs.rmSync(path.join(RELEASE_DIR, variant, 'desktop'), { recursive: true, force: true });
+    removePathWithRetry(path.join(RELEASE_DIR, variant, 'desktop'));
   }
 }
 
@@ -428,7 +633,7 @@ function printSummary() {
 function main() {
   const variants = parseVariants(process.argv.slice(2));
   fs.mkdirSync(RELEASE_DIR, { recursive: true });
-  fs.rmSync(TEMP_DIR, { recursive: true, force: true });
+  removePathWithRetry(TEMP_DIR);
   cleanupStageDir();
 
   try {

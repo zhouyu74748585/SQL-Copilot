@@ -49,15 +49,16 @@
   "build": {
     "appId": "com.sqlcopilot.desktop",
     "productName": "SQL Copilot",
+    "copyright": "Copyright (C) 2026 SQL Copilot",
     "artifactName": "SQL-Copilot-${env.SQLCOPILOT_PACKAGE_VARIANT}-${version}-${os}-${arch}.${ext}",
     "directories": {
       "output": "../../release/${env.SQLCOPILOT_PACKAGE_VARIANT}/desktop"
     },
-    "icon": "icon.png",
     "files": [
       "dist/**/*",
       "electron/**/*",
-      "package.json"
+      "package.json",
+      "!**/*.db"
     ],
     "extraResources": [
       {
@@ -71,21 +72,25 @@
         "from": "resources/backend",
         "to": "backend",
         "filter": [
-          "**/*"
+          "**/*",
+          "!**/*.db"
         ]
       }
     ],
     "mac": {
+      "icon": "../../icon.icns",
       "target": [
         "dmg"
       ]
     },
     "win": {
+      "icon": "../../icon.ico",
       "target": [
         "nsis"
       ]
     },
     "linux": {
+      "icon": "../../icon.png",
       "target": [
         "AppImage"
       ]

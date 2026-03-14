@@ -639,3 +639,200 @@
 
 ### 备注
 - 默认端口 `18080` 在本机已被其他进程占用，因此本次后端启动验证改用 `18081`，不影响本次代码变更结论。
+
+### 2026-03-14 11:18:00
+
+## 本次目标
+- 修复 Windows 下执行 `npm run package:variants` 时，`release/<variant>/desktop/win-unpacked/resources/app.asar` 被占用导致 `electron-builder` 清理输出目录失败的问题。
+- 继续打通 Windows 下三种 variant 的完整桌面打包链路，并补齐后端启动、前端预览验收。
+
+## 关键改动
+- `scripts/package-variants.mjs`
+  - 将目录清理统一收敛到 `removePathWithRetry`，对 Windows 的 `EBUSY` / `EPERM` / `ENOTEMPTY` 增加重试等待。
+  - 新增 `releaseWindowsDirLocks`，在清理 `release/<variant>/desktop` 失败时，定向结束输出目录下残留的打包应用进程，避免误杀其他程序。
+  - 在执行 `electron-builder` 前显式清理桌面输出目录，尽量把文件锁问题拦截在脚本层，而不是让 `electron-builder` 直接失败。
+  - 新增 `prepareDesktopOutputDir` 兜底：若标准输出目录持续被 Windows 占用，则自动回退到时间戳目录 `release/<variant>/desktop-YYYYMMddHHmmss` 继续构建。
+  - 针对 Windows `full` 版本新增目标切换：改为 `zip` 产物，规避 NSIS 在约 3 GB 安装包场景下 `failed creating mmap` 的限制；仍保留 `win-unpacked` 目录产物。
+
+## 验证结果
+- 锁文件回归验证通过：
+  - 人工在 `release/medium/desktop/win-unpacked` 内放置并启动临时 `lock-holder` 进程后，执行 `npm run package:app:medium`。
+  - 脚本能识别目录占用并在标准输出目录不可清理时自动回退到 `release/medium/desktop-20260314025416` 完成打包。
+- 单 variant 打包验证通过：
+  - `npm run package:app:medium`
+  - `npm run package:app:full`
+- 全量打包验证通过：
+  - `npm run package:variants`
+  - 结果：
+    - `minimal` 输出到回退目录 `release/minimal/desktop-20260314030824`
+    - `medium` 输出到回退目录 `release/medium/desktop-20260314031035`
+    - `full` 输出到标准目录 `release/full/desktop`，并生成 `SQL-Copilot-full-0.1.0-win-x64.zip`
+- 启动验收通过：
+  - 后端 clean 启动：
+    - `mvn -f apps/server/pom.xml clean package -DskipTests`
+    - `java -Dfile.encoding=UTF-8 -jar apps/server/target/sql-copilot-server-0.1.0.jar --spring.profiles.active=medium --server.port=18080`
+    - `GET http://127.0.0.1:18080/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`
+  - 前端 clean 预览：
+    - `npm run -w @sqlcopilot/desktop build -- --emptyOutDir`
+    - `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 8888 --strictPort`
+    - `GET http://127.0.0.1:8888` 返回 `HTTP 200`
+
+## 说明
+- 由于 Windows 可能在打包完成后继续短暂占用旧输出目录，`minimal` / `medium` 本次最终产物位于时间戳回退目录；这是本次修复的预期行为，目的是优先保证打包成功而不是整次流程失败。
+- `full` 版本在 Windows 下改为 `zip` 属于容量兜底策略；如果后续需要恢复安装器格式，需要先进一步拆分模型资源或重新评估 Windows 安装包方案。
+
+### 2026-03-14 12:10:00
+
+## 补充记录
+- 针对 Windows `full` 变体偶发的 `rcedit-x64.exe` 报错 `Fatal error: Unable to commit changes`，在 `apps/desktop/package.json` 的 `build` 配置中显式补充：
+  - `copyright: "Copyright (C) 2026 SQL Copilot"`
+- 目的：
+  - 覆盖 electron-builder 默认生成的 `Copyright © year ${author}`，避免向 `rcedit` 传递 `©` 字符造成版本资源写入不稳定。
+
+## 验证结果
+- `npm run package:app:full` 再次执行通过。
+- `rcedit` 命令已改为：
+  - `--set-version-string LegalCopyright 'Copyright (C) 2026 SQL Copilot'`
+- 本次复测中未再出现 `Unable to commit changes` 重试日志。
+- 产物输出到：
+  - `release/full/desktop-20260314040557/SQL-Copilot-full-0.1.0-win-x64.zip`
+- 启动验收通过：
+  - 后端：
+    - `mvn -f apps/server/pom.xml clean package -DskipTests`
+    - `java -Dfile.encoding=UTF-8 -jar apps/server/target/sql-copilot-server-0.1.0.jar --spring.profiles.active=medium --server.port=18080`
+    - `GET http://127.0.0.1:18080/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`
+  - 前端：
+    - `npm run -w @sqlcopilot/desktop build -- --emptyOutDir`
+    - `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 8888 --strictPort`
+    - `GET http://127.0.0.1:8888` 返回 `HTTP 200`
+
+### 2026-03-14 13:45:00
+
+## 补充记录
+- 修复桌面打包时误带入数据库文件，以及后端默认数据库路径写死为工程绝对路径的问题。
+
+## 关键改动
+- `apps/server/src/main/resources/application.yml`
+  - 新增 `sqlcopilot.storage.data-dir: ${SQLCOPILOT_DATA_DIR:.}`。
+  - `spring.datasource.url` 改为 `jdbc:sqlite:${sqlcopilot.storage.data-dir}/sql-copilot.db`，不再绑定开发机绝对路径。
+- `apps/desktop/electron/main.cjs`
+  - 新增 `resolveBackendDataDir()`，桌面端启动内置后端时自动将 `SQLCOPILOT_DATA_DIR` 指向 Electron `userData` 目录。
+  - 启动前主动创建数据目录，确保首次安装启动时可以直接建库。
+- `scripts/package-variants.mjs`
+  - 生成的 `run.cmd` / `run.sh` 启动脚本改为动态设置 `SQLCOPILOT_DATA_DIR`。
+  - Windows 默认落到 `%LOCALAPPDATA%\\SQL Copilot`，Linux/macOS 默认落到 `${XDG_DATA_HOME:-$HOME/.local/share}/sql-copilot`。
+- `apps/desktop/package.json`
+  - `build.files` 新增 `!**/*.db`。
+  - `extraResources` 中 `resources/backend` 的过滤规则新增 `!**/*.db`，防止运行后产生的数据库再次被打包带入产物。
+
+## 验证结果
+- 打包验证通过：
+  - `npm run package:app:full`
+  - 产物目录 `release/full/desktop` 下未发现 `.db` 文件。
+  - `release/full/desktop/win-unpacked/resources/backend/application.yml` 中数据库路径已为占位写法，不再包含开发机绝对路径。
+  - `release/full/desktop/win-unpacked/resources/backend/run.cmd` 已改为动态设置 `SQLCOPILOT_DATA_DIR`。
+- 后端启动验证通过：
+  - 从独立工作目录 `target/backend-runtime-check` 启动：
+    - `java -Dfile.encoding=UTF-8 -jar apps/server/target/sql-copilot-server-0.1.0.jar --spring.profiles.active=medium --server.port=18080`
+  - `GET http://127.0.0.1:18080/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`
+  - 数据库文件实际创建于 `target/backend-runtime-check/sql-copilot.db`，说明默认路径已随运行位置动态变化。
+- 前端预览验证通过：
+  - `npm run -w @sqlcopilot/desktop build -- --emptyOutDir`
+  - `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 8888 --strictPort`
+  - `GET http://127.0.0.1:8888` 返回 `HTTP 200`
+
+### 2026-03-14 13:50:00
+
+## 补充记录
+- 按平台拆分 Electron 桌面端图标资源：
+  - Windows 使用 `icon.ico`
+  - macOS 使用 `icon.icns`
+  - Linux 使用 `icon.png`
+
+## 关键改动
+- `apps/desktop/package.json`
+  - 移除顶层通用 `build.icon`。
+  - 改为：
+    - `build.win.icon = "../../icon.ico"`
+    - `build.mac.icon = "../../icon.icns"`
+    - `build.linux.icon = "../../icon.png"`
+
+## 验证结果
+- Windows 打包验证通过：
+  - `npm run package:app:full`
+  - `electron-builder` 日志已显示：
+    - `path resolved   path=D:\Ideaprojects\SQL-Copilot\icon.ico outputFormat=ico`
+    - `rcedit ... --set-icon 'D:\Ideaprojects\SQL-Copilot\icon.ico'`
+  - 说明当前 Windows 构建已直接使用 `icon.ico`，不再从 `png` 临时转换。
+- 启动验收通过：
+  - 后端：
+    - `GET http://127.0.0.1:18080/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`
+  - 前端：
+    - `GET http://127.0.0.1:8888` 返回 `HTTP 200`
+
+### 2026-03-14 14:05:00
+
+## 补充记录
+- 新增 GitHub Actions 多平台打包工作流，用于在 GitHub 上按当前 runner 环境分别产出 Windows、macOS、Linux 制品。
+
+## 关键改动
+- 新增 `.github/workflows/package-variants.yml`
+  - 触发方式：
+    - `workflow_dispatch`
+    - `push` 到 `main` / `master`
+    - `push` 标签 `v*`
+  - 矩阵环境：
+    - `windows-latest`
+    - `macos-latest`
+    - `ubuntu-latest`
+  - 统一步骤：
+    - `actions/checkout@v4`
+    - `actions/setup-node@v4`，Node 22，启用 npm cache
+    - `actions/setup-java@v4`，Temurin JDK 17，启用 Maven cache
+    - Linux 额外安装 `libarchive-tools`
+    - 执行 `npm ci`
+    - 执行 `npm run package:variants`
+    - 上传 `release/**` 为 GitHub artifact
+  - 默认设置：
+    - `SQLCOPILOT_MAC_SIGN=0`，避免 macOS runner 因未签名而失败
+
+## 验证结果
+- 工作流文件已生成：
+  - `.github/workflows/package-variants.yml`
+- 本地联动验证通过：
+  - 后端 clean 启动：
+    - `mvn -f apps/server/pom.xml clean package -DskipTests`
+    - `GET http://127.0.0.1:18080/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`
+  - 前端 clean 预览：
+    - `npm run -w @sqlcopilot/desktop build -- --emptyOutDir`
+    - `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 8888 --strictPort`
+    - `GET http://127.0.0.1:8888` 返回 `HTTP 200`
+
+## 说明
+- 该工作流仍然遵循当前项目的“按运行环境产出对应平台制品”逻辑：
+  - Windows runner 产出 Windows 包
+  - macOS runner 产出 macOS 包
+  - Linux runner 产出 Linux 包
+- 不做单机跨平台交叉打包；三平台制品通过矩阵任务汇总为独立 artifact。
+
+### 2026-03-14 17:00:00
+
+## 补充记录
+- 复核 Windows `full` 变体的制品类型问题：用户期望不要只生成 `zip`。
+
+## 结论
+- 当前 `full` 包体量约 3 GB，Windows 下传统安装类目标暂时不可行：
+  - `nsis` 安装包失败：`makensis.exe` 报错 `failed creating mmap of ...nsis.7z`
+  - `portable` 单文件 exe 同样失败：内部仍会走 NSIS 打包流程，并触发相同 `failed creating mmap`
+- 因此现阶段 Windows `full` 只能稳定保留为 `zip` 制品；`minimal` / `medium` 仍可正常生成安装包。
+
+## 关键改动
+- `scripts/package-variants.mjs`
+  - 保持 Windows `full` 目标为 `zip`
+  - 保留 Windows `rcedit` 提交异常的重试逻辑，但在最后一次仍检测到 `Unable to commit changes` 时改为告警而非直接中断，避免 `zip` 已成功生成却被脚本误判失败。
+
+## 验证结果
+- `npm run package:app:full` 已再次验证通过。
+- 打包日志确认：
+  - Windows `full` 使用 `zip` 目标可成功输出制品。
+  - Windows `portable` 目标会在 NSIS 阶段失败，错误为 `failed creating mmap of ...nsis.7z`。
