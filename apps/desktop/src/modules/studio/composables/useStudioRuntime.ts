@@ -53,10 +53,9 @@ import postgresqlIcon from '../../../assets/db/postgresql.svg';
 import sqliteIcon from '../../../assets/db/sqlite.svg';
 import sqlserverIcon from '../../../assets/db/sqlserver.svg';
 import {
-  minimalPackage,
   normalizeRagProviderByPackage,
+  ragLocalOnnxEnabled,
   ragProviderOptions,
-  sqlCopilotPackageVariant,
 } from '../../../config/packageVariant';
 import type {
   AiAutoQueryVO,
@@ -112,8 +111,6 @@ import type {
 } from '../../../types';
 
 export function useStudioRuntime() {
-const packageVariant = sqlCopilotPackageVariant;
-const ragLocalOnnxEnabled = !minimalPackage;
 const ragProviderTypeOptions = ragProviderOptions;
 interface DesktopDialogFilter {
   name: string;
@@ -129,6 +126,7 @@ interface DesktopPickFileOptions {
 interface DesktopBridge {
   pickFile: (options?: DesktopPickFileOptions) => Promise<string>;
   pickDirectory: (options?: Omit<DesktopPickFileOptions, 'filters'>) => Promise<string>;
+  openExternal?: (url?: string) => Promise<boolean>;
   saveChartCache?: (payload: ChartCacheSaveReq) => Promise<{ filePath: string; width: number; height: number }>;
   readChartCache?: (filePath: string) => Promise<string>;
 }
@@ -5418,6 +5416,7 @@ async function pickRagEmbeddingModelDir() {
     if (!selectedPath) {
       return;
     }
+    ragConfigForm.ragEmbeddingProviderType = 'LOCAL_ONNX';
     ragConfigForm.ragEmbeddingModelDir = selectedPath;
   } finally {
     pickingRagModelDir.value = false;
@@ -5446,6 +5445,7 @@ async function pickRagRerankModelDir() {
     if (!selectedPath) {
       return;
     }
+    ragConfigForm.ragRerankProviderType = 'LOCAL_ONNX';
     ragConfigForm.ragRerankModelDir = selectedPath;
   } finally {
     pickingRagRerankModelDir.value = false;
@@ -5496,6 +5496,13 @@ async function saveAiConfig() {
       ragConfigForm.ragEmbeddingModelDir = '';
       ragConfigForm.ragRerankProviderType = 'ONLINE_OPENAI_COMPAT';
       ragConfigForm.ragRerankModelDir = '';
+    } else {
+      if (ragConfigForm.ragEmbeddingModelDir) {
+        ragConfigForm.ragEmbeddingProviderType = 'LOCAL_ONNX';
+      }
+      if (ragConfigForm.ragRerankEnabled && ragConfigForm.ragRerankModelDir) {
+        ragConfigForm.ragRerankProviderType = 'LOCAL_ONNX';
+      }
     }
     const savedAi = await postApi<AiConfigVO>('/api/ai/config/save', aiConfigForm);
     const savedRag = await postApi<RagConfigVO>('/api/rag/config/save', ragConfigForm);
@@ -8116,15 +8123,25 @@ function defaultRagConfigForm(): RagConfigSaveReq {
 }
 
 function fillRagConfigForm(config: RagConfigVO) {
+  const embeddingModelDir = (config.ragEmbeddingModelDir || '').trim();
+  const rerankModelDir = (config.ragRerankModelDir || '').trim();
+  const embeddingProviderType = normalizeRagProviderType(config.ragEmbeddingProviderType);
+  const rerankProviderType = normalizeRagProviderType(config.ragRerankProviderType);
   Object.assign(ragConfigForm, {
-    ragEmbeddingProviderType: normalizeRagProviderType(config.ragEmbeddingProviderType),
-    ragEmbeddingModelDir: config.ragEmbeddingModelDir || '',
+    ragEmbeddingProviderType: ragLocalOnnxEnabled
+      && (embeddingProviderType === 'LOCAL_ONNX' || !!embeddingModelDir)
+      ? 'LOCAL_ONNX'
+      : embeddingProviderType,
+    ragEmbeddingModelDir: embeddingModelDir,
     ragEmbeddingOnlineBaseUrl: config.ragEmbeddingOnlineBaseUrl || 'https://api.openai.com/v1',
     ragEmbeddingOnlineApiKey: config.ragEmbeddingOnlineApiKey || '',
     ragEmbeddingOnlineModel: config.ragEmbeddingOnlineModel || '',
     ragRerankEnabled: config.ragRerankEnabled === true,
-    ragRerankProviderType: normalizeRagProviderType(config.ragRerankProviderType),
-    ragRerankModelDir: config.ragRerankModelDir || '',
+    ragRerankProviderType: ragLocalOnnxEnabled
+      && (rerankProviderType === 'LOCAL_ONNX' || !!rerankModelDir)
+      ? 'LOCAL_ONNX'
+      : rerankProviderType,
+    ragRerankModelDir: rerankModelDir,
     ragRerankOnlineBaseUrl: config.ragRerankOnlineBaseUrl || 'https://api.openai.com/v1',
     ragRerankOnlineApiKey: config.ragRerankOnlineApiKey || '',
     ragRerankOnlineModel: config.ragRerankOnlineModel || '',
@@ -8150,7 +8167,6 @@ function resetConnectionModalState() {
 }
 
   return {
-    packageVariant,
     ragLocalOnnxEnabled,
     ragProviderTypeOptions,
     browserTabKey,

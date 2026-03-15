@@ -12,15 +12,9 @@
     "dev:electron": "wait-on http-get://127.0.0.1:8888/@vite/client && node scripts/run-electron-main.cjs",
     "debug:main": "wait-on http-get://127.0.0.1:8888/@vite/client && node scripts/run-electron-main.cjs --inspect=9229 --debug",
     "debug": "concurrently -k \"npm run dev:renderer\" \"npm run debug:main\"",
-    "build": "vite build",
-    "build:minimal": "cross-env VITE_PACKAGE_VARIANT=minimal vite build --emptyOutDir",
-    "build:medium": "cross-env VITE_PACKAGE_VARIANT=medium vite build --emptyOutDir",
-    "build:full": "cross-env VITE_PACKAGE_VARIANT=full vite build --emptyOutDir",
+    "build": "vite build --emptyOutDir",
     "download:qdrant": "node scripts/download-qdrant.mjs",
-    "dist": "npm run dist:medium",
-    "dist:minimal": "npm run build:minimal && cross-env SQLCOPILOT_PACKAGE_VARIANT=minimal electron-builder",
-    "dist:medium": "npm run build:medium && cross-env SQLCOPILOT_PACKAGE_VARIANT=medium electron-builder",
-    "dist:full": "npm run build:full && cross-env SQLCOPILOT_PACKAGE_VARIANT=full electron-builder",
+    "dist": "npm run build && electron-builder",
     "type-check": "vue-tsc --noEmit -p tsconfig.json",
     "preview": "vite preview"
   },
@@ -50,9 +44,9 @@
     "appId": "com.sqlcopilot.desktop",
     "productName": "SQL Copilot",
     "copyright": "Copyright (C) 2026 SQL Copilot",
-    "artifactName": "SQL-Copilot-${env.SQLCOPILOT_PACKAGE_VARIANT}-${version}-${os}-${arch}.${ext}",
+    "artifactName": "SQL-Copilot-${version}-${os}-${arch}.${ext}",
     "directories": {
-      "output": "../../release/${env.SQLCOPILOT_PACKAGE_VARIANT}/desktop"
+      "output": "../../release/desktop"
     },
     "files": [
       "dist/**/*",

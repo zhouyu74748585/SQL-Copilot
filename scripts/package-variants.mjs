@@ -13,7 +13,8 @@ const DESKTOP_DIR = path.join(ROOT_DIR, 'apps', 'desktop');
 const DESKTOP_BACKEND_STAGE_DIR = path.join(DESKTOP_DIR, 'resources', 'backend');
 const RELEASE_DIR = path.join(ROOT_DIR, 'release');
 const TEMP_DIR = path.join(RELEASE_DIR, '.jlink-temp');
-const DEFAULT_VARIANTS = ['minimal', 'medium', 'full'];
+const DESKTOP_RELEASE_DIR = path.join(RELEASE_DIR, 'desktop');
+const BACKEND_RELEASE_DIR = path.join(RELEASE_DIR, 'backend');
 const EXTRA_MODULES_ENV = 'SQLCOPILOT_JLINK_EXTRA_MODULES';
 const RETRY_DELETE_COUNT = 6;
 const RETRY_DELETE_DELAY_MS = 1000;
@@ -121,8 +122,8 @@ function hasWindowsRceditCommitIssue(logText) {
     && logText.includes('Unable to commit changes');
 }
 
-function runElectronBuilderCommand(variant, args, options, desktopOutputDir) {
-  const maxAttempts = process.platform === 'win32' && variant === 'full' ? 2 : 1;
+function runElectronBuilderCommand(targetName, args, options, desktopOutputDir) {
+  const maxAttempts = process.platform === 'win32' ? 2 : 1;
   let lastFailure = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -141,7 +142,7 @@ function runElectronBuilderCommand(variant, args, options, desktopOutputDir) {
         : formatCommandFailure(resolveShellCommand('npx'), args, result, true);
       lastFailure = new Error(failureMessage);
       if (commitIssueDetected && attempt < maxAttempts) {
-        console.warn(`[windows-rcedit] Detected commit issue for ${variant}, rebuilding executable from a clean output directory (attempt ${attempt + 1}/${maxAttempts})`);
+        console.warn(`[windows-rcedit] Detected commit issue for ${targetName}, rebuilding executable from a clean output directory (attempt ${attempt + 1}/${maxAttempts})`);
         ensureCleanDir(desktopOutputDir);
         continue;
       }
@@ -150,11 +151,11 @@ function runElectronBuilderCommand(variant, args, options, desktopOutputDir) {
 
     if (commitIssueDetected) {
       if (attempt < maxAttempts) {
-        console.warn(`[windows-rcedit] Detected commit issue for ${variant}, rebuilding executable from a clean output directory (attempt ${attempt + 1}/${maxAttempts})`);
+        console.warn(`[windows-rcedit] Detected commit issue for ${targetName}, rebuilding executable from a clean output directory (attempt ${attempt + 1}/${maxAttempts})`);
         ensureCleanDir(desktopOutputDir);
         continue;
       }
-      console.warn(`[windows-rcedit] Commit issue still detected for ${variant} after ${maxAttempts} attempts; keeping the last successful artifact for manual verification.`);
+      console.warn(`[windows-rcedit] Commit issue still detected for ${targetName} after ${maxAttempts} attempts; keeping the last successful artifact for manual verification.`);
     }
 
     return result;
@@ -164,32 +165,7 @@ function runElectronBuilderCommand(variant, args, options, desktopOutputDir) {
     throw lastFailure;
   }
 
-  throw new Error(`electron-builder failed for ${variant}`);
-}
-
-function normalizeVariant(raw) {
-  const value = (raw || '').trim().toLowerCase();
-  return DEFAULT_VARIANTS.includes(value) ? value : '';
-}
-
-function parseVariants(argv) {
-  const variants = [];
-  const rawItems = argv.length > 0
-    ? argv
-    : ((process.env.SQLCOPILOT_VARIANTS || '').trim()
-        ? process.env.SQLCOPILOT_VARIANTS.split(',')
-        : DEFAULT_VARIANTS);
-
-  for (const raw of rawItems) {
-    const normalized = normalizeVariant(raw);
-    if (!normalized) {
-      throw new Error(`Invalid variant: ${raw}. Allowed values: minimal|medium|full`);
-    }
-    if (!variants.includes(normalized)) {
-      variants.push(normalized);
-    }
-  }
-  return variants;
+  throw new Error(`electron-builder failed for ${targetName}`);
 }
 
 function ensureCleanDir(targetDir) {
@@ -425,12 +401,12 @@ function detectJlinkModules(unpackedDir) {
   return modules;
 }
 
-function createJlinkRuntime(variant, jarPath) {
+function createJlinkRuntime(jarPath) {
   const jarCommand = resolveJavaTool('jar');
   const jlinkCommand = resolveJavaTool('jlink');
-  const variantTempDir = path.join(TEMP_DIR, `${variant}-backend`);
-  const unpackedDir = path.join(variantTempDir, 'unpacked');
-  const runtimeDir = path.join(variantTempDir, 'runtime');
+  const backendTempDir = path.join(TEMP_DIR, 'backend');
+  const unpackedDir = path.join(backendTempDir, 'unpacked');
+  const runtimeDir = path.join(backendTempDir, 'runtime');
 
   ensureCleanDir(unpackedDir);
   fs.mkdirSync(TEMP_DIR, { recursive: true });
@@ -438,7 +414,7 @@ function createJlinkRuntime(variant, jarPath) {
 
   const modules = [...detectJlinkModules(unpackedDir)].sort();
   const moduleList = modules.join(',');
-  console.log(`==> [${variant}] jlink runtime`);
+  console.log('==> [backend] jlink runtime');
   console.log(`    modules: ${moduleList}`);
 
   fs.rmSync(runtimeDir, { recursive: true, force: true });
@@ -456,11 +432,11 @@ function createJlinkRuntime(variant, jarPath) {
   return runtimeDir;
 }
 
-function writeBackendLaunchScripts(targetDir, variant) {
+function writeBackendLaunchScripts(targetDir) {
   const runSh = `#!/usr/bin/env bash
 set -euo pipefail
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROFILE="\${1:-${variant}}"
+PROFILE="\${1:-\${SQLCOPILOT_BACKEND_PROFILE:-}}"
 JAVA_BIN="\${JAVA_BIN:-$BASE_DIR/jre/bin/java}"
 DATA_ROOT="\${SQLCOPILOT_DATA_DIR:-\${XDG_DATA_HOME:-$HOME/.local/share}/sql-copilot}"
 
@@ -478,14 +454,19 @@ fi
 mkdir -p "$DATA_ROOT"
 export SQLCOPILOT_DATA_DIR="$DATA_ROOT"
 
-exec "$JAVA_BIN" -Dfile.encoding=UTF-8 -jar "$JAR_FILE" --spring.profiles.active="$PROFILE"
+ARGS=(-Dfile.encoding=UTF-8 -jar "$JAR_FILE")
+if [[ -n "$PROFILE" ]]; then
+  ARGS+=(--spring.profiles.active="$PROFILE")
+fi
+
+exec "$JAVA_BIN" "\${ARGS[@]}"
 `;
 
   const runCmd = `@echo off
 setlocal enabledelayedexpansion
 set "BASE_DIR=%~dp0"
 set "PROFILE=%~1"
-if "%PROFILE%"=="" set "PROFILE=${variant}"
+if "%PROFILE%"=="" if defined SQLCOPILOT_BACKEND_PROFILE set "PROFILE=%SQLCOPILOT_BACKEND_PROFILE%"
 set "JAVA_BIN=%BASE_DIR%jre\\bin\\java.exe"
 if defined SQLCOPILOT_JAVA_BIN set "JAVA_BIN=%SQLCOPILOT_JAVA_BIN%"
 if not defined SQLCOPILOT_DATA_DIR set "SQLCOPILOT_DATA_DIR=%LOCALAPPDATA%\\SQL Copilot"
@@ -498,7 +479,11 @@ if not exist "%JAVA_BIN%" (
 if not exist "%SQLCOPILOT_DATA_DIR%" mkdir "%SQLCOPILOT_DATA_DIR%"
 
 for %%f in ("%BASE_DIR%*.jar") do (
-  "%JAVA_BIN%" -Dfile.encoding=UTF-8 -jar "%%f" --spring.profiles.active=%PROFILE%
+  if defined PROFILE (
+    "%JAVA_BIN%" -Dfile.encoding=UTF-8 -jar "%%f" --spring.profiles.active=%PROFILE%
+  ) else (
+    "%JAVA_BIN%" -Dfile.encoding=UTF-8 -jar "%%f"
+  )
   exit /b !ERRORLEVEL!
 )
 
@@ -513,32 +498,25 @@ exit /b 1
   }
 }
 
-function prepareBackendRuntime(targetDir, variant, jarPath, runtimeDir) {
+function prepareBackendRuntime(targetDir, jarPath, runtimeDir) {
   ensureEmptyDir(targetDir);
   fs.copyFileSync(jarPath, path.join(targetDir, path.basename(jarPath)));
   fs.cpSync(runtimeDir, path.join(targetDir, 'jre'), { recursive: true });
   copyIfExists(path.join(SERVER_DIR, 'src', 'main', 'resources', 'application.yml'), path.join(targetDir, 'application.yml'));
-  copyIfExists(path.join(SERVER_DIR, 'src', 'main', 'resources', `application-${variant}.yml`), path.join(targetDir, `application-${variant}.yml`));
-  writeBackendLaunchScripts(targetDir, variant);
-  fs.writeFileSync(path.join(targetDir, 'variant'), `${variant}\n`, 'utf8');
-
-  if (variant === 'full') {
-    copyDirIfExists(path.join(SERVER_DIR, 'models'), path.join(targetDir, 'models'));
-  }
+  writeBackendLaunchScripts(targetDir);
 }
 
-function buildBackendVariant(variant) {
-  console.log(`==> [${variant}] backend clean package`);
+function buildBackend() {
+  console.log('==> [backend] clean package');
   runCommand(resolveShellCommand('mvn'), [
     '-f',
     path.join('apps', 'server', 'pom.xml'),
-    `-Ppack-${variant}`,
     'clean',
     'package',
     '-DskipTests',
   ]);
   const jarPath = locatePackagedJar();
-  const runtimeDir = createJlinkRuntime(variant, jarPath);
+  const runtimeDir = createJlinkRuntime(jarPath);
   return { jarPath, runtimeDir };
 }
 
@@ -550,8 +528,8 @@ function buildDesktopTypeCheckOnce() {
   runCommand(resolveShellCommand('npm'), ['run', '-w', '@sqlcopilot/desktop', 'type-check']);
 }
 
-function prepareDesktopOutputDir(variant) {
-  const desktopReleaseDir = path.join(RELEASE_DIR, variant, 'desktop');
+function prepareDesktopOutputDir() {
+  const desktopReleaseDir = DESKTOP_RELEASE_DIR;
   try {
     ensureCleanDir(desktopReleaseDir);
     return desktopReleaseDir;
@@ -562,7 +540,6 @@ function prepareDesktopOutputDir(variant) {
 
     const fallbackDir = path.join(
       RELEASE_DIR,
-      variant,
       `desktop-${new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14)}`,
     );
     console.warn(`[windows-lock] ${desktopReleaseDir} is still locked, fallback to ${fallbackDir}`);
@@ -571,89 +548,83 @@ function prepareDesktopOutputDir(variant) {
   }
 }
 
-function buildDesktopVariant(variant) {
+function buildDesktop() {
   if (!INCLUDE_DESKTOP) {
     return;
   }
 
-  console.log(`==> [${variant}] desktop build`);
-  runCommand(resolveShellCommand('npm'), ['run', '-w', '@sqlcopilot/desktop', `build:${variant}`]);
+  console.log('==> [desktop] build');
+  runCommand(resolveShellCommand('npm'), ['run', '-w', '@sqlcopilot/desktop', 'build']);
 
-  console.log(`==> [${variant}] desktop output cleanup`);
-  const desktopOutputDir = prepareDesktopOutputDir(variant);
+  console.log('==> [desktop] output cleanup');
+  const desktopOutputDir = prepareDesktopOutputDir();
 
-  console.log(`==> [${variant}] electron-builder`);
+  console.log('==> [desktop] electron-builder');
   const args = [
     'electron-builder',
     `--config.directories.output=${desktopOutputDir}`,
   ];
-  if (process.platform === 'win32' && variant === 'full') {
-    args.push('--win', 'zip');
-  }
   if (ELECTRON_DIST) {
     args.push(`--config.electronDist=${ELECTRON_DIST}`);
   }
-  const env = {
-    SQLCOPILOT_PACKAGE_VARIANT: variant,
-  };
+  const env = {};
   if (SHOULD_DISABLE_MAC_SIGN) {
     env.CSC_IDENTITY_AUTO_DISCOVERY = 'false';
   }
-  runElectronBuilderCommand(variant, args, {
+  runElectronBuilderCommand('desktop', args, {
     cwd: DESKTOP_DIR,
     env,
   }, desktopOutputDir);
 }
 
-function removeReleaseDirIfDisabled(variant) {
+function removeReleaseDirIfDisabled() {
   if (!EXPORT_BACKEND) {
-    removePathWithRetry(path.join(RELEASE_DIR, variant, 'backend'));
+    removePathWithRetry(BACKEND_RELEASE_DIR);
   }
   if (!INCLUDE_DESKTOP) {
-    removePathWithRetry(path.join(RELEASE_DIR, variant, 'desktop'));
+    removePathWithRetry(DESKTOP_RELEASE_DIR);
   }
 }
 
 function printSummary() {
   if (INCLUDE_DESKTOP && EXPORT_BACKEND) {
-    console.log('All variants packaged under release/{minimal,medium,full}/{backend,desktop}');
+    console.log('Package exported under release/{backend,desktop}');
     return;
   }
   if (INCLUDE_DESKTOP) {
-    console.log('Desktop variants packaged under release/{minimal,medium,full}/desktop (backend bundled with jlink runtime)');
+    console.log('Desktop package exported under release/desktop (backend bundled with jlink runtime)');
     return;
   }
   if (EXPORT_BACKEND) {
-    console.log('Backend runtime variants exported under release/{minimal,medium,full}/backend');
+    console.log('Backend runtime exported under release/backend');
     return;
   }
   console.log('No release artifacts exported (backend build executed as intermediate only)');
 }
 
 function main() {
-  const variants = parseVariants(process.argv.slice(2));
+  const args = process.argv.slice(2);
+  if (args.length > 0) {
+    throw new Error(`This script no longer accepts variant arguments: ${args.join(' ')}`);
+  }
   fs.mkdirSync(RELEASE_DIR, { recursive: true });
   removePathWithRetry(TEMP_DIR);
   cleanupStageDir();
 
   try {
     buildDesktopTypeCheckOnce();
+    removeReleaseDirIfDisabled();
 
-    for (const variant of variants) {
-      removeReleaseDirIfDisabled(variant);
-
-      const { jarPath, runtimeDir } = buildBackendVariant(variant);
-      if (INCLUDE_DESKTOP) {
-        prepareBackendRuntime(DESKTOP_BACKEND_STAGE_DIR, variant, jarPath, runtimeDir);
-      } else {
-        cleanupStageDir();
-      }
-      if (EXPORT_BACKEND) {
-        prepareBackendRuntime(path.join(RELEASE_DIR, variant, 'backend'), variant, jarPath, runtimeDir);
-      }
-
-      buildDesktopVariant(variant);
+    const { jarPath, runtimeDir } = buildBackend();
+    if (INCLUDE_DESKTOP) {
+      prepareBackendRuntime(DESKTOP_BACKEND_STAGE_DIR, jarPath, runtimeDir);
+    } else {
+      cleanupStageDir();
     }
+    if (EXPORT_BACKEND) {
+      prepareBackendRuntime(BACKEND_RELEASE_DIR, jarPath, runtimeDir);
+    }
+    buildDesktop();
 
     printSummary();
   } finally {

@@ -30,7 +30,6 @@ public class RagConfigServiceImpl implements RagConfigService {
     private final String defaultRerankOnlineBaseUrl;
     private final String defaultRerankOnlineApiKey;
     private final String defaultRerankOnlineModel;
-    private final boolean localOnnxEnabled;
 
     public RagConfigServiceImpl(RagConfigMapper ragConfigMapper,
                                 @Value("${rag.embedding.provider-type:LOCAL_ONNX}") String defaultEmbeddingProviderType,
@@ -43,10 +42,8 @@ public class RagConfigServiceImpl implements RagConfigService {
                                 @Value("${rag.rerank.model-dir:}") String defaultRerankModelDir,
                                 @Value("${rag.rerank.online.base-url:https://api.openai.com/v1}") String defaultRerankOnlineBaseUrl,
                                 @Value("${rag.rerank.online.api-key:}") String defaultRerankOnlineApiKey,
-                                @Value("${rag.rerank.online.model:}") String defaultRerankOnlineModel,
-                                @Value("${sqlcopilot.rag.local-onnx-enabled:true}") boolean localOnnxEnabled) {
+                                @Value("${rag.rerank.online.model:}") String defaultRerankOnlineModel) {
         this.ragConfigMapper = ragConfigMapper;
-        this.localOnnxEnabled = localOnnxEnabled;
         this.defaultEmbeddingProviderType = normalizeProviderType(defaultEmbeddingProviderType, PROVIDER_LOCAL_ONNX);
         this.defaultEmbeddingModelDir = safe(defaultEmbeddingModelDir);
         this.defaultEmbeddingOnlineBaseUrl = safe(defaultEmbeddingOnlineBaseUrl);
@@ -158,11 +155,11 @@ public class RagConfigServiceImpl implements RagConfigService {
         if (PROVIDER_ONLINE_OPENAI_COMPAT.equals(value)) {
             return value;
         }
-        if (PROVIDER_LOCAL_ONNX.equals(value) && localOnnxEnabled) {
+        if (PROVIDER_LOCAL_ONNX.equals(value)) {
             return value;
         }
         String fallbackValue = safe(fallback).toUpperCase(Locale.ROOT);
-        if (PROVIDER_ONLINE_OPENAI_COMPAT.equals(fallbackValue) || !localOnnxEnabled) {
+        if (PROVIDER_ONLINE_OPENAI_COMPAT.equals(fallbackValue)) {
             return PROVIDER_ONLINE_OPENAI_COMPAT;
         }
         return PROVIDER_LOCAL_ONNX;

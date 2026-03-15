@@ -1,4 +1,4 @@
-name: Package Variants
+name: Package App
 
 on:
   workflow_dispatch:
@@ -54,12 +54,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Package current platform variants
-        run: npm run package:variants -- minimal medium
+      - name: Package current platform artifact
+        run: npm run package:app
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: sql-copilot-${{ matrix.label }}-release
+          name: sql-copilot-${{ matrix.label }}
           path: release/**
           if-no-files-found: error

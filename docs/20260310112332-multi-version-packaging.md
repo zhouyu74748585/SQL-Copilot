@@ -836,3 +836,182 @@
 - 打包日志确认：
   - Windows `full` 使用 `zip` 目标可成功输出制品。
   - Windows `portable` 目标会在 NSIS 阶段失败，错误为 `failed creating mmap of ...nsis.7z`。
+
+### 2026-03-14 21:55:00
+
+## 补充记录
+- 按最新要求收敛打包模式：不再保留 `minimal` / `full`，仅保留 `medium` 这一种打包模式。
+- `medium` 继续保留 ONNX 框架能力，但打包产物不包含模型文件，模型由用户自行下载并配置目录。
+
+## 关键改动
+- 根 `package.json`
+  - 移除 `package:app:minimal` / `package:app:full`
+  - 新增 `package:app` 作为 `medium` 的同义入口
+- `apps/desktop/package.json`
+  - 移除 `build:minimal` / `build:full`、`dist:minimal` / `dist:full`
+  - 保留 `build:medium` / `dist:medium`
+  - 产物命名去掉包型后缀，改为 `SQL-Copilot-${version}-${os}-${arch}.${ext}`
+  - 输出目录固定为 `release/desktop`
+- `apps/desktop/src/config/packageVariant.ts`
+  - 包型常量固定为 `medium`
+  - 前端始终提供 `LOCAL_ONNX` / `ONLINE_OPENAI_COMPAT` 两种 RAG 运行模式选项
+- `scripts/package-variants.mjs`
+  - 仅接受 `medium` 包型
+  - 汇总输出提示改为 `release/medium/...`
+  - 不再包含 `full` / `minimal` 的特殊分支
+- `.github/workflows/package-variants.yml`
+  - 工作流名称改为 `Package Medium`
+  - CI 只执行 `npm run package:variants`
+  - artifact 名称改为 `sql-copilot-${platform}-medium`
+
+## 验证结果
+- 打包验证通过：
+  - `npm run package:variants`
+  - 成功输出 `release/desktop-20260314134755`
+  - 产物为 `SQL-Copilot-0.1.0-win-x64.exe`
+- 启动验收通过：
+  - 后端：
+    - `GET http://127.0.0.1:18080/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`
+  - 前端：
+    - `GET http://127.0.0.1:8888` 返回 `HTTP 200`
+
+### 2026-03-14 22:10:00
+
+## 补充记录
+- 后端配置进一步收敛为单一配置文件：仅保留 `application.yml`，不再保留 `application-medium.yml`。
+
+## 关键改动
+- `apps/server/src/main/resources/application.yml`
+  - 合并原 `application-medium.yml` 的有效默认值：
+    - `rag.embedding.provider-type = ONLINE_OPENAI_COMPAT`
+    - `rag.embedding.model-dir = ""`
+    - `rag.rerank.enabled = false`
+    - `rag.rerank.provider-type = ONLINE_OPENAI_COMPAT`
+    - `rag.rerank.model-dir = ""`
+  - 保留 `sqlcopilot.rag.local-onnx-enabled = true`，继续支持用户手动切换到本地 ONNX。
+- 删除：
+  - `apps/server/src/main/resources/application-medium.yml`
+- `apps/server/pom.xml`
+  - 删除 `pack-medium` profile
+  - 不再保留 `sqlcopilot.packaging.variant` 属性
+- `scripts/package-variants.mjs`
+  - 后端打包改为直接执行 `mvn clean package -DskipTests`
+  - 不再复制 `application-${variant}.yml`
+  - 生成的 `run.cmd` / `run.sh` 默认不再附带 `--spring.profiles.active=medium`
+- `apps/desktop/electron/main.cjs`
+  - 内置 backend 启动默认 profile 改为空；仅当显式设置 `SQLCOPILOT_BACKEND_PROFILE` 时才传递 `spring.profiles.active`
+
+## 验证结果
+- 后端 clean 构建通过：
+  - `mvn -f apps/server/pom.xml clean package -DskipTests`
+- 后端启动验收通过：
+  - `java -Dfile.encoding=UTF-8 -jar apps/server/target/sql-copilot-server-0.1.0.jar --server.port=18080`
+  - `GET http://127.0.0.1:18080/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`
+- 前端 clean build 与预览通过：
+  - `npm run -w @sqlcopilot/desktop build -- --emptyOutDir`
+  - `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 8888 --strictPort`
+  - `GET http://127.0.0.1:8888` 返回 `HTTP 200`
+
+### 2026-03-14 22:15:00
+
+## 补充记录
+- 去掉后端代码中与 `sqlcopilot.rag.local-onnx-enabled` 相关的参数判断与条件装配，统一改为按 provider 配置和本地服务可用性判断。
+
+## 关键改动
+- `apps/server/src/main/resources/application.yml`
+  - 删除 `sqlcopilot.rag.local-onnx-enabled`
+- `apps/server/src/main/java/com/sqlcopilot/studio/service/impl/RagConfigServiceImpl.java`
+  - 删除 `localOnnxEnabled` 配置注入
+  - `normalizeProviderType(...)` 不再依赖开关，直接接受 `LOCAL_ONNX` / `ONLINE_OPENAI_COMPAT`
+- `apps/server/src/main/java/com/sqlcopilot/studio/service/rag/impl/RagEmbeddingRouterServiceImpl.java`
+  - 删除 `localOnnxEnabled` 配置注入
+  - provider 归一化仅依赖配置值和 `localRagEmbeddingService` 是否存在
+- `apps/server/src/main/java/com/sqlcopilot/studio/service/rag/impl/RagRerankRouterServiceImpl.java`
+  - 删除 `localOnnxEnabled` 配置注入
+  - provider 归一化仅依赖配置值和 `localRagRerankService` 是否存在
+- `apps/server/src/main/java/com/sqlcopilot/studio/service/rag/impl/OnnxBgeM3EmbeddingServiceImpl.java`
+  - 删除 `@ConditionalOnProperty(sqlcopilot.rag.local-onnx-enabled=true)`
+- `apps/server/src/main/java/com/sqlcopilot/studio/service/rag/impl/OnnxLocalRerankServiceImpl.java`
+  - 删除 `@ConditionalOnProperty(sqlcopilot.rag.local-onnx-enabled=true)`
+
+## 验证结果
+- 后端 clean 构建通过：
+  - `mvn -f apps/server/pom.xml clean package -DskipTests`
+- 后端启动验收通过：
+  - `java -Dfile.encoding=UTF-8 -jar apps/server/target/sql-copilot-server-0.1.0.jar --server.port=18080`
+  - `GET http://127.0.0.1:18080/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`
+- 前端 clean build 与预览通过：
+  - `npm run -w @sqlcopilot/desktop build -- --emptyOutDir`
+  - `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 8888 --strictPort`
+  - `GET http://127.0.0.1:8888` 返回 `HTTP 200`
+
+### 2026-03-14 22:30:34
+
+## 补充记录
+- 按最新要求继续收敛打包入口与 README 命令说明，去掉多余的模式参数和重复打包命令，只保留一个对外打包入口。
+
+## 关键改动
+- `package.json`
+  - 删除 `package:variants` 与 `package:app:medium`，仅保留 `package:app`。
+- `apps/desktop/package.json`
+  - 删除 `build:medium` / `dist:medium`，统一由 `build` / `dist` 承担单一 medium 打包流程。
+- `scripts/package-variants.mjs`
+  - desktop 构建步骤改为调用统一的 `npm run -w @sqlcopilot/desktop build`，避免继续依赖包型后缀命令。
+- `README.md`
+  - 删除多余的 `:medium` 后缀命令、重复的一键打包入口和模式说明表。
+  - 桌面打包命令收敛为 `npm run -w @sqlcopilot/desktop dist`。
+  - 一键打包命令收敛为 `npm run package:app`。
+- `.github/workflows/package-variants.yml`
+  - CI 打包命令同步切换为 `npm run package:app`。
+
+## 验证结果
+- 前端校验通过：
+  - `npm run type-check`
+  - `npm run build`
+- 前端预览通过：
+  - `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 8888 --strictPort`
+  - `GET http://127.0.0.1:8888` 返回 `HTTP 200`
+- 后端 clean 启动通过：
+  - `mvn -f apps/server/pom.xml clean spring-boot:run "-Dspring-boot.run.arguments=--server.port=18080"`
+  - `GET http://127.0.0.1:18080/api/health` 返回包含 `ok` 的成功响应
+
+### 2026-03-14 22:52:03
+
+## 补充记录
+- 继续收敛单模式打包实现，去掉当前代码与工作流中残留的 `medium` 包型字面量和 variant 骨架，避免“实际上只有一种模式，但实现仍按变体处理”的混乱。
+
+## 关键改动
+- `apps/desktop/package.json`
+  - `build` 改为直接执行 `vite build --emptyOutDir`。
+  - `dist` 改为直接执行 `electron-builder`，不再注入 `VITE_PACKAGE_VARIANT` / `SQLCOPILOT_PACKAGE_VARIANT`。
+- `apps/desktop/src/config/packageVariant.ts`
+  - 删除 `SqlCopilotPackageVariant`、默认 `medium` 常量和 `minimalPackage`。
+  - 保留真正仍在使用的 RAG provider 选项与归一化逻辑，并显式导出 `ragLocalOnnxEnabled = true`。
+- `apps/desktop/src/modules/studio/composables/useStudioRuntime.ts`
+  - 删除 `packageVariant` 返回值和对包型常量的依赖，直接使用固定的本地 ONNX 可用状态。
+- `scripts/package-variants.mjs`
+  - 删除 `DEFAULT_VARIANTS`、`normalizeVariant`、`parseVariants` 和 `for variant of variants` 循环。
+  - 脚本改为单次执行 `backend -> jlink -> desktop`。
+  - 输出目录统一为 `release/desktop` 与可选的 `release/backend`。
+  - 若仍传入旧的 variant 参数，脚本会直接报错提示不再支持。
+- `.github/workflows/package-variants.yml`
+  - 工作流名称由 `Package Medium` 改为 `Package App`。
+  - artifact 名称去掉 `-medium` 后缀。
+- `README.md`
+  - 脚本描述改为“单包打包脚本”，不再出现 `medium` 模式表述。
+
+## 验证结果
+- 当前实现代码检索结果：
+  - 在 `package.json`、`README.md`、`apps/desktop`、`scripts`、`.github` 中，已无与打包单模式相关的 `medium`、`VITE_PACKAGE_VARIANT`、`SQLCOPILOT_PACKAGE_VARIANT` 残留。
+  - 剩余命中仅为业务样式类 `risk-level-medium`，与打包模式无关。
+- 前端校验通过：
+  - `npm run type-check`
+  - `npm run build`
+- 打包脚本实跑通过：
+  - `npm run package:app`
+  - 成功输出到 `release/desktop`
+- 启动验收通过：
+  - 前端预览：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 8888 --strictPort`
+  - `GET http://127.0.0.1:8888` 返回 `HTTP 200`
+  - 后端 clean 启动：`mvn -f apps/server/pom.xml clean spring-boot:run "-Dspring-boot.run.arguments=--server.port=18080"`
+  - `GET http://127.0.0.1:18080/api/health` 返回包含 `ok` 的成功响应

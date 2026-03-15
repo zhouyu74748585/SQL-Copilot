@@ -24,18 +24,15 @@ public class RagEmbeddingRouterServiceImpl implements RagEmbeddingService {
     private final RagConfigService ragConfigService;
     private final LocalRagEmbeddingService localRagEmbeddingService;
     private final OpenAiCompatEmbeddingServiceImpl openAiCompatEmbeddingService;
-    private final boolean localOnnxEnabled;
     private final String defaultProviderType;
 
     public RagEmbeddingRouterServiceImpl(RagConfigService ragConfigService,
                                          ObjectProvider<LocalRagEmbeddingService> localRagEmbeddingServiceProvider,
                                          OpenAiCompatEmbeddingServiceImpl openAiCompatEmbeddingService,
-                                         @Value("${rag.embedding.provider-type:LOCAL_ONNX}") String defaultProviderType,
-                                         @Value("${sqlcopilot.rag.local-onnx-enabled:true}") boolean localOnnxEnabled) {
+                                         @Value("${rag.embedding.provider-type:LOCAL_ONNX}") String defaultProviderType) {
         this.ragConfigService = ragConfigService;
         this.localRagEmbeddingService = localRagEmbeddingServiceProvider.getIfAvailable();
         this.openAiCompatEmbeddingService = openAiCompatEmbeddingService;
-        this.localOnnxEnabled = localOnnxEnabled;
         this.defaultProviderType = normalizeProviderType(defaultProviderType, PROVIDER_LOCAL_ONNX);
     }
 
@@ -86,12 +83,11 @@ public class RagEmbeddingRouterServiceImpl implements RagEmbeddingService {
         if (PROVIDER_ONLINE_OPENAI_COMPAT.equals(value)) {
             return PROVIDER_ONLINE_OPENAI_COMPAT;
         }
-        if (PROVIDER_LOCAL_ONNX.equals(value) && localOnnxEnabled) {
+        if (PROVIDER_LOCAL_ONNX.equals(value)) {
             return PROVIDER_LOCAL_ONNX;
         }
         String fallbackValue = safe(fallback).toUpperCase(Locale.ROOT);
         if (PROVIDER_ONLINE_OPENAI_COMPAT.equals(fallbackValue)
-            || !localOnnxEnabled
             || localRagEmbeddingService == null) {
             return PROVIDER_ONLINE_OPENAI_COMPAT;
         }

@@ -9,9 +9,6 @@
   "scripts": {
     "build": "npm run -w @sqlcopilot/desktop build",
     "type-check": "npm run -w @sqlcopilot/desktop type-check",
-    "package:variants": "node scripts/package-variants.mjs",
-    "package:app:minimal": "npm run package:variants -- minimal",
-    "package:app:medium": "npm run package:variants -- medium",
-    "package:app:full": "npm run package:variants -- full"
+    "package:app": "node scripts/package-variants.mjs"
   }
 }

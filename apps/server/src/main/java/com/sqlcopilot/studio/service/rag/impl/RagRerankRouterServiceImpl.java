@@ -26,20 +26,17 @@ public class RagRerankRouterServiceImpl implements RagRerankService {
     private final LocalRagRerankService localRagRerankService;
     private final OpenAiCompatRerankServiceImpl openAiCompatRerankService;
     private final boolean defaultRerankEnabled;
-    private final boolean localOnnxEnabled;
     private final String defaultProviderType;
 
     public RagRerankRouterServiceImpl(RagConfigService ragConfigService,
                                       ObjectProvider<LocalRagRerankService> localRagRerankServiceProvider,
                                       OpenAiCompatRerankServiceImpl openAiCompatRerankService,
                                       @Value("${rag.rerank.enabled:false}") boolean defaultRerankEnabled,
-                                      @Value("${rag.rerank.provider-type:LOCAL_ONNX}") String defaultProviderType,
-                                      @Value("${sqlcopilot.rag.local-onnx-enabled:true}") boolean localOnnxEnabled) {
+                                      @Value("${rag.rerank.provider-type:LOCAL_ONNX}") String defaultProviderType) {
         this.ragConfigService = ragConfigService;
         this.localRagRerankService = localRagRerankServiceProvider.getIfAvailable();
         this.openAiCompatRerankService = openAiCompatRerankService;
         this.defaultRerankEnabled = defaultRerankEnabled;
-        this.localOnnxEnabled = localOnnxEnabled;
         this.defaultProviderType = normalizeProviderType(defaultProviderType, PROVIDER_LOCAL_ONNX);
     }
 
@@ -98,12 +95,11 @@ public class RagRerankRouterServiceImpl implements RagRerankService {
         if (PROVIDER_ONLINE_OPENAI_COMPAT.equals(value)) {
             return PROVIDER_ONLINE_OPENAI_COMPAT;
         }
-        if (PROVIDER_LOCAL_ONNX.equals(value) && localOnnxEnabled) {
+        if (PROVIDER_LOCAL_ONNX.equals(value)) {
             return PROVIDER_LOCAL_ONNX;
         }
         String fallbackValue = safe(fallback).toUpperCase(Locale.ROOT);
         if (PROVIDER_ONLINE_OPENAI_COMPAT.equals(fallbackValue)
-            || !localOnnxEnabled
             || localRagRerankService == null) {
             return PROVIDER_ONLINE_OPENAI_COMPAT;
         }

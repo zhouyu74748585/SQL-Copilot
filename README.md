@@ -130,7 +130,7 @@ SQL Copilot 不是一个只会“吐一段 SQL”的问答工具，而是一个�
 | ONNX Runtime | 1.19.2 | 本地 embedding / rerank 推理 |
 | DJL Tokenizers | 0.29.0 | 本地 tokenizer |
 | OpenAI Compatible API | 已接入 | 在线模型、在线 embedding / rerank |
-| BGE-M3 / BGE-Reranker | `apps/server/models` | `full` 变体默认本地模型 |
+| BGE-M3 / BGE-Reranker | 外部下载 + 本地目录配置 | 保留 ONNX 框架能力，但打包产物默认不携带模型文件 |
 
 ## 项目结构
 
@@ -146,9 +146,9 @@ SQL Copilot 不是一个只会“吐一段 SQL”的问答工具，而是一个�
 │   ├── service/llm                 LLM 网关
 │   ├── service/rag                 检索、向量化、rerank
 │   ├── mapper/entity               SQLite 持久化
-│   └── resources                   application*.yml / schema.sql / drivers
+│   └── resources                   application.yml / schema.sql / drivers
 ├── packages/shared-contracts       前后端共享契约
-├── scripts/package-variants.mjs    多变体打包脚本
+├── scripts/package-variants.mjs    单包打包脚本
 └── docs                            文档、截图与阶段总结
 ```
 
@@ -167,7 +167,6 @@ npm run -w @sqlcopilot/desktop debug
 ```bash
 npm run type-check
 npm run build
-npm run -w @sqlcopilot/desktop build -- --emptyOutDir
 npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 8888 --strictPort
 ```
 
@@ -175,50 +174,36 @@ npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 8888 --strictP
 
 ```bash
 mvn -f apps/server/pom.xml clean spring-boot:run
-mvn -f apps/server/pom.xml clean spring-boot:run "-Dspring-boot.run.arguments=--server.port=18080"
 mvn -f apps/server/pom.xml clean package
-mvn -f apps/server/pom.xml -Ppack-minimal clean package -DskipTests
-mvn -f apps/server/pom.xml -Ppack-medium clean package -DskipTests
-mvn -f apps/server/pom.xml -Ppack-full clean package -DskipTests
 ```
 
 ### 桌面端打包
 
 ```bash
-npm run -w @sqlcopilot/desktop build:minimal
-npm run -w @sqlcopilot/desktop build:medium
-npm run -w @sqlcopilot/desktop build:full
-
-npm run -w @sqlcopilot/desktop dist:minimal
-npm run -w @sqlcopilot/desktop dist:medium
-npm run -w @sqlcopilot/desktop dist:full
+npm run -w @sqlcopilot/desktop dist
 ```
 
-### 多变体一键打包
+### 一键打包
 
 ```bash
-# 默认输出 desktop 变体，backend 作为中间构建参与 jlink 打包
-npm run package:variants
-
-# 只打一个变体
-npm run package:app:minimal
-npm run package:app:medium
-npm run package:app:full
-
-# 同时导出 backend 运行时目录
-SQLCOPILOT_EXPORT_BACKEND=1 npm run package:variants
-
-# 仅导出 backend
-SQLCOPILOT_INCLUDE_DESKTOP=0 SQLCOPILOT_EXPORT_BACKEND=1 npm run package:variants
+npm run package:app
 ```
 
-## 变体说明
+## 打包说明
 
-| 变体 | 前端行为 | 后端 / RAG 默认特征 |
-| --- | --- | --- |
-| minimal | 前端仅提供在线 OpenAI 兼容 RAG 选项 | `application-minimal.yml` 禁用本地 ONNX，rerank 关闭 |
-| medium | 前端允许本地 ONNX / 在线两种选项 | `application-medium.yml` 默认走在线 embedding / rerank 配置 |
-| full | 前端允许本地 ONNX / 在线两种选项 | `application-full.yml` 默认启用本地 embedding + 本地 rerank，并打包 `apps/server/models` |
+当前仅保留一种桌面打包形态，统一输出到 `release/desktop`。
+
+- 打包命令统一使用 `npm run package:app`。
+- 打包流程会自动为 backend 执行 Maven 构建，并通过 `jdeps + jlink` 生成随桌面端一起分发的运行时。
+- 前端仍保留本地 ONNX / 在线两种 RAG 运行方式，但安装包默认不内置模型文件，需要用户自行下载并配置本地模型目录。
+
+## 模型下载
+
+- Embedding 模型：
+  - https://huggingface.co/hooman650/bge-m3-onnx-o4/tree/main
+- Rerank 模型：
+  - https://huggingface.co/swulling/bge-reranker-base-onnx-o4/tree/main
+- 在桌面应用设置中点击下载链接时，会直接调用系统默认浏览器打开，不会在应用内弹窗下载。
 
 ## 启动检查
 

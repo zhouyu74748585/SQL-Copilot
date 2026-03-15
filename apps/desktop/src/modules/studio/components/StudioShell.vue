@@ -2527,6 +2527,7 @@
                   <a-select
                     v-model:value="ragConfigForm.ragEmbeddingProviderType"
                     :options="ragProviderTypeOptions"
+                    @change="handleEmbeddingProviderTypeChange"
                   />
                 </a-form-item>
                 <template v-if="ragLocalOnnxEnabled && ragConfigForm.ragEmbeddingProviderType === 'LOCAL_ONNX'">
@@ -2540,6 +2541,15 @@
                       <a-button :loading="pickingRagModelDir" @click="pickRagEmbeddingModelDir">选择目录</a-button>
                     </div>
                   </a-form-item>
+                  <a-alert class="rag-local-tip" type="info" show-icon>
+                    <template #message>{{ localEmbeddingTipTitle }}</template>
+                    <template #description>
+                      <div class="rag-local-tip-body">
+                        <span>{{ localEmbeddingTipDescription }}</span>
+                        <a href="" @click.prevent="openExternalLink(embeddingModelRepoUrl)">{{ localEmbeddingTipLinkText }}</a>
+                      </div>
+                    </template>
+                  </a-alert>
                 </template>
                 <template v-else>
                   <a-form-item label="在线 Base URL">
@@ -2565,7 +2575,7 @@
               <div class="rag-config-card">
                 <div class="rag-config-card-title">Rerank 配置</div>
                 <a-form-item>
-                  <a-switch v-model:checked="ragConfigForm.ragRerankEnabled" />
+                  <a-switch v-model:checked="ragConfigForm.ragRerankEnabled" @change="handleRerankEnabledChange" />
                   <span style="margin-left: 8px;">启用 Rerank</span>
                 </a-form-item>
                 <template v-if="ragConfigForm.ragRerankEnabled">
@@ -2586,6 +2596,15 @@
                         <a-button :loading="pickingRagRerankModelDir" @click="pickRagRerankModelDir">选择目录</a-button>
                       </div>
                     </a-form-item>
+                    <a-alert class="rag-local-tip" type="info" show-icon>
+                      <template #message>{{ localRerankTipTitle }}</template>
+                      <template #description>
+                        <div class="rag-local-tip-body">
+                          <span>{{ localRerankTipDescription }}</span>
+                          <a href="" @click.prevent="openExternalLink(rerankModelRepoUrl)">{{ localRerankTipLinkText }}</a>
+                        </div>
+                      </template>
+                    </a-alert>
                   </template>
                   <template v-else>
                     <a-form-item label="在线 Base URL">
@@ -3062,7 +3081,7 @@ import {
 } from '@ant-design/icons-vue';
 import {Editor as MonacoEditor} from '@guolao/vue-monaco-editor';
 import type * as MonacoApi from 'monaco-editor';
-import {nextTick, ref, watch} from 'vue';
+import {computed, nextTick, ref, watch} from 'vue';
 import {useAppI18n, type AppLocale} from '../../../i18n';
 import QueryChartPanel from '../../../components/QueryChartPanel.vue';
 import ErDiagramPanel from '../../../components/ErDiagramPanel.vue';
@@ -3073,6 +3092,9 @@ import type {StudioController} from '../composables/useStudioController';
 
 const {currentLocale, antLocale, localeSelectOptions, setLocale, useDomI18n} = useAppI18n();
 useDomI18n();
+
+const embeddingModelRepoUrl = 'https://huggingface.co/hooman650/bge-m3-onnx-o4/tree/main';
+const rerankModelRepoUrl = 'https://huggingface.co/swulling/bge-reranker-base-onnx-o4/tree/main';
 
 const props = defineProps<{ controller: StudioController }>();
 const {
@@ -3721,6 +3743,65 @@ const {
     resetConnectionModalState
 } = props.controller;
 
+function isEnglishLocale() {
+  return currentLocale.value === 'en-US';
+}
+
+function handleEmbeddingProviderTypeChange(value: 'LOCAL_ONNX' | 'ONLINE_OPENAI_COMPAT') {
+  ragConfigForm.ragEmbeddingProviderType = value;
+  if (!ragLocalOnnxEnabled || !ragConfigForm.ragRerankEnabled) {
+    return;
+  }
+  ragConfigForm.ragRerankProviderType = value;
+}
+
+function handleRerankEnabledChange(enabled: boolean) {
+  ragConfigForm.ragRerankEnabled = enabled;
+  if (!enabled || !ragLocalOnnxEnabled) {
+    return;
+  }
+  ragConfigForm.ragRerankProviderType = ragConfigForm.ragEmbeddingProviderType;
+}
+
+const localEmbeddingTipTitle = computed(() => (
+  isEnglishLocale() ? 'Local embedding model download' : '本地向量模型下载'
+));
+
+const localEmbeddingTipDescription = computed(() => (
+  isEnglishLocale()
+    ? 'Download the BGE-M3 ONNX model repository first, then select the cloned directory here.'
+    : '请先下载 BGE-M3 ONNX 模型仓库，再在这里选择 clone 后的目录。'
+));
+
+const localEmbeddingTipLinkText = computed(() => (
+  isEnglishLocale() ? 'Open embedding model repository' : '打开向量模型仓库'
+));
+
+const localRerankTipTitle = computed(() => (
+  isEnglishLocale() ? 'Local rerank model download' : '本地 Rerank 模型下载'
+));
+
+const localRerankTipDescription = computed(() => (
+  isEnglishLocale()
+    ? 'Download the BGE reranker ONNX model repository first, then select the cloned directory here.'
+    : '请先下载 BGE Reranker ONNX 模型仓库，再在这里选择 clone 后的目录。'
+));
+
+const localRerankTipLinkText = computed(() => (
+  isEnglishLocale() ? 'Open rerank model repository' : '打开 Rerank 模型仓库'
+));
+
+async function openExternalLink(url: string) {
+  const bridge = typeof window !== 'undefined'
+    ? (window as Window & { sqlCopilotDesktop?: { openExternal?: (value?: string) => Promise<boolean> } }).sqlCopilotDesktop
+    : null;
+  if (bridge?.openExternal) {
+    await bridge.openExternal(url);
+    return;
+  }
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
 const queryPromptAssistListRef = ref<HTMLElement | null>(null);
 const queryPromptAssistItemRefMap = new Map<string, HTMLElement>();
 
@@ -3848,3 +3929,20 @@ function handleTableEditorDatabaseSelectorChange(
   handleTableEditorDatabaseChange(tab);
 }
 </script>
+
+<style scoped>
+.rag-local-tip {
+  margin-top: 8px;
+}
+
+.rag-local-tip-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rag-local-tip-body a {
+  align-self: flex-start;
+  word-break: break-all;
+}
+</style>

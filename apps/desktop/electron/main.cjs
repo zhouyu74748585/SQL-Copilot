@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const http = require('http');
@@ -47,6 +47,21 @@ function createWindow() {
     const indexPath = path.join(__dirname, '../dist/index.html');
     win.loadFile(indexPath);
   }
+
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) {
+      void shell.openExternal(url);
+      return { action: 'deny' };
+    }
+    return { action: 'allow' };
+  });
+
+  win.webContents.on('will-navigate', (event, url) => {
+    if (/^https?:\/\//i.test(url)) {
+      event.preventDefault();
+      void shell.openExternal(url);
+    }
+  });
 
   if (isDebug) {
     win.webContents.openDevTools({ mode: 'detach' });
@@ -154,6 +169,15 @@ function registerIpcHandlers() {
       return '';
     }
     return result.filePaths[0];
+  });
+
+  ipcMain.handle('shell:open-external', async (_event, rawUrl) => {
+    const url = typeof rawUrl === 'string' ? rawUrl.trim() : '';
+    if (!/^https?:\/\//i.test(url)) {
+      throw new Error('仅支持打开 http/https 外部链接');
+    }
+    await shell.openExternal(url);
+    return true;
   });
 
   ipcMain.handle('chart-cache:save', async (_event, rawPayload) => {
@@ -364,18 +388,7 @@ function resolveDefaultBackendProfile(runtimeDir) {
   if (envProfile && envProfile.trim()) {
     return envProfile.trim();
   }
-  try {
-    const variantFile = path.join(runtimeDir, 'variant');
-    if (fs.existsSync(variantFile)) {
-      const profile = fs.readFileSync(variantFile, 'utf8').trim();
-      if (profile) {
-        return profile;
-      }
-    }
-  } catch (error) {
-    console.warn(`[backend] failed to read variant marker: ${error.message}`);
-  }
-  return 'medium';
+  return '';
 }
 
 function resolveBackendLaunchSpec(runtimeDir, profile) {
@@ -404,15 +417,23 @@ function resolveBackendLaunchSpec(runtimeDir, profile) {
     : [];
   if (fs.existsSync(bundledJavaPath) && jars.length > 0) {
     ensureExecutable(bundledJavaPath);
+    const args = ['-Dfile.encoding=UTF-8', '-jar', path.join(runtimeDir, jars[0])];
+    if (profile) {
+      args.push(`--spring.profiles.active=${profile}`);
+    }
     return {
       command: bundledJavaPath,
-      args: ['-Dfile.encoding=UTF-8', '-jar', path.join(runtimeDir, jars[0]), `--spring.profiles.active=${profile}`],
+      args,
     };
   }
   if (jars.length > 0) {
+    const args = ['-Dfile.encoding=UTF-8', '-jar', path.join(runtimeDir, jars[0])];
+    if (profile) {
+      args.push(`--spring.profiles.active=${profile}`);
+    }
     return {
       command: process.env.JAVA_BIN || 'java',
-      args: ['-Dfile.encoding=UTF-8', '-jar', path.join(runtimeDir, jars[0]), `--spring.profiles.active=${profile}`],
+      args,
     };
   }
 

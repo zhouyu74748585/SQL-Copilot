@@ -15,7 +15,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 import java.lang.reflect.Method;
@@ -35,7 +34,6 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 @Service
 @ConditionalOnClass(name = "ai.onnxruntime.OrtEnvironment")
-@ConditionalOnProperty(value = "sqlcopilot.rag.local-onnx-enabled", havingValue = "true", matchIfMissing = true)
 public class OnnxLocalRerankServiceImpl implements LocalRagRerankService {
 
     private static final Logger log = LoggerFactory.getLogger(OnnxLocalRerankServiceImpl.class);

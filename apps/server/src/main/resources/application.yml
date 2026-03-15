@@ -4,8 +4,6 @@ server:
 sqlcopilot:
   storage:
     data-dir: ${SQLCOPILOT_DATA_DIR:.}
-  rag:
-    local-onnx-enabled: true
 
 spring:
   datasource:
@@ -48,7 +46,8 @@ rag:
     example-sql: example_sql
     sql-fragment: sql_fragment
   embedding:
-    provider-type: LOCAL_ONNX
+    provider-type: ONLINE_OPENAI_COMPAT
+    model-dir: ""
     model-file-name: model_optimized.onnx
     model-data-file-name: model_optimized.onnx.data
     tokenizer-file-name: tokenizer.json
@@ -75,8 +74,9 @@ rag:
     metric-term-limit: 6
     example-sql-limit: 6
   rerank:
-    enabled: true
-    provider-type: LOCAL_ONNX
+    enabled: false
+    provider-type: ONLINE_OPENAI_COMPAT
+    model-dir: ""
     alpha: 0.65
     beta: 0.30
     gamma: 0.05
