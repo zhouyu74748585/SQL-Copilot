@@ -180,6 +180,15 @@ function registerIpcHandlers() {
     return true;
   });
 
+  ipcMain.handle('shell:open-privacy-policy', async () => {
+    const isDev = !!process.env.ELECTRON_RENDERER_URL;
+    const privacyPolicyPath = isDev
+      ? path.join(__dirname, '../../../docs/privacy-policy.html')
+      : path.join(__dirname, '../dist/privacy-policy.html');
+    await shell.openPath(privacyPolicyPath);
+    return true;
+  });
+
   ipcMain.handle('chart-cache:save', async (_event, rawPayload) => {
     const payload = rawPayload && typeof rawPayload === 'object' ? rawPayload : {};
     const connectionId = Number(payload.connectionId);

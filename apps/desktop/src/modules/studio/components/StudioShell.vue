@@ -2393,6 +2393,19 @@
                 </a-form-item>
               </a-col>
             </a-row>
+            <a-divider style="margin: 12px 0;" />
+            <a-row :gutter="12" align="middle">
+              <a-col :span="12">
+                <a-form-item label="关于" style="margin-bottom: 0;">
+                  <a-space>
+                    <a-button size="small" @click="openPrivacyPolicy">
+                      <template #icon><FileProtectOutlined /></template>
+                      隐私政策
+                    </a-button>
+                  </a-space>
+                </a-form-item>
+              </a-col>
+            </a-row>
           </a-tab-pane>
 
           <a-tab-pane key="model" tab="模型配置">
@@ -3064,6 +3077,7 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   MessageOutlined,
+  FileProtectOutlined,
   MinusOutlined,
   MinusCircleOutlined,
   PlayCircleOutlined,
@@ -3800,6 +3814,17 @@ async function openExternalLink(url: string) {
     return;
   }
   window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+async function openPrivacyPolicy() {
+  const bridge = typeof window !== 'undefined'
+    ? (window as Window & { sqlCopilotDesktop?: { openPrivacyPolicy?: () => Promise<boolean> } }).sqlCopilotDesktop
+    : null;
+  if (bridge?.openPrivacyPolicy) {
+    await bridge.openPrivacyPolicy();
+    return;
+  }
+  window.open('./privacy-policy.html', '_blank', 'noopener,noreferrer');
 }
 
 const queryPromptAssistListRef = ref<HTMLElement | null>(null);

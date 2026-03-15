@@ -10,6 +10,9 @@ contextBridge.exposeInMainWorld('sqlCopilotDesktop', {
   openExternal(url = '') {
     return ipcRenderer.invoke('shell:open-external', url);
   },
+  openPrivacyPolicy() {
+    return ipcRenderer.invoke('shell:open-privacy-policy');
+  },
   saveChartCache(payload = {}) {
     return ipcRenderer.invoke('chart-cache:save', payload);
   },

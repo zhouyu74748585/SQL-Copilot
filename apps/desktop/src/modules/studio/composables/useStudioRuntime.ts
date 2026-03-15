@@ -127,6 +127,7 @@ interface DesktopBridge {
   pickFile: (options?: DesktopPickFileOptions) => Promise<string>;
   pickDirectory: (options?: Omit<DesktopPickFileOptions, 'filters'>) => Promise<string>;
   openExternal?: (url?: string) => Promise<boolean>;
+  openPrivacyPolicy?: () => Promise<boolean>;
   saveChartCache?: (payload: ChartCacheSaveReq) => Promise<{ filePath: string; width: number; height: number }>;
   readChartCache?: (filePath: string) => Promise<string>;
 }
