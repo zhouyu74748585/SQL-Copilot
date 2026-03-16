@@ -1,6 +1,7 @@
 package com.sqlcopilot.studio.service.impl;
 
 import com.sqlcopilot.studio.dto.rag.*;
+import com.sqlcopilot.studio.dto.schema.SchemaSyncVO;
 import com.sqlcopilot.studio.dto.schema.TableDetailVO;
 import com.sqlcopilot.studio.entity.RagVectorizeStatusEntity;
 import com.sqlcopilot.studio.entity.SchemaColumnCacheEntity;
@@ -647,7 +648,13 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
             return;
         }
         // 关键操作：执行整库队列任务时直接触发 Schema 同步，复用现有元数据读取与向量化链路。
-        schemaService.syncSchema(task.connectionId(), task.databaseName());
+        SchemaSyncVO syncResult = schemaService.syncSchema(task.connectionId(), task.databaseName());
+        ensureDatabaseVectorsPresent(
+            task.connectionId(),
+            task.databaseName(),
+            syncResult == null ? null : syncResult.getTableCount(),
+            syncResult == null ? null : syncResult.getColumnCount()
+        );
     }
 
     private void vectorizeSingleTable(Long connectionId, String databaseName, String tableName) {
@@ -698,6 +705,7 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
             List.of(tableMeta),
             columnMetaList
         );
+        ensureTableVectorsPresent(connectionId, databaseName, tableName);
     }
 
     private boolean isDatabaseScopedDedupeKey(String dedupeKey, String statusKey) {
@@ -742,9 +750,12 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
 
     private String resolveOverviewMessage(VectorizeStatusRecord statusRecord, long totalCount) {
         if (statusRecord != null) {
+            if (totalCount <= 0 && VectorizeStatus.SUCCESS.name().equals(statusRecord.status())) {
+                return "当前库暂无向量化数据";
+            }
             return statusRecord.message();
         }
-        return totalCount > 0 ? "已向量化（历史统计）" : "暂无向量化数据";
+        return totalCount > 0 ? "已向量化（历史统计）" : "当前库暂无向量化数据";
     }
 
     private Integer resolveVectorDimension(QdrantCollectionMetric... metrics) {
@@ -758,6 +769,48 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
             }
         }
         return 0;
+    }
+
+    private void ensureDatabaseVectorsPresent(Long connectionId,
+                                              String databaseName,
+                                              Integer tableCount,
+                                              Integer columnCount) {
+        long expectedTableCount = tableCount == null ? 0L : Math.max(0, tableCount);
+        long expectedColumnCount = columnCount == null ? 0L : Math.max(0, columnCount);
+        if (expectedTableCount <= 0 && expectedColumnCount <= 0) {
+            return;
+        }
+
+        long actualCount = safeCount(qdrantClientService.queryCollectionMetric(
+            collectionNames.getSchemaTable(),
+            connectionId,
+            databaseName
+        ).getPointCount()) + safeCount(qdrantClientService.queryCollectionMetric(
+            collectionNames.getSchemaColumn(),
+            connectionId,
+            databaseName
+        ).getPointCount());
+        if (actualCount <= 0) {
+            throw new BusinessException(500, "向量化完成后未检测到写入数据，请检查向量模型和 Qdrant 状态");
+        }
+    }
+
+    private void ensureTableVectorsPresent(Long connectionId, String databaseName, String tableName) {
+        List<QdrantPayloadFilter> filters = List.of(
+            new QdrantPayloadFilter("connection_id", connectionId),
+            new QdrantPayloadFilter("database_name", databaseName),
+            new QdrantPayloadFilter("table_name", tableName)
+        );
+        long actualCount = safeCount(qdrantClientService.queryCollectionMetricByFilters(
+            collectionNames.getSchemaTable(),
+            filters
+        ).getPointCount()) + safeCount(qdrantClientService.queryCollectionMetricByFilters(
+            collectionNames.getSchemaColumn(),
+            filters
+        ).getPointCount());
+        if (actualCount <= 0) {
+            throw new BusinessException(500, "表向量化完成后未检测到写入数据，请检查向量模型和 Qdrant 状态");
+        }
     }
 
     private String resolveRuntimeProviderSafely() {

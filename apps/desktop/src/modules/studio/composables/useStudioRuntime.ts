@@ -5218,10 +5218,6 @@ async function openVectorizeOverview(connectionId: number, databaseName: string)
     vectorizeOverviewData.value = await getApi<RagVectorizeOverviewVO>(
       `/api/rag/vectorize/overview?connectionId=${connectionId}&databaseName=${encodeURIComponent(databaseName)}`,
     );
-    if ((vectorizeOverviewData.value.totalVectorCount ?? 0) <= 0) {
-      message.info('该数据库暂无向量化数据');
-      vectorizeOverviewModalOpen.value = false;
-    }
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     message.error(msg);

@@ -21,6 +21,7 @@ import com.sqlcopilot.studio.service.rag.model.QdrantPoint;
 import com.sqlcopilot.studio.service.rag.model.QdrantPayloadFilter;
 import com.sqlcopilot.studio.service.rag.model.RagCollectionNames;
 import com.sqlcopilot.studio.service.rag.model.SqlFeatureMeta;
+import com.sqlcopilot.studio.util.BusinessException;
 import com.sqlcopilot.studio.util.KnowledgeMetadataUtil;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -185,10 +186,14 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             }
             List<QdrantPoint> columnPoints = buildQdrantPoints(columnTasks);
             writePoints(collectionNames.getSchemaColumn(), columnPoints);
-        } catch (Exception ex) {
-            ex.printStackTrace();
+        } catch (BusinessException ex) {
             log.warn("Schema RAG 写入失败, connectionId={}, databaseName={}, reason={}",
                 connectionId, normalizedDatabaseName, ex.getMessage());
+            throw ex;
+        } catch (Exception ex) {
+            log.warn("Schema RAG 写入失败, connectionId={}, databaseName={}, reason={}",
+                connectionId, normalizedDatabaseName, ex.getMessage());
+            throw new BusinessException(500, "Schema 向量写入失败: " + ex.getMessage());
         }
     }
 

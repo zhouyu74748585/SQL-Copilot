@@ -233,3 +233,41 @@
   - 健康检查：`curl --noproxy '*' http://127.0.0.1:18088/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
   - 前端：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 55062 --strictPort` 启动成功。
   - 探活：`curl --noproxy '*' -I http://127.0.0.1:55062/` 返回 `HTTP/1.1 200 OK`。
+## 20260316211000 追加记录
+
+### 本次目标
+- 修复“向量化提示成功但向量库无数据”的假成功问题。
+- 调整前端“查看向量化数据”在 0 数据时的交互，保留弹窗直接展示 0。
+- 修复打包制品关闭窗口后后端 / Qdrant 子进程未同步退出的问题。
+
+### 关键改动
+- 后端 `RagIngestionServiceImpl`
+  - 将 `ingestSchema(...)` 中原本仅记录日志、不向上抛出的入库异常改为抛出 `BusinessException`。
+  - 由此修复了“Qdrant / 向量化写入失败时，队列仍把状态标记为 SUCCESS”的假成功链路。
+- 后端 `RagVectorizeQueueServiceImpl`
+  - 整库向量化改为读取 `SchemaSyncVO`，在同步后立即校验 `schema_table + schema_column` 是否真的写入到 Qdrant。
+  - 单表手动向量化完成后，同样追加按 `connection_id + database_name + table_name` 的写入校验。
+  - 概览接口在 `SUCCESS + 0 条数据` 的场景下，改为返回“当前库暂无向量化数据”提示，避免误导。
+- 前端 `useStudioRuntime.ts`
+  - `openVectorizeOverview(...)` 不再因为总量为 0 就主动关闭弹窗并额外弹 `message.info`，现在会直接保留概览弹窗显示 0。
+- 桌面端 `apps/desktop/electron/main.cjs`
+  - 新增 `stopManagedProcess(...)`，Windows 下使用 `taskkill /pid /t /f` 杀整个进程树。
+  - 关闭应用时对后端与 Qdrant 统一走进程树回收，避免只退出外层壳进程、Java / Qdrant 子进程残留。
+
+### 原因确认
+- 已从代码链路确认，之前“前几次向量化提示成功但库里没有数据”的直接原因是：
+  - `RagIngestionServiceImpl.ingestSchema(...)` 捕获了写入异常后只打日志、不抛错；
+  - `RagVectorizeQueueServiceImpl` 在上层感知不到失败，仍继续把状态写成 `SUCCESS`。
+- 因此只要首轮向量化时出现 Qdrant 未写入、模型加载异常或其他写入失败，前端就会看到“已向量化”，但概览统计仍是 0。
+
+### 验证结果
+- 后端 clean 打包：
+  - `mvn -f apps/server/pom.xml clean package '-DskipTests' '-Dfile.encoding=UTF-8'` 通过。
+- 前端验证：
+  - `npm run -w @sqlcopilot/desktop type-check` 通过。
+  - `npm run -w @sqlcopilot/desktop build -- --emptyOutDir` 通过。
+- 启动验证（clean）：
+  - 后端：`java -Dfile.encoding=UTF-8 -jar apps/server/target/sql-copilot-server-0.1.0.jar --server.port=18113`
+  - 健康检查：`http://127.0.0.1:18113/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`
+  - 前端：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6063 --strictPort`
+  - 访问验证：`http://127.0.0.1:6063` 返回 `HTTP 200`

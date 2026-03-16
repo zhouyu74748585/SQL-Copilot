@@ -1,5 +1,5 @@
 const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
@@ -498,22 +498,7 @@ function stopQdrant() {
 
   const proc = qdrantProcess;
   qdrantProcess = null;
-
-  try {
-    proc.kill('SIGTERM');
-  } catch (error) {
-    console.warn(`[qdrant] failed to send SIGTERM: ${error.message}`);
-  }
-
-  setTimeout(() => {
-    if (!proc.killed) {
-      try {
-        proc.kill('SIGKILL');
-      } catch (error) {
-        console.warn(`[qdrant] failed to send SIGKILL: ${error.message}`);
-      }
-    }
-  }, 3000);
+  stopManagedProcess(proc, 'qdrant');
 }
 
 async function startBackend() {
@@ -560,11 +545,30 @@ function stopBackend() {
 
   const proc = backendProcess;
   backendProcess = null;
+  stopManagedProcess(proc, 'backend');
+}
+
+function stopManagedProcess(proc, label) {
+  if (!proc) {
+    return;
+  }
+
+  if (process.platform === 'win32' && proc.pid) {
+    try {
+      spawnSync('taskkill', ['/pid', String(proc.pid), '/t', '/f'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      return;
+    } catch (error) {
+      console.warn(`[${label}] failed to taskkill process tree: ${error.message}`);
+    }
+  }
 
   try {
     proc.kill('SIGTERM');
   } catch (error) {
-    console.warn(`[backend] failed to send SIGTERM: ${error.message}`);
+    console.warn(`[${label}] failed to send SIGTERM: ${error.message}`);
   }
 
   setTimeout(() => {
@@ -572,7 +576,7 @@ function stopBackend() {
       try {
         proc.kill('SIGKILL');
       } catch (error) {
-        console.warn(`[backend] failed to send SIGKILL: ${error.message}`);
+        console.warn(`[${label}] failed to send SIGKILL: ${error.message}`);
       }
     }
   }, 3000);
