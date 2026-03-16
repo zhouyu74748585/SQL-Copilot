@@ -305,7 +305,26 @@ function ensureExecutable(filePath) {
     throw new Error(`Executable not found: ${filePath}`);
   }
   if (process.platform !== 'win32') {
-    fs.chmodSync(filePath, 0o755);
+    try {
+      fs.accessSync(filePath, fs.constants.X_OK);
+      return;
+    } catch {
+      // Continue to chmod when the current mode is not executable.
+    }
+
+    try {
+      fs.chmodSync(filePath, 0o755);
+    } catch (error) {
+      if (['EROFS', 'EPERM', 'EACCES'].includes(error?.code)) {
+        try {
+          fs.accessSync(filePath, fs.constants.X_OK);
+          return;
+        } catch {
+          throw error;
+        }
+      }
+      throw error;
+    }
   }
 }
 
@@ -415,7 +434,6 @@ function resolveBackendLaunchSpec(runtimeDir, profile) {
   }
 
   if (process.platform !== 'win32' && fs.existsSync(runSh)) {
-    ensureExecutable(runSh);
     return { command: '/bin/bash', args: [runSh, profile] };
   }
 
