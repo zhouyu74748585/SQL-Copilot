@@ -19,6 +19,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.lang.reflect.Method;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.when;
@@ -109,6 +110,27 @@ class AiServiceImplAstValidationTest {
 
         assertFalse(readBoolean(result, "valid"));
         assertTrue(readString(result, "message").contains("analytics.missing_events"));
+    }
+
+    @Test
+    void validateByAst_allowsMultipleStatements() throws Exception {
+        AiGenerateSqlReq req = buildReq("mdm");
+        when(schemaService.getOverview(1L, "mdm")).thenReturn(overview("users", "orders"));
+        when(connectionService.getConnectionEntity(1L)).thenReturn(connection("MYSQL", "mdm"));
+
+        Object result = ReflectionTestUtils.invokeMethod(
+            aiService,
+            "validateByAst",
+            req,
+            "SELECT * FROM users; UPDATE orders SET status = 'DONE' WHERE id = 1;"
+        );
+
+        assertTrue(readBoolean(result, "valid"));
+        assertTrue(readString(result, "message").contains("2 条 SQL"));
+        assertEquals(
+            "SELECT * FROM users;\nUPDATE orders SET status = 'DONE' WHERE id = 1",
+            readString(result, "sqlText")
+        );
     }
 
     @Test

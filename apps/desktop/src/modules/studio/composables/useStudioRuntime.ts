@@ -193,6 +193,35 @@ interface QueryExecutionPreview {
   truncated: boolean;
 }
 
+type QueryResultTableRow = Record<string, string | null> & { __rowKey: string; __rowState: string };
+
+interface QueryResultTableColumn {
+  title: string;
+  dataIndex: string;
+  key: string;
+  width: number;
+  ellipsis: boolean;
+}
+
+interface QueryStatementResult {
+  key: string;
+  index: number;
+  sqlText: string;
+  status: 'running' | 'success' | 'error';
+  executeResult: SqlExecuteVO | null;
+  resultTableRows: QueryResultTableRow[];
+  resultTableColumns: QueryResultTableColumn[];
+  lastExecuteFailed: boolean;
+  lastExecuteErrorMessage: string;
+  lastFailedSqlText: string;
+  resultViewMode: QueryResultViewMode;
+  manualChartConfig: ChartConfigVO;
+  activeChartConfig: ChartConfigVO | null;
+  chartImageDataUrl: string;
+  chartImageCacheKey: string;
+  chartReadonly: boolean;
+}
+
 interface QueryChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -238,16 +267,11 @@ interface QueryWorkspaceTab {
   autoExecute: boolean;
   aiGenerating: boolean;
   sqlExecuting: boolean;
+  executingStatementIndex: number | null;
   selectedSqlText: string;
   chatMessages: QueryChatMessage[];
-  resultTableRows: Array<Record<string, string | null> & { __rowKey: string; __rowState: string }>;
-  resultTableColumns: Array<{
-    title: string;
-    dataIndex: string;
-    key: string;
-    width: number;
-    ellipsis: boolean;
-  }>;
+  resultTableRows: QueryResultTableRow[];
+  resultTableColumns: QueryResultTableColumn[];
   lastExecuteFailed: boolean;
   lastExecuteErrorMessage: string;
   lastFailedSqlText: string;
@@ -257,6 +281,8 @@ interface QueryWorkspaceTab {
   chartImageDataUrl: string;
   chartImageCacheKey: string;
   chartReadonly: boolean;
+  statementResults: QueryStatementResult[];
+  activeStatementResultKey: string;
   createdAt: number;
   updatedAt: number;
   conversationMemoryEnabled: boolean;
@@ -924,6 +950,16 @@ const activeQueryTab = computed(() =>
   queryTabs.value.find((item) => item.key === activeWorkbenchTab.value) ?? null,
 );
 
+const activeStatementResult = computed(() => {
+  const tab = activeQueryTab.value;
+  if (!tab) {
+    return null as QueryStatementResult | null;
+  }
+  return tab.statementResults.find((item) => item.key === tab.activeStatementResultKey)
+    ?? tab.statementResults[0]
+    ?? null;
+});
+
 const activeQueryContextUsage = computed<QueryContextUsage>(() =>
   buildQueryContextUsage(activeQueryTab.value),
 );
@@ -1434,38 +1470,22 @@ const workbenchStyle = computed(() => {
   };
 });
 
-const activeResultRows = computed(() => {
-  if (!activeQueryTab.value) {
-    return [] as Array<Record<string, string | null> & { __rowKey: string; __rowState: string }>;
-  }
-  return activeQueryTab.value.resultTableRows;
-});
-
-const activeResultColumns = computed(() => {
-  if (!activeQueryTab.value) {
-    return [];
-  }
-  return activeQueryTab.value.resultTableColumns;
-});
-
-const queryResultScrollX = computed(() => Math.max(activeResultColumns.value.length * 180, 960));
-
-function rebuildQueryResultTableCache(tab: QueryWorkspaceTab) {
-  const rows = tab.executeResult?.rows ?? tab.explainResult?.rows ?? [];
+function buildResultTableCache(rows: Array<{ cells: Array<{ columnName: string; cellValue: string | null }> }>) {
   if (!rows.length) {
-    tab.resultTableRows = [];
-    tab.resultTableColumns = [];
-    return;
+    return {
+      rows: [] as QueryResultTableRow[],
+      columns: [] as QueryResultTableColumn[],
+    };
   }
-  tab.resultTableColumns = rows[0].cells.map((cell) => ({
+  const columns = rows[0].cells.map((cell) => ({
     title: cell.columnName,
     dataIndex: cell.columnName,
     key: cell.columnName,
     width: 180,
     ellipsis: true,
   }));
-  tab.resultTableRows = rows.map((row, index) => {
-    const result: Record<string, string | null> & { __rowKey: string; __rowState: string } = {
+  const normalizedRows = rows.map((row, index) => {
+    const result: QueryResultTableRow = {
       __rowKey: `${index}`,
       __rowState: 'clean',
     };
@@ -1474,6 +1494,145 @@ function rebuildQueryResultTableCache(tab: QueryWorkspaceTab) {
     });
     return result;
   });
+  return {
+    rows: normalizedRows,
+    columns,
+  };
+}
+
+function createStatementResult(index: number, sqlText: string): QueryStatementResult {
+  return {
+    key: `statement-${Date.now()}-${index}-${Math.round(Math.random() * 1000)}`,
+    index,
+    sqlText,
+    status: 'running',
+    executeResult: null,
+    resultTableRows: [],
+    resultTableColumns: [],
+    lastExecuteFailed: false,
+    lastExecuteErrorMessage: '',
+    lastFailedSqlText: '',
+    resultViewMode: 'table',
+    manualChartConfig: emptyManualChartConfig(),
+    activeChartConfig: null,
+    chartImageDataUrl: '',
+    chartImageCacheKey: '',
+    chartReadonly: false,
+  };
+}
+
+function getActiveStatementResultForTab(tab: QueryWorkspaceTab | null | undefined) {
+  if (!tab) {
+    return null as QueryStatementResult | null;
+  }
+  return tab.statementResults.find((item) => item.key === tab.activeStatementResultKey)
+    ?? tab.statementResults[0]
+    ?? null;
+}
+
+function syncTabPresentationFromStatementResult(tab: QueryWorkspaceTab, result: QueryStatementResult | null) {
+  if (!result) {
+    return;
+  }
+  tab.executeResult = result.executeResult;
+  tab.explainResult = null;
+  tab.resultTableRows = result.resultTableRows;
+  tab.resultTableColumns = result.resultTableColumns;
+  tab.lastExecuteFailed = result.lastExecuteFailed;
+  tab.lastExecuteErrorMessage = result.lastExecuteErrorMessage;
+  tab.lastFailedSqlText = result.lastFailedSqlText;
+  tab.resultViewMode = result.resultViewMode;
+  tab.manualChartConfig = cloneChartConfig(result.manualChartConfig);
+  tab.activeChartConfig = result.activeChartConfig ? cloneChartConfig(result.activeChartConfig) : null;
+  tab.chartImageDataUrl = result.chartImageDataUrl;
+  tab.chartImageCacheKey = result.chartImageCacheKey;
+  tab.chartReadonly = result.chartReadonly;
+}
+
+function syncActiveStatementResultFromTab(tab: QueryWorkspaceTab) {
+  const result = getActiveStatementResultForTab(tab);
+  if (!result) {
+    return;
+  }
+  result.executeResult = tab.executeResult;
+  result.resultTableRows = tab.resultTableRows;
+  result.resultTableColumns = tab.resultTableColumns;
+  result.lastExecuteFailed = tab.lastExecuteFailed;
+  result.lastExecuteErrorMessage = tab.lastExecuteErrorMessage;
+  result.lastFailedSqlText = tab.lastFailedSqlText;
+  result.resultViewMode = tab.resultViewMode;
+  result.manualChartConfig = cloneChartConfig(tab.manualChartConfig);
+  result.activeChartConfig = tab.activeChartConfig ? cloneChartConfig(tab.activeChartConfig) : null;
+  result.chartImageDataUrl = tab.chartImageDataUrl;
+  result.chartImageCacheKey = tab.chartImageCacheKey;
+  result.chartReadonly = tab.chartReadonly;
+}
+
+function clearTabExecutionPresentation(tab: QueryWorkspaceTab) {
+  tab.executeResult = null;
+  tab.explainResult = null;
+  tab.resultTableRows = [];
+  tab.resultTableColumns = [];
+  tab.lastExecuteFailed = false;
+  tab.lastExecuteErrorMessage = '';
+  tab.lastFailedSqlText = '';
+  tab.resultViewMode = 'table';
+  tab.manualChartConfig = emptyManualChartConfig();
+  tab.activeChartConfig = null;
+  tab.chartImageDataUrl = '';
+  tab.chartImageCacheKey = '';
+  tab.chartReadonly = false;
+}
+
+function clearStatementResults(tab: QueryWorkspaceTab) {
+  tab.statementResults = [];
+  tab.activeStatementResultKey = '';
+  tab.executingStatementIndex = null;
+  clearTabExecutionPresentation(tab);
+}
+
+function setActiveStatementResult(tab: QueryWorkspaceTab, statementKey: string) {
+  syncActiveStatementResultFromTab(tab);
+  tab.activeStatementResultKey = statementKey;
+  syncTabPresentationFromStatementResult(tab, getActiveStatementResultForTab(tab));
+}
+
+function resultTabTitle(result: QueryStatementResult) {
+  const firstKeyword = (result.sqlText.match(/^\s*([a-zA-Z]+)/)?.[1] || '').toUpperCase();
+  return firstKeyword ? `结果 ${result.index} · ${firstKeyword}` : `结果 ${result.index}`;
+}
+
+function latestSuccessfulStatementResult(tab: QueryWorkspaceTab) {
+  return [...tab.statementResults].reverse().find((item) => item.executeResult?.success) ?? null;
+}
+
+function setQueryResultViewMode(tab: QueryWorkspaceTab, mode: QueryResultViewMode) {
+  tab.resultViewMode = mode;
+  touchQueryTab(tab);
+}
+
+const activeResultRows = computed(() => {
+  if (!activeQueryTab.value) {
+    return [] as QueryResultTableRow[];
+  }
+  return activeStatementResult.value?.resultTableRows ?? activeQueryTab.value.resultTableRows;
+});
+
+const activeResultColumns = computed(() => {
+  if (!activeQueryTab.value) {
+    return [];
+  }
+  return activeStatementResult.value?.resultTableColumns ?? activeQueryTab.value.resultTableColumns;
+});
+
+const queryResultScrollX = computed(() => Math.max(activeResultColumns.value.length * 180, 960));
+
+function rebuildQueryResultTableCache(tab: QueryWorkspaceTab) {
+  const rows = tab.executeResult?.rows ?? tab.explainResult?.rows ?? [];
+  const cache = buildResultTableCache(rows);
+  tab.resultTableRows = cache.rows;
+  tab.resultTableColumns = cache.columns;
+  syncActiveStatementResultFromTab(tab);
 }
 
 const chartTypeOptions = [
@@ -1611,11 +1770,13 @@ function setupManualChartConfigByResult(tab: QueryWorkspaceTab) {
   const rows = (tab.executeResult?.rows ?? tab.explainResult?.rows ?? []);
   if (!rows.length) {
     tab.manualChartConfig = emptyManualChartConfig();
+    syncActiveStatementResultFromTab(tab);
     return;
   }
   const fields = rows[0].cells.map((cell) => cell.columnName).filter((item) => !!item);
   if (!fields.length) {
     tab.manualChartConfig = emptyManualChartConfig();
+    syncActiveStatementResultFromTab(tab);
     return;
   }
   const rowObjects = rows.map((row) => {
@@ -1640,31 +1801,37 @@ function setupManualChartConfigByResult(tab: QueryWorkspaceTab) {
     description: '',
   };
   normalizeManualChartConfig(tab.manualChartConfig);
+  syncActiveStatementResultFromTab(tab);
 }
 
 function handleManualChartTypeChange(tab: QueryWorkspaceTab, value: string) {
   tab.manualChartConfig.chartType = (value || 'LINE') as ChartType;
   normalizeManualChartConfig(tab.manualChartConfig);
+  touchQueryTab(tab);
 }
 
 function handleManualChartXAxisChange(tab: QueryWorkspaceTab, value: string) {
   tab.manualChartConfig.xField = value || '';
   normalizeManualChartConfig(tab.manualChartConfig);
+  touchQueryTab(tab);
 }
 
 function handleManualChartYFieldsChange(tab: QueryWorkspaceTab, value: string[]) {
   tab.manualChartConfig.yFields = Array.isArray(value) ? value : [];
   normalizeManualChartConfig(tab.manualChartConfig);
+  touchQueryTab(tab);
 }
 
 function handleManualChartSingleYFieldChange(tab: QueryWorkspaceTab, value: string) {
   tab.manualChartConfig.yFields = value ? [value] : [];
   normalizeManualChartConfig(tab.manualChartConfig);
+  touchQueryTab(tab);
 }
 
 function handleManualChartSeriesFieldChange(tab: QueryWorkspaceTab, value: string) {
   tab.manualChartConfig.seriesField = value || '';
   normalizeManualChartConfig(tab.manualChartConfig);
+  touchQueryTab(tab);
 }
 
 function buildConnectionNode(conn: ConnectionVO) {
@@ -2183,6 +2350,7 @@ function createQueryTab(options?: {
     autoExecute: false,
     aiGenerating: false,
     sqlExecuting: false,
+    executingStatementIndex: null,
     selectedSqlText: '',
     chatMessages: [],
     resultTableRows: [],
@@ -2196,6 +2364,8 @@ function createQueryTab(options?: {
     chartImageDataUrl: '',
     chartImageCacheKey: '',
     chartReadonly: false,
+    statementResults: [],
+    activeStatementResultKey: '',
     createdAt: now,
     updatedAt: now,
     conversationMemoryEnabled: aiConfigForm.conversationMemoryEnabled !== false,
@@ -2981,6 +3151,7 @@ function userBubbleClass(actionType: QueryActionType) {
 }
 
 function touchQueryTab(tab: QueryWorkspaceTab) {
+  syncActiveStatementResultFromTab(tab);
   tab.updatedAt = Date.now();
 }
 
@@ -5559,19 +5730,8 @@ async function handleQueryConnectionChange(tab: QueryWorkspaceTab) {
     tab.databaseName = getActiveDatabaseName(tab.connectionId);
     tab.riskAckToken = '';
     tab.riskInfo = null;
-    tab.executeResult = null;
-    tab.explainResult = null;
-    rebuildQueryResultTableCache(tab);
-    tab.lastExecuteFailed = false;
-    tab.lastExecuteErrorMessage = '';
-    tab.lastFailedSqlText = '';
     tab.selectedSqlText = '';
-    tab.resultViewMode = 'table';
-    tab.manualChartConfig = emptyManualChartConfig();
-    tab.activeChartConfig = null;
-    tab.chartImageDataUrl = '';
-    tab.chartImageCacheKey = '';
-    tab.chartReadonly = false;
+    clearStatementResults(tab);
     touchQueryTab(tab);
     await warmupTableSuggestions(tab);
   });
@@ -5579,18 +5739,7 @@ async function handleQueryConnectionChange(tab: QueryWorkspaceTab) {
 
 function handleQueryDatabaseChange(tab: QueryWorkspaceTab) {
   tab.riskAckToken = '';
-  tab.lastExecuteFailed = false;
-  tab.lastExecuteErrorMessage = '';
-  tab.lastFailedSqlText = '';
-  tab.executeResult = null;
-  tab.explainResult = null;
-  rebuildQueryResultTableCache(tab);
-  tab.resultViewMode = 'table';
-  tab.manualChartConfig = emptyManualChartConfig();
-  tab.activeChartConfig = null;
-  tab.chartImageDataUrl = '';
-  tab.chartImageCacheKey = '';
-  tab.chartReadonly = false;
+  clearStatementResults(tab);
   touchQueryTab(tab);
   void warmupTableSuggestions(tab);
 }
@@ -5629,6 +5778,118 @@ function resolveSqlForAction(tab: QueryWorkspaceTab, sqlOverride?: string) {
     return selected;
   }
   return tab.sqlText.trim();
+}
+
+function normalizeSqlStatement(text: string) {
+  return text.trim().replace(/;+$/g, '').trim();
+}
+
+function splitSqlStatements(sourceSql: string) {
+  const sqlText = sourceSql || '';
+  const statements: string[] = [];
+  let current = '';
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let inBacktickQuote = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+  const pushCurrent = () => {
+    const normalized = normalizeSqlStatement(current);
+    if (normalized) {
+      statements.push(normalized);
+    }
+    current = '';
+  };
+  for (let index = 0; index < sqlText.length; index += 1) {
+    const char = sqlText[index];
+    const next = sqlText[index + 1] || '';
+    current += char;
+    if (inLineComment) {
+      if (char === '\n') {
+        inLineComment = false;
+      }
+      continue;
+    }
+    if (inBlockComment) {
+      if (char === '*' && next === '/') {
+        current += next;
+        index += 1;
+        inBlockComment = false;
+      }
+      continue;
+    }
+    if (inSingleQuote) {
+      if (char === '\\' && next) {
+        current += next;
+        index += 1;
+        continue;
+      }
+      if (char === '\'' && next === '\'') {
+        current += next;
+        index += 1;
+        continue;
+      }
+      if (char === '\'') {
+        inSingleQuote = false;
+      }
+      continue;
+    }
+    if (inDoubleQuote) {
+      if (char === '\\' && next) {
+        current += next;
+        index += 1;
+        continue;
+      }
+      if (char === '"' && next === '"') {
+        current += next;
+        index += 1;
+        continue;
+      }
+      if (char === '"') {
+        inDoubleQuote = false;
+      }
+      continue;
+    }
+    if (inBacktickQuote) {
+      if (char === '`') {
+        inBacktickQuote = false;
+      }
+      continue;
+    }
+    if (char === '-' && next === '-') {
+      current += next;
+      index += 1;
+      inLineComment = true;
+      continue;
+    }
+    if (char === '#') {
+      inLineComment = true;
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      current += next;
+      index += 1;
+      inBlockComment = true;
+      continue;
+    }
+    if (char === '\'') {
+      inSingleQuote = true;
+      continue;
+    }
+    if (char === '"') {
+      inDoubleQuote = true;
+      continue;
+    }
+    if (char === '`') {
+      inBacktickQuote = true;
+      continue;
+    }
+    if (char === ';') {
+      pushCurrent();
+    }
+  }
+  pushCurrent();
+  return statements;
 }
 
 function resolveSelectedSqlSnippet(tab: QueryWorkspaceTab, sqlOverride?: string) {
@@ -6347,8 +6608,8 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
           const executed = await executeSqlForTab(tab, sqlText, { silentSuccess: true });
           if (!executed) {
             message.warning('SQL generated, but auto execution failed.');
-          } else if (tab.executeResult?.success) {
-            assistantMessage.executionPreview = buildExecutionPreview(tab.executeResult);
+          } else if (latestSuccessfulStatementResult(tab)?.executeResult) {
+            assistantMessage.executionPreview = buildExecutionPreview(latestSuccessfulStatementResult(tab)?.executeResult as SqlExecuteVO);
             touchQueryTab(tab);
           }
         }
@@ -6870,8 +7131,8 @@ async function generateChartFromMessage(
   if (!success) {
     return;
   }
-  if (tab.executeResult?.success) {
-    item.executionPreview = buildExecutionPreview(tab.executeResult);
+  if (latestSuccessfulStatementResult(tab)?.executeResult) {
+    item.executionPreview = buildExecutionPreview(latestSuccessfulStatementResult(tab)?.executeResult as SqlExecuteVO);
   }
 
   const rows = activeChartRows.value;
@@ -6899,6 +7160,7 @@ async function generateChartFromMessage(
   const cacheKey = cached.cacheKey || '';
   tab.chartImageCacheKey = cacheKey;
   item.chartImageCacheKey = cacheKey;
+  touchQueryTab(tab);
   if (cached.cacheErrorMessage) {
     message.warning(normalizeChartCacheErrorMessage(cached.cacheErrorMessage));
   }
@@ -6951,6 +7213,7 @@ async function generateManualChartForTab(tab: QueryWorkspaceTab) {
   }
   tab.chartImageDataUrl = imageDataUrl;
   tab.chartImageCacheKey = cached.cacheKey || '';
+  touchQueryTab(tab);
   if (cached.cacheErrorMessage) {
     message.warning(normalizeChartCacheErrorMessage(cached.cacheErrorMessage));
   }
@@ -7031,6 +7294,7 @@ async function explainSqlForTab(tab: QueryWorkspaceTab, sqlOverride?: string) {
     if (!sqlText) {
       throw new Error('请先输入或选择 SQL');
     }
+    clearStatementResults(tab);
     tab.explainResult = await postApi<ExplainVO>('/api/sql/explain', {
       connectionId: tab.connectionId,
       sqlText,
@@ -7103,6 +7367,75 @@ async function ensureRiskConfirmedBeforeExecute(tab: QueryWorkspaceTab, sqlText:
   return riskAckToken;
 }
 
+async function executeSingleSqlStatementForTab(
+  tab: QueryWorkspaceTab,
+  sqlText: string,
+  controller: AbortController,
+) {
+  let riskAckToken = '';
+  try {
+    riskAckToken = await ensureRiskConfirmedBeforeExecute(tab, sqlText, controller.signal);
+  } catch (error) {
+    const manualAborted = sqlExecutionAbortReasonMap.get(tab.key) === 'manual' || isAbortError(error);
+    if (manualAborted) {
+      return { success: false, aborted: true, cancelled: false, errorMessage: '' };
+    }
+    const errMsg = error instanceof Error ? error.message : String(error);
+    if (errMsg === RISK_EXECUTION_CANCELLED) {
+      return { success: false, aborted: false, cancelled: true, errorMessage: errMsg };
+    }
+    message.error(errMsg);
+    return { success: false, aborted: false, cancelled: false, errorMessage: errMsg };
+  }
+
+  try {
+    tab.riskAckToken = riskAckToken;
+    const result = await postApi<SqlExecuteVO>('/api/sql/execute', {
+      connectionId: tab.connectionId,
+      sessionId: tab.sessionId,
+      sqlText,
+      databaseName: tab.databaseName || undefined,
+      maxRows: QUERY_RESULT_MAX_ROWS,
+      memoryEnabled: tab.sqlMemoryEnabled,
+      riskAckToken: riskAckToken || undefined,
+      operatorName: 'desktop-user',
+    }, {
+      signal: controller.signal,
+    });
+    tab.executeResult = result;
+    tab.explainResult = null;
+    rebuildQueryResultTableCache(tab);
+    tab.riskAckToken = '';
+    tab.lastExecuteFailed = false;
+    tab.lastExecuteErrorMessage = '';
+    tab.lastFailedSqlText = '';
+    tab.resultViewMode = 'table';
+    tab.chartReadonly = false;
+    tab.chartImageDataUrl = '';
+    tab.chartImageCacheKey = '';
+    setupManualChartConfigByResult(tab);
+    return { success: true, aborted: false, cancelled: false, errorMessage: '' };
+  } catch (error) {
+    const manualAborted = sqlExecutionAbortReasonMap.get(tab.key) === 'manual' || isAbortError(error);
+    if (manualAborted) {
+      tab.riskAckToken = '';
+      tab.lastExecuteFailed = false;
+      tab.lastExecuteErrorMessage = '';
+      tab.lastFailedSqlText = '';
+      return { success: false, aborted: true, cancelled: false, errorMessage: '' };
+    }
+    const errMsg = error instanceof Error ? error.message : String(error);
+    tab.executeResult = null;
+    tab.explainResult = null;
+    rebuildQueryResultTableCache(tab);
+    tab.riskAckToken = '';
+    tab.lastExecuteFailed = true;
+    tab.lastExecuteErrorMessage = errMsg;
+    tab.lastFailedSqlText = sqlText;
+    return { success: false, aborted: false, cancelled: false, errorMessage: errMsg };
+  }
+}
+
 async function executeSqlForTab(
   tab: QueryWorkspaceTab,
   sqlOverride?: string,
@@ -7116,87 +7449,81 @@ async function executeSqlForTab(
     message.error('请先输入或选择 SQL');
     return false;
   }
+  const statements = splitSqlStatements(sqlText);
+  if (!statements.length) {
+    message.error('请先输入或选择 SQL');
+    return false;
+  }
+  clearStatementResults(tab);
+  tab.riskInfo = null;
   tab.sqlExecuting = true;
   const controller = new AbortController();
   sqlExecutionAbortControllerMap.set(tab.key, controller);
   sqlExecutionAbortReasonMap.delete(tab.key);
   touchQueryTab(tab);
-  let riskAckToken = '';
+  let successCount = 0;
+  let failureCount = 0;
+  let cancelled = false;
+  let aborted = false;
   try {
-    try {
-      riskAckToken = await ensureRiskConfirmedBeforeExecute(tab, sqlText, controller.signal);
-    } catch (error) {
-      const manualAborted = sqlExecutionAbortReasonMap.get(tab.key) === 'manual' || isAbortError(error);
-      if (manualAborted) {
-        message.info('Execution was stopped.');
-        return false;
+    for (let index = 0; index < statements.length; index += 1) {
+      const statementSql = statements[index];
+      const statementResult = createStatementResult(index + 1, statementSql);
+      tab.statementResults = [...tab.statementResults, statementResult];
+      tab.executingStatementIndex = index + 1;
+      setActiveStatementResult(tab, statementResult.key);
+      tab.riskInfo = null;
+      touchQueryTab(tab);
+
+      const execution = await executeSingleSqlStatementForTab(tab, statementSql, controller);
+      statementResult.status = execution.success ? 'success' : 'error';
+      syncActiveStatementResultFromTab(tab);
+
+      if (execution.aborted) {
+        aborted = true;
+        break;
       }
-      const errMsg = error instanceof Error ? error.message : String(error);
-      if (errMsg === RISK_EXECUTION_CANCELLED) {
-        message.info('Execution cancelled.');
-        return false;
+      if (execution.cancelled) {
+        cancelled = true;
+        break;
       }
-      message.error(errMsg);
-      return false;
-    }
-    try {
-      tab.riskAckToken = riskAckToken;
-      const result = await postApi<SqlExecuteVO>('/api/sql/execute', {
-        connectionId: tab.connectionId,
-        sessionId: tab.sessionId,
-        sqlText,
-        databaseName: tab.databaseName || undefined,
-        maxRows: QUERY_RESULT_MAX_ROWS,
-        memoryEnabled: tab.sqlMemoryEnabled,
-        riskAckToken: riskAckToken || undefined,
-        operatorName: 'desktop-user',
-      }, {
-        signal: controller.signal,
-      });
-      tab.executeResult = result;
-      tab.explainResult = null;
-      rebuildQueryResultTableCache(tab);
-      tab.riskAckToken = '';
-      tab.lastExecuteFailed = false;
-      tab.lastExecuteErrorMessage = '';
-      tab.lastFailedSqlText = '';
-      tab.resultViewMode = 'table';
-      tab.chartReadonly = false;
-      tab.chartImageDataUrl = '';
-      tab.chartImageCacheKey = '';
-      setupManualChartConfigByResult(tab);
-      if (!options?.silentSuccess) {
-        message.success(`执行成功，耗时 ${result.executionMs}ms`);
+      if (execution.success) {
+        successCount += 1;
+      } else {
+        failureCount += 1;
       }
-      return true;
-    } catch (error) {
-      const manualAborted = sqlExecutionAbortReasonMap.get(tab.key) === 'manual' || isAbortError(error);
-      if (manualAborted) {
-        tab.riskAckToken = '';
-        tab.lastExecuteFailed = false;
-        tab.lastExecuteErrorMessage = '';
-        tab.lastFailedSqlText = '';
-        message.info('Execution was stopped.');
-        return false;
-      }
-      const errMsg = error instanceof Error ? error.message : String(error);
-      tab.executeResult = null;
-      tab.explainResult = null;
-      rebuildQueryResultTableCache(tab);
-      tab.riskAckToken = '';
-      tab.lastExecuteFailed = true;
-      tab.lastExecuteErrorMessage = errMsg;
-      tab.lastFailedSqlText = sqlText;
-      return false;
     }
   } finally {
     if (sqlExecutionAbortControllerMap.get(tab.key) === controller) {
       sqlExecutionAbortControllerMap.delete(tab.key);
     }
     sqlExecutionAbortReasonMap.delete(tab.key);
+    tab.executingStatementIndex = null;
     tab.sqlExecuting = false;
     touchQueryTab(tab);
   }
+  if (aborted) {
+    message.info('Execution was stopped.');
+    return successCount > 0;
+  }
+  if (cancelled) {
+    message.info('Execution cancelled.');
+    return successCount > 0;
+  }
+  if (!options?.silentSuccess) {
+    if (statements.length === 1 && successCount === 1 && tab.executeResult) {
+      message.success(`执行成功，耗时 ${tab.executeResult.executionMs}ms`);
+    } else if (statements.length > 1) {
+      if (failureCount === 0) {
+        message.success(`共执行 ${successCount} 条 SQL，全部成功`);
+      } else if (successCount > 0) {
+        message.warning(`共执行 ${statements.length} 条 SQL，成功 ${successCount} 条，失败 ${failureCount} 条`);
+      } else {
+        message.error(`共执行 ${statements.length} 条 SQL，全部失败`);
+      }
+    }
+  }
+  return successCount > 0;
 }
 
 async function repairSqlForTab(tab: QueryWorkspaceTab) {
@@ -7311,9 +7638,13 @@ async function repairSqlForTab(tab: QueryWorkspaceTab) {
 
 async function exportCsvForTab(tab: QueryWorkspaceTab) {
   await runSafely(async () => {
+    const exportSql = getActiveStatementResultForTab(tab)?.sqlText || resolveSqlForAction(tab);
+    if (!exportSql) {
+      throw new Error('当前没有可导出的 SQL');
+    }
     const result = await postApi<{ filePath: string }>('/api/editor/result/export', {
       connectionId: tab.connectionId,
-      sqlText: tab.sqlText,
+      sqlText: exportSql,
       format: 'CSV',
       fileName: `aidb_${Date.now()}`,
     });
@@ -7489,6 +7820,28 @@ watch(
     syncSelectedSqlForActiveTab(false);
   },
   { immediate: true },
+);
+
+watch(
+  () => [activeQueryTab.value?.key ?? '', activeQueryTab.value?.activeStatementResultKey ?? ''],
+  () => {
+    if (!activeQueryTab.value) {
+      return;
+    }
+    syncTabPresentationFromStatementResult(activeQueryTab.value, getActiveStatementResultForTab(activeQueryTab.value));
+  },
+  { immediate: true },
+);
+
+watch(
+  () => activeQueryTab.value?.manualChartConfig,
+  () => {
+    if (!activeQueryTab.value || !activeStatementResult.value) {
+      return;
+    }
+    syncActiveStatementResultFromTab(activeQueryTab.value);
+  },
+  { deep: true },
 );
 
 watch(
@@ -8383,6 +8736,7 @@ function resetConnectionModalState() {
     queryResultScrollY,
     aiModelOptions,
     workbenchStyle,
+    activeStatementResult,
     activeResultRows,
     activeResultColumns,
     queryResultScrollX,
@@ -8403,6 +8757,9 @@ function resetConnectionModalState() {
     handleManualChartSingleYFieldChange,
     handleManualChartSeriesFieldChange,
     setupManualChartConfigByResult,
+    setActiveStatementResult,
+    setQueryResultViewMode,
+    resultTabTitle,
     buildConnectionNode,
     buildCategoryChildren,
     getCategoryChildren,

@@ -247,6 +247,7 @@ export function useHistoryModule(runtime: StudioRuntime): HistoryModule {
       autoExecute: false,
       aiGenerating: false,
       sqlExecuting: false,
+      executingStatementIndex: null,
       selectedSqlText: '',
       chatMessages: messages,
       resultTableRows: [],
@@ -260,6 +261,8 @@ export function useHistoryModule(runtime: StudioRuntime): HistoryModule {
       chartImageDataUrl: '',
       chartImageCacheKey: '',
       chartReadonly: false,
+      statementResults: [],
+      activeStatementResultKey: '',
       createdAt: first?.createdAt ?? Date.now(),
       updatedAt: last?.createdAt ?? Date.now(),
       conversationMemoryEnabled: latestMemoryFlag ?? true,
@@ -386,6 +389,14 @@ export function useHistoryModule(runtime: StudioRuntime): HistoryModule {
         tab.riskInfo = null;
         tab.riskAckToken = '';
         tab.prompt = '';
+        tab.executingStatementIndex = null;
+        tab.statementResults = [];
+        tab.activeStatementResultKey = '';
+        tab.resultTableRows = [];
+        tab.resultTableColumns = [];
+        tab.lastExecuteFailed = false;
+        tab.lastExecuteErrorMessage = '';
+        tab.lastFailedSqlText = '';
         tab.resultViewMode = 'table';
         tab.manualChartConfig = runtime.emptyManualChartConfig();
         tab.activeChartConfig = null;

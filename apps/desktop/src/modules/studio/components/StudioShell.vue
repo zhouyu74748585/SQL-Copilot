@@ -1978,7 +1978,7 @@
                   <a-button
                     size="small"
                     :class="['sql-action-icon-btn', { 'is-selection-active': activeQueryTab.resultViewMode === 'table' }]"
-                    @click="activeQueryTab.resultViewMode = 'table'"
+                    @click="setQueryResultViewMode(activeQueryTab, 'table')"
                   >
                     <template #icon><table-outlined /></template>
                   </a-button>
@@ -1987,7 +1987,7 @@
                   <a-button
                     size="small"
                     :class="['sql-action-icon-btn', { 'is-selection-active': activeQueryTab.resultViewMode === 'chart' }]"
-                    @click="activeQueryTab.resultViewMode = 'chart'"
+                    @click="setQueryResultViewMode(activeQueryTab, 'chart')"
                   >
                     <template #icon><area-chart-outlined /></template>
                   </a-button>
@@ -1999,6 +1999,21 @@
                 </a-tooltip>
               </a-space>
             </div>
+            <a-tabs
+              v-if="activeQueryTab.statementResults.length"
+              class="query-result-tabs"
+              size="small"
+              :activeKey="activeQueryTab.activeStatementResultKey || activeStatementResult?.key"
+              @change="setActiveStatementResult(activeQueryTab, String($event || ''))"
+            >
+              <a-tab-pane v-for="item in activeQueryTab.statementResults" :key="item.key">
+                <template #tab>
+                  <span class="query-result-tab-label" :class="[`is-${item.status}`]">
+                    {{ resultTabTitle(item) }}
+                  </span>
+                </template>
+              </a-tab-pane>
+            </a-tabs>
             <div v-if="activeQueryTab.lastExecuteFailed" class="query-result-error">
               <span class="query-result-error-text">{{ activeQueryTab.lastExecuteErrorMessage || 'SQL 执行失败' }}</span>
               <a-button size="small" type="primary" danger @click="repairSqlForTab(activeQueryTab)">修复 SQL</a-button>
@@ -2198,8 +2213,13 @@
               </div>
             </template>
             <div class="query-result-footer">
-              共 {{ activeResultRows.length }} 行
-              <span v-if="activeQueryTab.executeResult?.truncated">，当前仅展示前 {{ activeResultRows.length }} 行</span>
+              <template v-if="activeQueryTab.executeResult && !activeResultRows.length">
+                影响 {{ activeQueryTab.executeResult.affectedRows || 0 }} 行
+              </template>
+              <template v-else>
+                共 {{ activeResultRows.length }} 行
+                <span v-if="activeQueryTab.executeResult?.truncated">，当前仅展示前 {{ activeResultRows.length }} 行</span>
+              </template>
             </div>
           </div>
         </aside>
@@ -3326,6 +3346,7 @@ const {
     queryResultScrollY,
     aiModelOptions,
     workbenchStyle,
+    activeStatementResult,
     activeResultRows,
     activeResultColumns,
     queryResultScrollX,
@@ -3346,6 +3367,9 @@ const {
     handleManualChartSingleYFieldChange,
     handleManualChartSeriesFieldChange,
     setupManualChartConfigByResult,
+    setActiveStatementResult,
+    setQueryResultViewMode,
+    resultTabTitle,
     buildConnectionNode,
     buildCategoryChildren,
     getCategoryChildren,

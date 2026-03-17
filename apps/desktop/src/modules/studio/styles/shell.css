@@ -2769,6 +2769,47 @@ body {
   background: #fbfdff;
 }
 
+.query-result-tabs {
+  padding: 0 8px;
+  border-bottom: 1px solid var(--line);
+  background: #fbfdff;
+}
+
+.query-result-tabs .ant-tabs-nav {
+  margin: 0;
+}
+
+.query-result-tabs .ant-tabs-content-holder {
+  display: none;
+}
+
+.query-result-tab-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.query-result-tab-label::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #8da2c2;
+}
+
+.query-result-tab-label.is-success::before {
+  background: #389e0d;
+}
+
+.query-result-tab-label.is-error::before {
+  background: #cf1322;
+}
+
+.query-result-tab-label.is-running::before {
+  background: #1677ff;
+}
+
 .query-chart-manual-panel {
   padding: 8px 10px;
   border-bottom: 1px solid var(--line);

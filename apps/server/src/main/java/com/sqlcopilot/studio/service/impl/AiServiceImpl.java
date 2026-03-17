@@ -2872,45 +2872,54 @@ public class AiServiceImpl implements AiService {
 
         try {
             Statements statements = CCJSqlParserUtil.parseStatements(rawSql);
-            if (statements == null || statements.getStatements().size() != 1) {
-                return new AstValidationResult(false, rawSql, "仅支持单条 SQL 语句");
+            if (statements == null || statements.getStatements().isEmpty()) {
+                return new AstValidationResult(false, rawSql, "未解析到可执行 SQL 语句");
             }
-            Statement statement = statements.getStatements().get(0);
-            String normalizedSql = statement.toString();
 
-            List<TableReference> referencedTables = collectReferencedTables(statement, rawSql);
+            ConnectionEntity connectionEntity = connectionService.getConnectionEntity(req.getConnectionId());
+            String currentDatabaseName = safe(req.getDatabaseName());
+            if (currentDatabaseName.isBlank()) {
+                currentDatabaseName = safe(connectionEntity.getDatabaseName());
+            }
+            String resolvedCurrentDatabaseName = currentDatabaseName;
+            String dbType = safe(connectionEntity.getDbType());
             Set<String> schemaTables = loadSchemaTables(req.getConnectionId(), req.getDatabaseName());
-            if (!referencedTables.isEmpty() && !schemaTables.isEmpty()) {
-                ConnectionEntity connectionEntity = connectionService.getConnectionEntity(req.getConnectionId());
-                String currentDatabaseName = safe(req.getDatabaseName());
-                if (currentDatabaseName.isBlank()) {
-                    currentDatabaseName = safe(connectionEntity.getDatabaseName());
+            Map<String, Set<String>> qualifiedSchemaTableCache = new HashMap<>();
+            List<String> normalizedStatements = new ArrayList<>();
+            for (Statement statement : statements.getStatements()) {
+                if (statement == null) {
+                    continue;
                 }
-                String resolvedCurrentDatabaseName = currentDatabaseName;
-                String dbType = safe(connectionEntity.getDbType());
-                Map<String, Set<String>> qualifiedSchemaTableCache = new HashMap<>();
-                List<String> missingTables = referencedTables.stream()
-                    .filter(table -> !tableExistsInValidationScope(
-                        req.getConnectionId(),
-                        resolvedCurrentDatabaseName,
-                        dbType,
-                        table,
-                        schemaTables,
-                        qualifiedSchemaTableCache
-                    ))
-                    .map(TableReference::displayName)
-                    .distinct()
-                    .toList();
-                if (!missingTables.isEmpty()) {
-                    return new AstValidationResult(
-                        false,
-                        normalizedSql,
-                        "引用了当前库不存在的表: " + String.join(", ", missingTables)
-                    );
+                String normalizedSql = statement.toString();
+                List<TableReference> referencedTables = collectReferencedTables(statement, normalizedSql);
+                if (!referencedTables.isEmpty() && !schemaTables.isEmpty()) {
+                    List<String> missingTables = referencedTables.stream()
+                        .filter(table -> !tableExistsInValidationScope(
+                            req.getConnectionId(),
+                            resolvedCurrentDatabaseName,
+                            dbType,
+                            table,
+                            schemaTables,
+                            qualifiedSchemaTableCache
+                        ))
+                        .map(TableReference::displayName)
+                        .distinct()
+                        .toList();
+                    if (!missingTables.isEmpty()) {
+                        return new AstValidationResult(
+                            false,
+                            normalizedSql,
+                            "引用了当前库不存在的表: " + String.join(", ", missingTables)
+                        );
+                    }
                 }
+                normalizedStatements.add(normalizedSql);
             }
-
-            return new AstValidationResult(true, normalizedSql, "AST 解析与结构校验通过");
+            if (normalizedStatements.isEmpty()) {
+                return new AstValidationResult(false, rawSql, "未解析到可执行 SQL 语句");
+            }
+            String normalizedSql = String.join(";\n", normalizedStatements);
+            return new AstValidationResult(true, normalizedSql, "AST 解析与结构校验通过（共 " + normalizedStatements.size() + " 条 SQL）");
         } catch (Exception ex) {
             return new AstValidationResult(false, rawSql, "AST 解析失败: " + ex.getMessage());
         }
