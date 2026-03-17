@@ -548,3 +548,43 @@ drivers:
           {definition_sql}
         dropSql: |-
           drop function if exists {quoted_object_name}
+  MONGODB:
+    displayName: "MongoDB"
+    defaultPort: 27017
+    storageKind: "DOCUMENT"
+    primaryObjectLabel: "集合"
+    queryEditorMode: "json"
+    supportsSelectedDatabases: true
+    supportsGenerateQuery: true
+    supportsExplainQuery: true
+    supportsAnalyzeQuery: true
+    supportsGenerateChart: false
+    defaultVersion: "default"
+    defaultDriver: "non.jdbc.MongoDB"
+    resourcePattern: "drivers/{type}/{version}/driver.jar"
+    driversByVersion:
+      "default": "non.jdbc.MongoDB"
+    resourceAliases:
+      "default": "default"
+    namespace:
+      label: "数据库"
+  REDIS:
+    displayName: "Redis"
+    defaultPort: 6379
+    storageKind: "KV"
+    primaryObjectLabel: "键"
+    queryEditorMode: "redis"
+    supportsSelectedDatabases: false
+    supportsGenerateQuery: true
+    supportsExplainQuery: true
+    supportsAnalyzeQuery: true
+    supportsGenerateChart: false
+    defaultVersion: "default"
+    defaultDriver: "non.jdbc.Redis"
+    resourcePattern: "drivers/{type}/{version}/driver.jar"
+    driversByVersion:
+      "default": "non.jdbc.Redis"
+    resourceAliases:
+      "default": "default"
+    namespace:
+      label: "逻辑库"

@@ -58,23 +58,31 @@ public class JdbcDriverResolver {
         for (Map.Entry<String, DriverSpec> entry : specs.entrySet()) {
             DriverSpec spec = entry.getValue();
             NamespaceSpec namespaceSpec = spec.namespaceSpec;
+            boolean relational = "RELATIONAL".equalsIgnoreCase(spec.storageKind);
             result.add(new SupportedDbTypeSpec(
                 entry.getKey(),
                 spec.displayName,
                 spec.defaultPort,
+                spec.storageKind,
+                spec.primaryObjectLabel,
+                spec.queryEditorMode,
                 spec.supportsSelectedDatabases,
                 namespaceSpec == null ? "" : namespaceSpec.label(),
                 namespaceSpec != null && !trimText(namespaceSpec.createSql()).isBlank(),
                 namespaceSpec != null && !trimText(namespaceSpec.renameSql()).isBlank(),
                 namespaceSpec != null && !trimText(namespaceSpec.dropSql()).isBlank(),
-                true,
-                true,
-                spec.objectDefinitionSpecMap.containsKey("view"),
-                spec.objectDefinitionSpecMap.containsKey("view")
+                relational,
+                relational,
+                relational && spec.objectDefinitionSpecMap.containsKey("view"),
+                relational && spec.objectDefinitionSpecMap.containsKey("view")
                     && !trimText(spec.objectDefinitionSpecMap.get("view").dropSql()).isBlank(),
-                spec.objectDefinitionSpecMap.containsKey("function"),
-                spec.objectDefinitionSpecMap.containsKey("function")
-                    && !trimText(spec.objectDefinitionSpecMap.get("function").dropSql()).isBlank()
+                relational && spec.objectDefinitionSpecMap.containsKey("function"),
+                relational && spec.objectDefinitionSpecMap.containsKey("function")
+                    && !trimText(spec.objectDefinitionSpecMap.get("function").dropSql()).isBlank(),
+                spec.supportsGenerateQuery,
+                spec.supportsExplainQuery,
+                spec.supportsAnalyzeQuery,
+                spec.supportsGenerateChart
             ));
         }
         return result;
@@ -173,7 +181,20 @@ public class JdbcDriverResolver {
         String defaultDriver = trimText(node.get("defaultDriver"));
         String displayName = trimText(node.get("displayName"));
         Integer defaultPort = parseInteger(node.get("defaultPort"));
+        String storageKind = trimText(node.get("storageKind"));
+        if (storageKind.isBlank()) {
+            storageKind = "RELATIONAL";
+        }
+        String primaryObjectLabel = trimText(node.get("primaryObjectLabel"));
+        String queryEditorMode = trimText(node.get("queryEditorMode"));
+        if (queryEditorMode.isBlank()) {
+            queryEditorMode = "sql";
+        }
         boolean supportsSelectedDatabases = parseBoolean(node.get("supportsSelectedDatabases"));
+        boolean supportsGenerateQuery = !node.containsKey("supportsGenerateQuery") || parseBoolean(node.get("supportsGenerateQuery"));
+        boolean supportsExplainQuery = !node.containsKey("supportsExplainQuery") || parseBoolean(node.get("supportsExplainQuery"));
+        boolean supportsAnalyzeQuery = !node.containsKey("supportsAnalyzeQuery") || parseBoolean(node.get("supportsAnalyzeQuery"));
+        boolean supportsGenerateChart = !node.containsKey("supportsGenerateChart") || parseBoolean(node.get("supportsGenerateChart"));
         String resourcePattern = trimText(node.get("resourcePattern"));
         if (resourcePattern.isBlank()) {
             resourcePattern = DEFAULT_RESOURCE_PATTERN;
@@ -217,7 +238,14 @@ public class JdbcDriverResolver {
         return new DriverSpec(
             displayName.isBlank() ? type : displayName,
             defaultPort,
+            storageKind,
+            primaryObjectLabel,
+            queryEditorMode,
             supportsSelectedDatabases,
+            supportsGenerateQuery,
+            supportsExplainQuery,
+            supportsAnalyzeQuery,
+            supportsGenerateChart,
             defaultVersion,
             defaultDriver,
             resourcePattern,
@@ -382,7 +410,14 @@ public class JdbcDriverResolver {
     private static final class DriverSpec {
         private final String displayName;
         private final Integer defaultPort;
+        private final String storageKind;
+        private final String primaryObjectLabel;
+        private final String queryEditorMode;
         private final boolean supportsSelectedDatabases;
+        private final boolean supportsGenerateQuery;
+        private final boolean supportsExplainQuery;
+        private final boolean supportsAnalyzeQuery;
+        private final boolean supportsGenerateChart;
         private final String defaultVersion;
         private final String defaultDriver;
         private final String resourcePattern;
@@ -397,7 +432,14 @@ public class JdbcDriverResolver {
 
         private DriverSpec(String displayName,
                            Integer defaultPort,
+                           String storageKind,
+                           String primaryObjectLabel,
+                           String queryEditorMode,
                            boolean supportsSelectedDatabases,
+                           boolean supportsGenerateQuery,
+                           boolean supportsExplainQuery,
+                           boolean supportsAnalyzeQuery,
+                           boolean supportsGenerateChart,
                            String defaultVersion,
                            String defaultDriver,
                            String resourcePattern,
@@ -411,7 +453,14 @@ public class JdbcDriverResolver {
                            NamespaceSpec namespaceSpec) {
             this.displayName = displayName;
             this.defaultPort = defaultPort;
+            this.storageKind = storageKind;
+            this.primaryObjectLabel = primaryObjectLabel;
+            this.queryEditorMode = queryEditorMode;
             this.supportsSelectedDatabases = supportsSelectedDatabases;
+            this.supportsGenerateQuery = supportsGenerateQuery;
+            this.supportsExplainQuery = supportsExplainQuery;
+            this.supportsAnalyzeQuery = supportsAnalyzeQuery;
+            this.supportsGenerateChart = supportsGenerateChart;
             this.defaultVersion = defaultVersion;
             this.defaultDriver = defaultDriver;
             this.resourcePattern = resourcePattern;
@@ -457,6 +506,9 @@ public class JdbcDriverResolver {
     public record SupportedDbTypeSpec(String dbType,
                                       String displayName,
                                       Integer defaultPort,
+                                      String storageKind,
+                                      String primaryObjectLabel,
+                                      String queryEditorMode,
                                       boolean supportsSelectedDatabases,
                                       String namespaceLabel,
                                       boolean supportsNamespaceCreate,
@@ -467,7 +519,11 @@ public class JdbcDriverResolver {
                                       boolean supportsViewCreate,
                                       boolean supportsViewDrop,
                                       boolean supportsFunctionCreate,
-                                      boolean supportsFunctionDrop) {
+                                      boolean supportsFunctionDrop,
+                                      boolean supportsGenerateQuery,
+                                      boolean supportsExplainQuery,
+                                      boolean supportsAnalyzeQuery,
+                                      boolean supportsGenerateChart) {
     }
 
     public record ResolvedDriver(String dbType,

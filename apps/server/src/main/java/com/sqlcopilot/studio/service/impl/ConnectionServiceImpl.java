@@ -7,6 +7,7 @@ import com.sqlcopilot.studio.dto.connection.*;
 import com.sqlcopilot.studio.entity.ConnectionEntity;
 import com.sqlcopilot.studio.mapper.ConnectionMapper;
 import com.sqlcopilot.studio.service.ConnectionService;
+import com.sqlcopilot.studio.service.kv.KvRuntimeClientFactory;
 import com.sqlcopilot.studio.support.JdbcDriverResolver;
 import com.sqlcopilot.studio.support.driver.IsolatedJdbcConnectionManager;
 import com.sqlcopilot.studio.support.ssh.SshTunnelManager;
@@ -28,6 +29,8 @@ public class ConnectionServiceImpl implements ConnectionService {
     private static final String DB_TYPE_SQLITE = "SQLITE";
     private static final String DB_TYPE_SQLSERVER = "SQLSERVER";
     private static final String DB_TYPE_ORACLE = "ORACLE";
+    private static final String DB_TYPE_MONGODB = "MONGODB";
+    private static final String DB_TYPE_REDIS = "REDIS";
 
     private static final String SSH_AUTH_PASSWORD = "SSH_PASSWORD";
     private static final String SSH_AUTH_KEY_PATH = "SSH_KEY_PATH";
@@ -37,6 +40,7 @@ public class ConnectionServiceImpl implements ConnectionService {
     private final JdbcDriverResolver jdbcDriverResolver;
     private final IsolatedJdbcConnectionManager isolatedJdbcConnectionManager;
     private final SshTunnelManager sshTunnelManager;
+    private final KvRuntimeClientFactory kvRuntimeClientFactory;
     private final ObjectMapper objectMapper;
     private final AtomicLong temporaryConnectionIdGenerator = new AtomicLong(-1L);
 
@@ -44,11 +48,13 @@ public class ConnectionServiceImpl implements ConnectionService {
                                  JdbcDriverResolver jdbcDriverResolver,
                                  IsolatedJdbcConnectionManager isolatedJdbcConnectionManager,
                                  SshTunnelManager sshTunnelManager,
+                                 KvRuntimeClientFactory kvRuntimeClientFactory,
                                  ObjectMapper objectMapper) {
         this.connectionMapper = connectionMapper;
         this.jdbcDriverResolver = jdbcDriverResolver;
         this.isolatedJdbcConnectionManager = isolatedJdbcConnectionManager;
         this.sshTunnelManager = sshTunnelManager;
+        this.kvRuntimeClientFactory = kvRuntimeClientFactory;
         this.objectMapper = objectMapper;
     }
 
@@ -59,6 +65,9 @@ public class ConnectionServiceImpl implements ConnectionService {
             vo.setDbType(spec.dbType());
             vo.setDisplayName(spec.displayName());
             vo.setDefaultPort(spec.defaultPort());
+            vo.setStorageKind(spec.storageKind());
+            vo.setPrimaryObjectLabel(spec.primaryObjectLabel());
+            vo.setQueryEditorMode(spec.queryEditorMode());
             vo.setSupportsSelectedDatabases(spec.supportsSelectedDatabases());
             vo.setNamespaceLabel(spec.namespaceLabel());
             vo.setSupportsNamespaceCreate(spec.supportsNamespaceCreate());
@@ -70,6 +79,10 @@ public class ConnectionServiceImpl implements ConnectionService {
             vo.setSupportsViewDrop(spec.supportsViewDrop());
             vo.setSupportsFunctionCreate(spec.supportsFunctionCreate());
             vo.setSupportsFunctionDrop(spec.supportsFunctionDrop());
+            vo.setSupportsGenerateQuery(spec.supportsGenerateQuery());
+            vo.setSupportsExplainQuery(spec.supportsExplainQuery());
+            vo.setSupportsAnalyzeQuery(spec.supportsAnalyzeQuery());
+            vo.setSupportsGenerateChart(spec.supportsGenerateChart());
             return vo;
         }).toList();
     }
@@ -166,7 +179,18 @@ public class ConnectionServiceImpl implements ConnectionService {
     public ConnectionTestVO testConnection(Long connectionId) {
         ConnectionTestVO vo = new ConnectionTestVO();
         long now = System.currentTimeMillis();
-        try (Connection ignored = openTargetConnection(connectionId)) {
+        try {
+            ConnectionEntity entity = getConnectionEntity(connectionId);
+            String dbType = upper(entity.getDbType());
+            if (DB_TYPE_MONGODB.equals(dbType)) {
+                kvRuntimeClientFactory.withMongoClient(entity, connectionId, client -> client.listDatabaseNames().first());
+            } else if (DB_TYPE_REDIS.equals(dbType)) {
+                kvRuntimeClientFactory.withRedisConnection(entity, connectionId, connection -> connection.sync().ping());
+            } else {
+                try (Connection ignored = openTargetConnection(connectionId)) {
+                    // JDBC 类型复用现有建连逻辑。
+                }
+            }
             vo.setSuccess(Boolean.TRUE);
             vo.setMessage("连接成功");
             connectionMapper.updateTestStatus(connectionId, "SUCCESS", "连接成功", now);
@@ -191,6 +215,9 @@ public class ConnectionServiceImpl implements ConnectionService {
     public Connection openTargetConnection(Long connectionId) throws SQLException {
         ConnectionEntity entity = getConnectionEntity(connectionId);
         validateConnectionConfig(entity);
+        if (isNonJdbcType(entity.getDbType())) {
+            throw new BusinessException(400, "当前连接类型不支持 JDBC SQL 连接: " + entity.getDbType());
+        }
         if (isSshEnabled(entity)) {
             // 关键操作：SSH 场景先建立本地端口转发，再切换 JDBC 目标到 127.0.0.1:localPort。
             SshTunnelManager.TunnelEndpoint endpoint = sshTunnelManager.ensureTunnel(connectionId, entity);
@@ -292,6 +319,18 @@ public class ConnectionServiceImpl implements ConnectionService {
             String sqliteName = safeValue(entity.getDatabaseName());
             return List.of(sqliteName.isBlank() ? "main" : sqliteName);
         }
+        if (DB_TYPE_MONGODB.equals(dbType)) {
+            return kvRuntimeClientFactory.withMongoClient(entity, null, client -> {
+                List<String> result = new ArrayList<>();
+                for (String name : client.listDatabaseNames()) {
+                    result.add(name);
+                }
+                return result;
+            });
+        }
+        if (DB_TYPE_REDIS.equals(dbType)) {
+            return List.of(resolveRedisDatabaseName(entity.getDatabaseName()));
+        }
 
         long temporaryId = temporaryConnectionIdGenerator.decrementAndGet();
         entity.setId(temporaryId);
@@ -348,6 +387,28 @@ public class ConnectionServiceImpl implements ConnectionService {
             throw new BusinessException(400, "数据库端口必须在 1-65535 之间");
         }
         String dbName = safeValue(entity.getDatabaseName());
+        if (DB_TYPE_MONGODB.equals(type)) {
+            if (isSshEnabled(entity)) {
+                validateSshConfig(entity);
+            }
+            return;
+        }
+        if (DB_TYPE_REDIS.equals(type)) {
+            if (!dbName.isBlank()) {
+                try {
+                    int dbIndex = Integer.parseInt(dbName);
+                    if (dbIndex < 0) {
+                        throw new NumberFormatException("negative");
+                    }
+                } catch (NumberFormatException ex) {
+                    throw new BusinessException(400, "Redis logical db 必须是非负整数");
+                }
+            }
+            if (isSshEnabled(entity)) {
+                validateSshConfig(entity);
+            }
+            return;
+        }
         if (DB_TYPE_ORACLE.equals(type) && dbName.isBlank() && !containsDatabaseInHost(entity.getHost())) {
             throw new BusinessException(400, "Oracle 服务名不能为空");
         }
@@ -485,6 +546,11 @@ public class ConnectionServiceImpl implements ConnectionService {
         return jdbcDriverResolver.supportsSelectedDatabases(dbType);
     }
 
+    private boolean isNonJdbcType(String dbType) {
+        String type = upper(dbType);
+        return DB_TYPE_MONGODB.equals(type) || DB_TYPE_REDIS.equals(type);
+    }
+
     private List<String> normalizeSelectedDatabases(List<String> selectedDatabases) {
         if (selectedDatabases == null || selectedDatabases.isEmpty()) {
             return List.of();
@@ -600,5 +666,10 @@ public class ConnectionServiceImpl implements ConnectionService {
 
     private String safeValue(String input) {
         return Objects.toString(input, "").trim();
+    }
+
+    private String resolveRedisDatabaseName(String databaseName) {
+        String value = safeValue(databaseName);
+        return value.isBlank() ? "0" : value;
     }
 }

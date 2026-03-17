@@ -4,6 +4,11 @@ import org.mybatis.spring.annotation.MapperScan;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.data.mongo.MongoDataAutoConfiguration;
+import org.springframework.boot.autoconfigure.data.mongo.MongoRepositoriesAutoConfiguration;
+import org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration;
+import org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration;
+import org.springframework.boot.autoconfigure.mongo.MongoAutoConfiguration;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
@@ -11,7 +16,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Objects;
 
-@SpringBootApplication
+@SpringBootApplication(exclude = {
+    MongoAutoConfiguration.class,
+    MongoDataAutoConfiguration.class,
+    MongoRepositoriesAutoConfiguration.class,
+    RedisAutoConfiguration.class,
+    RedisRepositoriesAutoConfiguration.class,
+})
 @MapperScan(
     value = "com.sqlcopilot.studio.mapper",
     sqlSessionTemplateRef = "sqlSessionTemplate"

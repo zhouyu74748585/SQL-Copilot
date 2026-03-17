@@ -88,6 +88,8 @@ import type {
   QueryHistorySessionPageVO,
   QueryHistorySessionVO,
   QueryHistoryVO,
+  KvObjectDetailVO,
+  KvOverviewVO,
   RagConfigSaveReq,
   RagConfigVO,
   RagDatabaseVectorizeStatusVO,
@@ -524,6 +526,8 @@ const connections = ref<ConnectionVO[]>([]);
 
 const schemaOverview = ref<SchemaOverviewVO | null>(null);
 
+const kvOverview = ref<KvOverviewVO | null>(null);
+
 const selectedObjectName = ref('');
 
 const createModalOpen = ref(false);
@@ -747,6 +751,10 @@ const sessionTitleOverrides = ref<Record<string, string>>({});
 const tableDetail = ref<TableDetailVO | null>(null);
 
 const tableDetailLoading = ref(false);
+
+const kvObjectDetail = ref<KvObjectDetailVO | null>(null);
+
+const kvObjectDetailLoading = ref(false);
 
 const objectDefinitionDetail = ref<SchemaObjectDefinitionVO | null>(null);
 
@@ -1170,10 +1178,13 @@ const canPreviewDatabases = computed(() => {
   if (!isMultiDatabaseFormType.value) {
     return false;
   }
-  if (!connectionForm.host?.trim() || !connectionForm.username?.trim()) {
+  if (!connectionForm.host?.trim()) {
     return false;
   }
   if (!connectionForm.port || connectionForm.port <= 0) {
+    return false;
+  }
+  if (connectionForm.dbType !== 'MONGODB' && !connectionForm.username?.trim()) {
     return false;
   }
   if (connectionForm.sshEnabled) {
@@ -1207,12 +1218,26 @@ const connectionTreeData = computed(() => {
 });
 
 const objectRows = computed<ObjectRow[]>(() => {
+  const activeDbType = connections.value.find((item) => item.id === workflow.connectionId)?.dbType || '';
+  const kvContext = isKvDbType(activeDbType);
   const databaseName = getActiveDatabaseName(workflow.connectionId);
   const dbVectorizeStatus = getDatabaseVectorizeStatus(workflow.connectionId, databaseName);
   const dbVectorizeRecord = getDatabaseVectorizeStatusRecord(workflow.connectionId, databaseName);
   const unsupportedObjectVectorizeMessage = 'Object type is not vectorized';
 
   if (currentObjectType.value === 'tables') {
+    if (kvContext) {
+      return (kvOverview.value?.objects ?? []).map((item) => ({
+        objectName: item.objectName,
+        objectType: 'tables',
+        rowEstimate: Number(item.itemCount ?? 0),
+        tableSize: item.valueType || '-',
+        description: item.description ?? '',
+        vectorizeStatus: 'NOT_VECTORIZED',
+        vectorizeMessage: 'KV 类型不进行向量化',
+        vectorizeUpdatedAt: undefined,
+      }));
+    }
     const statsByTable = tableStatsCache.value[tableCacheKey(workflow.connectionId, databaseName)] ?? {};
     return (schemaOverview.value?.tableSummaries ?? []).map((item) => ({
       objectName: item.tableName,
@@ -1333,6 +1358,13 @@ const selectedTreeDatabaseTableCount = computed(() => {
   if (!detail || (detail.kind !== 'database' && detail.kind !== 'category')) {
     return '-';
   }
+  if (isKvConnectionId(detail.connectionId)) {
+    if (kvOverview.value && kvOverview.value.databaseName === detail.databaseName) {
+      return `${kvOverview.value.objectCount ?? 0}`;
+    }
+    const tableNames = tableNameCache.value[tableCacheKey(detail.connectionId, detail.databaseName)] ?? [];
+    return `${tableNames.length}`;
+  }
   if (schemaOverview.value && schemaOverview.value.databaseName === detail.databaseName) {
     return `${schemaOverview.value.tableCount ?? 0}`;
   }
@@ -1343,6 +1375,9 @@ const selectedTreeDatabaseTableCount = computed(() => {
 const selectedTreeDatabaseColumnCount = computed(() => {
   const detail = selectedTreeDetail.value;
   if (!detail || (detail.kind !== 'database' && detail.kind !== 'category')) {
+    return '-';
+  }
+  if (isKvConnectionId(detail.connectionId)) {
     return '-';
   }
   if (schemaOverview.value && schemaOverview.value.databaseName === detail.databaseName) {
@@ -1399,7 +1434,16 @@ const filteredObjectRows = computed(() => {
 });
 
 const objectColumns = computed(() => {
+  const activeDbType = connections.value.find((item) => item.id === workflow.connectionId)?.dbType || '';
   if (currentObjectType.value === 'tables') {
+    if (isKvDbType(activeDbType)) {
+      return [
+        { title: primaryObjectLabelByDbType(activeDbType), dataIndex: 'objectName', key: 'objectName', width: 280, ellipsis: true },
+        { title: '值类型', dataIndex: 'tableSize', key: 'tableSize', width: 160 },
+        { title: '数量', dataIndex: 'rowEstimate', key: 'rowEstimate', width: 120 },
+        { title: '说明', dataIndex: 'description', key: 'description', width: 320, ellipsis: true },
+      ];
+    }
     return [
       { title: '对象', dataIndex: 'objectName', key: 'objectName', width: 250, ellipsis: true },
       { title: '行数', dataIndex: 'rowEstimate', key: 'rowEstimate', width: 120 },
@@ -1872,12 +1916,20 @@ function buildConnectionNode(conn: ConnectionVO) {
 }
 
 function buildCategoryChildren(connectionId: number, databaseName: string) {
-  const categoryNodes = [
-    { suffix: 'tables', title: '表', nodeType: 'tables' },
-    { suffix: 'views', title: '视图', nodeType: 'views' },
-    { suffix: 'functions', title: '函数', nodeType: 'functions' },
-    { suffix: 'queries', title: '查询', nodeType: 'queries' },
-  ];
+  const connection = connections.value.find((item) => item.id === connectionId);
+  const dbType = connection?.dbType || '';
+  const primaryLabel = primaryObjectLabelByDbType(dbType);
+  const categoryNodes = isKvDbType(dbType)
+    ? [
+      { suffix: 'tables', title: primaryLabel, nodeType: 'tables' },
+      { suffix: 'queries', title: '查询', nodeType: 'queries' },
+    ]
+    : [
+      { suffix: 'tables', title: '表', nodeType: 'tables' },
+      { suffix: 'views', title: '视图', nodeType: 'views' },
+      { suffix: 'functions', title: '函数', nodeType: 'functions' },
+      { suffix: 'queries', title: '查询', nodeType: 'queries' },
+    ];
   return categoryNodes.map((category) => ({
     key: buildCategoryNodeKey(connectionId, databaseName, category.suffix),
     title: category.title,
@@ -1924,6 +1976,32 @@ function requiresDatabaseLayer(connection: ConnectionVO) {
 
 function findSupportedDbType(dbType: string) {
   return supportedDbTypes.value.find((item) => item.dbType === dbType) ?? null;
+}
+
+function storageKindByDbType(dbType: string) {
+  return findSupportedDbType(dbType)?.storageKind || 'RELATIONAL';
+}
+
+function queryEditorModeByDbType(dbType: string) {
+  return findSupportedDbType(dbType)?.queryEditorMode || 'sql';
+}
+
+function primaryObjectLabelByDbType(dbType: string) {
+  return findSupportedDbType(dbType)?.primaryObjectLabel || '表';
+}
+
+function supportsGenerateChartByDbType(dbType: string) {
+  return findSupportedDbType(dbType)?.supportsGenerateChart !== false;
+}
+
+function isKvDbType(dbType: string) {
+  const kind = storageKindByDbType(dbType);
+  return kind === 'DOCUMENT' || kind === 'KV';
+}
+
+function isKvConnectionId(connectionId: number) {
+  const dbType = connections.value.find((item) => item.id === connectionId)?.dbType || '';
+  return isKvDbType(dbType);
 }
 
 function defaultPortForDbType(dbType: string) {
@@ -2084,6 +2162,7 @@ function invalidateConnectionMetadataCaches(connectionId: number) {
 
   if (workflow.connectionId === connectionId) {
     schemaOverview.value = null;
+    kvOverview.value = null;
     selectedObjectName.value = '';
     clearObjectDetail();
   }
@@ -3664,7 +3743,10 @@ async function loadDatabaseListForConnection(connectionId: number, options?: { f
   if (!options?.force && databaseListCache.value[connectionId]?.length) {
     return;
   }
-  const list = await getApi<SchemaDatabaseVO[]>(`/api/schema/databases?connectionId=${connectionId}`);
+  const endpoint = isKvConnectionId(connectionId)
+    ? `/api/kv/databases?connectionId=${connectionId}`
+    : `/api/schema/databases?connectionId=${connectionId}`;
+  const list = await getApi<SchemaDatabaseVO[]>(endpoint);
   const databaseNames = list.map((item) => item.databaseName).filter((item) => !!item);
   databaseListCache.value = {
     ...databaseListCache.value,
@@ -3838,6 +3920,7 @@ async function loadConnections() {
       tableStatsLoadingState.value = {};
       tableStatsLastRequestAt.value = {};
       schemaOverview.value = null;
+      kvOverview.value = null;
       queryTabs.value = [];
       erTabs.value = [];
       tableDataTabs.value = [];
@@ -4057,11 +4140,38 @@ async function loadOverview(options?: { forceTableStats?: boolean; syncTreeCache
   ensureConnection();
   await runSafely(async () => {
     const databaseName = getActiveDatabaseName(workflow.connectionId);
+    if (isKvConnectionId(workflow.connectionId)) {
+      const query = databaseName
+        ? `/api/kv/overview?connectionId=${workflow.connectionId}&databaseName=${encodeURIComponent(databaseName)}`
+        : `/api/kv/overview?connectionId=${workflow.connectionId}`;
+      const overview = await getApi<KvOverviewVO>(query);
+      kvOverview.value = overview;
+      schemaOverview.value = null;
+      if (options?.syncTreeCaches !== false) {
+        const cacheKey = tableCacheKey(workflow.connectionId, databaseName);
+        const names = (overview.objects ?? []).map((item) => item.objectName);
+        tableNameCache.value = {
+          ...tableNameCache.value,
+          [cacheKey]: names,
+        };
+        tableNameLoadedCache.value = {
+          ...tableNameLoadedCache.value,
+          [cacheKey]: true,
+        };
+        objectNameCache.value = {
+          ...objectNameCache.value,
+          [objectCacheKey(workflow.connectionId, databaseName, 'tables')]: names,
+        };
+      }
+      expandConnectionNode(workflow.connectionId);
+      return;
+    }
     const query = databaseName
       ? `/api/schema/overview?connectionId=${workflow.connectionId}&databaseName=${encodeURIComponent(databaseName)}`
       : `/api/schema/overview?connectionId=${workflow.connectionId}`;
     const overview = await getApi<SchemaOverviewVO>(query);
     schemaOverview.value = overview;
+    kvOverview.value = null;
     if (options?.syncTreeCaches !== false) {
       const cacheKey = tableCacheKey(workflow.connectionId, databaseName);
       const tableNames = (overview.tableSummaries ?? []).map((item) => item.tableName);
@@ -4224,6 +4334,25 @@ function scheduleTableStatsForExpandedDatabases(keys: string[]) {
 async function loadTableNamesByConnection(connectionId: number, databaseName: string) {
   if (!connectionId || !databaseName) {
     return [];
+  }
+  if (isKvConnectionId(connectionId)) {
+    const query = `/api/kv/overview?connectionId=${connectionId}&databaseName=${encodeURIComponent(databaseName)}`;
+    const overview = await getApi<KvOverviewVO>(query);
+    const names = (overview.objects ?? []).map((item) => item.objectName);
+    const cacheKey = tableCacheKey(connectionId, databaseName);
+    tableNameCache.value = {
+      ...tableNameCache.value,
+      [cacheKey]: names,
+    };
+    tableNameLoadedCache.value = {
+      ...tableNameLoadedCache.value,
+      [cacheKey]: true,
+    };
+    objectNameCache.value = {
+      ...objectNameCache.value,
+      [objectCacheKey(connectionId, databaseName, 'tables')]: names,
+    };
+    return names;
   }
   const query = `/api/schema/overview?connectionId=${connectionId}&databaseName=${encodeURIComponent(databaseName)}`;
   const overview = await getApi<SchemaOverviewVO>(query);
@@ -5478,11 +5607,14 @@ async function selectObject(connectionId: number, databaseName: string, objectTy
     await openSavedQueryTabByTitle(connectionId, databaseName, objectName);
     return;
   }
-  workflow.prompt = `查询 ${objectName} 最近数据`;
-  if (objectType === 'tables' || objectType === 'views') {
+  workflow.prompt = isKvConnectionId(connectionId) ? `查询 ${objectName}` : `查询 ${objectName} 最近数据`;
+  if ((objectType === 'tables' || objectType === 'views') && !isKvConnectionId(connectionId)) {
     workflow.sqlText = `SELECT * FROM ${objectName} LIMIT 100`;
   }
   await loadObjectDetail(connectionId, databaseName, objectType, objectName);
+  if (isKvConnectionId(connectionId) && objectType === 'tables') {
+    workflow.sqlText = kvObjectDetail.value?.queryTemplate || '';
+  }
 }
 
 async function loadObjectDetail(
@@ -5493,8 +5625,23 @@ async function loadObjectDetail(
 ) {
   tableDetail.value = null;
   tableDetailLoading.value = false;
+  kvObjectDetail.value = null;
+  kvObjectDetailLoading.value = false;
   objectDefinitionDetail.value = null;
   objectDefinitionDetailLoading.value = false;
+
+  if (isKvConnectionId(connectionId) && objectType === 'tables') {
+    kvObjectDetailLoading.value = true;
+    try {
+      const query = databaseName
+        ? `/api/kv/object/detail?connectionId=${connectionId}&databaseName=${encodeURIComponent(databaseName)}&objectName=${encodeURIComponent(objectName)}`
+        : `/api/kv/object/detail?connectionId=${connectionId}&objectName=${encodeURIComponent(objectName)}`;
+      kvObjectDetail.value = await getApi<KvObjectDetailVO>(query);
+    } finally {
+      kvObjectDetailLoading.value = false;
+    }
+    return;
+  }
 
   if (objectType === 'tables') {
     tableDetailLoading.value = true;
@@ -5524,6 +5671,8 @@ async function loadObjectDetail(
 function clearObjectDetail() {
   tableDetail.value = null;
   tableDetailLoading.value = false;
+  kvObjectDetail.value = null;
+  kvObjectDetailLoading.value = false;
   objectDefinitionDetail.value = null;
   objectDefinitionDetailLoading.value = false;
 }
@@ -5532,8 +5681,12 @@ function openQueryTabByObject(record: ObjectRow, autoExecute = false) {
   if (record.objectType !== 'tables' && record.objectType !== 'views') {
     return;
   }
-  const sql = `SELECT * FROM ${record.objectName} LIMIT 100`;
-  const prompt = `查询 ${record.objectName} 最近数据`;
+  const connectionId = workflow.connectionId;
+  const isKv = isKvConnectionId(connectionId);
+  const sql = isKv
+    ? (kvObjectDetail.value?.queryTemplate || '')
+    : `SELECT * FROM ${record.objectName} LIMIT 100`;
+  const prompt = isKv ? `查询 ${record.objectName}` : `查询 ${record.objectName} 最近数据`;
   workflow.sqlText = sql;
   workflow.prompt = prompt;
   const tab = openAiQueryTab(prompt);
@@ -5904,6 +6057,46 @@ function queryTabDbType(tab: QueryWorkspaceTab) {
   return connections.value.find((item) => item.id === tab.connectionId)?.dbType ?? 'MYSQL';
 }
 
+function queryEditorLanguageByDbType(dbTypeRaw: string) {
+  const mode = queryEditorModeByDbType(dbTypeRaw);
+  if (mode === 'json') {
+    return 'json';
+  }
+  if (mode === 'redis') {
+    return 'plaintext';
+  }
+  return 'sql';
+}
+
+function queryUnitLabelByDbType(dbTypeRaw: string) {
+  return isKvDbType(dbTypeRaw) ? '查询' : 'SQL';
+}
+
+function generateActionLabelByDbType(dbTypeRaw: string) {
+  return isKvDbType(dbTypeRaw) ? '生成查询' : '生成 SQL';
+}
+
+function explainActionLabelByDbType(dbTypeRaw: string) {
+  return isKvDbType(dbTypeRaw) ? '解释查询' : '解释 SQL';
+}
+
+function analyzeActionLabelByDbType(dbTypeRaw: string) {
+  return isKvDbType(dbTypeRaw) ? '分析查询' : '分析 SQL';
+}
+
+function canGenerateChartForTab(tab: QueryWorkspaceTab | null | undefined) {
+  if (!tab) {
+    return false;
+  }
+  return supportsGenerateChartByDbType(queryTabDbType(tab));
+}
+
+const activeQueryEditorLanguage = computed(() =>
+  queryEditorLanguageByDbType(activeQueryTab.value ? queryTabDbType(activeQueryTab.value) : 'MYSQL'),
+);
+
+const activeConnectionIsKv = computed(() => isKvConnectionId(workflow.connectionId));
+
 function sqlFormatterLanguage(dbTypeRaw: string): SqlLanguage {
   const dbType = (dbTypeRaw || 'MYSQL').toUpperCase();
   if (dbType === 'POSTGRESQL') {
@@ -5922,6 +6115,17 @@ function sqlFormatterLanguage(dbTypeRaw: string): SqlLanguage {
 }
 
 function formatSqlText(sourceSql: string, dbTypeRaw: string) {
+  const mode = queryEditorModeByDbType(dbTypeRaw);
+  if (mode === 'json') {
+    try {
+      return JSON.stringify(JSON.parse(sourceSql), null, 2);
+    } catch {
+      return sourceSql;
+    }
+  }
+  if (mode === 'redis') {
+    return sourceSql.trim();
+  }
   return sqlFormat(sourceSql, {
     language: sqlFormatterLanguage(dbTypeRaw),
     keywordCase: 'upper',
@@ -5938,7 +6142,7 @@ function formatSqlForTab(tab: QueryWorkspaceTab) {
   const hasSelection = !!model && !!selection && !selection.isEmpty();
   const sourceSql = hasSelection ? model.getValueInRange(selection).trim() : tab.sqlText.trim();
   if (!sourceSql) {
-    message.info('请先输入 SQL');
+    message.info(isKvDbType(queryTabDbType(tab)) ? '请先输入查询文本' : '请先输入 SQL');
     return;
   }
 
@@ -5963,9 +6167,9 @@ function formatSqlForTab(tab: QueryWorkspaceTab) {
     tab.selectedSqlText = '';
     hideSqlSelectionPopover();
     touchQueryTab(tab);
-    message.success(hasSelection ? '所选 SQL 已美化' : 'SQL 已美化');
+    message.success(hasSelection ? '所选内容已格式化' : '查询文本已格式化');
   } catch (error) {
-    message.error(`SQL 美化失败：${getErrorMessage(error)}`);
+    message.error(`格式化失败：${getErrorMessage(error)}`);
   }
 }
 
@@ -6281,9 +6485,23 @@ async function postAiStreamWithTimeout(
   }
 }
 
-function looksLikeSqlText(text: string) {
+function looksLikeExecutableQueryText(text: string, dbType: string) {
   const normalized = text.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  const mode = queryEditorModeByDbType(dbType);
+  if (mode === 'json') {
+    return normalized.startsWith('{') && normalized.includes('"collection"');
+  }
+  if (mode === 'redis') {
+    return /^(get|type|ttl|exists|hgetall|lrange|smembers|zrange|keys|scan)\b/.test(normalized);
+  }
   return /^(select|with|insert|update|delete|replace|create|alter|drop|truncate|merge|show|explain)\b/.test(normalized);
+}
+
+function looksLikeSqlText(text: string) {
+  return looksLikeExecutableQueryText(text, 'MYSQL');
 }
 
 interface RetryInvokeOptions {
@@ -6381,7 +6599,7 @@ async function generateSqlForTab(
       }
       tab.lastTokenEstimate = Number(generated.totalTokens || 0);
       const generatedText = (generated.sqlText || '').trim();
-      if (looksLikeSqlText(generatedText)) {
+      if (looksLikeExecutableQueryText(generatedText, queryTabDbType(tab))) {
         appendAssistantSqlMessage(tab, generatedText, actionType, '', undefined, undefined, undefined, generated.trace, thinkingMessage);
         await saveConversationHistoryOnce(tab, userMessage, promptText, generatedText, {
           trace: generated.trace,
@@ -6586,7 +6804,7 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
     const actionType = autoActionTypeByIntent(result.intentType);
     if (result.intentType === 'GENERATE_SQL') {
       const sqlText = (result.sqlText || '').trim();
-      if (looksLikeSqlText(sqlText)) {
+      if (looksLikeExecutableQueryText(sqlText, queryTabDbType(tab))) {
         const assistantMessage = appendAssistantSqlMessage(
           tab,
           sqlText,
@@ -7372,6 +7590,50 @@ async function executeSingleSqlStatementForTab(
   sqlText: string,
   controller: AbortController,
 ) {
+  if (isKvDbType(queryTabDbType(tab))) {
+    try {
+      const result = await postApi<SqlExecuteVO>('/api/kv/query/execute', {
+        connectionId: tab.connectionId,
+        sessionId: tab.sessionId,
+        queryText: sqlText,
+        databaseName: tab.databaseName || undefined,
+        maxRows: QUERY_RESULT_MAX_ROWS,
+      }, {
+        signal: controller.signal,
+      });
+      tab.executeResult = result;
+      tab.explainResult = null;
+      rebuildQueryResultTableCache(tab);
+      tab.riskAckToken = '';
+      tab.lastExecuteFailed = false;
+      tab.lastExecuteErrorMessage = '';
+      tab.lastFailedSqlText = '';
+      tab.resultViewMode = 'table';
+      tab.chartReadonly = false;
+      tab.chartImageDataUrl = '';
+      tab.chartImageCacheKey = '';
+      return { success: true, aborted: false, cancelled: false, errorMessage: '' };
+    } catch (error) {
+      const manualAborted = sqlExecutionAbortReasonMap.get(tab.key) === 'manual' || isAbortError(error);
+      if (manualAborted) {
+        tab.riskAckToken = '';
+        tab.lastExecuteFailed = false;
+        tab.lastExecuteErrorMessage = '';
+        tab.lastFailedSqlText = '';
+        return { success: false, aborted: true, cancelled: false, errorMessage: '' };
+      }
+      const errMsg = error instanceof Error ? error.message : String(error);
+      tab.executeResult = null;
+      tab.explainResult = null;
+      rebuildQueryResultTableCache(tab);
+      tab.riskAckToken = '';
+      tab.lastExecuteFailed = true;
+      tab.lastExecuteErrorMessage = errMsg;
+      tab.lastFailedSqlText = sqlText;
+      return { success: false, aborted: false, cancelled: false, errorMessage: errMsg };
+    }
+  }
+
   let riskAckToken = '';
   try {
     riskAckToken = await ensureRiskConfirmedBeforeExecute(tab, sqlText, controller.signal);
@@ -7446,12 +7708,12 @@ async function executeSqlForTab(
   }
   const sqlText = resolveSqlForAction(tab, sqlOverride);
   if (!sqlText) {
-    message.error('请先输入或选择 SQL');
+    message.error(isKvDbType(queryTabDbType(tab)) ? '请先输入查询文本' : '请先输入或选择 SQL');
     return false;
   }
-  const statements = splitSqlStatements(sqlText);
+  const statements = isKvDbType(queryTabDbType(tab)) ? [sqlText.trim()] : splitSqlStatements(sqlText);
   if (!statements.length) {
-    message.error('请先输入或选择 SQL');
+    message.error(isKvDbType(queryTabDbType(tab)) ? '请先输入查询文本' : '请先输入或选择 SQL');
     return false;
   }
   clearStatementResults(tab);
@@ -7997,7 +8259,8 @@ function toObjectType(value: string): 'tables' | 'views' | 'functions' | 'events
 
 function objectTypeLabel(value: string) {
   if (value === 'tables') {
-    return 'Table';
+    const dbType = connections.value.find((item) => item.id === workflow.connectionId)?.dbType || '';
+    return primaryObjectLabelByDbType(dbType);
   }
   if (value === 'views') {
     return '视图';
@@ -8276,7 +8539,7 @@ function dbIconUrl(dbType: string) {
   if (dbType === 'ORACLE') {
     return oracleIcon;
   }
-  return sqliteIcon;
+  return '';
 }
 
 function normalizeModelOptions(options: AiModelOption[] | undefined) {
@@ -8532,6 +8795,7 @@ function resetConnectionModalState() {
     tableStatsPollIntervalMs,
     connections,
     schemaOverview,
+    kvOverview,
     selectedObjectName,
     createModalOpen,
     isEditMode,
@@ -8631,6 +8895,8 @@ function resetConnectionModalState() {
     sessionTitleOverrides,
     tableDetail,
     tableDetailLoading,
+    kvObjectDetail,
+    kvObjectDetailLoading,
     objectDefinitionDetail,
     objectDefinitionDetailLoading,
     queryEditorPaneRef,
@@ -8684,6 +8950,8 @@ function resetConnectionModalState() {
     aiRequestAbortReasonMap,
     selectedConnection,
     activeQueryTab,
+    activeQueryEditorLanguage,
+    activeConnectionIsKv,
     activeQueryContextUsage,
     activeErTab,
     activeTableEditorTab,
@@ -8766,6 +9034,7 @@ function resetConnectionModalState() {
     findSupportedDbType,
     requiresDatabaseLayer,
     isMultiDatabaseType,
+    isKvConnectionId,
     normalizeSelectedDatabases,
     visibleDatabasesForConnection,
     parseConfiguredDatabaseName,
@@ -8907,8 +9176,15 @@ function resetConnectionModalState() {
     handleQueryDatabaseChange,
     handleTableEditorConnectionChange,
     handleTableEditorDatabaseChange,
+    queryTabDbType,
     resolveSqlForAction,
     resolveSelectedSqlSnippet,
+    queryEditorLanguageByDbType,
+    queryUnitLabelByDbType,
+    generateActionLabelByDbType,
+    explainActionLabelByDbType,
+    analyzeActionLabelByDbType,
+    canGenerateChartForTab,
     formatSqlForTab,
     formatObjectDefinitionSql,
     extractThinkingContentFromTrace,
@@ -8928,6 +9204,7 @@ function resetConnectionModalState() {
     postAiApiWithTimeout,
     postAiStreamWithTimeout,
     looksLikeSqlText,
+    looksLikeExecutableQueryText,
     generateSqlForTab,
     autoActionTypeByIntent,
     sendAutoForTab,

@@ -75,6 +75,9 @@ export interface ConnectionDbTypeVO {
   dbType: string;
   displayName: string;
   defaultPort?: number;
+  storageKind?: 'RELATIONAL' | 'DOCUMENT' | 'KV';
+  primaryObjectLabel?: string;
+  queryEditorMode?: 'sql' | 'json' | 'redis';
   supportsSelectedDatabases: boolean;
   namespaceLabel?: string;
   supportsNamespaceCreate?: boolean;
@@ -86,6 +89,44 @@ export interface ConnectionDbTypeVO {
   supportsViewDrop?: boolean;
   supportsFunctionCreate?: boolean;
   supportsFunctionDrop?: boolean;
+  supportsGenerateQuery?: boolean;
+  supportsExplainQuery?: boolean;
+  supportsAnalyzeQuery?: boolean;
+  supportsGenerateChart?: boolean;
+}
+
+export interface KvObjectSummaryVO {
+  objectName: string;
+  valueType?: string;
+  itemCount?: number | null;
+  description?: string;
+}
+
+export interface KvOverviewVO {
+  connectionId: number;
+  databaseName?: string;
+  objectLabel?: string;
+  objectCount: number;
+  objects: KvObjectSummaryVO[];
+}
+
+export interface KvObjectDetailVO {
+  connectionId: number;
+  databaseName?: string;
+  objectName: string;
+  valueType?: string;
+  description?: string;
+  queryTemplate?: string;
+  sampleJson?: string;
+  facts?: string[];
+}
+
+export interface KvQueryExecuteReq {
+  connectionId: number;
+  sessionId?: string;
+  databaseName?: string;
+  queryText: string;
+  maxRows?: number;
 }
 
 export interface SchemaOverviewVO {

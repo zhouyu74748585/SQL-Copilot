@@ -299,8 +299,17 @@
             >
               <template #title="{ title, dataRef }">
                 <div class="tree-title-row" @dblclick.stop="handleTreeNodeDblclick(dataRef)">
-                  <img v-if="dataRef.nodeType === 'connection'" class="tree-icon-img" :src="dbIconUrl(dataRef.dbType)" alt="db" />
-                  <component v-else :is="nodeIconComponent(dataRef)" class="tree-icon-font" />
+                  <img
+                    v-if="dataRef.nodeType === 'connection' && dbIconUrl(dataRef.dbType)"
+                    class="tree-icon-img"
+                    :src="dbIconUrl(dataRef.dbType)"
+                    alt="db"
+                  />
+                  <component
+                    v-else
+                    :is="dataRef.nodeType === 'connection' ? DatabaseOutlined : nodeIconComponent(dataRef)"
+                    class="tree-icon-font"
+                  />
                   <span class="tree-title-text">{{ title }}</span>
                   <span
                     v-if="dataRef.nodeType === 'connection'"
@@ -349,7 +358,7 @@
       <template v-if="activeWorkbenchTab === browserTabKey">
           <section class="pane pane-center browser-center-pane">
             <div class="center-toolbar">
-              <div v-if="currentObjectType === 'tables'" class="center-toolbar-left">
+              <div v-if="currentObjectType === 'tables' && !activeConnectionIsKv" class="center-toolbar-left">
                 <a-button
                   size="small"
                   :type="canCreateTable ? 'primary' : 'default'"
@@ -369,6 +378,12 @@
                     智能ER图
                   </a-button>
                 </a-tooltip>
+              </div>
+              <div v-else-if="currentObjectType === 'tables' && activeConnectionIsKv" class="center-toolbar-left">
+                <a-button size="small" type="primary" :disabled="!workflow.connectionId" @click="openAiQueryTab()">
+                  <template #icon><plus-outlined /></template>
+                  新建查询
+                </a-button>
               </div>
               <div v-else-if="currentObjectType === 'views'" class="center-toolbar-left">
                 <a-button
@@ -407,7 +422,12 @@
                 </a-button>
               </div>
               <div class="center-toolbar-right">
-                <a-input v-model:value="tableKeyword" size="small" :placeholder="currentObjectType === 'queries' ? '搜索保存查询' : '搜索表名'" allow-clear>
+                <a-input
+                  v-model:value="tableKeyword"
+                  size="small"
+                  :placeholder="currentObjectType === 'queries' ? '搜索保存查询' : `搜索${objectTypeLabel(currentObjectType)}`"
+                  allow-clear
+                >
                   <template #prefix><search-outlined /></template>
                 </a-input>
                 <a-button size="small" @click="refreshCurrentPageObjects({ force: true })" title="刷新当前对象">
@@ -473,7 +493,7 @@
                 >
                   <div class="object-card-title">{{ item.objectName }}</div>
                   <div class="object-card-meta">{{ currentObjectType === 'queries' ? '保存查询' : objectTypeLabel(item.objectType) }}</div>
-                  <div v-if="currentObjectType !== 'queries'" class="object-card-vectorize" :class="databaseStatusClass(item.vectorizeStatus)">
+                  <div v-if="currentObjectType !== 'queries' && !activeConnectionIsKv" class="object-card-vectorize" :class="databaseStatusClass(item.vectorizeStatus)">
                     <component :is="databaseStatusIcon(item.vectorizeStatus)" class="object-vectorize-icon" />
                     <span>{{ databaseStatusLabel(item.vectorizeStatus) }}</span>
                   </div>
@@ -506,7 +526,7 @@
                 <div class="detail-row"><span>数据库</span><strong>{{ getActiveDatabaseName(workflow.connectionId) || '-' }}</strong></div>
               </div>
 
-              <div v-if="selectedObjectRecord.objectType === 'tables'" class="detail-table-panel">
+              <div v-if="selectedObjectRecord.objectType === 'tables' && !activeConnectionIsKv" class="detail-table-panel">
                 <a-spin :spinning="tableDetailLoading">
                   <div class="detail-code-head">
                     <span>建表语句</span>
@@ -516,6 +536,25 @@
                     </a-button>
                   </div>
                   <pre class="detail-code-block"><code v-html="createTableSqlHighlighted"></code></pre>
+                </a-spin>
+              </div>
+              <div v-else-if="selectedObjectRecord.objectType === 'tables' && activeConnectionIsKv" class="detail-table-panel">
+                <a-spin :spinning="kvObjectDetailLoading">
+                  <div class="detail-code-head">
+                    <span>推荐查询模板</span>
+                    <a-button size="small" type="text" :disabled="kvObjectDetailLoading" @click="copyTextContent(kvObjectDetail?.queryTemplate || '', '查询模板已复制')">
+                      <template #icon><copy-outlined /></template>
+                      复制
+                    </a-button>
+                  </div>
+                  <pre class="detail-code-block"><code>{{ kvObjectDetail?.queryTemplate || '-- 暂无查询模板' }}</code></pre>
+                  <div class="detail-code-head detail-code-head-secondary">
+                    <span>样本内容</span>
+                  </div>
+                  <pre class="detail-code-block"><code>{{ kvObjectDetail?.sampleJson || '-- 暂无样本内容' }}</code></pre>
+                  <div v-if="kvObjectDetail?.facts?.length" class="detail-note">
+                    {{ kvObjectDetail.facts.join(' | ') }}
+                  </div>
                 </a-spin>
               </div>
 
@@ -1422,7 +1461,7 @@
 
           <div ref="queryChatScrollRef" class="query-chat-scroll">
             <div v-if="!activeQueryTab.chatMessages.length" class="query-chat-empty">
-              使用自然语言描述需求后发送消息；可使用 Auto 自动识别意图，或关闭 Auto 后手动选择“生成 SQL”“解释 SQL”“分析 SQL”“生成图表”。
+              使用自然语言描述需求后发送消息；可使用 Auto 自动识别意图，或关闭 Auto 后手动选择“{{ generateActionLabelByDbType(queryTabDbType(activeQueryTab)) }}”“{{ explainActionLabelByDbType(queryTabDbType(activeQueryTab)) }}”“{{ analyzeActionLabelByDbType(queryTabDbType(activeQueryTab)) }}”{{ canGenerateChartForTab(activeQueryTab) ? '“生成图表”' : '' }}。
             </div>
             <div
               v-for="item in activeQueryTab.chatMessages"
@@ -1791,7 +1830,7 @@
                 </a-tooltip>
               </div>
               <div v-else class="query-chat-composer-actions">
-                <a-tooltip title="生成 SQL">
+                <a-tooltip :title="generateActionLabelByDbType(queryTabDbType(activeQueryTab))">
                   <a-button
                     size="small"
                     type="primary"
@@ -1801,7 +1840,7 @@
                     <template #icon><code-outlined /></template>
                   </a-button>
                 </a-tooltip>
-                <a-tooltip title="解释 SQL">
+                <a-tooltip :title="explainActionLabelByDbType(queryTabDbType(activeQueryTab))">
                   <a-button
                     size="small"
                     class="sql-action-icon-btn"
@@ -1810,7 +1849,7 @@
                     <template #icon><read-outlined /></template>
                   </a-button>
                 </a-tooltip>
-                <a-tooltip title="分析 SQL">
+                <a-tooltip :title="analyzeActionLabelByDbType(queryTabDbType(activeQueryTab))">
                   <a-button
                     size="small"
                     class="sql-action-icon-btn"
@@ -1819,7 +1858,7 @@
                     <template #icon><experiment-outlined /></template>
                   </a-button>
                 </a-tooltip>
-                <a-tooltip title="生成图表">
+                <a-tooltip v-if="canGenerateChartForTab(activeQueryTab)" title="生成图表">
                   <a-button
                     size="small"
                     class="sql-action-icon-btn"
@@ -1838,7 +1877,10 @@
         <aside v-if="activeQueryTab" ref="queryEditorPaneRef" class="pane pane-right query-editor-pane">
           <div class="pane-title pane-title-with-action">
             <div class="pane-title-actions query-editor-header-actions">
-              <a-tooltip :title="activeQueryTab.selectedSqlText ? '计划选择的SQL' : '计划 SQL'">
+              <a-tooltip
+                v-if="!isKvConnectionId(activeQueryTab.connectionId)"
+                :title="activeQueryTab.selectedSqlText ? `计划选择的${queryUnitLabelByDbType(queryTabDbType(activeQueryTab))}` : `计划 ${queryUnitLabelByDbType(queryTabDbType(activeQueryTab))}`"
+              >
                 <a-button
                   size="small"
                   :class="['sql-action-icon-btn', { 'is-selection-active': !!activeQueryTab.selectedSqlText }]"
@@ -1847,7 +1889,7 @@
                   <template #icon><eye-outlined /></template>
                 </a-button>
               </a-tooltip>
-              <a-tooltip :title="activeQueryTab.sqlExecuting ? '终止执行' : (activeQueryTab.selectedSqlText ? '执行选中的SQL' : '执行 SQL')">
+              <a-tooltip :title="activeQueryTab.sqlExecuting ? '终止执行' : (activeQueryTab.selectedSqlText ? `执行选中的${queryUnitLabelByDbType(queryTabDbType(activeQueryTab))}` : `执行 ${queryUnitLabelByDbType(queryTabDbType(activeQueryTab))}`)">
                 <a-button
                   size="small"
                   :type="activeQueryTab.sqlExecuting ? 'default' : 'primary'"
@@ -1861,12 +1903,12 @@
                   </template>
                 </a-button>
               </a-tooltip>
-              <a-tooltip v-if="activeQueryTab.lastExecuteFailed" title="自动修复">
+              <a-tooltip v-if="activeQueryTab.lastExecuteFailed && !isKvConnectionId(activeQueryTab.connectionId)" title="自动修复">
                 <a-button size="small" class="sql-action-icon-btn" @click="repairSqlForTab(activeQueryTab)">
                   <template #icon><tool-outlined /></template>
                 </a-button>
               </a-tooltip>
-              <a-tooltip :title="activeQueryTab.selectedSqlText ? '美化选中的SQL' : '美化 SQL'">
+              <a-tooltip :title="activeQueryTab.selectedSqlText ? `格式化选中的${queryUnitLabelByDbType(queryTabDbType(activeQueryTab))}` : `格式化 ${queryUnitLabelByDbType(queryTabDbType(activeQueryTab))}`">
                 <a-button
                   size="small"
                   :class="['sql-action-icon-btn', { 'is-selection-active': !!activeQueryTab.selectedSqlText }]"
@@ -1885,7 +1927,7 @@
                   <template #icon><save-outlined /></template>
                 </a-button>
               </a-tooltip>
-              <a-tooltip title="保存为样例 SQL">
+              <a-tooltip v-if="!isKvConnectionId(activeQueryTab.connectionId)" title="保存为样例 SQL">
                 <a-button size="small" class="sql-action-icon-btn" @click="openSaveQueryAsExampleModal(activeQueryTab)">
                   <template #icon><hdd-outlined /></template>
                 </a-button>
@@ -1900,7 +1942,7 @@
                 </a-button>
               </a-tooltip>
             </div>
-            <div class="pane-title-actions query-memory-title-actions">
+            <div v-if="!isKvConnectionId(activeQueryTab.connectionId)" class="pane-title-actions query-memory-title-actions">
               <span class="query-memory-title-label">记忆理解</span>
               <a-switch v-model:checked="activeQueryTab.sqlMemoryEnabled" size="small" />
               <a-tooltip title="开启后，执行成功的 SQL 会被理解记忆，并在后续生成与执行中参与向量召回。">
@@ -1916,7 +1958,7 @@
           >
             <MonacoEditor
               v-model:value="activeQueryTab.sqlText"
-              language="sql"
+              :language="activeQueryEditorLanguage"
               width="100%"
               height="100%"
               :theme="monacoTheme"
@@ -1938,7 +1980,7 @@
                     <template #icon><message-outlined /></template>
                   </a-button>
                 </a-tooltip>
-                <a-tooltip title="解释 SQL">
+                <a-tooltip :title="explainActionLabelByDbType(queryTabDbType(activeQueryTab))">
                   <a-button
                     size="small"
                     class="sql-action-icon-btn sql-selection-popover-btn"
@@ -1949,7 +1991,7 @@
                     <template #icon><read-outlined /></template>
                   </a-button>
                 </a-tooltip>
-                <a-tooltip title="分析 SQL">
+                <a-tooltip :title="analyzeActionLabelByDbType(queryTabDbType(activeQueryTab))">
                   <a-button
                     size="small"
                     class="sql-action-icon-btn sql-selection-popover-btn"
@@ -1983,7 +2025,7 @@
                     <template #icon><table-outlined /></template>
                   </a-button>
                 </a-tooltip>
-                <a-tooltip title="图表结果">
+                <a-tooltip v-if="canGenerateChartForTab(activeQueryTab)" title="图表结果">
                   <a-button
                     size="small"
                     :class="['sql-action-icon-btn', { 'is-selection-active': activeQueryTab.resultViewMode === 'chart' }]"
@@ -2015,8 +2057,8 @@
               </a-tab-pane>
             </a-tabs>
             <div v-if="activeQueryTab.lastExecuteFailed" class="query-result-error">
-              <span class="query-result-error-text">{{ activeQueryTab.lastExecuteErrorMessage || 'SQL 执行失败' }}</span>
-              <a-button size="small" type="primary" danger @click="repairSqlForTab(activeQueryTab)">修复 SQL</a-button>
+              <span class="query-result-error-text">{{ activeQueryTab.lastExecuteErrorMessage || `${queryUnitLabelByDbType(queryTabDbType(activeQueryTab))} 执行失败` }}</span>
+              <a-button v-if="!isKvConnectionId(activeQueryTab.connectionId)" size="small" type="primary" danger @click="repairSqlForTab(activeQueryTab)">修复 SQL</a-button>
             </div>
             <template v-if="activeQueryTab.resultViewMode === 'table'">
               <TableDataVirtualGrid
@@ -3294,6 +3336,8 @@ const {
     aiRequestAbortReasonMap,
     selectedConnection,
     activeQueryTab,
+    activeQueryEditorLanguage,
+    activeConnectionIsKv,
     activeQueryContextUsage,
     activeErTab,
     activeTableEditorTab,
@@ -3330,6 +3374,8 @@ const {
     connectionTreeData,
     objectRows,
     selectedObjectRecord,
+    kvObjectDetail,
+    kvObjectDetailLoading,
     selectedTreeDetail,
     selectedTreeConnection,
     selectedTreeDatabaseStatusLabel,
@@ -3375,6 +3421,7 @@ const {
     getCategoryChildren,
     requiresDatabaseLayer,
     isMultiDatabaseType,
+    isKvConnectionId,
     normalizeSelectedDatabases,
     visibleDatabasesForConnection,
     parseConfiguredDatabaseName,
@@ -3598,6 +3645,7 @@ const {
     handleQueryDatabaseChange,
     handleTableEditorConnectionChange,
     handleTableEditorDatabaseChange,
+    queryTabDbType,
     handleTableDataConnectionSelectorChange,
     handleTableDataDatabaseSelectorChange,
     formatObjectDefinitionSql,
@@ -3634,6 +3682,11 @@ const {
     isTableDataPrimaryKeyColumn,
     resolveSqlForAction,
     resolveSelectedSqlSnippet,
+    queryUnitLabelByDbType,
+    generateActionLabelByDbType,
+    explainActionLabelByDbType,
+    analyzeActionLabelByDbType,
+    canGenerateChartForTab,
     saveConversationHistory,
     buildStructuredContextForTab,
     saveConversationHistoryOnce,
@@ -3650,7 +3703,6 @@ const {
     terminateAiExecutionForTab,
     terminateSqlExecutionForTab,
     postAiApiWithTimeout,
-    looksLikeSqlText,
     generateSqlForTab,
     autoActionTypeByIntent,
     sendAutoForTab,

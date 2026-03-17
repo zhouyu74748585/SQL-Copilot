@@ -15,6 +15,15 @@ public class ConnectionDbTypeVO {
     /** 默认连接端口。 */
     private Integer defaultPort;
 
+    /** 存储类型。 */
+    private String storageKind;
+
+    /** 主对象分组展示名称。 */
+    private String primaryObjectLabel;
+
+    /** 查询编辑模式。 */
+    private String queryEditorMode;
+
     /** 是否支持预览并勾选数据库或 Schema。 */
     private Boolean supportsSelectedDatabases;
 
@@ -47,4 +56,16 @@ public class ConnectionDbTypeVO {
 
     /** 是否支持删除函数。 */
     private Boolean supportsFunctionDrop;
+
+    /** 是否支持 AI 生成查询。 */
+    private Boolean supportsGenerateQuery;
+
+    /** 是否支持 AI 解释查询。 */
+    private Boolean supportsExplainQuery;
+
+    /** 是否支持 AI 分析查询。 */
+    private Boolean supportsAnalyzeQuery;
+
+    /** 是否支持 AI 生成图表。 */
+    private Boolean supportsGenerateChart;
 }

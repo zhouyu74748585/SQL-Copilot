@@ -116,6 +116,34 @@ public class AiServiceImpl implements AiService {
         4) 输出的SQL的语法需要匹配上下文中的数据库类型 
         5) 一次仅输出一条最满足要求的SQL
         """;
+    private static final String KV_GENERATE_QUERY_SYSTEM_PROMPT = """
+        你是 KV/文档数据库查询助手。
+        你的目标是根据当前存储类型生成“可直接执行的查询文本”，或者在信息不足时明确要求用户补充必要信息。
+        规则：
+        1) 绝对禁止臆造集合结构、字段路径、key 规则、索引信息；
+        2) 如果缺少关键上下文，优先输出“需要补充的信息：...”的简洁中文列表，不要硬猜；
+        3) MongoDB 场景仅输出 JSON 查询模板，不要输出 markdown 代码块；JSON 结构优先使用 collection / operation / filter / projection / sort / limit；
+        4) Redis 场景仅输出单条可执行命令，不要输出 markdown 代码块；
+        5) 若用户给出的信息足够，直接输出查询文本本体，不要附带解释。
+        """;
+    private static final String KV_EXPLAIN_QUERY_SYSTEM_PROMPT = """
+        你是 KV/文档数据库解释助手。
+        请基于用户提供的查询文本或业务需求，用中文说明查询意图、筛选逻辑、结果含义和不确定项。
+        规则：
+        1) 不要臆造不存在的字段和 key 结构；
+        2) 如果上下文不足，要明确指出还需要用户补充哪些信息；
+        3) 输出自然语言说明，不要输出 markdown 代码块。
+        """;
+    private static final String KV_ANALYZE_QUERY_SYSTEM_PROMPT = """
+        你是 KV/文档数据库分析助手。
+        请从可执行性、性能风险、上下文完整性三个角度分析用户提供的查询文本或需求。
+        规则：
+        1) 如果用户未提供集合名、字段路径、key 模式、数据类型等关键信息，要明确指出；
+        2) Redis 重点关注 key 命令范围、SCAN/KEYS 影响、TTL/类型匹配；
+        3) MongoDB 重点关注 collection、filter、projection、sort、limit、索引依赖；
+        4) 输出格式固定为“结论、问题、建议”三部分；
+        5) 不要臆造元数据。
+        """;
     private static final String GENERATE_CHART_SYSTEM_PROMPT = """
         你是数据库图表方案助手。请基于用户需求和数据库上下文，输出严格 JSON，不要输出任何额外文本。
         JSON 格式：
@@ -234,6 +262,9 @@ public class AiServiceImpl implements AiService {
     }
 
     private AiAutoQueryVO doAutoQuery(AiGenerateSqlReq req) {
+        if (isKvConnection(req.getConnectionId())) {
+            return doKvAutoQuery(req);
+        }
         conversationContextManager.enterRequestScope();
         try {
         long startAt = System.currentTimeMillis();
@@ -437,6 +468,9 @@ public class AiServiceImpl implements AiService {
     }
 
     private AiGenerateSqlVO doGenerateSql(AiGenerateSqlReq req) {
+        if (isKvConnection(req.getConnectionId())) {
+            return generateKvQuery(req);
+        }
         conversationContextManager.enterRequestScope();
         try {
         long startAt = System.currentTimeMillis();
@@ -661,6 +695,9 @@ public class AiServiceImpl implements AiService {
     }
 
     private AiGenerateChartVO doGenerateChart(AiGenerateSqlReq req) {
+        if (isKvConnection(req.getConnectionId())) {
+            throw new BusinessException(400, "当前 KV/文档类型对话暂不支持生成图表");
+        }
         conversationContextManager.enterRequestScope();
         try {
         long startAt = System.currentTimeMillis();
@@ -908,6 +945,9 @@ public class AiServiceImpl implements AiService {
 
     @Override
     public AiTextResponseVO explainSql(AiGenerateSqlReq req, AiStreamObserver observer) {
+        if (isKvConnection(req.getConnectionId())) {
+            return executeWithStreamObserver(observer, "explain", () -> generateKvExplainResponse(req));
+        }
         return executeWithStreamObserver(observer, "explain", () -> {
             conversationContextManager.enterRequestScope();
             try {
@@ -925,6 +965,9 @@ public class AiServiceImpl implements AiService {
 
     @Override
     public AiTextResponseVO analyzeSql(AiGenerateSqlReq req, AiStreamObserver observer) {
+        if (isKvConnection(req.getConnectionId())) {
+            return executeWithStreamObserver(observer, "analyze", () -> generateKvAnalyzeResponse(req));
+        }
         return executeWithStreamObserver(observer, "analyze", () -> {
             conversationContextManager.enterRequestScope();
             try {
@@ -1820,6 +1863,255 @@ public class AiServiceImpl implements AiService {
             return left;
         }
         return left + "；" + right;
+    }
+
+    private AiAutoQueryVO doKvAutoQuery(AiGenerateSqlReq req) {
+        IntentResult intentResult = identifyKvIntent(req);
+        IntentType intentType = intentResult.intentType();
+        emitIntentResolved(req.getSessionId(), "auto", intentType.name(), intentType.label(), intentResult.confidence(), intentResult.reason());
+
+        AiAutoQueryVO vo = new AiAutoQueryVO();
+        vo.setIntentType(intentType.name());
+        vo.setIntentLabel(intentType.label());
+        vo.setIntentConfidence(intentResult.confidence());
+
+        if (containsKvChartIntent(req.getPrompt())) {
+            vo.setFallbackUsed(true);
+            vo.setReasoning("KV/文档类型当前不支持生成图表，已返回补充说明。");
+            vo.setSqlText("当前 Redis / MongoDB 对话暂不支持生成图表。请改为“生成查询”“解释查询”或“分析查询”，并补充集合名、字段路径、key 名称等有效信息。");
+            publishFinalResult(req.getSessionId(), "auto", buildFinalResult("auto", vo));
+            return vo;
+        }
+
+        if (intentType == IntentType.EXPLAIN_SQL) {
+            AiTextResponseVO explained = generateKvTextResponse(req, "auto", KV_EXPLAIN_QUERY_SYSTEM_PROMPT, "KV 查询解释", false);
+            vo.setContent(explained.getContent());
+            vo.setFallbackUsed(Boolean.TRUE.equals(explained.getFallbackUsed()));
+            vo.setReasoning(joinReasoning(intentResult.reason(), explained.getReasoning()));
+            vo.setTotalTokens(explained.getTotalTokens());
+            vo.setTrace(explained.getTrace());
+        } else if (intentType == IntentType.ANALYZE_SQL) {
+            AiTextResponseVO analyzed = generateKvTextResponse(req, "auto", KV_ANALYZE_QUERY_SYSTEM_PROMPT, "KV 查询分析", false);
+            vo.setContent(analyzed.getContent());
+            vo.setFallbackUsed(Boolean.TRUE.equals(analyzed.getFallbackUsed()));
+            vo.setReasoning(joinReasoning(intentResult.reason(), analyzed.getReasoning()));
+            vo.setTotalTokens(analyzed.getTotalTokens());
+            vo.setTrace(analyzed.getTrace());
+        } else {
+            AiGenerateSqlVO generated = generateKvQueryInternal(req, "auto", false);
+            vo.setSqlText(generated.getSqlText());
+            vo.setFallbackUsed(Boolean.TRUE.equals(generated.getFallbackUsed()));
+            vo.setReasoning(joinReasoning(intentResult.reason(), generated.getReasoning()));
+            vo.setTotalTokens(generated.getTotalTokens());
+            vo.setTrace(generated.getTrace());
+        }
+        publishFinalResult(req.getSessionId(), "auto", buildFinalResult("auto", vo));
+        return vo;
+    }
+
+    private AiGenerateSqlVO generateKvQuery(AiGenerateSqlReq req) {
+        return generateKvQueryInternal(req, "generate", true);
+    }
+
+    private AiTextResponseVO generateKvExplainResponse(AiGenerateSqlReq req) {
+        return generateKvTextResponse(req, "explain", KV_EXPLAIN_QUERY_SYSTEM_PROMPT, "KV 查询解释", true);
+    }
+
+    private AiTextResponseVO generateKvAnalyzeResponse(AiGenerateSqlReq req) {
+        return generateKvTextResponse(req, "analyze", KV_ANALYZE_QUERY_SYSTEM_PROMPT, "KV 查询分析", true);
+    }
+
+    private AiGenerateSqlVO generateKvQueryInternal(AiGenerateSqlReq req, String actionType, boolean publishResult) {
+        long startAt = System.currentTimeMillis();
+        boolean detailOutputEnabled = resolveDetailOutputEnabled(req);
+        List<AiTraceStageVO> traceStages = detailOutputEnabled ? new ArrayList<>() : List.of();
+        String storageType = resolveKvStorageLabel(req.getConnectionId());
+        String userPrompt = buildKvUserPrompt(req, storageType, true);
+        String generatedText;
+        String reasoning;
+        OpenAiTextClient.TokenUsage providerTokenUsage = null;
+        LlmGatewayResult gatewayResult = null;
+        boolean fallbackUsed = false;
+        try {
+            TextProviderResult result = generateRawTextByConfiguredProvider(req, KV_GENERATE_QUERY_SYSTEM_PROMPT, userPrompt, "生成 SQL");
+            generatedText = safe(result.content());
+            reasoning = safe(result.reasoning());
+            providerTokenUsage = result.usage();
+            gatewayResult = result.gatewayResult();
+            if (detailOutputEnabled) {
+                addTraceStage(req.getSessionId(), actionType, traceStages, buildTraceStage(
+                    "kv_generate_query",
+                    "kv_generate_query",
+                    "llm",
+                    "success",
+                    0L,
+                    List.of(buildTraceField("userPrompt", "userPrompt", userPrompt)),
+                    List.of(buildTraceField("queryText", "queryText", generatedText)),
+                    buildTraceLlmCall(gatewayResult)
+                ));
+            }
+        } catch (Exception ex) {
+            generatedText = "需要补充的信息：请提供目标数据库、集合/键名称、关键字段路径或 key 名称、筛选条件、排序和返回条数。";
+            reasoning = "KV 查询生成失败，已返回信息补充提示。原因: " + safe(ex.getMessage());
+            fallbackUsed = true;
+            if (detailOutputEnabled) {
+                addTraceStage(req.getSessionId(), actionType, traceStages, buildTraceStage(
+                    "kv_generate_query",
+                    "kv_generate_query",
+                    "llm",
+                    "failed",
+                    0L,
+                    List.of(buildTraceField("userPrompt", "userPrompt", userPrompt)),
+                    List.of(buildTraceField("error", "error", ex.getMessage())),
+                    null
+                ));
+            }
+        }
+
+        AiGenerateSqlVO vo = new AiGenerateSqlVO();
+        vo.setSqlText(generatedText);
+        vo.setReasoning(reasoning);
+        vo.setFallbackUsed(fallbackUsed);
+        TokenUsageStats tokenUsage = resolveTokenUsage(providerTokenUsage, userPrompt, generatedText + "\n" + reasoning);
+        vo.setPromptTokens(tokenUsage.promptTokens());
+        vo.setCompletionTokens(tokenUsage.completionTokens());
+        vo.setTotalTokens(tokenUsage.totalTokens());
+        if (detailOutputEnabled) {
+            publishTraceSnapshot(req.getSessionId(), actionType, traceStages, System.currentTimeMillis() - startAt);
+            vo.setTrace(buildTrace(traceStages, System.currentTimeMillis() - startAt));
+        }
+        if (publishResult) {
+            publishFinalResult(req.getSessionId(), actionType, buildFinalResult(actionType, vo));
+        }
+        return vo;
+    }
+
+    private AiTextResponseVO generateKvTextResponse(AiGenerateSqlReq req,
+                                                    String actionType,
+                                                    String systemPrompt,
+                                                    String taskLabel,
+                                                    boolean publishResult) {
+        long startAt = System.currentTimeMillis();
+        boolean detailOutputEnabled = resolveDetailOutputEnabled(req);
+        List<AiTraceStageVO> traceStages = detailOutputEnabled ? new ArrayList<>() : List.of();
+        String storageType = resolveKvStorageLabel(req.getConnectionId());
+        String userPrompt = buildKvUserPrompt(req, storageType, false);
+        String content;
+        String reasoning;
+        OpenAiTextClient.TokenUsage providerTokenUsage = null;
+        LlmGatewayResult gatewayResult = null;
+        boolean fallbackUsed = false;
+        try {
+            TextProviderResult result = generateRawTextByConfiguredProvider(req, systemPrompt, userPrompt, taskLabel);
+            content = safe(result.content());
+            reasoning = safe(result.reasoning());
+            providerTokenUsage = result.usage();
+            gatewayResult = result.gatewayResult();
+            if (detailOutputEnabled) {
+                addTraceStage(req.getSessionId(), actionType, traceStages, buildTraceStage(
+                    "kv_text_response",
+                    "kv_text_response",
+                    "llm",
+                    "success",
+                    0L,
+                    List.of(buildTraceField("userPrompt", "userPrompt", userPrompt)),
+                    List.of(buildTraceField("content", "content", content)),
+                    buildTraceLlmCall(gatewayResult)
+                ));
+            }
+        } catch (Exception ex) {
+            content = "信息不足。请补充目标数据库、集合/键名称、字段路径或 key 名称，以及你希望执行的筛选或分析目标。";
+            reasoning = "KV 对话生成失败，已返回补充提示。原因: " + safe(ex.getMessage());
+            fallbackUsed = true;
+            if (detailOutputEnabled) {
+                addTraceStage(req.getSessionId(), actionType, traceStages, buildTraceStage(
+                    "kv_text_response",
+                    "kv_text_response",
+                    "llm",
+                    "failed",
+                    0L,
+                    List.of(buildTraceField("userPrompt", "userPrompt", userPrompt)),
+                    List.of(buildTraceField("error", "error", ex.getMessage())),
+                    null
+                ));
+            }
+        }
+
+        AiTextResponseVO vo = new AiTextResponseVO();
+        vo.setContent(content);
+        vo.setReasoning(reasoning);
+        vo.setFallbackUsed(fallbackUsed);
+        TokenUsageStats tokenUsage = resolveTokenUsage(providerTokenUsage, userPrompt, content + "\n" + reasoning);
+        vo.setPromptTokens(tokenUsage.promptTokens());
+        vo.setCompletionTokens(tokenUsage.completionTokens());
+        vo.setTotalTokens(tokenUsage.totalTokens());
+        if (detailOutputEnabled) {
+            publishTraceSnapshot(req.getSessionId(), actionType, traceStages, System.currentTimeMillis() - startAt);
+            vo.setTrace(buildTrace(traceStages, System.currentTimeMillis() - startAt));
+        }
+        if (publishResult) {
+            publishFinalResult(req.getSessionId(), actionType, buildFinalResult(actionType, vo));
+        }
+        return vo;
+    }
+
+    private IntentResult identifyKvIntent(AiGenerateSqlReq req) {
+        String prompt = safe(req.getPrompt()).toLowerCase(Locale.ROOT);
+        if (prompt.contains("图表") || prompt.contains("chart") || prompt.contains("可视化")) {
+            return new IntentResult(IntentType.GENERATE_SQL, 0.99D, "检测到图表诉求，但 KV/文档类型不支持图表生成");
+        }
+        if (prompt.contains("解释") || prompt.contains("含义") || prompt.contains("说明这段")) {
+            return new IntentResult(IntentType.EXPLAIN_SQL, 0.88D, "检测到解释类诉求");
+        }
+        if (prompt.contains("分析") || prompt.contains("优化") || prompt.contains("合理") || prompt.contains("风险")) {
+            return new IntentResult(IntentType.ANALYZE_SQL, 0.88D, "检测到分析类诉求");
+        }
+        return new IntentResult(IntentType.GENERATE_SQL, 0.86D, "默认按生成查询处理");
+    }
+
+    private boolean containsKvChartIntent(String prompt) {
+        String text = safe(prompt).toLowerCase(Locale.ROOT);
+        return text.contains("图表") || text.contains("chart") || text.contains("可视化");
+    }
+
+    private boolean isKvConnection(Long connectionId) {
+        String dbType = resolveConnectionDbType(connectionId);
+        return "MONGODB".equals(dbType) || "REDIS".equals(dbType);
+    }
+
+    private String resolveKvStorageLabel(Long connectionId) {
+        String dbType = resolveConnectionDbType(connectionId);
+        if ("MONGODB".equals(dbType)) {
+            return "MongoDB";
+        }
+        if ("REDIS".equals(dbType)) {
+            return "Redis";
+        }
+        return dbType;
+    }
+
+    private String resolveConnectionDbType(Long connectionId) {
+        ConnectionEntity entity = connectionService.getConnectionEntity(connectionId);
+        return safe(entity.getDbType()).toUpperCase(Locale.ROOT);
+    }
+
+    private String buildKvUserPrompt(AiGenerateSqlReq req, String storageType, boolean generateMode) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("存储类型: ").append(storageType).append('\n');
+        builder.append("当前数据库: ").append(safe(req.getDatabaseName()).isBlank() ? "未指定" : safe(req.getDatabaseName())).append('\n');
+        builder.append("用户需求:\n").append(safe(req.getPrompt())).append("\n\n");
+        if ("MongoDB".equals(storageType)) {
+            builder.append("如果信息不足，请优先提示用户补充：database / collection / filter / projection / sort / limit / 样例文档 / 索引。\n");
+            if (generateMode) {
+                builder.append("MongoDB 仅允许输出 JSON 查询模板。\n");
+            }
+        } else if ("Redis".equals(storageType)) {
+            builder.append("如果信息不足，请优先提示用户补充：logical db / key 名称或 pattern / 数据类型 / TTL / 字段示例 / 是否使用 RedisJSON 或 RediSearch。\n");
+            if (generateMode) {
+                builder.append("Redis 仅允许输出单条命令。\n");
+            }
+        }
+        return builder.toString();
     }
 
     /**
