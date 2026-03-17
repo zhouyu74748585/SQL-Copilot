@@ -79,6 +79,34 @@
       background: rgba(255,255,255,0.15);
       border: 1px solid rgba(255,255,255,0.3);
     }
+    header .header-links {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 12px;
+      margin-top: 20px;
+      position: relative;
+    }
+    header .header-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 8px 20px;
+      border-radius: 9999px;
+      font-size: 0.85rem;
+      font-weight: 700;
+      text-decoration: none;
+      transition: all .18s;
+      border: 2px solid rgba(255,255,255,0.7);
+      color: #fff;
+    }
+    header .header-link:hover {
+      background: rgba(255,255,255,0.25);
+      border-color: #fff;
+    }
+    header .header-link.primary {
+      background: rgba(255,255,255,0.18);
+    }
 
     /* ─── Lang Switch ─── */
     .lang-switch {
@@ -329,6 +357,18 @@
     <span class="badge">🗄 Multi-Database</span>
     <span class="badge">⚡ Electron + Spring Boot</span>
   </div>
+  <div class="header-links">
+    <a class="header-link primary"
+       href="https://github.com/zhouyu74748585/SQL-Copilot/releases/tag/V.1.0.0"
+       target="_blank" rel="noopener">
+      ⬇ 立即下载 / Download V1.0.0
+    </a>
+    <a class="header-link"
+       href="https://github.com/zhouyu74748585/SQL-Copilot"
+       target="_blank" rel="noopener">
+      ⭐ GitHub 仓库 / Repository
+    </a>
+  </div>
 </header>
 
 <!-- ══════════════════ LANG SWITCH ══════════════════ -->
@@ -355,6 +395,8 @@
       <span class="key">当前版本</span>      <span class="val">1.0.0</span>
       <span class="key">发布日期</span>      <span class="val">2026 年 3 月</span>
       <span class="key">开发者联系</span>    <span class="val"><a class="link" href="mailto:zhouyu74748585@hotmail.com">zhouyu74748585@hotmail.com</a></span>
+      <span class="key">GitHub 仓库</span>   <span class="val"><a class="link" href="https://github.com/zhouyu74748585/SQL-Copilot" target="_blank" rel="noopener">github.com/zhouyu74748585/SQL-Copilot</a></span>
+      <span class="key">下载地址</span>      <span class="val"><a class="link" href="https://github.com/zhouyu74748585/SQL-Copilot/releases/tag/V.1.0.0" target="_blank" rel="noopener">Releases / V.1.0.0</a></span>
       <span class="key">隐私政策</span>      <span class="val"><a class="link" href="privacy-policy.html">查看隐私政策</a></span>
       <span class="key">定价</span>          <span class="val">免费（Free）</span>
     </div>
@@ -367,6 +409,8 @@
       <span class="key">Version</span>          <span class="val">1.0.0</span>
       <span class="key">Release Date</span>     <span class="val">March 2026</span>
       <span class="key">Developer Contact</span><span class="val"><a class="link" href="mailto:zhouyu74748585@hotmail.com">zhouyu74748585@hotmail.com</a></span>
+      <span class="key">GitHub Repository</span><span class="val"><a class="link" href="https://github.com/zhouyu74748585/SQL-Copilot" target="_blank" rel="noopener">github.com/zhouyu74748585/SQL-Copilot</a></span>
+      <span class="key">Download</span>        <span class="val"><a class="link" href="https://github.com/zhouyu74748585/SQL-Copilot/releases/tag/V.1.0.0" target="_blank" rel="noopener">Releases / V.1.0.0</a></span>
       <span class="key">Privacy Policy</span>  <span class="val"><a class="link" href="privacy-policy.html">View Privacy Policy</a></span>
       <span class="key">Pricing</span>         <span class="val">Free</span>
     </div>
@@ -993,13 +1037,17 @@
     </div>
     <div class="info-row" data-lang="zh">
       <span class="key">开发者邮箱</span>   <span class="val"><a class="link" href="mailto:zhouyu74748585@hotmail.com">zhouyu74748585@hotmail.com</a></span>
-      <span class="key">支持渠道</span>      <span class="val">邮件支持（Email Support）</span>
+      <span class="key">GitHub 仓库</span>  <span class="val"><a class="link" href="https://github.com/zhouyu74748585/SQL-Copilot" target="_blank" rel="noopener">github.com/zhouyu74748585/SQL-Copilot</a></span>
+      <span class="key">下载地址</span>     <span class="val"><a class="link" href="https://github.com/zhouyu74748585/SQL-Copilot/releases/tag/V.1.0.0" target="_blank" rel="noopener">Releases / V.1.0.0</a></span>
+      <span class="key">支持渠道</span>      <span class="val">邮件支持 · GitHub Issues</span>
       <span class="key">反馈语言</span>      <span class="val">中文 / English</span>
     </div>
     <div class="info-row" data-lang="en">
-      <span class="key">Developer Email</span>  <span class="val"><a class="link" href="mailto:zhouyu74748585@hotmail.com">zhouyu74748585@hotmail.com</a></span>
-      <span class="key">Support Channel</span> <span class="val">Email Support</span>
-      <span class="key">Languages</span>        <span class="val">Chinese / English</span>
+      <span class="key">Developer Email</span>   <span class="val"><a class="link" href="mailto:zhouyu74748585@hotmail.com">zhouyu74748585@hotmail.com</a></span>
+      <span class="key">GitHub Repository</span> <span class="val"><a class="link" href="https://github.com/zhouyu74748585/SQL-Copilot" target="_blank" rel="noopener">github.com/zhouyu74748585/SQL-Copilot</a></span>
+      <span class="key">Download</span>          <span class="val"><a class="link" href="https://github.com/zhouyu74748585/SQL-Copilot/releases/tag/V.1.0.0" target="_blank" rel="noopener">Releases / V.1.0.0</a></span>
+      <span class="key">Support Channel</span>   <span class="val">Email · GitHub Issues</span>
+      <span class="key">Languages</span>         <span class="val">Chinese / English</span>
     </div>
   </div>
 
