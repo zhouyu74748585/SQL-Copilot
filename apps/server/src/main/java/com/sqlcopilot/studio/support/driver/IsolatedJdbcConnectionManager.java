@@ -17,6 +17,7 @@ import java.nio.file.StandardCopyOption;
 import java.sql.Connection;
 import java.sql.Driver;
 import java.sql.SQLException;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
@@ -34,7 +35,11 @@ public class IsolatedJdbcConnectionManager {
         this.jdbcDriverResolver = jdbcDriverResolver;
     }
 
-    public Connection open(ConnectionEntity entity, String jdbcUrl, String username, String password) throws SQLException {
+    public Connection open(ConnectionEntity entity,
+                           String jdbcUrl,
+                           String username,
+                           String password,
+                           Map<String, String> extraProperties) throws SQLException {
         if (entity.getId() == null) {
             throw new BusinessException(400, "连接 ID 不能为空，无法建立隔离上下文");
         }
@@ -42,6 +47,15 @@ public class IsolatedJdbcConnectionManager {
         DriverSession session = ensureSession(entity.getId(), resolved);
 
         Properties properties = new Properties();
+        if (extraProperties != null) {
+            extraProperties.forEach((key, value) -> {
+                String normalizedKey = Objects.toString(key, "").trim();
+                if (normalizedKey.isBlank()) {
+                    return;
+                }
+                properties.setProperty(normalizedKey, Objects.toString(value, "").trim());
+            });
+        }
         if (username != null && !username.isBlank()) {
             properties.setProperty("user", username);
         }
@@ -95,7 +109,7 @@ public class IsolatedJdbcConnectionManager {
         ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
         URLClassLoader isolatedLoader = null;
 
-        ClassPathResource resource = new ClassPathResource(resolved.resourcePath());
+        ClassPathResource resource = new ClassPathResource(Objects.requireNonNull(resolved.resourcePath()));
         if (resource.exists()) {
             try {
                 Path tempJar = Files.createTempFile("sql-copilot-driver-", ".jar");

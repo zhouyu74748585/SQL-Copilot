@@ -29,6 +29,9 @@ public class ConnectionVO {
     /** 勾选展示的数据库列表。 */
     private List<String> selectedDatabases;
 
+    /** 自定义 JDBC 参数文本。 */
+    private String customParams;
+
     /** 登录用户名。 */
     private String username;
 

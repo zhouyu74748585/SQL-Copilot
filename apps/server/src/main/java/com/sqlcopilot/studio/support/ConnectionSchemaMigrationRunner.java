@@ -25,6 +25,7 @@ public class ConnectionSchemaMigrationRunner implements ApplicationRunner {
             ensureConnectionColumn(connection, statement, "ssh_private_key_path", "TEXT");
             ensureConnectionColumn(connection, statement, "ssh_private_key_text", "TEXT");
             ensureConnectionColumn(connection, statement, "ssh_private_key_passphrase", "TEXT");
+            ensureConnectionColumn(connection, statement, "custom_params", "TEXT");
             ensureConnectionColumn(connection, statement, "selected_databases_json", "TEXT");
             backfillSshAuthType(connection);
         } catch (SQLException ex) {

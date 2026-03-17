@@ -10,6 +10,7 @@ public class ConnectionEntity {
     private String host;
     private Integer port;
     private String databaseName;
+    private String customParams;
     private String username;
     private String password;
     private String authType;

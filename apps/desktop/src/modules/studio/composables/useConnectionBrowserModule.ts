@@ -20,6 +20,7 @@ type ContextAction =
   | 'createConnection'
   | 'editConnection'
   | 'testConnection'
+  | 'disconnectConnection'
   | 'syncSchema'
   | 'deleteConnection'
   | 'createNamespace'
@@ -388,6 +389,7 @@ export function useConnectionBrowserModule(
         { id: 'createConnection', label: '新建连接' },
         { id: 'editConnection', label: '编辑连接' },
         { id: 'testConnection', label: '测试连接' },
+        { id: 'disconnectConnection', label: '关闭连接' },
         { id: 'syncSchema', label: '同步 Schema' },
         { id: 'deleteConnection', label: '删除连接', danger: true },
       ];
@@ -520,6 +522,10 @@ export function useConnectionBrowserModule(
     }
     if (action === 'testConnection') {
       await runtime.testConnection(id);
+      return;
+    }
+    if (action === 'disconnectConnection') {
+      await runtime.disconnectConnection(id);
       return;
     }
     if (action === 'syncSchema') {
@@ -726,6 +732,16 @@ export function useConnectionBrowserModule(
   }
 
   async function handleTreeNodeDblclick(node: TreeNodeData) {
+    if (node.nodeType === 'connection' && node.connectionId) {
+      runtime.workflow.connectionId = node.connectionId;
+      const connectionKey = `conn-${node.connectionId}`;
+      if (runtime.expandedTreeKeys.value.includes(connectionKey)) {
+        runtime.collapseConnectionNode(node.connectionId);
+      } else {
+        await runtime.ensureConnectionTreeExpanded(node.connectionId);
+      }
+      return;
+    }
     if (!node.connectionId || !node.databaseName) {
       return;
     }

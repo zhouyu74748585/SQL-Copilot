@@ -33,6 +33,7 @@ export interface ConnectionCreateReq {
   port?: number;
   databaseName?: string;
   selectedDatabases?: string[];
+  customParams?: string;
   username?: string;
   password?: string;
   authType?: string;
@@ -54,6 +55,7 @@ export interface ConnectionDatabasePreviewReq {
   host?: string;
   port?: number;
   databaseName?: string;
+  customParams?: string;
   username?: string;
   password?: string;
   sshEnabled?: boolean;

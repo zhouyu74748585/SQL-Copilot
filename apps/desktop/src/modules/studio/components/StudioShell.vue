@@ -298,7 +298,13 @@
               @rightClick="handleTreeRightClick"
             >
               <template #title="{ title, dataRef }">
-                <div class="tree-title-row" @dblclick.stop="handleTreeNodeDblclick(dataRef)">
+                <div
+                  class="tree-title-row"
+                  :class="{
+                    'is-connection-expanded': dataRef.nodeType === 'connection' && expandedTreeKeys.includes(`conn-${dataRef.connectionId}`),
+                  }"
+                  @dblclick.stop="handleTreeNodeDblclick(dataRef)"
+                >
                   <img
                     v-if="dataRef.nodeType === 'connection' && dbIconUrl(dataRef.dbType)"
                     class="tree-icon-img"
@@ -2363,6 +2369,17 @@
             </a-form-item>
           </a-col>
         </a-row>
+
+        <a-form-item label="自定义参数">
+          <a-textarea
+            v-model:value="connectionForm.customParams"
+            :rows="4"
+            placeholder="每行一个 key=value，例如：&#10;encrypt=true&#10;trustServerCertificate=true"
+          />
+          <div class="connection-custom-params-tip">
+            连接时会自动拼接到 JDBC 配置中。推荐每行填写一个参数，例如 `encrypt=true`。
+          </div>
+        </a-form-item>
 
         <a-space>
           <a-checkbox v-model:checked="connectionForm.readOnly">只读</a-checkbox>

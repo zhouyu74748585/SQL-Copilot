@@ -56,6 +56,12 @@ public class ConnectionController {
         return ApiResponse.success(Boolean.TRUE);
     }
 
+    @PostMapping("/disconnect")
+    public ApiResponse<Boolean> disconnect(@Valid @RequestBody ConnectionRemoveReq req) {
+        connectionService.disconnectConnection(req.getId());
+        return ApiResponse.success(Boolean.TRUE);
+    }
+
     @PostMapping("/test")
     public ApiResponse<ConnectionTestVO> test(@Valid @RequestBody ConnectionTestReq req) {
         return ApiResponse.success(connectionService.testConnection(req.getConnectionId()));

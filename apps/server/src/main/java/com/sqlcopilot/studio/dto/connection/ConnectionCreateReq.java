@@ -30,6 +30,9 @@ public class ConnectionCreateReq {
     /** 勾选展示的数据库列表（仅 MySQL/PostgreSQL/SQLServer 生效）。 */
     private List<String> selectedDatabases;
 
+    /** 自定义 JDBC 参数，多行或分隔符格式，运行时会拼接到连接配置。 */
+    private String customParams;
+
     /** 登录用户名。 */
     private String username;
 

@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS connection_info (
     host TEXT,
     port INTEGER,
     database_name TEXT,
+    custom_params TEXT,
     username TEXT,
     password TEXT,
     auth_type TEXT,

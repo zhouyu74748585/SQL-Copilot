@@ -19,6 +19,8 @@ public interface ConnectionService {
 
     void removeConnection(Long id);
 
+    void disconnectConnection(Long id);
+
     ConnectionTestVO testConnection(Long connectionId);
 
     ConnectionEntity getConnectionEntity(Long id);

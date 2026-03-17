@@ -12,6 +12,7 @@ export interface ConnectionVO {
   port?: number;
   databaseName?: string;
   selectedDatabases?: string[];
+  customParams?: string;
   username?: string;
   env: string;
   readOnly: boolean;

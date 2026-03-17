@@ -176,6 +176,13 @@ public class ConnectionServiceImpl implements ConnectionService {
     }
 
     @Override
+    public void disconnectConnection(Long id) {
+        getConnectionEntity(id);
+        isolatedJdbcConnectionManager.release(id);
+        sshTunnelManager.release(id);
+    }
+
+    @Override
     public ConnectionTestVO testConnection(Long connectionId) {
         ConnectionTestVO vo = new ConnectionTestVO();
         long now = System.currentTimeMillis();
@@ -233,6 +240,7 @@ public class ConnectionServiceImpl implements ConnectionService {
         entity.setHost(safeValue(req.getHost()));
         entity.setPort(req.getPort());
         entity.setDatabaseName(safeValue(req.getDatabaseName()));
+        entity.setCustomParams(safeValue(req.getCustomParams()));
         entity.setUsername(safeValue(req.getUsername()));
         entity.setPassword(safeValue(req.getPassword()));
         entity.setAuthType(safeValue(req.getAuthType()));
@@ -257,6 +265,7 @@ public class ConnectionServiceImpl implements ConnectionService {
         entity.setHost(safeValue(req.getHost()));
         entity.setPort(req.getPort());
         entity.setDatabaseName(safeValue(req.getDatabaseName()));
+        entity.setCustomParams(safeValue(req.getCustomParams()));
         entity.setUsername(safeValue(req.getUsername()));
         entity.setPassword(safeValue(req.getPassword()));
         entity.setAuthType("PASSWORD");
@@ -283,6 +292,7 @@ public class ConnectionServiceImpl implements ConnectionService {
         vo.setPort(entity.getPort());
         vo.setDatabaseName(entity.getDatabaseName());
         vo.setSelectedDatabases(parseSelectedDatabases(entity.getSelectedDatabasesJson()));
+        vo.setCustomParams(safeValue(entity.getCustomParams()));
         vo.setUsername(entity.getUsername());
         vo.setEnv(entity.getEnv());
         vo.setReadOnly(entity.getReadOnly() != null && entity.getReadOnly() == 1);
@@ -309,7 +319,8 @@ public class ConnectionServiceImpl implements ConnectionService {
             driverEntity,
             url,
             safeValue(driverEntity.getUsername()),
-            safeValue(driverEntity.getPassword())
+            safeValue(driverEntity.getPassword()),
+            JdbcUrlBuilder.parseCustomParameters(driverEntity.getCustomParams())
         );
     }
 
@@ -642,6 +653,7 @@ public class ConnectionServiceImpl implements ConnectionService {
         target.setHost(source.getHost());
         target.setPort(source.getPort());
         target.setDatabaseName(source.getDatabaseName());
+        target.setCustomParams(source.getCustomParams());
         target.setUsername(source.getUsername());
         target.setPassword(source.getPassword());
         target.setAuthType(source.getAuthType());

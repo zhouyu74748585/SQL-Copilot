@@ -3,8 +3,14 @@ package com.sqlcopilot.studio.dialect;
 import com.sqlcopilot.studio.entity.ConnectionEntity;
 import com.sqlcopilot.studio.util.BusinessException;
 
+import java.net.URLDecoder;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
+import java.util.StringJoiner;
 
 public final class JdbcUrlBuilder {
 
@@ -13,16 +19,18 @@ public final class JdbcUrlBuilder {
 
     public static String build(ConnectionEntity entity) {
         String type = normalize(entity.getDbType()).toUpperCase(Locale.ROOT);
+        String customParams = safe(entity.getCustomParams());
         return switch (type) {
             case "MYSQL" -> {
                 Endpoint endpoint = resolveEndpoint(entity.getHost(), entity.getPort(), 3306, "MySQL 主机不能为空");
                 String dbName = sanitizeDbName(firstNonBlank(entity.getDatabaseName(), endpoint.dbNameFromHost()));
                 String databasePart = dbName.isBlank() ? "" : "/" + dbName;
-                yield String.format(
+                String url = String.format(
                     "jdbc:mysql://%s:%d%s?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8",
                     endpoint.host(),
                     endpoint.port(),
                     databasePart);
+                yield appendQueryParameters(url, customParams);
             }
             case "POSTGRESQL" -> {
                 Endpoint endpoint = resolveEndpoint(entity.getHost(), entity.getPort(), 5432, "PostgreSQL 主机不能为空");
@@ -30,22 +38,26 @@ public final class JdbcUrlBuilder {
                 if (dbName.isBlank()) {
                     dbName = "postgres";
                 }
-                yield String.format(
+                String url = String.format(
                     "jdbc:postgresql://%s:%d/%s",
                     endpoint.host(),
                     endpoint.port(),
                     dbName);
+                yield appendQueryParameters(url, customParams);
             }
-            case "SQLITE" -> String.format("jdbc:sqlite:%s",
-                requiredText(entity.getDatabaseName(), "SQLite 数据库文件路径不能为空"));
+            case "SQLITE" -> appendQueryParameters(
+                String.format("jdbc:sqlite:%s", requiredText(entity.getDatabaseName(), "SQLite 数据库文件路径不能为空")),
+                customParams
+            );
             case "SQLSERVER" -> {
                 Endpoint endpoint = resolveEndpoint(entity.getHost(), entity.getPort(), 1433, "SQL Server 主机不能为空");
                 String dbName = sanitizeDbName(firstNonBlank(entity.getDatabaseName(), endpoint.dbNameFromHost()));
-                yield String.format(
+                String url = String.format(
                     "jdbc:sqlserver://%s:%d%s",
                     endpoint.host(),
                     endpoint.port(),
                     dbName.isBlank() ? "" : ";databaseName=" + dbName);
+                yield appendSemicolonParameters(url, customParams);
             }
             case "ORACLE" -> {
                 Endpoint endpoint = resolveEndpoint(entity.getHost(), entity.getPort(), 1521, "Oracle 主机不能为空");
@@ -57,6 +69,38 @@ public final class JdbcUrlBuilder {
             }
             default -> throw new BusinessException(400, "不支持的数据库类型: " + entity.getDbType());
         };
+    }
+
+    public static Map<String, String> parseCustomParameters(String rawText) {
+        LinkedHashMap<String, String> params = new LinkedHashMap<>();
+        String normalizedText = safe(rawText).replace("\r", "\n");
+        if (normalizedText.isBlank()) {
+            return params;
+        }
+        String[] lines = normalizedText.split("\n");
+        for (String rawLine : lines) {
+            String line = safe(rawLine);
+            if (line.isBlank() || line.startsWith("#") || line.startsWith("--")) {
+                continue;
+            }
+            String[] segments = line.split("[&;]");
+            for (String rawSegment : segments) {
+                String segment = safe(rawSegment);
+                if (segment.isBlank()) {
+                    continue;
+                }
+                int delimiterIndex = segment.indexOf('=');
+                if (delimiterIndex < 0) {
+                    delimiterIndex = segment.indexOf(':');
+                }
+                String key = delimiterIndex >= 0 ? safe(segment.substring(0, delimiterIndex)) : segment;
+                String value = delimiterIndex >= 0 ? safe(segment.substring(delimiterIndex + 1)) : "true";
+                if (!key.isBlank()) {
+                    params.put(key, value);
+                }
+            }
+        }
+        return params;
     }
 
     private static Integer validPort(Integer port, Integer fallback) {
@@ -173,6 +217,63 @@ public final class JdbcUrlBuilder {
             dbName = dbName.substring(0, semicolonIndex);
         }
         return dbName.trim();
+    }
+
+    private static String appendQueryParameters(String jdbcUrl, String rawParams) {
+        Map<String, String> customParams = parseCustomParameters(rawParams);
+        if (customParams.isEmpty()) {
+            return jdbcUrl;
+        }
+        int queryIndex = jdbcUrl.indexOf('?');
+        String baseUrl = queryIndex >= 0 ? jdbcUrl.substring(0, queryIndex) : jdbcUrl;
+        LinkedHashMap<String, String> mergedParams = new LinkedHashMap<>();
+        if (queryIndex >= 0 && queryIndex < jdbcUrl.length() - 1) {
+            String query = jdbcUrl.substring(queryIndex + 1);
+            String[] entries = query.split("&");
+            for (String entry : entries) {
+                String normalizedEntry = safe(entry);
+                if (normalizedEntry.isBlank()) {
+                    continue;
+                }
+                int delimiterIndex = normalizedEntry.indexOf('=');
+                String key = delimiterIndex >= 0 ? urlDecode(normalizedEntry.substring(0, delimiterIndex)) : urlDecode(normalizedEntry);
+                String value = delimiterIndex >= 0 ? urlDecode(normalizedEntry.substring(delimiterIndex + 1)) : "";
+                if (!key.isBlank()) {
+                    mergedParams.put(key, value);
+                }
+            }
+        }
+        mergedParams.putAll(customParams);
+        StringJoiner joiner = new StringJoiner("&");
+        mergedParams.forEach((key, value) -> joiner.add(urlEncode(key) + "=" + urlEncode(value)));
+        return baseUrl + "?" + joiner;
+    }
+
+    private static String appendSemicolonParameters(String jdbcUrl, String rawParams) {
+        Map<String, String> params = parseCustomParameters(rawParams);
+        if (params.isEmpty()) {
+            return jdbcUrl;
+        }
+        StringBuilder builder = new StringBuilder(jdbcUrl);
+        params.forEach((key, value) -> {
+            if (builder.length() > 0 && builder.charAt(builder.length() - 1) != ';') {
+                builder.append(';');
+            }
+            builder.append(key).append('=').append(value);
+        });
+        return builder.toString();
+    }
+
+    private static String urlEncode(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8);
+    }
+
+    private static String urlDecode(String value) {
+        return URLDecoder.decode(value, StandardCharsets.UTF_8);
+    }
+
+    private static String safe(String value) {
+        return Objects.toString(value, "").trim();
     }
 
     private record Endpoint(String host, Integer port, String dbNameFromHost) {

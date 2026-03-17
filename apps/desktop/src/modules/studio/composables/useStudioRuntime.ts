@@ -47,9 +47,11 @@ import {getApi, postApi, postSseApi} from '../../../api/client';
 import QueryChartPanel from '../../../components/QueryChartPanel.vue';
 import ErDiagramPanel from '../../../components/ErDiagramPanel.vue';
 import TableEditor from '../../../components/TableEditor.vue';
+import mongodbIcon from '../../../assets/db/mongodb.svg';
 import mysqlIcon from '../../../assets/db/mysql.svg';
 import oracleIcon from '../../../assets/db/oracle.svg';
 import postgresqlIcon from '../../../assets/db/postgresql.svg';
+import redisIcon from '../../../assets/db/redis.svg';
 import sqliteIcon from '../../../assets/db/sqlite.svg';
 import sqlserverIcon from '../../../assets/db/sqlserver.svg';
 import {
@@ -2128,6 +2130,9 @@ function invalidateConnectionMetadataCaches(connectionId: number) {
   objectNameCache.value = Object.fromEntries(
     Object.entries(objectNameCache.value).filter(([key]) => !key.startsWith(`${connectionId}|`)),
   );
+  savedQueryCache.value = Object.fromEntries(
+    Object.entries(savedQueryCache.value).filter(([key]) => !key.startsWith(`${connectionId}|`)),
+  );
   queryTableDetailCache.value = Object.fromEntries(
     Object.entries(queryTableDetailCache.value).filter(([key]) => !key.startsWith(`${connectionId}|`)),
   );
@@ -2164,6 +2169,7 @@ function invalidateConnectionMetadataCaches(connectionId: number) {
     schemaOverview.value = null;
     kvOverview.value = null;
     selectedObjectName.value = '';
+    clearBrowserObjectCollections();
     clearObjectDetail();
   }
 }
@@ -2260,6 +2266,32 @@ function invalidateDatabaseListCache(connectionId: number) {
   databaseVectorizeStatusMap.value = Object.fromEntries(
     Object.entries(databaseVectorizeStatusMap.value).filter(([key]) => !key.startsWith(`${connectionId}|`)),
   );
+}
+
+function collapseConnectionNode(connectionId: number) {
+  const prefix = `conn-${connectionId}`;
+  expandedTreeKeys.value = expandedTreeKeys.value.filter((key) => {
+    const normalizedKey = String(key);
+    return normalizedKey !== prefix && !normalizedKey.startsWith(`${prefix}-`);
+  });
+}
+
+function resetConnectionRuntimeState(connectionId: number) {
+  if (!connectionId) {
+    return;
+  }
+  invalidateConnectionMetadataCaches(connectionId);
+  collapseConnectionNode(connectionId);
+  const childPrefix = `conn-${connectionId}-`;
+  if (selectedTreeKeys.value.some((key) => String(key).startsWith(childPrefix))) {
+    selectedTreeKeys.value = [`conn-${connectionId}`];
+  }
+  if (workflow.connectionId === connectionId) {
+    currentObjectType.value = 'tables';
+    selectedObjectName.value = '';
+    clearBrowserObjectCollections();
+    clearObjectDetail();
+  }
 }
 
 function handleDatabaseRenamedLocally(connectionId: number, sourceDatabaseName: string, targetDatabaseName: string) {
@@ -3968,11 +4000,10 @@ async function loadConnections() {
     currentObjectType.value = 'tables';
     selectedObjectName.value = '';
     clearObjectDetail();
-    await prepareConnectionTreeData(workflow.connectionId);
+    const expanded = await ensureConnectionTreeExpanded(workflow.connectionId, { showError: false });
     selectedTreeKeys.value = [`conn-${workflow.connectionId}`];
-    expandConnectionNode(workflow.connectionId);
     const current = connections.value.find((item) => item.id === workflow.connectionId);
-    if (current && (!requiresDatabaseLayer(current) || getActiveDatabaseName(workflow.connectionId))) {
+    if (expanded && current && (!requiresDatabaseLayer(current) || getActiveDatabaseName(workflow.connectionId))) {
       await loadOverview();
     } else {
       schemaOverview.value = null;
@@ -3999,6 +4030,7 @@ async function saveConnection() {
     const payload: ConnectionCreateReq & { id?: number } = {
       ...connectionForm,
       selectedDatabases: normalizedSelectedDatabases,
+      customParams: (connectionForm.customParams || '').trim(),
       sshAuthType,
       sshPassword: connectionForm.sshEnabled && sshAuthType === 'SSH_PASSWORD'
         ? (connectionForm.sshPassword || '').trim()
@@ -4046,6 +4078,7 @@ async function previewConnectionDatabases() {
       host: (connectionForm.host || '').trim(),
       port: connectionForm.port,
       databaseName: (connectionForm.databaseName || '').trim(),
+      customParams: (connectionForm.customParams || '').trim(),
       username: (connectionForm.username || '').trim(),
       password: (connectionForm.password || '').trim(),
       sshEnabled: connectionForm.sshEnabled,
@@ -4084,6 +4117,14 @@ async function testConnection(id: number) {
     const result = await postApi<{ success: boolean; message: string }>('/api/connection/test', { connectionId: id });
     message.info(result.message);
     await loadConnections();
+  });
+}
+
+async function disconnectConnection(id: number) {
+  await runSafely(async () => {
+    await postApi<boolean>('/api/connection/disconnect', { id });
+    resetConnectionRuntimeState(id);
+    message.success('连接已关闭');
   });
 }
 
@@ -4394,13 +4435,6 @@ async function ensureTableNamesLoaded(connectionId: number, databaseName: string
     return pending;
   }
   const task = loadTableNamesByConnection(connectionId, databaseName)
-    .catch(() => {
-      tableNameLoadedCache.value = {
-        ...tableNameLoadedCache.value,
-        [cacheKey]: true,
-      };
-      return [];
-    })
     .finally(() => {
       pendingTableNameLoads.delete(cacheKey);
     });
@@ -5304,8 +5338,12 @@ async function handleTreeSelect(keys: (string | number)[]) {
     selectedObjectName.value = '';
     clearBrowserObjectCollections();
     clearObjectDetail();
-    await prepareConnectionTreeData(connectionId);
-    expandConnectionNode(connectionId);
+    const expanded = await ensureConnectionTreeExpanded(connectionId);
+    if (!expanded) {
+      schemaOverview.value = null;
+      kvOverview.value = null;
+      return;
+    }
     const current = connections.value.find((item) => item.id === connectionId);
     if (current && (!requiresDatabaseLayer(current) || getActiveDatabaseName(connectionId))) {
       await loadOverview();
@@ -5384,15 +5422,19 @@ async function handleTreeSelect(keys: (string | number)[]) {
 async function handleTreeExpand(keys: (string | number)[]) {
   const previousExpanded = new Set(expandedTreeKeys.value);
   const normalizedKeys = keys.map((item) => String(item));
-  expandedTreeKeys.value = normalizedKeys;
   const newExpandedKeys = normalizedKeys.filter((item) => !previousExpanded.has(item));
+  const nextExpandedKeys = normalizedKeys.filter((item) => previousExpanded.has(item));
   await Promise.all(newExpandedKeys.map(async (nodeKey) => {
     try {
       await loadTreeChildrenByKey(nodeKey);
-    } catch {
-      // 展开时的懒加载失败不阻塞其余节点展开。
+      nextExpandedKeys.push(nodeKey);
+    } catch (error) {
+      if (nodeKey.startsWith('conn-')) {
+        message.error(getErrorMessage(error));
+      }
     }
   }));
+  expandedTreeKeys.value = nextExpandedKeys;
   scheduleTableStatsForExpandedDatabases(expandedTreeKeys.value);
 }
 
@@ -8230,6 +8272,21 @@ function expandConnectionNode(connectionId: number) {
   expandedTreeKeys.value = Array.from(keys);
 }
 
+async function ensureConnectionTreeExpanded(connectionId: number, options?: { showError?: boolean }) {
+  try {
+    await prepareConnectionTreeData(connectionId);
+    expandConnectionNode(connectionId);
+    scheduleTableStatsForExpandedDatabases(expandedTreeKeys.value);
+    return true;
+  } catch (error) {
+    collapseConnectionNode(connectionId);
+    if (options?.showError !== false) {
+      message.error(getErrorMessage(error));
+    }
+    return false;
+  }
+}
+
 function buildDatabaseNodeKey(connectionId: number, databaseName: string) {
   return `conn-${connectionId}-db-${encodeURIComponent(databaseName)}`;
 }
@@ -8527,8 +8584,14 @@ function dbIconUrl(dbType: string) {
   if (dbType === 'MYSQL') {
     return mysqlIcon;
   }
+  if (dbType === 'MONGODB') {
+    return mongodbIcon;
+  }
   if (dbType === 'POSTGRESQL') {
     return postgresqlIcon;
+  }
+  if (dbType === 'REDIS') {
+    return redisIcon;
   }
   if (dbType === 'SQLITE') {
     return sqliteIcon;
@@ -8621,6 +8684,7 @@ function defaultConnectionForm(): ConnectionCreateReq {
     port: 0,
     databaseName: '',
     selectedDatabases: [],
+    customParams: '',
     username: '',
     password: '',
     authType: 'PASSWORD',
@@ -8651,6 +8715,7 @@ function fillConnectionForm(connection: ConnectionVO) {
     port: connection.port ?? 0,
     databaseName: connection.databaseName ?? '',
     selectedDatabases: normalizeSelectedDatabases(connection.selectedDatabases),
+    customParams: connection.customParams ?? '',
     username: connection.username ?? '',
     password: '',
     authType: 'PASSWORD',
@@ -9045,6 +9110,8 @@ function resetConnectionModalState() {
     invalidateConnectionMetadataCaches,
     invalidateDatabaseMetadataCaches,
     invalidateDatabaseListCache,
+    collapseConnectionNode,
+    resetConnectionRuntimeState,
     handleDatabaseRenamedLocally,
     getDatabaseVectorizeStatus,
     getDatabaseVectorizeStatusRecord,
@@ -9111,6 +9178,7 @@ function resetConnectionModalState() {
     saveConnection,
     previewConnectionDatabases,
     testConnection,
+    disconnectConnection,
     removeConnection,
     syncSchema,
     loadOverview,
@@ -9253,6 +9321,7 @@ function resetConnectionModalState() {
     formatDurationMs,
     formatVectorizeProvider,
     expandConnectionNode,
+    ensureConnectionTreeExpanded,
     buildDatabaseNodeKey,
     buildCategoryNodeKey,
     buildObjectNodeKey,
