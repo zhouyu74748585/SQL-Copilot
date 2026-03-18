@@ -354,6 +354,17 @@ export interface SchemaNamespaceCreateReq {
   targetNamespaceName: string;
 }
 
+export interface SchemaDatabaseCreateReq {
+  connectionId: number;
+  targetDatabaseName: string;
+}
+
+export interface SchemaSchemaCreateReq {
+  connectionId: number;
+  databaseName: string;
+  targetNamespaceName: string;
+}
+
 export interface SchemaNamespaceRenameReq {
   connectionId: number;
   sourceNamespaceName: string;

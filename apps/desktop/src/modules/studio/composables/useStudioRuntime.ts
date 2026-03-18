@@ -121,8 +121,10 @@ import type {
   SchemaObjectType,
   SavedQuerySaveReq,
   SavedQueryVO,
+  SchemaDatabaseCreateReq,
   SchemaDatabaseVO,
   SchemaNamespaceVO,
+  SchemaSchemaCreateReq,
   SchemaOverviewVO,
   SchemaTableStatsVO,
   SortDirection,
@@ -649,7 +651,9 @@ const namespaceModalSubmitting = ref(false);
 
 const namespaceForm = reactive({
   mode: 'create' as 'create' | 'rename',
+  scope: 'namespace' as 'namespace' | 'database' | 'schema',
   connectionId: 0,
+  databaseName: '',
   namespaceLabel: '命名空间',
   sourceNamespaceName: '',
   targetNamespaceName: '',
@@ -891,7 +895,7 @@ const contextMenu = reactive({
   visible: false,
   x: 0,
   y: 0,
-  targetType: 'none' as 'none' | 'group' | 'connection' | 'database' | 'category' | 'object',
+  targetType: 'none' as 'none' | 'group' | 'connection' | 'databaseRoot' | 'database' | 'category' | 'object',
   groupId: 0,
   connectionId: 0,
   databaseName: '',
@@ -2767,14 +2771,14 @@ function getActiveDatabaseName(connectionId: number) {
     return selected;
   }
   const visibleDatabases = visibleDatabasesForConnection(connection);
-  if (selected && (!visibleDatabases.length || visibleDatabases.includes(selected))) {
+  if (selected && (!visibleDatabases.length || isDatabaseContextVisibleForConnection(connection, selected))) {
     return selected;
   }
-  if (selected && visibleDatabases.length && !visibleDatabases.includes(selected)) {
+  if (selected && visibleDatabases.length && !isDatabaseContextVisibleForConnection(connection, selected)) {
     return '';
   }
   const configured = parseConfiguredDatabaseName(connection);
-  if (configured && (!visibleDatabases.length || visibleDatabases.includes(configured))) {
+  if (configured && (!visibleDatabases.length || isDatabaseContextVisibleForConnection(connection, configured))) {
     return configured;
   }
   return '';
@@ -4132,6 +4136,20 @@ async function prepareConnectionTreeData(connectionId: number, options?: { force
 }
 
 async function loadDatabaseListForConnection(connectionId: number, options?: { force?: boolean }) {
+  const connection = connections.value.find((item) => item.id === connectionId);
+  if (connection?.dbType === 'REDIS') {
+    const configuredDatabaseName = parseConfiguredDatabaseName(connection) || '0';
+    databaseListCache.value = {
+      ...databaseListCache.value,
+      [connectionId]: [configuredDatabaseName],
+    };
+    activeDatabaseMap.value = {
+      ...activeDatabaseMap.value,
+      [connectionId]: (activeDatabaseMap.value[connectionId] || configuredDatabaseName).trim() || configuredDatabaseName,
+    };
+    setConnectionRuntimeStatus(connectionId, 'connected');
+    return;
+  }
   if (!options?.force && databaseListCache.value[connectionId]?.length) {
     setConnectionRuntimeStatus(connectionId, 'connected');
     return;
@@ -4152,7 +4170,6 @@ async function loadDatabaseListForConnection(connectionId: number, options?: { f
     ...databaseListCache.value,
     [connectionId]: databaseNames,
   };
-  const connection = connections.value.find((item) => item.id === connectionId);
   if (connection) {
     const visibleNames = visibleDatabasesForConnection(connection);
     const current = (activeDatabaseMap.value[connectionId] || '').trim();
@@ -6023,6 +6040,33 @@ async function handleTreeRightClick(event: { event: MouseEvent; node: { key?: st
     contextMenu.groupId = Number(groupMatch[1]);
     contextMenu.connectionId = 0;
     contextMenu.databaseName = '';
+    contextMenu.namespaceName = '';
+    contextMenu.category = '';
+    contextMenu.objectType = '';
+    contextMenu.objectName = '';
+    return;
+  }
+  const databaseRootMatch = keyValue.match(/^conn-(\d+)-dbroot-(.+)$/);
+  if (databaseRootMatch) {
+    const connectionId = Number(databaseRootMatch[1]);
+    const databaseName = decodeURIComponent(databaseRootMatch[2]);
+    workflow.connectionId = connectionId;
+    activeDatabaseMap.value = {
+      ...activeDatabaseMap.value,
+      [connectionId]: databaseName,
+    };
+    try {
+      await refreshVectorizeStatusForConnection(connectionId);
+    } catch {
+      // 右键菜单唤起时尝试刷新状态，失败则沿用本地缓存。
+    }
+    selectedTreeKeys.value = [keyValue];
+    contextMenu.visible = true;
+    contextMenu.x = Math.min(event.event.clientX, window.innerWidth - 220);
+    contextMenu.y = Math.min(event.event.clientY, window.innerHeight - 180);
+    contextMenu.targetType = 'databaseRoot';
+    contextMenu.connectionId = connectionId;
+    contextMenu.databaseName = databaseName;
     contextMenu.namespaceName = '';
     contextMenu.category = '';
     contextMenu.objectType = '';
@@ -9969,6 +10013,7 @@ function resetConnectionModalState() {
     getCategoryChildren,
     findSupportedDbType,
     requiresDatabaseLayer,
+    supportsSchemaLayer,
     isMultiDatabaseType,
     isKvConnectionId,
     getDatabaseNamePlaceholder,

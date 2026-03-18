@@ -5,10 +5,12 @@ import {postApi} from '../../../api/client';
 import type {
   ConnectionDbTypeVO,
   SavedQueryRemoveReq,
+  SchemaDatabaseCreateReq,
   SchemaNamespaceCreateReq,
   SchemaNamespaceDropReq,
   SchemaNamespaceOperationVO,
   SchemaNamespaceRenameReq,
+  SchemaSchemaCreateReq,
   SchemaObjectDropReq,
   SchemaObjectDropVO,
 } from '../../../types';
@@ -26,6 +28,8 @@ type ContextAction =
   | 'disconnectConnection'
   | 'syncSchema'
   | 'deleteConnection'
+  | 'createDatabase'
+  | 'createSchema'
   | 'createNamespace'
   | 'renameNamespace'
   | 'dropNamespace'
@@ -76,7 +80,11 @@ export interface ConnectionBrowserModule {
   toggleBrowserDetailCollapsed: () => void;
   openCreateModal: () => void;
   openEditModal: (targetConnectionId?: number) => void;
-  openNamespaceCreateModal: (connectionId: number, namespaceLabel?: string) => void;
+  openNamespaceCreateModal: (connectionId: number, options?: {
+    namespaceLabel?: string;
+    scope?: 'namespace' | 'database' | 'schema';
+    databaseName?: string;
+  }) => void;
   closeNamespaceModal: () => void;
   confirmNamespaceModal: () => Promise<void>;
   closeContextMenu: () => void;
@@ -195,11 +203,71 @@ export function useConnectionBrowserModule(
     return currentDbTypeSpec()?.namespaceLabel?.trim() || '命名空间';
   }
 
-  function openNamespaceCreateModal(connectionId: number, customNamespaceLabel?: string) {
+  function currentDbType() {
+    return currentConnection()?.dbType || '';
+  }
+
+  function parseDatabaseContext(rawDatabaseName: string) {
+    const dbType = currentDbType();
+    const normalized = String(rawDatabaseName || '').trim();
+    if (!normalized || !runtime.supportsSchemaLayer(dbType)) {
+      return {
+        databaseName: normalized,
+        namespaceName: '',
+      };
+    }
+    const separatorIndex = normalized.indexOf('::');
+    if (separatorIndex <= 0 || separatorIndex >= normalized.length - 2) {
+      return {
+        databaseName: normalized,
+        namespaceName: '',
+      };
+    }
+    return {
+      databaseName: normalized.slice(0, separatorIndex).trim(),
+      namespaceName: normalized.slice(separatorIndex + 2).trim(),
+    };
+  }
+
+  function currentRootDatabaseName() {
+    return parseDatabaseContext(runtime.contextMenu.databaseName).databaseName;
+  }
+
+  function supportsDatabaseCreateAction() {
+    return ['MYSQL', 'POSTGRESQL', 'SQLSERVER'].includes(currentDbType());
+  }
+
+  function supportsSchemaCreateAction() {
+    return ['POSTGRESQL', 'SQLSERVER'].includes(currentDbType());
+  }
+
+  function supportsViewCreateAction() {
+    const spec = currentDbTypeSpec();
+    if (typeof spec?.supportsViewCreate === 'boolean') {
+      return spec.supportsViewCreate;
+    }
+    return ['MYSQL', 'POSTGRESQL', 'SQLSERVER', 'ORACLE', 'SQLITE'].includes(currentDbType());
+  }
+
+  function supportsFunctionCreateAction() {
+    const spec = currentDbTypeSpec();
+    if (typeof spec?.supportsFunctionCreate === 'boolean') {
+      return spec.supportsFunctionCreate;
+    }
+    return ['MYSQL', 'POSTGRESQL', 'SQLSERVER', 'ORACLE'].includes(currentDbType());
+  }
+
+  function openNamespaceCreateModal(connectionId: number, options?: {
+    namespaceLabel?: string;
+    scope?: 'namespace' | 'database' | 'schema';
+    databaseName?: string;
+  }) {
     closeContextMenu();
     runtime.namespaceForm.mode = 'create';
+    runtime.namespaceForm.scope = options?.scope || 'namespace';
     runtime.namespaceForm.connectionId = connectionId;
-    runtime.namespaceForm.namespaceLabel = customNamespaceLabel || namespaceLabel();
+    runtime.namespaceForm.databaseName = options?.databaseName || '';
+    runtime.namespaceForm.namespaceLabel = options?.namespaceLabel || namespaceLabel();
     runtime.namespaceForm.sourceNamespaceName = '';
     runtime.namespaceForm.targetNamespaceName = '';
     runtime.namespaceModalOpen.value = true;
@@ -208,7 +276,9 @@ export function useConnectionBrowserModule(
   function openNamespaceRenameModal(connectionId: number, sourceNamespaceName: string, customNamespaceLabel?: string) {
     closeContextMenu();
     runtime.namespaceForm.mode = 'rename';
+    runtime.namespaceForm.scope = 'namespace';
     runtime.namespaceForm.connectionId = connectionId;
+    runtime.namespaceForm.databaseName = '';
     runtime.namespaceForm.namespaceLabel = customNamespaceLabel || namespaceLabel();
     runtime.namespaceForm.sourceNamespaceName = sourceNamespaceName;
     runtime.namespaceForm.targetNamespaceName = sourceNamespaceName;
@@ -219,7 +289,9 @@ export function useConnectionBrowserModule(
     runtime.namespaceModalOpen.value = false;
     runtime.namespaceModalSubmitting.value = false;
     runtime.namespaceForm.mode = 'create';
+    runtime.namespaceForm.scope = 'namespace';
     runtime.namespaceForm.connectionId = 0;
+    runtime.namespaceForm.databaseName = '';
     runtime.namespaceForm.namespaceLabel = '命名空间';
     runtime.namespaceForm.sourceNamespaceName = '';
     runtime.namespaceForm.targetNamespaceName = '';
@@ -227,7 +299,9 @@ export function useConnectionBrowserModule(
 
   async function confirmNamespaceModal() {
     const mode = runtime.namespaceForm.mode;
+    const scope = runtime.namespaceForm.scope;
     const connectionId = runtime.namespaceForm.connectionId;
+    const databaseName = runtime.namespaceForm.databaseName.trim();
     const namespaceLabelValue = runtime.namespaceForm.namespaceLabel;
     const sourceNamespaceName = runtime.namespaceForm.sourceNamespaceName.trim();
     const targetNamespaceName = runtime.namespaceForm.targetNamespaceName.trim();
@@ -237,19 +311,37 @@ export function useConnectionBrowserModule(
     }
     runtime.namespaceModalSubmitting.value = true;
     try {
-      const result = mode === 'create'
-        ? await postApi<SchemaNamespaceOperationVO>('/api/schema/namespace/create', {
+      let result: SchemaNamespaceOperationVO;
+      if (mode === 'create' && scope === 'database') {
+        result = await postApi<SchemaNamespaceOperationVO>('/api/schema/database/create', {
           connectionId,
-          targetNamespaceName,
-        } satisfies SchemaNamespaceCreateReq)
-        : await postApi<SchemaNamespaceOperationVO>('/api/schema/namespace/rename', {
+          targetDatabaseName: targetNamespaceName,
+        } satisfies SchemaDatabaseCreateReq);
+      } else if (mode === 'create' && scope === 'schema') {
+        result = await postApi<SchemaNamespaceOperationVO>('/api/schema/schema/create', {
           connectionId,
-          sourceNamespaceName,
+          databaseName,
           targetNamespaceName,
-        } satisfies SchemaNamespaceRenameReq);
+        } satisfies SchemaSchemaCreateReq);
+      } else {
+        result = mode === 'create'
+          ? await postApi<SchemaNamespaceOperationVO>('/api/schema/namespace/create', {
+            connectionId,
+            targetNamespaceName,
+          } satisfies SchemaNamespaceCreateReq)
+          : await postApi<SchemaNamespaceOperationVO>('/api/schema/namespace/rename', {
+            connectionId,
+            sourceNamespaceName,
+            targetNamespaceName,
+          } satisfies SchemaNamespaceRenameReq);
+      }
       closeNamespaceModal();
       message.success(result.message || `${namespaceLabelValue}鎿嶄綔鎴愬姛`);
-      runtime.invalidateConnectionMetadataCaches(connectionId);
+      if (scope === 'schema' && databaseName) {
+        runtime.invalidateDatabaseMetadataCaches(connectionId, databaseName);
+      } else {
+        runtime.invalidateConnectionMetadataCaches(connectionId);
+      }
       await runtime.prepareConnectionTreeData(connectionId, { force: true });
       runtime.selectedTreeKeys.value = [`conn-${connectionId}`];
     } catch (error) {
@@ -362,15 +454,14 @@ export function useConnectionBrowserModule(
   }
 
   function createChildActions(): ContextMenuActionItem[] {
-    const spec = currentDbTypeSpec();
     const actions: ContextMenuActionItem[] = [];
-    if (spec?.supportsTableCreate !== false) {
+    if (currentDbTypeSpec()?.supportsTableCreate !== false) {
       actions.push({ id: 'createTable', label: '新建表' });
     }
-    if (spec?.supportsViewCreate) {
+    if (supportsViewCreateAction()) {
       actions.push({ id: 'createView', label: '新建视图' });
     }
-    if (spec?.supportsFunctionCreate) {
+    if (supportsFunctionCreateAction()) {
       actions.push({ id: 'createFunction', label: '新建函数' });
     }
     actions.push({ id: 'createQuery', label: '新建查询' });
@@ -403,18 +494,28 @@ export function useConnectionBrowserModule(
         { id: 'syncSchema', label: '同步 Schema' },
         { id: 'deleteConnection', label: '删除连接', danger: true },
       ];
-      if (spec?.supportsNamespaceCreate) {
+      if (supportsDatabaseCreateAction()) {
+        actions.splice(1, 0, { id: 'createDatabase', label: '新建库' });
+      }
+      if (!supportsDatabaseCreateAction() && spec?.supportsNamespaceCreate) {
         actions.splice(1, 0, { id: 'createNamespace', label: `新建${namespaceLabel()}` });
       }
       return actions;
     }
-    if (menu.targetType === 'database') {
+    if (menu.targetType === 'databaseRoot' || menu.targetType === 'database') {
       const isKv = runtime.isKvConnectionId(menu.connectionId);
+      const isSchemaContext = menu.targetType === 'database' && !!menu.namespaceName;
       const actions: ContextMenuActionItem[] = [];
-      if (spec?.supportsNamespaceRename && !isKv) {
+      if (!isKv && supportsDatabaseCreateAction()) {
+        actions.push({ id: 'createDatabase', label: '新建库' });
+      }
+      if (!isKv && supportsSchemaCreateAction()) {
+        actions.push({ id: 'createSchema', label: '新建Schema' });
+      }
+      if (!isSchemaContext && spec?.supportsNamespaceRename && !isKv) {
         actions.push({ id: 'renameNamespace', label: `编辑${namespaceLabel()}` });
       }
-      if (spec?.supportsNamespaceCreate && !isKv) {
+      if (!supportsDatabaseCreateAction() && !supportsSchemaCreateAction() && spec?.supportsNamespaceCreate && !isKv) {
         actions.push({ id: 'createNamespace', label: `新建同级${namespaceLabel()}` });
       }
       const childActions = createChildActions();
@@ -428,7 +529,7 @@ export function useConnectionBrowserModule(
           { id: 'viewVectorizedData', label: '查看向量化数据', disabled: !runtime.canViewContextVectorizedData.value },
         );
       }
-      if (spec?.supportsNamespaceDrop && !isKv) {
+      if (!isSchemaContext && spec?.supportsNamespaceDrop && !isKv) {
         actions.push({ id: 'dropNamespace', label: `删除${namespaceLabel()}`, danger: true });
       }
       return actions;
@@ -437,10 +538,10 @@ export function useConnectionBrowserModule(
       if (menu.category === 'tables') {
         return [{ id: 'createTable', label: '新建表' }];
       }
-      if (menu.category === 'views' && spec?.supportsViewCreate) {
+      if (menu.category === 'views' && supportsViewCreateAction()) {
         return [{ id: 'createView', label: '新建视图' }];
       }
-      if (menu.category === 'functions' && spec?.supportsFunctionCreate) {
+      if (menu.category === 'functions' && supportsFunctionCreateAction()) {
         return [{ id: 'createFunction', label: '新建函数' }];
       }
       if (menu.category === 'queries') {
@@ -485,7 +586,7 @@ export function useConnectionBrowserModule(
         { id: 'editDefinition', label: '编辑视图定义' },
         { id: 'browseData', label: '数据浏览' },
       ];
-      if (spec?.supportsViewCreate) {
+      if (supportsViewCreateAction()) {
         actions.unshift(
           { id: 'querySql', label: 'SQL查询' },
           { id: 'createView', label: '新建视图' },
@@ -500,7 +601,7 @@ export function useConnectionBrowserModule(
       const actions: ContextMenuActionItem[] = [
         { id: 'editDefinition', label: '编辑函数定义' },
       ];
-      if (spec?.supportsFunctionCreate) {
+      if (supportsFunctionCreateAction()) {
         actions.unshift({ id: 'createFunction', label: '新建函数' });
       }
       if (spec?.supportsFunctionDrop) {
@@ -579,6 +680,22 @@ export function useConnectionBrowserModule(
     }
     if (action === 'createNamespace') {
       openNamespaceCreateModal(id);
+      return;
+    }
+    if (action === 'createDatabase') {
+      openNamespaceCreateModal(id, {
+        namespaceLabel: '库',
+        scope: 'database',
+        databaseName: currentRootDatabaseName(),
+      });
+      return;
+    }
+    if (action === 'createSchema') {
+      openNamespaceCreateModal(id, {
+        namespaceLabel: 'Schema',
+        scope: 'schema',
+        databaseName: currentRootDatabaseName(),
+      });
       return;
     }
     if (action === 'renameNamespace') {

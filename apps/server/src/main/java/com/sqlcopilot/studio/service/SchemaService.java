@@ -28,6 +28,10 @@ public interface SchemaService {
 
     TableOperationVO alterTable(TableAlterReq req);
 
+    SchemaNamespaceOperationVO createDatabase(SchemaDatabaseCreateReq req);
+
+    SchemaNamespaceOperationVO createSchema(SchemaSchemaCreateReq req);
+
     SchemaNamespaceOperationVO createNamespace(SchemaNamespaceCreateReq req);
 
     SchemaNamespaceOperationVO renameNamespace(SchemaNamespaceRenameReq req);

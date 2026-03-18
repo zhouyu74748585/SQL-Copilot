@@ -451,6 +451,89 @@ public class SchemaServiceImpl implements SchemaService {
     }
 
     @Override
+    public SchemaNamespaceOperationVO createDatabase(SchemaDatabaseCreateReq req) {
+        String targetDatabaseName = normalize(req.getTargetDatabaseName());
+        if (targetDatabaseName.isBlank()) {
+            throw new BusinessException(400, "新库名称不能为空");
+        }
+        ConnectionEntity connectionEntity = connectionService.getConnectionEntity(req.getConnectionId());
+        String dbType = normalize(connectionEntity.getDbType()).toUpperCase(Locale.ROOT);
+        List<String> databaseNames = listDatabases(req.getConnectionId());
+        if (databaseNames.stream().anyMatch(item -> item.equalsIgnoreCase(targetDatabaseName))) {
+            throw new BusinessException(400, "目标库已存在: " + targetDatabaseName);
+        }
+
+        JdbcDriverResolver.NamespaceSpec spec = switch (dbType) {
+            case "POSTGRESQL", "MYSQL" -> requireNamespaceSpec(dbType, "新建");
+            case "SQLSERVER" -> new JdbcDriverResolver.NamespaceSpec("数据库", "create database {quoted_target_namespace}", "", "");
+            default -> throw new BusinessException(400, "当前数据库不支持新建库: " + dbType);
+        };
+
+        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId())) {
+            String executedSql = schemaNamespaceJdbcRepository.createNamespace(
+                connection,
+                dbType,
+                spec,
+                targetDatabaseName
+            );
+            return SchemaNamespaceOperationVO.success(
+                "库创建成功",
+                "",
+                targetDatabaseName,
+                executedSql
+            );
+        } catch (SQLException ex) {
+            throw new BusinessException(500, "创建库失败: " + ex.getMessage());
+        }
+    }
+
+    @Override
+    public SchemaNamespaceOperationVO createSchema(SchemaSchemaCreateReq req) {
+        String databaseName = normalize(req.getDatabaseName());
+        String targetNamespaceName = normalize(req.getTargetNamespaceName());
+        if (databaseName.isBlank()) {
+            throw new BusinessException(400, "所属库不能为空");
+        }
+        if (targetNamespaceName.isBlank()) {
+            throw new BusinessException(400, "新 Schema 名称不能为空");
+        }
+
+        ConnectionEntity connectionEntity = connectionService.getConnectionEntity(req.getConnectionId());
+        String dbType = normalize(connectionEntity.getDbType()).toUpperCase(Locale.ROOT);
+        if (!SchemaContextSupport.supportsSchemaLayer(dbType)) {
+            throw new BusinessException(400, "当前数据库不支持 Schema: " + dbType);
+        }
+        List<String> namespaceNames = listNamespaces(req.getConnectionId(), databaseName);
+        if (namespaceNames.stream().anyMatch(item -> item.equalsIgnoreCase(targetNamespaceName))) {
+            throw new BusinessException(400, "目标 Schema 已存在: " + targetNamespaceName);
+        }
+
+        JdbcDriverResolver.NamespaceSpec spec = switch (dbType) {
+            case "POSTGRESQL" -> new JdbcDriverResolver.NamespaceSpec("Schema", "create schema {quoted_target_namespace}", "", "drop schema if exists {quoted_source_namespace} cascade");
+            case "SQLSERVER" -> requireNamespaceSpec(dbType, "新建");
+            default -> throw new BusinessException(400, "当前数据库不支持新建 Schema: " + dbType);
+        };
+
+        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId())) {
+            applyDatabaseContext(connection, dbType, databaseName);
+            String executedSql = schemaNamespaceJdbcRepository.createNamespace(
+                connection,
+                dbType,
+                spec,
+                targetNamespaceName
+            );
+            return SchemaNamespaceOperationVO.success(
+                "Schema 创建成功",
+                "",
+                targetNamespaceName,
+                executedSql
+            );
+        } catch (SQLException ex) {
+            throw new BusinessException(500, "创建 Schema 失败: " + ex.getMessage());
+        }
+    }
+
+    @Override
     public SchemaNamespaceOperationVO createNamespace(SchemaNamespaceCreateReq req) {
         String targetNamespaceName = normalize(req.getTargetNamespaceName());
         if (targetNamespaceName.isBlank()) {

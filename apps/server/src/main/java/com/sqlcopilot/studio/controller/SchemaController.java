@@ -156,6 +156,27 @@ public class SchemaController {
         return toTableOperationResponse(result);
     }
 
+    @PostMapping("/database/create")
+    public ApiResponse<SchemaNamespaceOperationVO> createDatabase(@Valid @RequestBody SchemaDatabaseCreateReq req) {
+        SchemaNamespaceOperationVO result = schemaService.createDatabase(req);
+        if (result.isSuccess()) {
+            metadataChangeSyncService.onDatabaseCreated(
+                req.getConnectionId(),
+                normalizeNamespaceName(result.getTargetNamespaceName(), req.getTargetDatabaseName())
+            );
+        }
+        return ApiResponse.success(result);
+    }
+
+    @PostMapping("/schema/create")
+    public ApiResponse<SchemaNamespaceOperationVO> createSchema(@Valid @RequestBody SchemaSchemaCreateReq req) {
+        SchemaNamespaceOperationVO result = schemaService.createSchema(req);
+        if (result.isSuccess()) {
+            metadataChangeSyncService.onDatabaseMetadataChanged(req.getConnectionId(), req.getDatabaseName());
+        }
+        return ApiResponse.success(result);
+    }
+
     @PostMapping("/namespace/create")
     public ApiResponse<SchemaNamespaceOperationVO> createNamespace(@Valid @RequestBody SchemaNamespaceCreateReq req) {
         SchemaNamespaceOperationVO result = schemaService.createNamespace(req);

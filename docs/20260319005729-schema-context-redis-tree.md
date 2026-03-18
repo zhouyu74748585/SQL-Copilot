@@ -60,3 +60,29 @@
 - `npm run -w @sqlcopilot/desktop type-check`：通过。
 - `npm run -w @sqlcopilot/desktop build`：通过。
 - 待继续执行 clean 后的前后端启动验证。
+
+### 2026-03-19 07:40:00
+
+## 本轮补充
+- 修复 Redis 连接树读取数据库列表时再次误走 JDBC 路径的问题；桌面端现在直接为 Redis 连接回填逻辑库 `0`（或连接配置中的逻辑库），不再触发关系型数据库的库列表读取。
+- 补齐 schema 分层树的右键菜单处理：新增 `databaseRoot` 节点右键识别，恢复库 / schema 节点上的创建入口。
+- 增加库级与 schema 级创建动作：
+  - 前端新增“新建库”“新建 Schema”动作，并按节点上下文选择对应接口。
+  - 后端新增 `POST /api/schema/database/create` 与 `POST /api/schema/schema/create`。
+- 补齐“新建下级”中的新建视图、新建函数入口，并为视图/函数相关右键菜单增加稳妥的能力判断回退。
+- 修复 `database::schema` 上下文在 `getActiveDatabaseName` 中被误判为不可见的问题，避免 schema 级对象操作丢失上下文。
+
+## 涉及文件
+- `apps/desktop/src/modules/studio/composables/useStudioRuntime.ts`
+- `apps/desktop/src/modules/studio/composables/useConnectionBrowserModule.ts`
+- `apps/desktop/src/types/index.ts`
+- `apps/server/src/main/java/com/sqlcopilot/studio/controller/SchemaController.java`
+- `apps/server/src/main/java/com/sqlcopilot/studio/service/SchemaService.java`
+- `apps/server/src/main/java/com/sqlcopilot/studio/service/impl/SchemaServiceImpl.java`
+- `apps/server/src/main/java/com/sqlcopilot/studio/dto/schema/SchemaDatabaseCreateReq.java`
+- `apps/server/src/main/java/com/sqlcopilot/studio/dto/schema/SchemaSchemaCreateReq.java`
+
+## 验证补充
+- `npm run -w @sqlcopilot/desktop type-check`：通过。
+- `mvn -f apps/server/pom.xml -DskipTests compile`：通过。
+- 待继续执行 clean 打包与启动验证。
