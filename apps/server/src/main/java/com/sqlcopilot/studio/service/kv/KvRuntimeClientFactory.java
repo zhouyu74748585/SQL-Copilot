@@ -42,11 +42,18 @@ public class KvRuntimeClientFactory {
     }
 
     public <T> T withRedisConnection(ConnectionEntity entity, Long runtimeId, RedisConnectionCallback<T> callback) {
+        return withRedisConnection(entity, runtimeId, null, callback);
+    }
+
+    public <T> T withRedisConnection(ConnectionEntity entity,
+                                     Long runtimeId,
+                                     String databaseNameOverride,
+                                     RedisConnectionCallback<T> callback) {
         RuntimeEndpoint endpoint = resolveRuntimeEndpoint(entity, runtimeId);
         RedisClient client = null;
         StatefulRedisConnection<String, String> connection = null;
         try {
-            client = RedisClient.create(buildRedisUri(entity, endpoint.host(), endpoint.port()));
+            client = RedisClient.create(buildRedisUri(entity, endpoint.host(), endpoint.port(), databaseNameOverride));
             connection = client.connect();
             return callback.execute(connection);
         } finally {
@@ -79,12 +86,12 @@ public class KvRuntimeClientFactory {
         return MongoClients.create(builder.build());
     }
 
-    private RedisURI buildRedisUri(ConnectionEntity entity, String host, int port) {
+    private RedisURI buildRedisUri(ConnectionEntity entity, String host, int port, String databaseNameOverride) {
         RedisURI.Builder builder = RedisURI.builder()
             .withHost(host)
             .withPort(port)
             .withTimeout(DEFAULT_TIMEOUT)
-            .withDatabase(parseRedisDatabase(entity.getDatabaseName()));
+            .withDatabase(parseRedisDatabase(Objects.requireNonNullElse(databaseNameOverride, entity.getDatabaseName())));
         String username = safe(entity.getUsername());
         String password = safe(entity.getPassword());
         if (!username.isBlank()) {

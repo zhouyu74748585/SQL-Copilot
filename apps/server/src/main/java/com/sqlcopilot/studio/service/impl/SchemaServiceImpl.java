@@ -10,6 +10,7 @@ import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.SchemaService;
 import com.sqlcopilot.studio.service.rag.RagIngestionService;
 import com.sqlcopilot.studio.support.JdbcDriverResolver;
+import com.sqlcopilot.studio.support.SchemaContextSupport;
 import com.sqlcopilot.studio.util.BusinessException;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -289,19 +290,46 @@ public class SchemaServiceImpl implements SchemaService {
     public List<String> listDatabases(Long connectionId) {
         ConnectionEntity connectionEntity = connectionService.getConnectionEntity(connectionId);
         String dbType = normalize(connectionEntity.getDbType()).toUpperCase(Locale.ROOT);
+        if ("SQLITE".equals(dbType)) {
+            String sqliteName = normalize(connectionEntity.getDatabaseName());
+            return List.of(sqliteName.isBlank() ? "main" : sqliteName);
+        }
+        if ("ORACLE".equals(dbType)) {
+            String configuredDatabaseName = resolveTargetDatabaseName(connectionEntity, null);
+            return configuredDatabaseName.isBlank() ? List.of() : List.of(configuredDatabaseName);
+        }
 
         try (Connection connection = connectionService.openTargetConnection(connectionId)) {
-            String schemasSql = jdbcDriverResolver.findSchemasSql(dbType);
-            if (!schemasSql.isBlank()) {
-                return queryConfiguredSchemas(connection, schemasSql, connectionEntity);
-            }
-            if ("SQLITE".equals(dbType)) {
-                String sqliteName = normalize(connectionEntity.getDatabaseName());
-                return List.of(sqliteName.isBlank() ? "main" : sqliteName);
+            String databasesSql = jdbcDriverResolver.findConnectionPreviewSql(dbType);
+            if (!databasesSql.isBlank()) {
+                return queryConfiguredSchemas(connection, databasesSql, connectionEntity);
             }
             return List.of();
         } catch (Exception ex) {
             throw new BusinessException(500, "读取数据库列表失败: " + ex.getMessage());
+        }
+    }
+
+    @Override
+    public List<String> listNamespaces(Long connectionId, String databaseName) {
+        ConnectionEntity connectionEntity = connectionService.getConnectionEntity(connectionId);
+        String dbType = normalize(connectionEntity.getDbType()).toUpperCase(Locale.ROOT);
+        if (!SchemaContextSupport.supportsSchemaLayer(dbType)) {
+            return List.of();
+        }
+        String databaseContext = resolveTargetDatabaseName(connectionEntity, databaseName);
+        try (Connection connection = connectionService.openTargetConnection(connectionId)) {
+            applyDatabaseContext(connection, dbType, databaseContext);
+            String schemasSql = jdbcDriverResolver.findSchemasSql(dbType);
+            if (schemasSql.isBlank()) {
+                return List.of();
+            }
+            return queryConfiguredSchemas(connection, schemasSql, connectionEntity).stream()
+                .distinct()
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .toList();
+        } catch (Exception ex) {
+            throw new BusinessException(500, "璇诲彇鍛藉悕绌洪棿鍒楄〃澶辫触: " + ex.getMessage());
         }
     }
 
@@ -824,27 +852,20 @@ public class SchemaServiceImpl implements SchemaService {
     }
 
     private String qualifyTableName(String databaseName, String tableName, String dbType) {
-        String normalizedDatabaseName = normalize(databaseName);
+        String normalizedDatabaseName = resolveQualifiedNamespace(databaseName, dbType);
         String quotedTable = quoteIdentifier(tableName, dbType);
         if (normalizedDatabaseName.isBlank()) {
             return quotedTable;
         }
-        return switch (normalize(dbType).toUpperCase(Locale.ROOT)) {
-            case "MYSQL", "POSTGRESQL", "ORACLE" -> quoteIdentifier(normalizedDatabaseName, dbType) + "." + quotedTable;
-            case "SQLSERVER" -> quoteIdentifier(normalizedDatabaseName, dbType) + "." + quotedTable;
-            default -> quotedTable;
-        };
+        return quoteIdentifier(normalizedDatabaseName, dbType) + "." + quotedTable;
     }
 
     private String buildSourceFullName(String databaseName, String tableName, String dbType) {
-        String normalizedDatabaseName = normalize(databaseName);
+        String normalizedDatabaseName = resolveQualifiedNamespace(databaseName, dbType);
         if (normalizedDatabaseName.isBlank()) {
             return normalize(tableName);
         }
-        return switch (normalize(dbType).toUpperCase(Locale.ROOT)) {
-            case "SQLSERVER", "POSTGRESQL", "ORACLE" -> normalizedDatabaseName + "." + normalize(tableName);
-            default -> normalize(tableName);
-        };
+        return normalizedDatabaseName + "." + normalize(tableName);
     }
 
     private String quoteIdentifier(String identifier, String dbType) {
@@ -1316,7 +1337,8 @@ public class SchemaServiceImpl implements SchemaService {
             return List.of();
         }
         List<SchemaTableCacheEntity> tables = new ArrayList<>();
-        try (PreparedStatement statement = prepareConfiguredStatement(connection, tablesSql, null, targetDatabaseName);
+        String statementScopeName = resolveStatementScopeName(dbType, targetDatabaseName);
+        try (PreparedStatement statement = prepareConfiguredStatement(connection, tablesSql, null, statementScopeName);
              ResultSet rs = statement.executeQuery()) {
             while (rs.next()) {
                 String tableName = readOptionalStringColumn(rs, "table_name");
@@ -1351,10 +1373,11 @@ public class SchemaServiceImpl implements SchemaService {
         if (columnsSql.isBlank()) {
             return List.of();
         }
+        String statementScopeName = resolveStatementScopeName(dbType, targetDatabaseName);
         Set<String> primaryKeys = queryPrimaryKeysByConfiguredSql(connection, dbType, targetDatabaseName, tableName);
         Set<String> indexedColumns = queryIndexedColumnsByMetadata(connection, dbType, targetDatabaseName, tableName);
         List<SchemaColumnCacheEntity> columns = new ArrayList<>();
-        try (PreparedStatement statement = prepareConfiguredStatement(connection, columnsSql, null, targetDatabaseName, tableName);
+        try (PreparedStatement statement = prepareConfiguredStatement(connection, columnsSql, null, statementScopeName, tableName);
              ResultSet rs = statement.executeQuery()) {
             while (rs.next()) {
                 String columnName = readOptionalStringColumn(rs, "column_name");
@@ -1395,7 +1418,8 @@ public class SchemaServiceImpl implements SchemaService {
             return Set.of();
         }
         Set<String> keys = new HashSet<>();
-        try (PreparedStatement statement = prepareConfiguredStatement(connection, primaryKeysSql, null, targetDatabaseName, tableName);
+        String statementScopeName = resolveStatementScopeName(dbType, targetDatabaseName);
+        try (PreparedStatement statement = prepareConfiguredStatement(connection, primaryKeysSql, null, statementScopeName, tableName);
              ResultSet rs = statement.executeQuery()) {
             while (rs.next()) {
                 String columnName = readOptionalStringColumn(rs, "column_name");
@@ -1619,22 +1643,40 @@ public class SchemaServiceImpl implements SchemaService {
      */
     private void applyDatabaseContext(Connection connection, String dbType, String targetDatabaseName) throws SQLException {
         String type = normalize(dbType).toUpperCase(Locale.ROOT);
-        if (targetDatabaseName.isBlank()) {
+        SchemaContextSupport.SchemaContext context = SchemaContextSupport.parse(type, targetDatabaseName);
+        if (context.rawContext().isBlank()) {
             return;
         }
-        if ("MYSQL".equals(type) || "POSTGRESQL".equals(type)) {
-            connection.setCatalog(targetDatabaseName);
+        if ("MYSQL".equals(type)) {
+            connection.setCatalog(context.databaseName());
         }
-        if ("SQLSERVER".equals(type) || "ORACLE".equals(type)) {
-            connection.setSchema(targetDatabaseName);
+        if ("POSTGRESQL".equals(type)) {
+            if (!context.databaseName().isBlank()) {
+                connection.setCatalog(context.databaseName());
+            }
+            if (context.hasNamespace()) {
+                connection.setSchema(context.namespaceName());
+            }
+        }
+        if ("SQLSERVER".equals(type)) {
+            if (!context.databaseName().isBlank()) {
+                connection.setCatalog(context.databaseName());
+            }
+            if (context.hasNamespace()) {
+                connection.setSchema(context.namespaceName());
+            }
+        }
+        if ("ORACLE".equals(type) && context.hasNamespace()) {
+            connection.setSchema(context.namespaceName());
         }
     }
 
     private String resolveCatalog(Connection connection, String dbType, String targetDatabaseName) throws SQLException {
         String type = normalize(dbType).toUpperCase(Locale.ROOT);
-        if ("MYSQL".equals(type) || "POSTGRESQL".equals(type)) {
-            if (!targetDatabaseName.isBlank()) {
-                return targetDatabaseName;
+        SchemaContextSupport.SchemaContext context = SchemaContextSupport.parse(type, targetDatabaseName);
+        if ("MYSQL".equals(type) || "POSTGRESQL".equals(type) || "SQLSERVER".equals(type)) {
+            if (!context.databaseName().isBlank()) {
+                return context.databaseName();
             }
             return normalize(connection.getCatalog());
         }
@@ -1643,19 +1685,27 @@ public class SchemaServiceImpl implements SchemaService {
 
     private String resolveSchemaPattern(String dbType, String targetDatabaseName) {
         String type = normalize(dbType).toUpperCase(Locale.ROOT);
-        if (("SQLSERVER".equals(type) || "ORACLE".equals(type)) && !targetDatabaseName.isBlank()) {
-            return targetDatabaseName;
+        SchemaContextSupport.SchemaContext context = SchemaContextSupport.parse(type, targetDatabaseName);
+        if ("POSTGRESQL".equals(type)) {
+            if (context.hasNamespace()) {
+                return context.namespaceName();
+            }
+            return context.databaseName().isBlank() ? null : "public";
+        }
+        if ("SQLSERVER".equals(type) || "ORACLE".equals(type)) {
+            return context.hasNamespace() ? context.namespaceName() : null;
         }
         return null;
     }
 
     private String resolveSchemaPatternForObjects(String dbType, String targetDatabaseName, String objectType) {
         String type = normalize(dbType).toUpperCase(Locale.ROOT);
+        SchemaContextSupport.SchemaContext context = SchemaContextSupport.parse(type, targetDatabaseName);
         if ("POSTGRESQL".equals(type)
             && ("TABLE".equals(objectType) || "TABLES".equals(objectType)
             || "VIEW".equals(objectType) || "VIEWS".equals(objectType)
             || "FUNCTION".equals(objectType) || "FUNCTIONS".equals(objectType))) {
-            return "public";
+            return context.hasNamespace() ? context.namespaceName() : "public";
         }
         return resolveSchemaPattern(dbType, targetDatabaseName);
     }
@@ -1670,6 +1720,26 @@ public class SchemaServiceImpl implements SchemaService {
             return fromField;
         }
         return extractDatabaseNameFromHost(connectionEntity.getHost());
+    }
+
+    private String resolveStatementScopeName(String dbType, String databaseContext) {
+        SchemaContextSupport.SchemaContext context = SchemaContextSupport.parse(dbType, databaseContext);
+        if (SchemaContextSupport.supportsSchemaLayer(dbType)) {
+            return context.hasNamespace() ? context.namespaceName() : context.databaseName();
+        }
+        return context.databaseName();
+    }
+
+    private String resolveQualifiedNamespace(String databaseContext, String dbType) {
+        SchemaContextSupport.SchemaContext context = SchemaContextSupport.parse(dbType, databaseContext);
+        String type = normalize(dbType).toUpperCase(Locale.ROOT);
+        if ("MYSQL".equals(type)) {
+            return context.databaseName();
+        }
+        if ("POSTGRESQL".equals(type) || "SQLSERVER".equals(type) || "ORACLE".equals(type)) {
+            return context.hasNamespace() ? context.namespaceName() : "";
+        }
+        return "";
     }
 
     private String extractDatabaseNameFromHost(String rawHost) {

@@ -98,7 +98,8 @@ public class KvServiceImpl implements KvService {
                 buildMongoOverview(connectionId, resolveMongoDatabaseName(entity, databaseName), client));
         }
         if (DB_TYPE_REDIS.equals(dbType)) {
-            return kvRuntimeClientFactory.withRedisConnection(entity, connectionId, connection ->
+            String resolvedDatabaseName = resolveRedisDatabaseName(databaseName);
+            return kvRuntimeClientFactory.withRedisConnection(entity, connectionId, resolvedDatabaseName, connection ->
                 buildRedisOverview(connectionId, resolveRedisDatabaseName(databaseName), connection.sync()));
         }
         throw unsupportedDbType(dbType);
@@ -113,7 +114,8 @@ public class KvServiceImpl implements KvService {
                 buildMongoObjectDetail(connectionId, resolveMongoDatabaseName(entity, databaseName), objectName, client));
         }
         if (DB_TYPE_REDIS.equals(dbType)) {
-            return kvRuntimeClientFactory.withRedisConnection(entity, connectionId, connection ->
+            String resolvedDatabaseName = resolveRedisDatabaseName(databaseName);
+            return kvRuntimeClientFactory.withRedisConnection(entity, connectionId, resolvedDatabaseName, connection ->
                 buildRedisObjectDetail(connectionId, resolveRedisDatabaseName(databaseName), objectName, connection.sync()));
         }
         throw unsupportedDbType(dbType);
@@ -128,7 +130,8 @@ public class KvServiceImpl implements KvService {
                 executeMongoQuery(entity, req, client));
         }
         if (DB_TYPE_REDIS.equals(dbType)) {
-            return kvRuntimeClientFactory.withRedisConnection(entity, req.getConnectionId(), connection ->
+            String resolvedDatabaseName = resolveRedisDatabaseName(req.getDatabaseName());
+            return kvRuntimeClientFactory.withRedisConnection(entity, req.getConnectionId(), resolvedDatabaseName, connection ->
                 executeRedisCommand(entity, req, connection.sync()));
         }
         throw unsupportedDbType(dbType);
@@ -150,7 +153,8 @@ public class KvServiceImpl implements KvService {
         if (!DB_TYPE_REDIS.equals(normalizeType(entity.getDbType()))) {
             throw unsupportedDbType(entity.getDbType());
         }
-        kvRuntimeClientFactory.withRedisConnection(entity, req.getConnectionId(), connection -> {
+        String resolvedDatabaseName = resolveRedisDatabaseName(req.getDatabaseName());
+        kvRuntimeClientFactory.withRedisConnection(entity, req.getConnectionId(), resolvedDatabaseName, connection -> {
             RedisCommands<String, String> sync = connection.sync();
             String keyName = safe(req.getKeyName());
             if (keyName.isBlank()) {
@@ -674,7 +678,8 @@ public class KvServiceImpl implements KvService {
         if (!DB_TYPE_REDIS.equals(normalizeType(entity.getDbType()))) {
             throw unsupportedDbType(entity.getDbType());
         }
-        return kvRuntimeClientFactory.withRedisConnection(entity, req.getConnectionId(), connection -> {
+        String resolvedDatabaseName = resolveRedisDatabaseName(req.getDatabaseName());
+        return kvRuntimeClientFactory.withRedisConnection(entity, req.getConnectionId(), resolvedDatabaseName, connection -> {
             RedisCommands<String, String> sync = connection.sync();
             String keyName = safe(req.getKeyName());
             String valueType = safe(req.getValueType()).toLowerCase(Locale.ROOT);

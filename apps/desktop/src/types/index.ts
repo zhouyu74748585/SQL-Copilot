@@ -217,6 +217,10 @@ export interface SchemaDatabaseVO {
   vectorizeUpdatedAt?: number;
 }
 
+export interface SchemaNamespaceVO {
+  namespaceName: string;
+}
+
 export interface SchemaTableStatsVO {
   connectionId: number;
   databaseName?: string;

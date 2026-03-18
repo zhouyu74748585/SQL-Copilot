@@ -139,14 +139,18 @@ export function useConnectionBrowserModule(
     runtime.contextMenu.targetType = 'none';
     runtime.contextMenu.groupId = 0;
     runtime.contextMenu.databaseName = '';
+    runtime.contextMenu.namespaceName = '';
     runtime.contextMenu.category = '';
     runtime.contextMenu.objectType = '';
     runtime.contextMenu.objectName = '';
   }
 
-  function openCreateModal() {
+  function openCreateModal(defaultGroupId?: number) {
     closeContextMenu();
     runtime.resetConnectionForm();
+    if (defaultGroupId) {
+      runtime.connectionForm.groupId = defaultGroupId;
+    }
     runtime.connectionPreviewDbOptions.value = [];
     runtime.connectionPreviewError.value = '';
     runtime.isEditMode.value = false;
@@ -244,23 +248,10 @@ export function useConnectionBrowserModule(
           targetNamespaceName,
         } satisfies SchemaNamespaceRenameReq);
       closeNamespaceModal();
-      message.success(result.message || `${namespaceLabelValue}操作成功`);
-      runtime.invalidateDatabaseListCache(connectionId);
-      if (mode === 'rename') {
-        runtime.handleDatabaseRenamedLocally(
-          connectionId,
-          sourceNamespaceName,
-          result.targetNamespaceName || targetNamespaceName,
-        );
-      }
-      await runtime.prepareConnectionTreeData(connectionId);
-      runtime.selectedTreeKeys.value = mode === 'create'
-        ? [runtime.buildDatabaseNodeKey(connectionId, targetNamespaceName)]
-        : [runtime.buildDatabaseNodeKey(connectionId, result.targetNamespaceName || targetNamespaceName)];
-      if (runtime.workflow.connectionId === connectionId
-        && runtime.getActiveDatabaseName(connectionId) === (result.targetNamespaceName || targetNamespaceName)) {
-        await runtime.refreshCurrentObjects();
-      }
+      message.success(result.message || `${namespaceLabelValue}鎿嶄綔鎴愬姛`);
+      runtime.invalidateConnectionMetadataCaches(connectionId);
+      await runtime.prepareConnectionTreeData(connectionId, { force: true });
+      runtime.selectedTreeKeys.value = [`conn-${connectionId}`];
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       message.error(msg);
@@ -560,7 +551,7 @@ export function useConnectionBrowserModule(
       return;
     }
     if (action === 'createConnection') {
-      openCreateModal();
+      openCreateModal(targetType === 'group' ? groupId : undefined);
       return;
     }
     if (!id) {
@@ -591,17 +582,19 @@ export function useConnectionBrowserModule(
       return;
     }
     if (action === 'renameNamespace') {
-      if (targetType !== 'database' || !databaseName) {
+      const namespaceName = (runtime.contextMenu.namespaceName || databaseName || '').trim();
+      if (targetType !== 'database' || !namespaceName) {
         return;
       }
-      openNamespaceRenameModal(id, databaseName);
+      openNamespaceRenameModal(id, namespaceName);
       return;
     }
     if (action === 'dropNamespace') {
-      if (targetType !== 'database' || !databaseName) {
+      const namespaceName = (runtime.contextMenu.namespaceName || databaseName || '').trim();
+      if (targetType !== 'database' || !namespaceName) {
         return;
       }
-      await removeNamespace(id, databaseName);
+      await removeNamespace(id, namespaceName);
       return;
     }
     if (action === 'createTable') {

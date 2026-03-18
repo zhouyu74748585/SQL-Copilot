@@ -325,12 +325,8 @@
                     class="tree-icon-font"
                   />
                   <div class="tree-title-main">
-                    <span class="tree-title-text" :class="{ 'tree-title-placeholder': dataRef.nodeType === 'group-empty' }">{{ title }}</span>
-                    <span
-                      v-if="dataRef.nodeType === 'connection' && dataRef.connectionName && dataRef.connectionName !== title"
-                      class="tree-title-subtext"
-                    >
-                      {{ dataRef.connectionName }}
+                    <span class="tree-title-text" :class="{ 'tree-title-placeholder': dataRef.nodeType === 'group-empty' }">
+                      {{ dataRef.nodeType === 'connection' ? (dataRef.connectionName || title) : title }}
                     </span>
                   </div>
                   <span
@@ -461,7 +457,11 @@
                 <a-button size="small" @click="refreshCurrentPageObjects({ force: true })" title="刷新当前对象">
                   <reload-outlined />
                 </a-button>
-                <a-radio-group v-model:value="objectViewMode" size="small">
+                <a-radio-group
+                  v-if="!(activeConnectionIsRedis && currentObjectType === 'tables')"
+                  v-model:value="objectViewMode"
+                  size="small"
+                >
                   <a-radio-button value="row"><unordered-list-outlined /></a-radio-button>
                   <a-radio-button value="grid"><appstore-outlined /></a-radio-button>
                 </a-radio-group>
@@ -499,7 +499,6 @@
                     <span class="redis-current-path">当前路径：{{ redisHierarchyPath || '/' }}</span>
                   </div>
                   <a-table
-                    v-if="objectViewMode === 'row'"
                     class="object-list-table"
                     size="small"
                     :pagination="false"
@@ -521,22 +520,6 @@
                       </template>
                     </template>
                   </a-table>
-
-                  <div v-else class="object-grid">
-                    <div
-                      v-for="item in currentObjectRows"
-                      :key="item.objectName"
-                      class="object-card"
-                      :class="{ 'is-active': selectedObjectName === item.objectName }"
-                      @click="onObjectRow(item).onClick()"
-                      @dblclick="onObjectRow(item).onDblclick()"
-                      @contextmenu.prevent.stop="onObjectRow(item).onContextmenu($event)"
-                    >
-                      <div class="object-card-title">{{ item.objectName }}</div>
-                      <div class="object-card-meta">{{ item.tableSize || 'string' }}</div>
-                      <div class="object-card-desc">{{ item.description || '-' }}</div>
-                    </div>
-                  </div>
                 </section>
               </div>
 

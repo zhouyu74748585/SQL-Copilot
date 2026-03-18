@@ -18,6 +18,8 @@ public interface SchemaService {
 
     List<String> listDatabases(Long connectionId);
 
+    List<String> listNamespaces(Long connectionId, String databaseName);
+
     List<String> listObjectNames(Long connectionId, String databaseName, String objectType);
 
     ContextBuildVO buildContext(ContextBuildReq req);

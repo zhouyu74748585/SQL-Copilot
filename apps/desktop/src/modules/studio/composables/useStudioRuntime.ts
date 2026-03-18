@@ -122,6 +122,7 @@ import type {
   SavedQuerySaveReq,
   SavedQueryVO,
   SchemaDatabaseVO,
+  SchemaNamespaceVO,
   SchemaOverviewVO,
   SchemaTableStatsVO,
   SortDirection,
@@ -599,6 +600,10 @@ const tableStatsLastRequestAt = ref<Record<string, number>>({});
 
 const databaseListCache = ref<Record<number, string[]>>({});
 
+const namespaceListCache = ref<Record<string, string[]>>({});
+
+const namespaceListLoadedCache = ref<Record<string, boolean>>({});
+
 const activeDatabaseMap = ref<Record<number, string>>({});
 
 const databaseVectorizeStatusMap = ref<Record<string, RagDatabaseVectorizeStatusVO>>({});
@@ -890,6 +895,7 @@ const contextMenu = reactive({
   groupId: 0,
   connectionId: 0,
   databaseName: '',
+  namespaceName: '',
   category: '' as '' | 'tables' | 'views' | 'functions' | 'queries',
   objectType: '' as '' | ObjectRow['objectType'],
   objectName: '',
@@ -1511,6 +1517,14 @@ const selectedTreeDetail = computed(() => {
       category: categoryMatch[3],
     };
   }
+  const databaseRootMatch = keyValue.match(/^conn-(\d+)-dbroot-(.+)$/);
+  if (databaseRootMatch) {
+    return {
+      kind: 'databaseRoot' as const,
+      connectionId: Number(databaseRootMatch[1]),
+      databaseName: decodeURIComponent(databaseRootMatch[2]),
+    };
+  }
   const databaseMatch = keyValue.match(/^conn-(\d+)-db-(.+)$/);
   if (databaseMatch) {
     return {
@@ -1543,7 +1557,7 @@ const selectedTreeGroup = computed(() => {
 
 const selectedTreeDatabaseStatusLabel = computed(() => {
   const detail = selectedTreeDetail.value;
-  if (!detail || (detail.kind !== 'database' && detail.kind !== 'category')) {
+  if (!detail || (detail.kind !== 'database' && detail.kind !== 'category' && detail.kind !== 'databaseRoot')) {
     return '-';
   }
   return databaseStatusLabel(getDatabaseVectorizeStatus(detail.connectionId, detail.databaseName));
@@ -1551,7 +1565,10 @@ const selectedTreeDatabaseStatusLabel = computed(() => {
 
 const selectedTreeDatabaseTableCount = computed(() => {
   const detail = selectedTreeDetail.value;
-  if (!detail || (detail.kind !== 'database' && detail.kind !== 'category')) {
+  if (!detail || (detail.kind !== 'database' && detail.kind !== 'category' && detail.kind !== 'databaseRoot')) {
+    return '-';
+  }
+  if (detail.kind === 'databaseRoot') {
     return '-';
   }
   if (isKvConnectionId(detail.connectionId)) {
@@ -1570,7 +1587,10 @@ const selectedTreeDatabaseTableCount = computed(() => {
 
 const selectedTreeDatabaseColumnCount = computed(() => {
   const detail = selectedTreeDetail.value;
-  if (!detail || (detail.kind !== 'database' && detail.kind !== 'category')) {
+  if (!detail || (detail.kind !== 'database' && detail.kind !== 'category' && detail.kind !== 'databaseRoot')) {
+    return '-';
+  }
+  if (detail.kind === 'databaseRoot') {
     return '-';
   }
   if (isKvConnectionId(detail.connectionId)) {
@@ -2078,17 +2098,45 @@ function buildConnectionNode(conn: ConnectionVO) {
   const title = buildConnectionNodeTitle(conn);
   if (requiresDatabaseLayer(conn)) {
     const databases = visibleDatabasesForConnection(conn);
-    const activeDbName = getActiveDatabaseName(conn.id);
-    const databaseNodes = (databases.length ? databases : ['未发现数据库']).map((databaseName) => ({
-      key: buildDatabaseNodeKey(conn.id, databaseName),
-      title: databaseName,
-      nodeType: 'database',
-      connectionId: conn.id,
-      databaseName,
-      vectorizeStatus: getDatabaseVectorizeStatus(conn.id, databaseName),
-      selectable: databaseName !== '未发现数据库',
-      children: buildCategoryChildren(conn.id, databaseName),
-    }));
+    const databaseNodes = (databases.length ? databases : ['未发现数据库']).map((databaseName) => {
+      if (supportsSchemaLayer(conn.dbType) && databaseName !== '未发现数据库') {
+        const namespaces = namespaceListCache.value[namespaceCacheKey(conn.id, databaseName)] ?? [];
+        return {
+          key: buildDatabaseRootNodeKey(conn.id, databaseName),
+          title: databaseName,
+          nodeType: 'database-root',
+          connectionId: conn.id,
+          databaseName,
+          vectorizeStatus: getDatabaseVectorizeStatus(conn.id, databaseName),
+          selectable: true,
+          isLeaf: false,
+          children: namespaces.map((namespaceName) => {
+            const schemaContext = buildSchemaContext(databaseName, namespaceName);
+            return {
+              key: buildDatabaseNodeKey(conn.id, schemaContext),
+              title: namespaceName,
+              nodeType: 'database',
+              connectionId: conn.id,
+              databaseName: schemaContext,
+              namespaceName,
+              vectorizeStatus: getDatabaseVectorizeStatus(conn.id, databaseName),
+              selectable: true,
+              children: buildCategoryChildren(conn.id, schemaContext),
+            };
+          }),
+        };
+      }
+      return {
+        key: buildDatabaseNodeKey(conn.id, databaseName),
+        title: databaseName,
+        nodeType: 'database',
+        connectionId: conn.id,
+        databaseName,
+        vectorizeStatus: getDatabaseVectorizeStatus(conn.id, databaseName),
+        selectable: databaseName !== '未发现数据库',
+        children: buildCategoryChildren(conn.id, databaseName),
+      };
+    });
     return {
       key: `conn-${conn.id}`,
       title,
@@ -2117,10 +2165,7 @@ function buildConnectionNode(conn: ConnectionVO) {
 }
 
 function buildConnectionNodeTitle(conn: ConnectionVO) {
-  const spec = findSupportedDbType(conn.dbType);
-  const typeLabel = spec?.displayName || conn.dbType;
-  const dbName = parseConfiguredDatabaseName(conn) || '未指定库';
-  return `${typeLabel} / ${dbName}`;
+  return conn.name?.trim() || '未命名连接';
 }
 
 function buildCategoryChildren(connectionId: number, databaseName: string) {
@@ -2185,6 +2230,10 @@ function requiresDatabaseLayer(connection: ConnectionVO) {
     return true;
   }
   return !parseConfiguredDatabaseName(connection).trim();
+}
+
+function supportsSchemaLayer(dbType: string) {
+  return dbType === 'POSTGRESQL' || dbType === 'SQLSERVER' || dbType === 'ORACLE';
 }
 
 function findSupportedDbType(dbType: string) {
@@ -2281,6 +2330,60 @@ function visibleDatabasesForConnection(connection: ConnectionVO) {
   return allDatabases.filter((item) => selectedSet.has(item.toLowerCase()));
 }
 
+function buildSchemaContext(databaseName: string, namespaceName: string) {
+  const normalizedDatabaseName = (databaseName || '').trim();
+  const normalizedNamespaceName = (namespaceName || '').trim();
+  if (!normalizedDatabaseName || !normalizedNamespaceName) {
+    return normalizedDatabaseName;
+  }
+  return `${normalizedDatabaseName}::${normalizedNamespaceName}`;
+}
+
+function parseSchemaContext(dbType: string, rawContext: string) {
+  const normalizedContext = (rawContext || '').trim();
+  if (!supportsSchemaLayer(dbType)) {
+    return {
+      rawContext: normalizedContext,
+      databaseName: normalizedContext,
+      namespaceName: '',
+    };
+  }
+  const separatorIndex = normalizedContext.indexOf('::');
+  if (separatorIndex <= 0 || separatorIndex >= normalizedContext.length - 2) {
+    return {
+      rawContext: normalizedContext,
+      databaseName: normalizedContext,
+      namespaceName: '',
+    };
+  }
+  return {
+    rawContext: normalizedContext,
+    databaseName: normalizedContext.slice(0, separatorIndex).trim(),
+    namespaceName: normalizedContext.slice(separatorIndex + 2).trim(),
+  };
+}
+
+function rootDatabaseNameForContext(dbType: string, rawContext: string) {
+  return parseSchemaContext(dbType, rawContext).databaseName;
+}
+
+function namespaceCacheKey(connectionId: number, databaseName: string) {
+  return `${connectionId}|${databaseName || '__default__'}`;
+}
+
+function isDatabaseContextVisibleForConnection(connection: ConnectionVO, databaseName: string) {
+  const normalizedDatabaseName = (databaseName || '').trim();
+  if (!normalizedDatabaseName) {
+    return false;
+  }
+  const visibleNames = visibleDatabasesForConnection(connection);
+  if (!visibleNames.length) {
+    return true;
+  }
+  const rootDatabaseName = rootDatabaseNameForContext(connection.dbType, normalizedDatabaseName);
+  return !!rootDatabaseName && visibleNames.includes(rootDatabaseName);
+}
+
 function parseConfiguredDatabaseName(connection: ConnectionVO) {
   const direct = (connection.databaseName ?? '').trim();
   if (direct) {
@@ -2340,6 +2443,13 @@ function invalidateConnectionMetadataCaches(connectionId: number) {
   const nextDatabaseListCache = {...databaseListCache.value};
   delete nextDatabaseListCache[connectionId];
   databaseListCache.value = nextDatabaseListCache;
+
+  namespaceListCache.value = Object.fromEntries(
+    Object.entries(namespaceListCache.value).filter(([key]) => !key.startsWith(`${connectionId}|`)),
+  );
+  namespaceListLoadedCache.value = Object.fromEntries(
+    Object.entries(namespaceListLoadedCache.value).filter(([key]) => !key.startsWith(`${connectionId}|`)),
+  );
 
   const nextActiveDatabaseMap = {...activeDatabaseMap.value};
   delete nextActiveDatabaseMap[connectionId];
@@ -2410,6 +2520,7 @@ function invalidateDatabaseMetadataCaches(connectionId: number, databaseName: st
   const tableKey = tableCacheKey(connectionId, normalizedDatabaseName);
   const tablePrefix = `${connectionId}|${normalizedDatabaseName}|`;
   const objectPrefix = `${connectionId}|${normalizedDatabaseName}|`;
+  const namespaceKey = namespaceCacheKey(connectionId, normalizedDatabaseName);
 
   const nextTableNameCache = {...tableNameCache.value};
   delete nextTableNameCache[tableKey];
@@ -2441,6 +2552,14 @@ function invalidateDatabaseMetadataCaches(connectionId: number, databaseName: st
   const nextDatabaseVectorizeStatusMap = {...databaseVectorizeStatusMap.value};
   delete nextDatabaseVectorizeStatusMap[vectorizeStatusCacheKey(connectionId, normalizedDatabaseName)];
   databaseVectorizeStatusMap.value = nextDatabaseVectorizeStatusMap;
+
+  const nextNamespaceListCache = {...namespaceListCache.value};
+  delete nextNamespaceListCache[namespaceKey];
+  namespaceListCache.value = nextNamespaceListCache;
+
+  const nextNamespaceListLoadedCache = {...namespaceListLoadedCache.value};
+  delete nextNamespaceListLoadedCache[namespaceKey];
+  namespaceListLoadedCache.value = nextNamespaceListLoadedCache;
 
   clearTableStatsPollingTimer(tableKey);
   pendingTableNameLoads.delete(tableKey);
@@ -2487,6 +2606,12 @@ function invalidateDatabaseListCache(connectionId: number) {
   const nextDatabaseListCache = {...databaseListCache.value};
   delete nextDatabaseListCache[connectionId];
   databaseListCache.value = nextDatabaseListCache;
+  namespaceListCache.value = Object.fromEntries(
+    Object.entries(namespaceListCache.value).filter(([key]) => !key.startsWith(`${connectionId}|`)),
+  );
+  namespaceListLoadedCache.value = Object.fromEntries(
+    Object.entries(namespaceListLoadedCache.value).filter(([key]) => !key.startsWith(`${connectionId}|`)),
+  );
   databaseVectorizeStatusMap.value = Object.fromEntries(
     Object.entries(databaseVectorizeStatusMap.value).filter(([key]) => !key.startsWith(`${connectionId}|`)),
   );
@@ -4031,7 +4156,7 @@ async function loadDatabaseListForConnection(connectionId: number, options?: { f
   if (connection) {
     const visibleNames = visibleDatabasesForConnection(connection);
     const current = (activeDatabaseMap.value[connectionId] || '').trim();
-    if (current && visibleNames.length && !visibleNames.includes(current)) {
+    if (current && visibleNames.length && !isDatabaseContextVisibleForConnection(connection, current)) {
       activeDatabaseMap.value = {
         ...activeDatabaseMap.value,
         [connectionId]: '',
@@ -4058,6 +4183,33 @@ async function loadDatabaseListForConnection(connectionId: number, options?: { f
     };
   });
   databaseVectorizeStatusMap.value = next;
+}
+
+async function loadNamespaceList(connectionId: number, databaseName: string, options?: { force?: boolean }) {
+  if (!connectionId || !databaseName) {
+    return [];
+  }
+  const connection = connections.value.find((item) => item.id === connectionId);
+  if (!connection || !supportsSchemaLayer(connection.dbType)) {
+    return [];
+  }
+  const cacheKey = namespaceCacheKey(connectionId, databaseName);
+  if (!options?.force && namespaceListLoadedCache.value[cacheKey]) {
+    return namespaceListCache.value[cacheKey] ?? [];
+  }
+  const list = await getApi<SchemaNamespaceVO[]>(
+    `/api/schema/namespaces?connectionId=${connectionId}&databaseName=${encodeURIComponent(databaseName)}`,
+  );
+  const namespaceNames = list.map((item) => (item.namespaceName || '').trim()).filter((item) => !!item);
+  namespaceListCache.value = {
+    ...namespaceListCache.value,
+    [cacheKey]: namespaceNames,
+  };
+  namespaceListLoadedCache.value = {
+    ...namespaceListLoadedCache.value,
+    [cacheKey]: true,
+  };
+  return namespaceNames;
 }
 
 async function refreshVectorizeStatusForConnection(connectionId: number) {
@@ -4175,7 +4327,7 @@ async function loadConnections() {
         return;
       }
       const visibleNames = visibleDatabasesForConnection(connection);
-      if (tab.databaseName && visibleNames.length && !visibleNames.includes(tab.databaseName)) {
+      if (tab.databaseName && visibleNames.length && !isDatabaseContextVisibleForConnection(connection, tab.databaseName)) {
         tab.databaseName = '';
       }
     });
@@ -4185,7 +4337,7 @@ async function loadConnections() {
         return;
       }
       const visibleNames = visibleDatabasesForConnection(connection);
-      if (tab.databaseName && visibleNames.length && !visibleNames.includes(tab.databaseName)) {
+      if (tab.databaseName && visibleNames.length && !isDatabaseContextVisibleForConnection(connection, tab.databaseName)) {
         tab.databaseName = '';
       }
     });
@@ -4195,7 +4347,7 @@ async function loadConnections() {
         return;
       }
       const visibleNames = visibleDatabasesForConnection(connection);
-      if (tab.databaseName && visibleNames.length && !visibleNames.includes(tab.databaseName)) {
+      if (tab.databaseName && visibleNames.length && !isDatabaseContextVisibleForConnection(connection, tab.databaseName)) {
         tab.databaseName = '';
       }
     });
@@ -5624,6 +5776,17 @@ async function loadTreeChildrenByKey(nodeKey: string) {
     return;
   }
 
+  const databaseRootMatch = nodeKey.match(/^conn-(\d+)-dbroot-(.+)$/);
+  if (databaseRootMatch) {
+    const connectionId = Number(databaseRootMatch[1]);
+    const databaseName = decodeURIComponent(databaseRootMatch[2] || '').trim();
+    if (!connectionId || !databaseName || databaseName === '未发现数据库') {
+      return;
+    }
+    await loadNamespaceList(connectionId, databaseName);
+    return;
+  }
+
   const databaseMatch = nodeKey.match(/^conn-(\d+)-db-(.+)$/);
   if (databaseMatch && !nodeKey.includes('-category-') && !nodeKey.includes('-obj-')) {
     const connectionId = Number(databaseMatch[1]);
@@ -5631,8 +5794,6 @@ async function loadTreeChildrenByKey(nodeKey: string) {
     if (!connectionId || !databaseName || databaseName === '未发现数据库') {
       return;
     }
-    // 对于KV类型（Redis/MongoDB），不在展开数据库节点时加载键列表
-    // 键列表只在点击"键"节点时才加载
     if (!isKvConnectionId(connectionId)) {
       await ensureTableNamesLoaded(connectionId, databaseName);
     }
@@ -5697,11 +5858,31 @@ async function handleTreeSelect(keys: (string | number)[]) {
       return;
     }
     const current = connections.value.find((item) => item.id === connectionId);
-    if (current && (!requiresDatabaseLayer(current) || getActiveDatabaseName(connectionId))) {
+    const activeDatabaseName = getActiveDatabaseName(connectionId);
+    const activeSchemaContext = current ? parseSchemaContext(current.dbType, activeDatabaseName) : null;
+    if (current && (!requiresDatabaseLayer(current) || (activeDatabaseName && (!supportsSchemaLayer(current.dbType) || activeSchemaContext?.namespaceName)))) {
       await loadOverview();
     } else {
       schemaOverview.value = null;
     }
+    return;
+  }
+
+  const databaseRootMatch = value.match(/^conn-(\d+)-dbroot-(.+)$/);
+  if (databaseRootMatch) {
+    const connectionId = Number(databaseRootMatch[1]);
+    const databaseName = decodeURIComponent(databaseRootMatch[2]);
+    workflow.connectionId = connectionId;
+    activeDatabaseMap.value = {
+      ...activeDatabaseMap.value,
+      [connectionId]: databaseName,
+    };
+    currentObjectType.value = 'tables';
+    selectedObjectName.value = '';
+    clearBrowserObjectCollections();
+    clearObjectDetail();
+    expandConnectionNode(connectionId);
+    await loadNamespaceList(connectionId, databaseName);
     return;
   }
 
@@ -5842,6 +6023,7 @@ async function handleTreeRightClick(event: { event: MouseEvent; node: { key?: st
     contextMenu.groupId = Number(groupMatch[1]);
     contextMenu.connectionId = 0;
     contextMenu.databaseName = '';
+    contextMenu.namespaceName = '';
     contextMenu.category = '';
     contextMenu.objectType = '';
     contextMenu.objectName = '';
@@ -5865,6 +6047,7 @@ async function handleTreeRightClick(event: { event: MouseEvent; node: { key?: st
     contextMenu.targetType = 'object';
     contextMenu.connectionId = connectionId;
     contextMenu.databaseName = databaseName;
+    contextMenu.namespaceName = '';
     contextMenu.category = '';
     contextMenu.objectType = objectType;
     contextMenu.objectName = objectName;
@@ -5890,6 +6073,7 @@ async function handleTreeRightClick(event: { event: MouseEvent; node: { key?: st
     contextMenu.targetType = 'category';
     contextMenu.connectionId = connectionId;
     contextMenu.databaseName = databaseName;
+    contextMenu.namespaceName = '';
     contextMenu.category = category;
     contextMenu.objectType = '';
     contextMenu.objectName = '';
@@ -5912,6 +6096,7 @@ async function handleTreeRightClick(event: { event: MouseEvent; node: { key?: st
     contextMenu.targetType = 'connection';
     contextMenu.connectionId = connectionId;
     contextMenu.databaseName = '';
+    contextMenu.namespaceName = '';
     contextMenu.category = '';
     contextMenu.objectType = '';
     contextMenu.objectName = '';
@@ -5934,7 +6119,7 @@ async function handleTreeRightClick(event: { event: MouseEvent; node: { key?: st
   try {
     await refreshVectorizeStatusForConnection(connectionId);
   } catch {
-    // 关键操作：右键菜单唤起时尝试刷新状态，失败则沿用本地缓存状态。
+    // 右键菜单唤起时尝试刷新状态，失败则沿用本地缓存。
   }
   selectedTreeKeys.value = [keyValue];
   contextMenu.visible = true;
@@ -5943,6 +6128,10 @@ async function handleTreeRightClick(event: { event: MouseEvent; node: { key?: st
   contextMenu.targetType = 'database';
   contextMenu.connectionId = connectionId;
   contextMenu.databaseName = databaseName;
+  contextMenu.namespaceName = parseSchemaContext(
+    connections.value.find((item) => item.id === connectionId)?.dbType || '',
+    databaseName,
+  ).namespaceName;
   contextMenu.category = '';
   contextMenu.objectType = '';
   contextMenu.objectName = '';
@@ -5953,6 +6142,7 @@ function closeContextMenu() {
   contextMenu.targetType = 'none';
   contextMenu.groupId = 0;
   contextMenu.databaseName = '';
+  contextMenu.namespaceName = '';
   contextMenu.category = '';
   contextMenu.objectType = '';
   contextMenu.objectName = '';
@@ -6061,7 +6251,7 @@ async function selectObject(connectionId: number, databaseName: string, objectTy
   }
   workflow.prompt = isKvConnectionId(connectionId) ? `查询 ${objectName}` : `查询 ${objectName} 最近数据`;
   if ((objectType === 'tables' || objectType === 'views') && !isKvConnectionId(connectionId)) {
-    workflow.sqlText = `SELECT * FROM ${objectName} LIMIT 100`;
+    workflow.sqlText = buildObjectQuerySql(objectName, queryDbTypeByConnectionId(connectionId));
   }
   await loadObjectDetail(connectionId, databaseName, objectType, objectName);
   if (isKvConnectionId(connectionId) && objectType === 'tables') {
@@ -6266,7 +6456,7 @@ function openQueryTabByObject(record: ObjectRow, autoExecute = false) {
   const isKv = isKvConnectionId(connectionId);
   const sql = isKv
     ? (kvObjectDetail.value?.queryTemplate || '')
-    : `SELECT * FROM ${record.objectName} LIMIT 100`;
+    : buildObjectQuerySql(record.objectName, queryDbTypeByConnectionId(connectionId));
   const prompt = isKv ? `查询 ${record.objectName}` : `查询 ${record.objectName} 最近数据`;
   workflow.sqlText = sql;
   workflow.prompt = prompt;
@@ -6418,40 +6608,43 @@ async function saveAiConfig() {
 function databaseOptionsForTab(tab: QueryWorkspaceTab) {
   const connection = connections.value.find((item) => item.id === tab.connectionId);
   const cached = connection ? visibleDatabasesForConnection(connection) : [];
-  if (cached.length) {
-    return cached.map((item) => ({ label: item, value: item }));
-  }
+  const options = cached.map((item) => ({ label: item, value: item }));
   const fallback = tab.databaseName || getActiveDatabaseName(tab.connectionId);
   if (!fallback) {
-    return [];
+    return options;
   }
-  return [{ label: fallback, value: fallback }];
+  if (options.some((item) => item.value === fallback)) {
+    return options;
+  }
+  return [...options, { label: fallback, value: fallback }];
 }
 
 function databaseOptionsForTableEditorTab(tab: TableEditorWorkspaceTab) {
   const connection = connections.value.find((item) => item.id === tab.connectionId);
   const cached = connection ? visibleDatabasesForConnection(connection) : [];
-  if (cached.length) {
-    return cached.map((item) => ({ label: item, value: item }));
-  }
+  const options = cached.map((item) => ({ label: item, value: item }));
   const fallback = tab.databaseName || getActiveDatabaseName(tab.connectionId);
   if (!fallback) {
-    return [];
+    return options;
   }
-  return [{ label: fallback, value: fallback }];
+  if (options.some((item) => item.value === fallback)) {
+    return options;
+  }
+  return [...options, { label: fallback, value: fallback }];
 }
 
 function databaseOptionsForTableDataTab(tab: TableDataWorkspaceTab) {
   const connection = connections.value.find((item) => item.id === tab.connectionId);
   const cached = connection ? visibleDatabasesForConnection(connection) : [];
-  if (cached.length) {
-    return cached.map((item) => ({ label: item, value: item }));
-  }
+  const options = cached.map((item) => ({ label: item, value: item }));
   const fallback = tab.databaseName || getActiveDatabaseName(tab.connectionId);
   if (!fallback) {
-    return [];
+    return options;
   }
-  return [{ label: fallback, value: fallback }];
+  if (options.some((item) => item.value === fallback)) {
+    return options;
+  }
+  return [...options, { label: fallback, value: fallback }];
 }
 
 function queryTabConnectionName(tab: QueryWorkspaceTab) {
@@ -6634,8 +6827,12 @@ function resolveSelectedSqlSnippet(tab: QueryWorkspaceTab, sqlOverride?: string)
   return tab.selectedSqlText.trim();
 }
 
+function queryDbTypeByConnectionId(connectionId: number) {
+  return connections.value.find((item) => item.id === connectionId)?.dbType ?? 'MYSQL';
+}
+
 function queryTabDbType(tab: QueryWorkspaceTab) {
-  return connections.value.find((item) => item.id === tab.connectionId)?.dbType ?? 'MYSQL';
+  return queryDbTypeByConnectionId(tab.connectionId);
 }
 
 function queryEditorLanguageByDbType(dbTypeRaw: string) {
@@ -8811,8 +9008,19 @@ function expandConnectionNode(connectionId: number) {
   const activeCategory = currentObjectType.value || 'tables';
   if (requiresDatabaseLayer(connection)) {
     if (activeDb) {
-      keys.add(buildDatabaseNodeKey(connectionId, activeDb));
-      keys.add(buildCategoryNodeKey(connectionId, activeDb, activeCategory));
+      if (supportsSchemaLayer(connection.dbType)) {
+        const schemaContext = parseSchemaContext(connection.dbType, activeDb);
+        if (schemaContext.databaseName) {
+          keys.add(buildDatabaseRootNodeKey(connectionId, schemaContext.databaseName));
+        }
+        if (schemaContext.namespaceName) {
+          keys.add(buildDatabaseNodeKey(connectionId, activeDb));
+          keys.add(buildCategoryNodeKey(connectionId, activeDb, activeCategory));
+        }
+      } else {
+        keys.add(buildDatabaseNodeKey(connectionId, activeDb));
+        keys.add(buildCategoryNodeKey(connectionId, activeDb, activeCategory));
+      }
     }
   } else {
     keys.add(buildCategoryNodeKey(connectionId, activeDb, activeCategory));
@@ -8837,6 +9045,10 @@ async function ensureConnectionTreeExpanded(connectionId: number, options?: { sh
 
 function buildDatabaseNodeKey(connectionId: number, databaseName: string) {
   return `conn-${connectionId}-db-${encodeURIComponent(databaseName)}`;
+}
+
+function buildDatabaseRootNodeKey(connectionId: number, databaseName: string) {
+  return `conn-${connectionId}-dbroot-${encodeURIComponent(databaseName)}`;
 }
 
 function buildCategoryNodeKey(connectionId: number, databaseName: string, category: string) {
@@ -8991,6 +9203,32 @@ function quoteSqlIdentifier(identifier: string, dbType: string) {
     return `"${text}"`;
   }
   return `\`${text}\``;
+}
+
+function quoteSqlObjectName(objectName: string, dbType: string) {
+  const normalized = String(objectName || '').trim();
+  if (!normalized) {
+    return '';
+  }
+  return normalized
+    .split('.')
+    .map((segment) => {
+      const text = String(segment || '').trim();
+      return quoteSqlIdentifier(text, dbType) || text;
+    })
+    .join('.');
+}
+
+function buildObjectQuerySql(objectName: string, dbType: string) {
+  const normalizedDbType = String(dbType || '').trim().toUpperCase();
+  const objectRef = quoteSqlObjectName(objectName, normalizedDbType) || objectName;
+  if (normalizedDbType === 'SQLSERVER') {
+    return `SELECT TOP 100 * FROM ${objectRef}`;
+  }
+  if (normalizedDbType === 'ORACLE') {
+    return `SELECT * FROM ${objectRef} FETCH FIRST 100 ROWS ONLY`;
+  }
+  return `SELECT * FROM ${objectRef} LIMIT 100`;
 }
 
 function buildColumnSqlDefinition(
@@ -9193,7 +9431,7 @@ function treeNodeIconUrl(dataRef: { nodeType?: string; objectName?: string }) {
   if (!t || t === 'connection') {
     return '';
   }
-  if (t === 'database') {
+  if (t === 'database' || t === 'database-root') {
     return treeDatabaseIcon;
   }
   if (t === 'tables') {
@@ -9968,6 +10206,7 @@ function resetConnectionModalState() {
     formatVectorizeProvider,
     expandConnectionNode,
     ensureConnectionTreeExpanded,
+    buildDatabaseRootNodeKey,
     buildDatabaseNodeKey,
     buildCategoryNodeKey,
     buildObjectNodeKey,
@@ -10004,7 +10243,7 @@ function resetConnectionModalState() {
     fillAiConfigForm,
     defaultRagConfigForm,
     fillRagConfigForm,
-    resetConnectionModalState
+    resetConnectionModalState,
   };
 }
 

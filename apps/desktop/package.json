@@ -8,9 +8,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:renderer": "NO_PROXY=localhost,127.0.0.1 vite --host 127.0.0.1 --port 8888 --strictPort",
-    "dev:electron": "NO_PROXY=localhost,127.0.0.1 wait-on http-get://127.0.0.1:8888/@vite/client && node scripts/run-electron-main.cjs",
-    "debug:main": "NO_PROXY=localhost,127.0.0.1 wait-on http-get://127.0.0.1:8888/@vite/client && node scripts/run-electron-main.cjs --inspect=9229 --debug",
+   "dev:renderer": "vite --host 127.0.0.1 --port 8888 --strictPort",
+    "dev:electron": "wait-on http-get://127.0.0.1:8888/@vite/client && node scripts/run-electron-main.cjs",
+    "debug:main": "wait-on http-get://127.0.0.1:8888/@vite/client && node scripts/run-electron-main.cjs --inspect=9229 --debug",
     "debug": "concurrently -k \"npm run dev:renderer\" \"npm run debug:main\"",
     "build": "vite build --emptyOutDir",
     "download:qdrant": "node scripts/download-qdrant.mjs",

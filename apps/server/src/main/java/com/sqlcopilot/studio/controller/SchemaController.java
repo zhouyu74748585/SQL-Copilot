@@ -100,6 +100,19 @@ public class SchemaController {
         return ApiResponse.success(result);
     }
 
+    @GetMapping("/namespaces")
+    public ApiResponse<List<SchemaNamespaceVO>> namespaces(@RequestParam("connectionId") Long connectionId,
+                                                           @RequestParam("databaseName") String databaseName) {
+        List<SchemaNamespaceVO> result = schemaService.listNamespaces(connectionId, databaseName).stream()
+            .map(item -> {
+                SchemaNamespaceVO vo = new SchemaNamespaceVO();
+                vo.setNamespaceName(item);
+                return vo;
+            })
+            .toList();
+        return ApiResponse.success(result);
+    }
+
     @GetMapping("/objectNames")
     public ApiResponse<java.util.List<String>> objectNames(@RequestParam("connectionId") Long connectionId,
                                                            @RequestParam(value = "databaseName", required = false) String databaseName,

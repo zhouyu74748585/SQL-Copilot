@@ -10,6 +10,7 @@ import com.sqlcopilot.studio.repository.TableDataJdbcRepository;
 import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.SchemaService;
 import com.sqlcopilot.studio.service.TableDataService;
+import com.sqlcopilot.studio.support.SchemaContextSupport;
 import com.sqlcopilot.studio.util.BusinessException;
 import org.springframework.stereotype.Service;
 
@@ -474,14 +475,31 @@ public class TableDataServiceImpl implements TableDataService {
      */
     private void applyDatabaseContext(Connection connection, String dbType, String targetDatabaseName) throws SQLException {
         String type = normalize(dbType).toUpperCase(Locale.ROOT);
-        if (targetDatabaseName.isBlank()) {
+        SchemaContextSupport.SchemaContext context = SchemaContextSupport.parse(type, targetDatabaseName);
+        if (context.rawContext().isBlank()) {
             return;
         }
-        if ("MYSQL".equals(type) || "POSTGRESQL".equals(type)) {
-            connection.setCatalog(targetDatabaseName);
+        if ("MYSQL".equals(type)) {
+            connection.setCatalog(context.databaseName());
         }
-        if ("SQLSERVER".equals(type) || "ORACLE".equals(type)) {
-            connection.setSchema(targetDatabaseName);
+        if ("POSTGRESQL".equals(type)) {
+            if (!context.databaseName().isBlank()) {
+                connection.setCatalog(context.databaseName());
+            }
+            if (context.hasNamespace()) {
+                connection.setSchema(context.namespaceName());
+            }
+        }
+        if ("SQLSERVER".equals(type)) {
+            if (!context.databaseName().isBlank()) {
+                connection.setCatalog(context.databaseName());
+            }
+            if (context.hasNamespace()) {
+                connection.setSchema(context.namespaceName());
+            }
+        }
+        if ("ORACLE".equals(type) && context.hasNamespace()) {
+            connection.setSchema(context.namespaceName());
         }
     }
 

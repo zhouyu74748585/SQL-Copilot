@@ -20,10 +20,11 @@ drivers:
       "12": "universal"
     introspection:
       schemas: |-
-        select datname as schema_name
-          from pg_database
-         where datistemplate = false
-         order by datname
+        select schema_name
+          from information_schema.schemata
+         where schema_name not in ('information_schema')
+           and schema_name not like 'pg_%'
+         order by schema_name
       tables: |-
         select n.nspname as table_schema,
                c.relname as table_name,
