@@ -1960,6 +1960,8 @@ function buildCategoryChildren(connectionId: number, databaseName: string) {
 }
 
 function getCategoryChildren(connectionId: number, databaseName: string, category: string) {
+  const connection = connections.value.find((item) => item.id === connectionId);
+  const dbType = connection?.dbType || '';
   if (category === 'queries') {
     return savedQueriesByDatabase(connectionId, databaseName).map((item) => ({
       key: buildObjectNodeKey(connectionId, databaseName, category, item.title),
@@ -1970,6 +1972,9 @@ function getCategoryChildren(connectionId: number, databaseName: string, categor
       objectType: category,
       objectName: item.title,
     }));
+  }
+  if (category === 'tables' && isKvDbType(dbType)) {
+    return [];
   }
   const names = category === 'tables'
     ? tableNameCache.value[tableCacheKey(connectionId, databaseName)] ?? []
@@ -2040,6 +2045,19 @@ function defaultPortForDbType(dbType: string) {
     return 1521;
   }
   return 0;
+}
+
+function getDatabaseNamePlaceholder(dbType: string) {
+  if (dbType === 'SQLITE') {
+    return 'SQLite 文件路径';
+  }
+  if (dbType === 'REDIS') {
+    return '逻辑库（0-15），默认 0';
+  }
+  if (dbType === 'MONGODB') {
+    return '数据库名/默认库';
+  }
+  return '数据库名/服务名';
 }
 
 function isMultiDatabaseType(dbType: string) {
@@ -5306,7 +5324,11 @@ async function loadTreeChildrenByKey(nodeKey: string) {
     if (!connectionId || !databaseName || databaseName === '未发现数据库') {
       return;
     }
-    await ensureTableNamesLoaded(connectionId, databaseName);
+    // 对于KV类型（Redis/MongoDB），不在展开数据库节点时加载键列表
+    // 键列表只在点击"键"节点时才加载
+    if (!isKvConnectionId(connectionId)) {
+      await ensureTableNamesLoaded(connectionId, databaseName);
+    }
     return;
   }
 
@@ -8388,6 +8410,36 @@ function envTagIcon(value?: string) {
   return ToolOutlined;
 }
 
+function connectionStatusClass(connectionId?: number) {
+  if (!connectionId) {
+    return 'is-unknown';
+  }
+  const conn = connections.value.find((item) => item.id === connectionId);
+  const status = conn?.lastTestStatus;
+  if (status === 'SUCCESS') {
+    return 'is-success';
+  }
+  if (status === 'FAIL') {
+    return 'is-failed';
+  }
+  return 'is-unknown';
+}
+
+function connectionStatusText(connectionId?: number) {
+  if (!connectionId) {
+    return '未测试';
+  }
+  const conn = connections.value.find((item) => item.id === connectionId);
+  const status = conn?.lastTestStatus;
+  if (status === 'SUCCESS') {
+    return '已连接';
+  }
+  if (status === 'FAIL') {
+    return '连接失败';
+  }
+  return '未测试';
+}
+
 function nodeIconComponent(dataRef: { nodeType?: string }) {
   if (dataRef.nodeType === 'database') {
     return DatabaseOutlined;
@@ -9147,6 +9199,7 @@ function resetConnectionModalState() {
     requiresDatabaseLayer,
     isMultiDatabaseType,
     isKvConnectionId,
+    getDatabaseNamePlaceholder,
     normalizeSelectedDatabases,
     visibleDatabasesForConnection,
     parseConfiguredDatabaseName,
@@ -9379,6 +9432,8 @@ function resetConnectionModalState() {
     envTagText,
     envTagClass,
     envTagIcon,
+    connectionStatusClass,
+    connectionStatusText,
     nodeIconComponent,
     quoteSqlIdentifier,
     buildColumnSqlDefinition,

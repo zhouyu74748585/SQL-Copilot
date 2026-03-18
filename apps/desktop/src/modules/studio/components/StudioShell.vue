@@ -326,7 +326,12 @@
                     {{ envTagText(dataRef.env) }}
                   </span>
                   <span
-                    v-if="dataRef.nodeType === 'database'"
+                    v-if="dataRef.nodeType === 'connection'"
+                    class="tree-connection-status"
+                    :class="connectionStatusClass(dataRef.connectionId)"
+                  />
+                  <span
+                    v-if="dataRef.nodeType === 'database' && !isKvConnectionId(dataRef.connectionId)"
                     class="db-vectorize-status"
                     :class="databaseStatusClass(dataRef.vectorizeStatus)"
                   >
@@ -605,7 +610,7 @@
                 <div class="detail-row"><span>连接</span><strong>{{ selectedTreeConnection?.name ?? '-' }}</strong></div>
                 <div class="detail-row"><span>数据库类型</span><strong>{{ selectedTreeConnection?.dbType ?? '-' }}</strong></div>
                 <div class="detail-row"><span>所属环境</span><strong>{{ envTagText(selectedTreeConnection?.env) }}</strong></div>
-                <div class="detail-row"><span>向量化</span><strong>{{ selectedTreeDatabaseStatusLabel }}</strong></div>
+                <div v-if="!isKvConnectionId(selectedTreeConnection?.id)" class="detail-row"><span>向量化</span><strong>{{ selectedTreeDatabaseStatusLabel }}</strong></div>
                 <div class="detail-row"><span>表数量</span><strong>{{ selectedTreeDatabaseTableCount }}</strong></div>
                 <div class="detail-row"><span>字段数</span><strong>{{ selectedTreeDatabaseColumnCount }}</strong></div>
               </div>
@@ -2359,7 +2364,7 @@
               <a-input
                 v-else
                 v-model:value="connectionForm.databaseName"
-                :placeholder="connectionForm.dbType === 'SQLITE' ? 'SQLite 文件路径' : '数据库名/服务名'"
+                :placeholder="getDatabaseNamePlaceholder(connectionForm.dbType)"
               />
             </a-form-item>
           </a-col>
@@ -3825,6 +3830,8 @@ const {
     envTagText,
     envTagClass,
     envTagIcon,
+    connectionStatusClass,
+    connectionStatusText,
     nodeIconComponent,
     quoteSqlIdentifier,
     buildColumnSqlDefinition,

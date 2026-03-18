@@ -628,9 +628,9 @@ body {
   flex-shrink: 0;
   object-fit: contain;
   vertical-align: middle;
-  border-radius: 2px;
-  border: 1px solid var(--line-soft);
-  background: color-mix(in srgb, var(--surface-0) 88%, var(--surface-2) 12%);
+  border: none;
+  border-radius: 0;
+  background: transparent;
 }
 
 .tree-icon-font {
@@ -660,6 +660,29 @@ body {
   padding: 0 5px;
   border-radius: 9px;
   border: 1px solid transparent;
+}
+
+.tree-connection-status {
+  margin-left: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.tree-connection-status.is-success {
+  background: #52c41a;
+}
+
+.tree-connection-status.is-failed {
+  background: #ff4d4f;
+}
+
+.tree-connection-status.is-unknown {
+  background: #d9d9d9;
 }
 
 .tree-env-tag-icon {
@@ -3582,10 +3605,6 @@ body {
 }
 
 .studio-root.theme-dark .tree-icon-img {
-  border-color: var(--line-strong);
-  background: color-mix(in srgb, var(--surface-2) 78%, var(--surface-0) 22%);
-  filter: contrast(1.08) brightness(1.1);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--surface-0) 50%, transparent);
 }
 
 .studio-root.theme-dark .tree-env-tag.is-dev {

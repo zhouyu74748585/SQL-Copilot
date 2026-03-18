@@ -71,11 +71,16 @@ public class KvServiceImpl implements KvService {
             });
         }
         if (DB_TYPE_REDIS.equals(dbType)) {
-            SchemaDatabaseVO vo = new SchemaDatabaseVO();
-            vo.setDatabaseName(resolveRedisDatabaseName(entity.getDatabaseName()));
-            vo.setVectorizeStatus("NOT_VECTORIZED");
-            vo.setVectorizeMessage("KV 类型不进行元数据向量化");
-            return List.of(vo);
+            // Redis 默认有 16 个数据库 (0-15)
+            List<SchemaDatabaseVO> result = new ArrayList<>();
+            for (int i = 0; i < 16; i++) {
+                SchemaDatabaseVO vo = new SchemaDatabaseVO();
+                vo.setDatabaseName(String.valueOf(i));
+                vo.setVectorizeStatus("NOT_VECTORIZED");
+                vo.setVectorizeMessage("KV 类型不进行元数据向量化");
+                result.add(vo);
+            }
+            return result;
         }
         throw unsupportedDbType(dbType);
     }

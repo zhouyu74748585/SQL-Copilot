@@ -45,7 +45,9 @@ type ContextAction =
   | 'deleteSavedQuery'
   | 'revectorize'
   | 'interruptVectorize'
-  | 'viewVectorizedData';
+  | 'viewVectorizedData'
+  | 'copyKeyName'
+  | 'deleteKey';
 
 type TreeNodeData = {
   nodeType?: string;
@@ -399,23 +401,26 @@ export function useConnectionBrowserModule(
       return actions;
     }
     if (menu.targetType === 'database') {
+      const isKv = runtime.isKvConnectionId(menu.connectionId);
       const actions: ContextMenuActionItem[] = [];
-      if (spec?.supportsNamespaceRename) {
+      if (spec?.supportsNamespaceRename && !isKv) {
         actions.push({ id: 'renameNamespace', label: `编辑${namespaceLabel()}` });
       }
-      if (spec?.supportsNamespaceCreate) {
+      if (spec?.supportsNamespaceCreate && !isKv) {
         actions.push({ id: 'createNamespace', label: `新建同级${namespaceLabel()}` });
       }
       const childActions = createChildActions();
-      if (childActions.length) {
+      if (childActions.length && !isKv) {
         actions.push({ id: 'createTable', label: '新建下级', children: childActions });
       }
-      actions.push(
-        { id: 'revectorize', label: '重新向量化', disabled: runtime.isContextDatabaseVectorizing.value },
-        { id: 'interruptVectorize', label: '中断向量化', disabled: !runtime.canInterruptContextVectorize.value },
-        { id: 'viewVectorizedData', label: '查看向量化数据', disabled: !runtime.canViewContextVectorizedData.value },
-      );
-      if (spec?.supportsNamespaceDrop) {
+      if (!isKv) {
+        actions.push(
+          { id: 'revectorize', label: '重新向量化', disabled: runtime.isContextDatabaseVectorizing.value },
+          { id: 'interruptVectorize', label: '中断向量化', disabled: !runtime.canInterruptContextVectorize.value },
+          { id: 'viewVectorizedData', label: '查看向量化数据', disabled: !runtime.canViewContextVectorizedData.value },
+        );
+      }
+      if (spec?.supportsNamespaceDrop && !isKv) {
         actions.push({ id: 'dropNamespace', label: `删除${namespaceLabel()}`, danger: true });
       }
       return actions;
@@ -438,7 +443,14 @@ export function useConnectionBrowserModule(
     if (menu.targetType !== 'object') {
       return [];
     }
+    const isKvForObject = menu.objectType === 'tables' && runtime.isKvConnectionId(menu.connectionId);
     if (menu.objectType === 'tables') {
+      if (isKvForObject) {
+        return [
+          { id: 'copyKeyName', label: '复制键名' },
+          { id: 'deleteKey', label: '删除键', danger: true },
+        ];
+      }
       return [
         { id: 'querySql', label: 'SQL查询' },
         { id: 'createTable', label: '新建表' },
@@ -687,6 +699,21 @@ export function useConnectionBrowserModule(
       runtime.dropTableModalOpen.value = true;
       return;
     }
+    if (action === 'copyKeyName') {
+      if (targetType !== 'object' || !objectName || objectType !== 'tables' || !databaseName) {
+        return;
+      }
+      void navigator.clipboard.writeText(objectName);
+      return;
+    }
+    if (action === 'deleteKey') {
+      if (targetType !== 'object' || !objectName || objectType !== 'tables' || !databaseName) {
+        return;
+      }
+      runtime.dropTableName.value = objectName;
+      runtime.dropTableModalOpen.value = true;
+      return;
+    }
     if (action === 'editSavedQuery') {
       if (targetType !== 'object' || objectType !== 'queries' || !objectName) {
         return;
@@ -753,6 +780,9 @@ export function useConnectionBrowserModule(
       return;
     }
     if (node.nodeType === 'tables' || node.nodeType === 'views') {
+      if (runtime.isKvConnectionId(node.connectionId)) {
+        return;
+      }
       const rowVectorizeRecord = runtime.getDatabaseVectorizeStatusRecord(node.connectionId, node.databaseName);
       await deps.openTableDataTabByObject({
         objectName: node.objectName,
@@ -785,6 +815,9 @@ export function useConnectionBrowserModule(
       },
       onDblclick: () => {
         if (record.objectType === 'tables' || record.objectType === 'views') {
+          if (runtime.isKvConnectionId(runtime.workflow.connectionId)) {
+            return;
+          }
           void deps.openTableDataTabByObject(record, {
             connectionId: runtime.workflow.connectionId,
             databaseName: runtime.getActiveDatabaseName(runtime.workflow.connectionId),
