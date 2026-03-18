@@ -18,6 +18,9 @@ public class ConnectionCreateReq {
     @NotBlank
     private String dbType;
 
+    /** 所属连接分组 ID。 */
+    private Long groupId;
+
     /** 数据库主机地址。 */
     private String host;
 

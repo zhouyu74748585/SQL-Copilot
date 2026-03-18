@@ -4,6 +4,9 @@ import com.sqlcopilot.studio.dto.common.ApiResponse;
 import com.sqlcopilot.studio.dto.kv.KvObjectDetailVO;
 import com.sqlcopilot.studio.dto.kv.KvOverviewVO;
 import com.sqlcopilot.studio.dto.kv.KvQueryExecuteReq;
+import com.sqlcopilot.studio.dto.kv.KvRedisKeyDeleteReq;
+import com.sqlcopilot.studio.dto.kv.KvRedisKeySaveReq;
+import com.sqlcopilot.studio.dto.kv.KvRedisKeySaveVO;
 import com.sqlcopilot.studio.dto.schema.SchemaDatabaseVO;
 import com.sqlcopilot.studio.dto.sql.SqlExecuteVO;
 import com.sqlcopilot.studio.service.KvService;
@@ -45,5 +48,21 @@ public class KvController {
     @PostMapping("/query/execute")
     public ApiResponse<SqlExecuteVO> execute(@Valid @RequestBody KvQueryExecuteReq req) {
         return ApiResponse.success(kvService.executeQuery(req));
+    }
+
+    @PostMapping("/redis/key/create")
+    public ApiResponse<KvRedisKeySaveVO> createRedisKey(@Valid @RequestBody KvRedisKeySaveReq req) {
+        return ApiResponse.success(kvService.createRedisKey(req));
+    }
+
+    @PostMapping("/redis/key/update")
+    public ApiResponse<KvRedisKeySaveVO> updateRedisKey(@Valid @RequestBody KvRedisKeySaveReq req) {
+        return ApiResponse.success(kvService.updateRedisKey(req));
+    }
+
+    @PostMapping("/redis/key/delete")
+    public ApiResponse<Boolean> deleteRedisKey(@Valid @RequestBody KvRedisKeyDeleteReq req) {
+        kvService.deleteRedisKey(req);
+        return ApiResponse.success(Boolean.TRUE);
     }
 }

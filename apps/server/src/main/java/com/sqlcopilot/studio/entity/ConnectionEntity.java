@@ -7,6 +7,8 @@ public class ConnectionEntity {
     private Long id;
     private String name;
     private String dbType;
+    private Long groupId;
+    private String groupName;
     private String host;
     private Integer port;
     private String databaseName;

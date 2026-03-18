@@ -27,6 +27,11 @@ public class ConnectionController {
         return ApiResponse.success(connectionService.listSupportedDbTypes());
     }
 
+    @GetMapping("/group/list")
+    public ApiResponse<List<ConnectionGroupVO>> listGroups() {
+        return ApiResponse.success(connectionService.listConnectionGroups());
+    }
+
     @GetMapping("/list")
     public ApiResponse<List<ConnectionVO>> list() {
         return ApiResponse.success(connectionService.listConnections());
@@ -47,6 +52,28 @@ public class ConnectionController {
     public ApiResponse<ConnectionDatabasePreviewVO> previewDatabases(@RequestBody ConnectionDatabasePreviewReq req) {
         // 关键操作：弹窗未保存配置下临时建连预览库列表，不写入 connection_info。
         return ApiResponse.success(connectionService.previewDatabases(req));
+    }
+
+    @PostMapping("/group/create")
+    public ApiResponse<ConnectionGroupVO> createGroup(@Valid @RequestBody ConnectionGroupCreateReq req) {
+        return ApiResponse.success(connectionService.createConnectionGroup(req));
+    }
+
+    @PostMapping("/group/rename")
+    public ApiResponse<ConnectionGroupVO> renameGroup(@Valid @RequestBody ConnectionGroupRenameReq req) {
+        return ApiResponse.success(connectionService.renameConnectionGroup(req));
+    }
+
+    @PostMapping("/group/remove")
+    public ApiResponse<Boolean> removeGroup(@Valid @RequestBody ConnectionGroupRemoveReq req) {
+        connectionService.removeConnectionGroup(req.getGroupId());
+        return ApiResponse.success(Boolean.TRUE);
+    }
+
+    @PostMapping("/group/move")
+    public ApiResponse<Boolean> moveToGroup(@Valid @RequestBody ConnectionGroupMoveReq req) {
+        connectionService.moveConnectionToGroup(req.getConnectionId(), req.getTargetGroupId());
+        return ApiResponse.success(Boolean.TRUE);
     }
 
     @PostMapping("/remove")

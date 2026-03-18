@@ -29,6 +29,7 @@ export type {
 export interface ConnectionCreateReq {
   name: string;
   dbType: string;
+  groupId?: number;
   host?: string;
   port?: number;
   databaseName?: string;
@@ -95,6 +96,39 @@ export interface ConnectionDbTypeVO {
   supportsExplainQuery?: boolean;
   supportsAnalyzeQuery?: boolean;
   supportsGenerateChart?: boolean;
+  requiresHost?: boolean;
+  requiresPort?: boolean;
+  supportsDatabaseName?: boolean;
+  supportsDatabasePreview?: boolean;
+  databaseNameLabel?: string;
+  supportsUsername?: boolean;
+  supportsPassword?: boolean;
+}
+
+export interface ConnectionGroupVO {
+  id: number;
+  name: string;
+  sortOrder?: number;
+  connectionCount?: number;
+  defaultGroup?: boolean;
+}
+
+export interface ConnectionGroupCreateReq {
+  name: string;
+}
+
+export interface ConnectionGroupRenameReq {
+  groupId: number;
+  name: string;
+}
+
+export interface ConnectionGroupRemoveReq {
+  groupId: number;
+}
+
+export interface ConnectionGroupMoveReq {
+  connectionId: number;
+  targetGroupId: number;
 }
 
 export interface KvObjectSummaryVO {
@@ -120,6 +154,9 @@ export interface KvObjectDetailVO {
   description?: string;
   queryTemplate?: string;
   sampleJson?: string;
+  ttlSeconds?: number;
+  editorMode?: 'text' | 'json' | string;
+  editorPayload?: string;
   facts?: string[];
 }
 
@@ -129,6 +166,35 @@ export interface KvQueryExecuteReq {
   databaseName?: string;
   queryText: string;
   maxRows?: number;
+}
+
+export interface KvRedisKeyEntryVO {
+  key?: string;
+  value?: string;
+  score?: number;
+}
+
+export interface KvRedisKeySaveReq {
+  connectionId: number;
+  databaseName?: string;
+  keyName: string;
+  valueType: string;
+  ttlSeconds?: number;
+  stringValue?: string;
+  entries?: KvRedisKeyEntryVO[];
+}
+
+export interface KvRedisKeySaveVO {
+  success: boolean;
+  message: string;
+  keyName: string;
+  valueType: string;
+}
+
+export interface KvRedisKeyDeleteReq {
+  connectionId: number;
+  databaseName?: string;
+  keyName: string;
 }
 
 export interface SchemaOverviewVO {

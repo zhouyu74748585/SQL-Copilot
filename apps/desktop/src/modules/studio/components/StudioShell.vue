@@ -273,6 +273,12 @@
                 </template>
                 新建连接
               </a-button>
+              <a-button size="small" type="text" @click="openCreateGroupModal" title="新建分组">
+                <template #icon>
+                  <folder-add-outlined />
+                </template>
+                新建分组
+              </a-button>
               <a-button size="small" type="text" :loading="connectionRefreshing" @click="refreshConnections" title="刷新连接列表">
                 <template #icon>
                   <reload-outlined />
@@ -293,7 +299,9 @@
               :selected-keys="selectedTreeKeys"
               :expanded-keys="expandedTreeKeys"
               block-node
+              draggable
               @expand="handleTreeExpand"
+              @drop="handleConnectionTreeDrop"
               @select="handleTreeSelect"
               @rightClick="handleTreeRightClick"
             >
@@ -316,7 +324,15 @@
                     :is="dataRef.nodeType === 'connection' ? DatabaseOutlined : nodeIconComponent(dataRef)"
                     class="tree-icon-font"
                   />
-                  <span class="tree-title-text">{{ title }}</span>
+                  <div class="tree-title-main">
+                    <span class="tree-title-text" :class="{ 'tree-title-placeholder': dataRef.nodeType === 'group-empty' }">{{ title }}</span>
+                    <span
+                      v-if="dataRef.nodeType === 'connection' && dataRef.connectionName && dataRef.connectionName !== title"
+                      class="tree-title-subtext"
+                    >
+                      {{ dataRef.connectionName }}
+                    </span>
+                  </div>
                   <span
                     v-if="dataRef.nodeType === 'connection'"
                     class="tree-env-tag"
@@ -329,6 +345,7 @@
                     v-if="dataRef.nodeType === 'connection'"
                     class="tree-connection-status"
                     :class="connectionStatusClass(dataRef.connectionId)"
+                    :title="connectionStatusText(dataRef.connectionId)"
                   />
                   <span
                     v-if="dataRef.nodeType === 'database' && !isKvConnectionId(dataRef.connectionId)"
@@ -460,62 +477,128 @@
             </div>
 
             <div class="object-browser-content">
-              <a-table
-                v-if="objectViewMode === 'row'"
-                class="object-list-table"
-                size="small"
-                :pagination="false"
-                :columns="objectColumns"
-                :data-source="filteredObjectRows"
-                row-key="objectName"
-                :scroll="{ y: tableScrollY }"
-                :custom-row="onObjectRow"
-              >
-                <template #bodyCell="{ column, record }">
-                  <template v-if="column.key === 'objectName'">
-                    <div class="table-name-cell" :class="{ 'is-active': selectedObjectName === record.objectName, 'is-queryable': record.objectType === 'tables' || record.objectType === 'queries' }" @dblclick.stop="onObjectRow(record).onDblclick()">
-                      <database-outlined />
-                      <span>{{ record.objectName }}</span>
-                    </div>
-                  </template>
-                  <template v-else-if="column.key === 'description'">
-                    <span class="object-desc-ellipsis">{{ record.description || '-' }}</span>
-                  </template>
-                  <template v-else-if="column.key === 'vectorizeStatus'">
-                    <a-tooltip :title="record.vectorizeMessage ? `${databaseStatusLabel(record.vectorizeStatus)} | ${record.vectorizeMessage}` : databaseStatusLabel(record.vectorizeStatus)">
-                      <span class="object-vectorize-cell" :class="databaseStatusClass(record.vectorizeStatus)">
-                        <component :is="databaseStatusIcon(record.vectorizeStatus)" class="object-vectorize-icon" />
-                        <span>{{ databaseStatusLabel(record.vectorizeStatus) }}</span>
-                      </span>
-                    </a-tooltip>
-                  </template>
-                </template>
-              </a-table>
-
-              <div v-else class="object-grid">
-                <div
-                  v-for="item in filteredObjectRows"
-                  :key="item.objectName"
-                  class="object-card"
-                  :class="{ 'is-active': selectedObjectName === item.objectName }"
-                  @click="onObjectRow(item).onClick()"
-                  @dblclick="onObjectRow(item).onDblclick()"
-                  @contextmenu.prevent.stop="onObjectRow(item).onContextmenu($event)"
-                >
-                  <div class="object-card-title">{{ item.objectName }}</div>
-                  <div class="object-card-meta">{{ currentObjectType === 'queries' ? '保存查询' : objectTypeLabel(item.objectType) }}</div>
-                  <div v-if="currentObjectType !== 'queries' && !activeConnectionIsKv" class="object-card-vectorize" :class="databaseStatusClass(item.vectorizeStatus)">
-                    <component :is="databaseStatusIcon(item.vectorizeStatus)" class="object-vectorize-icon" />
-                    <span>{{ databaseStatusLabel(item.vectorizeStatus) }}</span>
+              <div v-if="activeConnectionIsRedis && currentObjectType === 'tables'" class="redis-browser-layout">
+                <aside class="redis-hierarchy-pane">
+                  <div class="redis-hierarchy-toolbar">
+                    <span>层级结构</span>
+                    <a-tag color="blue">{{ redisHierarchyPath || '根层级' }}</a-tag>
                   </div>
-                  <div class="object-card-desc">{{ item.description || '-' }}</div>
-                </div>
+                  <a-tree
+                    class="redis-hierarchy-tree"
+                    :tree-data="redisHierarchyTreeData"
+                    :selected-keys="redisHierarchySelectedKeys"
+                    :expanded-keys="redisHierarchyExpandedKeys"
+                    block-node
+                    @select="handleRedisHierarchySelect"
+                  />
+                </aside>
+
+                <section class="redis-list-pane">
+                  <div class="redis-hierarchy-toolbar">
+                    <span>键列表</span>
+                    <span class="redis-current-path">当前路径：{{ redisHierarchyPath || '/' }}</span>
+                  </div>
+                  <a-table
+                    v-if="objectViewMode === 'row'"
+                    class="object-list-table"
+                    size="small"
+                    :pagination="false"
+                    :columns="objectColumns"
+                    :data-source="currentObjectRows"
+                    row-key="objectName"
+                    :scroll="{ y: tableScrollY }"
+                    :custom-row="onObjectRow"
+                  >
+                    <template #bodyCell="{ column, record }">
+                      <template v-if="column.key === 'objectName'">
+                        <div class="table-name-cell" :class="{ 'is-active': selectedObjectName === record.objectName, 'is-queryable': record.objectType === 'tables' || record.objectType === 'queries' }" @dblclick.stop="onObjectRow(record).onDblclick()">
+                          <database-outlined />
+                          <span>{{ record.objectName }}</span>
+                        </div>
+                      </template>
+                      <template v-else-if="column.key === 'description'">
+                        <span class="object-desc-ellipsis">{{ record.description || '-' }}</span>
+                      </template>
+                    </template>
+                  </a-table>
+
+                  <div v-else class="object-grid">
+                    <div
+                      v-for="item in currentObjectRows"
+                      :key="item.objectName"
+                      class="object-card"
+                      :class="{ 'is-active': selectedObjectName === item.objectName }"
+                      @click="onObjectRow(item).onClick()"
+                      @dblclick="onObjectRow(item).onDblclick()"
+                      @contextmenu.prevent.stop="onObjectRow(item).onContextmenu($event)"
+                    >
+                      <div class="object-card-title">{{ item.objectName }}</div>
+                      <div class="object-card-meta">{{ item.tableSize || 'string' }}</div>
+                      <div class="object-card-desc">{{ item.description || '-' }}</div>
+                    </div>
+                  </div>
+                </section>
               </div>
+
+              <template v-else>
+                <a-table
+                  v-if="objectViewMode === 'row'"
+                  class="object-list-table"
+                  size="small"
+                  :pagination="false"
+                  :columns="objectColumns"
+                  :data-source="currentObjectRows"
+                  row-key="objectName"
+                  :scroll="{ y: tableScrollY }"
+                  :custom-row="onObjectRow"
+                >
+                  <template #bodyCell="{ column, record }">
+                    <template v-if="column.key === 'objectName'">
+                      <div class="table-name-cell" :class="{ 'is-active': selectedObjectName === record.objectName, 'is-queryable': record.objectType === 'tables' || record.objectType === 'queries' }" @dblclick.stop="onObjectRow(record).onDblclick()">
+                        <database-outlined />
+                        <span>{{ record.objectName }}</span>
+                      </div>
+                    </template>
+                    <template v-else-if="column.key === 'description'">
+                      <span class="object-desc-ellipsis">{{ record.description || '-' }}</span>
+                    </template>
+                    <template v-else-if="column.key === 'vectorizeStatus'">
+                      <a-tooltip :title="record.vectorizeMessage ? `${databaseStatusLabel(record.vectorizeStatus)} | ${record.vectorizeMessage}` : databaseStatusLabel(record.vectorizeStatus)">
+                        <span class="object-vectorize-cell" :class="databaseStatusClass(record.vectorizeStatus)">
+                          <component :is="databaseStatusIcon(record.vectorizeStatus)" class="object-vectorize-icon" />
+                          <span>{{ databaseStatusLabel(record.vectorizeStatus) }}</span>
+                        </span>
+                      </a-tooltip>
+                    </template>
+                  </template>
+                </a-table>
+
+                <div v-else class="object-grid">
+                  <div
+                    v-for="item in currentObjectRows"
+                    :key="item.objectName"
+                    class="object-card"
+                    :class="{ 'is-active': selectedObjectName === item.objectName }"
+                    @click="onObjectRow(item).onClick()"
+                    @dblclick="onObjectRow(item).onDblclick()"
+                    @contextmenu.prevent.stop="onObjectRow(item).onContextmenu($event)"
+                  >
+                    <div class="object-card-title">{{ item.objectName }}</div>
+                    <div class="object-card-meta">{{ currentObjectType === 'queries' ? '保存查询' : objectTypeLabel(item.objectType) }}</div>
+                    <div v-if="currentObjectType !== 'queries' && !activeConnectionIsKv" class="object-card-vectorize" :class="databaseStatusClass(item.vectorizeStatus)">
+                      <component :is="databaseStatusIcon(item.vectorizeStatus)" class="object-vectorize-icon" />
+                      <span>{{ databaseStatusLabel(item.vectorizeStatus) }}</span>
+                    </div>
+                    <div class="object-card-desc">{{ item.description || '-' }}</div>
+                  </div>
+                </div>
+              </template>
             </div>
 
             <div class="center-status">
-              <span>对象: {{ filteredObjectRows.length }}</span>
+              <span>对象: {{ currentObjectRows.length }}</span>
               <span>类型: {{ currentObjectType === 'queries' ? '保存查询' : objectTypeLabel(currentObjectType) }}</span>
+              <span v-if="activeConnectionIsRedis && currentObjectType === 'tables'">路径: {{ redisHierarchyPath || '/' }}</span>
             </div>
           </section>
 
@@ -551,6 +634,28 @@
               </div>
               <div v-else-if="selectedObjectRecord.objectType === 'tables' && activeConnectionIsKv" class="detail-table-panel">
                 <a-spin :spinning="kvObjectDetailLoading">
+                  <div class="detail-summary">
+                    <div class="detail-row"><span>完整键名</span><strong>{{ kvObjectDetail?.objectName || selectedObjectRecord.objectName }}</strong></div>
+                    <div class="detail-row"><span>值类型</span><strong>{{ kvObjectDetail?.valueType || selectedObjectRecord.tableSize || '-' }}</strong></div>
+                    <div class="detail-row"><span>TTL</span><strong>{{ kvObjectDetail?.ttlSeconds != null && Number(kvObjectDetail.ttlSeconds) >= 0 ? `${kvObjectDetail.ttlSeconds}s` : '永久' }}</strong></div>
+                  </div>
+                  <div class="detail-code-head">
+                    <span>键操作</span>
+                    <div class="redis-detail-actions">
+                      <a-button size="small" type="primary" ghost @click="openCreateRedisKeyModal">
+                        <template #icon><plus-outlined /></template>
+                        新增键
+                      </a-button>
+                      <a-button size="small" @click="openEditRedisKeyModal" :disabled="kvObjectDetailLoading">
+                        <template #icon><edit-outlined /></template>
+                        编辑键
+                      </a-button>
+                      <a-button size="small" danger @click="deleteRedisKey(selectedObjectRecord.objectName)">
+                        <template #icon><delete-outlined /></template>
+                        删除键
+                      </a-button>
+                    </div>
+                  </div>
                   <div class="detail-code-head">
                     <span>推荐查询模板</span>
                     <a-button size="small" type="text" :disabled="kvObjectDetailLoading" @click="copyTextContent(kvObjectDetail?.queryTemplate || '', '查询模板已复制')">
@@ -563,6 +668,10 @@
                     <span>样本内容</span>
                   </div>
                   <pre class="detail-code-block"><code>{{ kvObjectDetail?.sampleJson || '-- 暂无样本内容' }}</code></pre>
+                  <div class="detail-code-head detail-code-head-secondary">
+                    <span>可编辑内容</span>
+                  </div>
+                  <pre class="detail-code-block redis-detail-value"><code>{{ redisDetailValueText }}</code></pre>
                   <div v-if="kvObjectDetail?.facts?.length" class="detail-note">
                     {{ kvObjectDetail.facts.join(' | ') }}
                   </div>
@@ -604,13 +713,33 @@
                 <div class="detail-row"><span>SSH 隧道</span><strong>{{ selectedTreeConnection?.sshEnabled ? '已启用' : '未启用' }}</strong></div>
               </div>
             </div>
+            <div v-else-if="selectedTreeDetail?.kind === 'group'" class="detail-wrapper">
+              <div class="detail-summary">
+                <div class="detail-row"><span>分组</span><strong>{{ selectedTreeGroup?.name ?? '-' }}</strong></div>
+                <div class="detail-row"><span>连接数量</span><strong>{{ selectedTreeGroup?.connectionCount ?? 0 }}</strong></div>
+                <div class="detail-row"><span>默认分组</span><strong>{{ selectedTreeGroup?.defaultGroup ? '是' : '否' }}</strong></div>
+              </div>
+              <div class="detail-code-head">
+                <span>分组操作</span>
+                <div class="redis-detail-actions">
+                  <a-button size="small" type="primary" ghost @click="openCreateModal">
+                    <template #icon><link-outlined /></template>
+                    新建连接
+                  </a-button>
+                  <a-button size="small" @click="openRenameGroupModal(selectedTreeGroup?.id || 0)" :disabled="!selectedTreeGroup">
+                    <template #icon><edit-outlined /></template>
+                    重命名分组
+                  </a-button>
+                </div>
+              </div>
+            </div>
             <div v-else-if="selectedTreeDetail?.kind === 'database' || selectedTreeDetail?.kind === 'category'" class="detail-wrapper">
               <div class="detail-summary">
                 <div class="detail-row"><span>数据库</span><strong>{{ selectedTreeDetail.databaseName || '-' }}</strong></div>
                 <div class="detail-row"><span>连接</span><strong>{{ selectedTreeConnection?.name ?? '-' }}</strong></div>
                 <div class="detail-row"><span>数据库类型</span><strong>{{ selectedTreeConnection?.dbType ?? '-' }}</strong></div>
                 <div class="detail-row"><span>所属环境</span><strong>{{ envTagText(selectedTreeConnection?.env) }}</strong></div>
-                <div v-if="!isKvConnectionId(selectedTreeConnection?.id)" class="detail-row"><span>向量化</span><strong>{{ selectedTreeDatabaseStatusLabel }}</strong></div>
+                <div v-if="selectedTreeConnection?.id ? !isKvConnectionId(selectedTreeConnection.id) : false" class="detail-row"><span>向量化</span><strong>{{ selectedTreeDatabaseStatusLabel }}</strong></div>
                 <div class="detail-row"><span>表数量</span><strong>{{ selectedTreeDatabaseTableCount }}</strong></div>
                 <div class="detail-row"><span>字段数</span><strong>{{ selectedTreeDatabaseColumnCount }}</strong></div>
               </div>
@@ -2304,41 +2433,55 @@
 
         <a-row :gutter="12">
           <a-col :span="12">
+            <a-form-item label="连接分组">
+              <a-select v-model:value="connectionForm.groupId" :options="connectionGroupOptions" />
+            </a-form-item>
+          </a-col>
+          <a-col :span="12">
+            <a-form-item label="环境">
+              <a-select v-model:value="connectionForm.env" :options="envOptions" />
+            </a-form-item>
+          </a-col>
+        </a-row>
+
+        <a-row
+          v-if="connectionFormDbTypeSpec?.requiresHost !== false || connectionFormDbTypeSpec?.requiresPort !== false"
+          :gutter="12"
+        >
+          <a-col v-if="connectionFormDbTypeSpec?.requiresHost !== false" :span="12">
             <a-form-item label="主机">
               <a-input v-model:value="connectionForm.host" />
             </a-form-item>
           </a-col>
-          <a-col :span="12">
+          <a-col v-if="connectionFormDbTypeSpec?.requiresPort !== false" :span="12">
             <a-form-item label="端口">
               <a-input-number v-model:value="connectionForm.port" style="width: 100%" />
             </a-form-item>
           </a-col>
         </a-row>
 
-        <a-row :gutter="12">
-          <a-col :span="12">
+        <a-row
+          v-if="connectionFormDbTypeSpec?.supportsUsername !== false || connectionFormDbTypeSpec?.supportsPassword !== false"
+          :gutter="12"
+        >
+          <a-col v-if="connectionFormDbTypeSpec?.supportsUsername !== false" :span="12">
             <a-form-item label="用户">
-              <a-input
-                v-model:value="connectionForm.username"
-                :disabled="connectionForm.dbType === 'SQLITE'"
-                placeholder="请输入数据库用户"
-              />
+              <a-input v-model:value="connectionForm.username" placeholder="请输入数据库用户" />
             </a-form-item>
           </a-col>
-          <a-col :span="12">
+          <a-col v-if="connectionFormDbTypeSpec?.supportsPassword !== false" :span="12">
             <a-form-item label="密码">
-              <a-input-password
-                v-model:value="connectionForm.password"
-                :disabled="connectionForm.dbType === 'SQLITE'"
-                placeholder="请输入数据库密码"
-              />
+              <a-input-password v-model:value="connectionForm.password" placeholder="请输入数据库密码" />
             </a-form-item>
           </a-col>
         </a-row>
 
-        <a-row :gutter="12">
-          <a-col :span="16">
-            <a-form-item :label="isMultiDatabaseFormType ? '展示数据库（多选）' : '数据库名/路径'">
+        <a-row
+          v-if="isMultiDatabaseFormType || connectionFormDbTypeSpec?.supportsDatabaseName !== false"
+          :gutter="12"
+        >
+          <a-col :span="isMultiDatabaseFormType ? 24 : 16">
+            <a-form-item :label="isMultiDatabaseFormType ? '展示数据库（多选）' : (connectionFormDbTypeSpec?.databaseNameLabel || '数据库名/路径')">
               <template v-if="isMultiDatabaseFormType">
                 <div class="connection-db-selector-row">
                   <a-select
@@ -2368,11 +2511,6 @@
               />
             </a-form-item>
           </a-col>
-          <a-col :span="8">
-            <a-form-item label="环境">
-              <a-select v-model:value="connectionForm.env" :options="envOptions" />
-            </a-form-item>
-          </a-col>
         </a-row>
 
         <a-form-item label="自定义参数">
@@ -2384,11 +2522,14 @@
           <div class="connection-custom-params-tip">
             连接时会自动拼接到 JDBC 配置中。推荐每行填写一个参数，例如 `encrypt=true`。
           </div>
+          <div v-if="connectionForm.dbType === 'SQLSERVER'" class="connection-custom-params-tip">
+            SQL Server 默认启用 `encrypt=true` 与 `trustServerCertificate=true`，手工填写同名参数可覆盖默认行为。
+          </div>
         </a-form-item>
 
         <a-space>
           <a-checkbox v-model:checked="connectionForm.readOnly">只读</a-checkbox>
-          <a-checkbox v-model:checked="connectionForm.sshEnabled">SSH 隧道</a-checkbox>
+          <a-checkbox v-if="connectionForm.dbType !== 'SQLITE'" v-model:checked="connectionForm.sshEnabled">SSH 隧道</a-checkbox>
         </a-space>
 
         <div v-if="connectionForm.sshEnabled" class="connection-ssh-panel">
@@ -2853,6 +2994,77 @@
     </div>
 
     <a-modal
+      v-model:open="groupModalOpen"
+      :title="groupForm.mode === 'create' ? '新建分组' : '重命名分组'"
+      :ok-text="groupForm.mode === 'create' ? '创建' : '保存'"
+      cancel-text="取消"
+      :confirm-loading="groupModalSubmitting"
+      @ok="confirmGroupModal"
+      @cancel="closeGroupModal"
+    >
+      <a-form layout="vertical">
+        <a-form-item label="分组名称">
+          <a-input
+            v-model:value="groupForm.name"
+            maxlength="64"
+            placeholder="请输入分组名称"
+            @pressEnter="confirmGroupModal"
+          />
+        </a-form-item>
+      </a-form>
+    </a-modal>
+
+    <a-modal
+      v-model:open="redisKeyModalOpen"
+      :title="redisKeyModalMode === 'create' ? '新增键' : '编辑键'"
+      :ok-text="redisKeyModalMode === 'create' ? '创建' : '保存'"
+      cancel-text="取消"
+      :confirm-loading="redisKeyModalSubmitting"
+      width="720px"
+      @ok="confirmRedisKeyModal"
+      @cancel="closeRedisKeyModal"
+    >
+      <a-form layout="vertical">
+        <a-row :gutter="12">
+          <a-col :span="14">
+            <a-form-item label="键名">
+              <a-input v-model:value="redisKeyForm.keyName" :disabled="redisKeyModalMode === 'edit'" placeholder="例如：user:1:profile" />
+            </a-form-item>
+          </a-col>
+          <a-col :span="10">
+            <a-form-item label="值类型">
+              <a-select
+                v-model:value="redisKeyForm.valueType"
+                :disabled="redisKeyModalMode === 'edit'"
+                :options="[
+                  { label: 'string', value: 'string' },
+                  { label: 'hash', value: 'hash' },
+                  { label: 'list', value: 'list' },
+                  { label: 'set', value: 'set' },
+                  { label: 'zset', value: 'zset' },
+                ]"
+              />
+            </a-form-item>
+          </a-col>
+        </a-row>
+        <a-row :gutter="12">
+          <a-col :span="12">
+            <a-form-item label="TTL（秒）">
+              <a-input-number v-model:value="redisKeyForm.ttlSeconds" :min="-1" style="width: 100%" />
+            </a-form-item>
+          </a-col>
+        </a-row>
+        <a-form-item :label="redisKeyForm.valueType === 'string' ? '键值内容' : 'JSON 内容'">
+          <a-textarea
+            v-model:value="redisKeyForm.editorPayload"
+            :rows="12"
+            :placeholder="redisEditorPlaceholder"
+          />
+        </a-form-item>
+      </a-form>
+    </a-modal>
+
+    <a-modal
       v-model:open="namespaceModalOpen"
       :title="namespaceForm.mode === 'create' ? `新建${namespaceForm.namespaceLabel}` : `编辑${namespaceForm.namespaceLabel}`"
       :ok-text="namespaceForm.mode === 'create' ? '创建' : '保存'"
@@ -3152,6 +3364,7 @@ import {
   ExperimentOutlined,
   EyeOutlined,
   FilterOutlined,
+  FolderAddOutlined,
   FolderOpenOutlined,
   HddOutlined,
   HighlightOutlined,
@@ -3208,6 +3421,7 @@ const {
     tableStatsMinRequestIntervalMs,
     tableStatsPollIntervalMs,
     connections,
+    connectionGroups,
     schemaOverview,
     selectedObjectName,
     createModalOpen,
@@ -3234,6 +3448,9 @@ const {
     vectorizeOverviewModalOpen,
     vectorizeOverviewLoading,
     vectorizeOverviewData,
+    groupModalOpen,
+    groupModalSubmitting,
+    groupForm,
     saveQueryModalOpen,
     saveQuerySubmitting,
     saveQueryTitle,
@@ -3305,6 +3522,13 @@ const {
     sessionTitleOverrides,
     tableDetail,
     tableDetailLoading,
+    kvObjectDetail,
+    kvObjectDetailLoading,
+    redisHierarchyPath,
+    redisKeyModalOpen,
+    redisKeyModalSubmitting,
+    redisKeyModalMode,
+    redisKeyForm,
     objectDefinitionDetailLoading,
     queryEditorPaneRef,
     queryEditorSectionHeight,
@@ -3390,14 +3614,18 @@ const {
     canCreateView,
     canCreateFunction,
     connectionSelectOptions,
+    connectionGroupOptions,
+    connectionFormDbTypeSpec,
     isMultiDatabaseFormType,
     connectionPreviewSelectOptions,
     canPreviewDatabases,
     connectionTreeData,
     objectRows,
+    activeConnectionIsRedis,
+    redisHierarchyTreeData,
+    redisVisibleObjectRows,
     selectedObjectRecord,
-    kvObjectDetail,
-    kvObjectDetailLoading,
+    selectedTreeGroup,
     selectedTreeDetail,
     selectedTreeConnection,
     selectedTreeDatabaseStatusLabel,
@@ -3444,6 +3672,7 @@ const {
     requiresDatabaseLayer,
     isMultiDatabaseType,
     isKvConnectionId,
+    getDatabaseNamePlaceholder,
     normalizeSelectedDatabases,
     visibleDatabasesForConnection,
     parseConfiguredDatabaseName,
@@ -3586,6 +3815,10 @@ const {
     stopVectorizeStatusPolling,
     loadConnections,
     refreshConnections,
+    openCreateGroupModal,
+    openRenameGroupModal,
+    closeGroupModal,
+    confirmGroupModal,
     saveConnection,
     previewConnectionDatabases,
     testConnection,
@@ -3623,6 +3856,7 @@ const {
     loadTreeChildrenByKey,
     handleTreeSelect,
     handleTreeExpand,
+    handleConnectionTreeDrop,
     handleTreeRightClick,
     handleTreeNodeDblclick,
     closeContextMenu,
@@ -3640,6 +3874,12 @@ const {
     selectObject,
     loadObjectDetail,
     clearObjectDetail,
+    openCreateRedisKeyModal,
+    openEditRedisKeyModal,
+    closeRedisKeyModal,
+    confirmRedisKeyModal,
+    deleteRedisKey,
+    handleRedisHierarchySelect,
     startResizeLeftPane,
     handleResizeLeftPane,
     stopResizeLeftPane,
@@ -4015,6 +4255,59 @@ function handleLocaleChange(value: string) {
   setLocale(value as AppLocale);
 }
 
+const currentObjectRows = computed(() => (
+  activeConnectionIsRedis.value && currentObjectType.value === 'tables'
+    ? redisVisibleObjectRows.value
+    : filteredObjectRows.value
+));
+
+const redisHierarchySelectedKeys = computed(() => {
+  if (selectedObjectName.value) {
+    return [`redis-key-${selectedObjectName.value}`];
+  }
+  if (redisHierarchyPath.value) {
+    return [`redis-path-${redisHierarchyPath.value}`];
+  }
+  return [] as string[];
+});
+
+const redisHierarchyExpandedKeys = computed(() => {
+  const keys: string[] = [];
+  const pushPath = (value: string) => {
+    let current = '';
+    value.split(':').filter((item) => !!item).forEach((segment) => {
+      current = current ? `${current}:${segment}` : segment;
+      keys.push(`redis-path-${current}`);
+    });
+  };
+  if (redisHierarchyPath.value) {
+    pushPath(redisHierarchyPath.value);
+  }
+  if (selectedObjectName.value) {
+    pushPath(selectedObjectName.value.split(':').slice(0, -1).join(':'));
+  }
+  return Array.from(new Set(keys));
+});
+
+const redisDetailValueText = computed(() => (
+  kvObjectDetail.value?.editorPayload
+  || kvObjectDetail.value?.sampleJson
+  || '-- 暂无内容'
+));
+
+const redisEditorPlaceholder = computed(() => {
+  if (redisKeyForm.valueType === 'string') {
+    return '请输入字符串值';
+  }
+  if (redisKeyForm.valueType === 'hash') {
+    return '{\n  "field": "value"\n}';
+  }
+  if (redisKeyForm.valueType === 'zset') {
+    return '[\n  { "member": "item-1", "score": 1 }\n]';
+  }
+  return '[\n  "item-1",\n  "item-2"\n]';
+});
+
 function handleActiveQueryModelMenuClick(event: { key: string | number }) {
   if (!activeQueryTab.value) {
     return;
@@ -4069,5 +4362,77 @@ function handleTableEditorDatabaseSelectorChange(
 .rag-local-tip-body a {
   align-self: flex-start;
   word-break: break-all;
+}
+
+.tree-title-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.tree-title-subtext {
+  color: var(--ant-color-text-description);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.tree-title-placeholder {
+  color: var(--ant-color-text-description);
+}
+
+.redis-browser-layout {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 12px;
+  min-height: 0;
+  height: 100%;
+}
+
+.redis-hierarchy-pane,
+.redis-list-pane {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.redis-hierarchy-pane {
+  border-right: 1px solid var(--ant-color-border-secondary);
+  padding-right: 12px;
+}
+
+.redis-hierarchy-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ant-color-text-secondary);
+}
+
+.redis-current-path {
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.redis-hierarchy-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.redis-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.redis-detail-value {
+  max-height: 240px;
+  overflow: auto;
 }
 </style>

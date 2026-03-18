@@ -63,6 +63,12 @@ drivers:
            and tc.table_schema = current_schema()
            and tc.table_name = {table_literal}
          order by kcu.ordinal_position
+    connectionPreview:
+      databases: |-
+        select datname as schema_name
+          from pg_database
+         where datistemplate = false
+         order by datname
     pagination:
       preview: |-
         select *
@@ -210,6 +216,11 @@ drivers:
            and t.table_schema = ?
            and t.table_name = ?
          order by k.ordinal_position
+    connectionPreview:
+      databases: |-
+        select schema_name
+          from information_schema.schemata
+         order by schema_name
     pagination:
       preview: |-
         select *
@@ -393,6 +404,11 @@ drivers:
            and con.owner = ?
            and con.table_name = ?
          order by col.position
+    connectionPreview:
+      databases: |-
+        select username as schema_name
+          from all_users
+         order by username
     tableCopy:
       createTableSql: |-
         select dbms_metadata.get_ddl('TABLE', {source_table_literal}, sys_context('USERENV', 'CURRENT_SCHEMA')) as ddl
@@ -509,6 +525,11 @@ drivers:
            and s.name = ?
            and t.name = ?
          order by ic.key_ordinal
+    connectionPreview:
+      databases: |-
+        select name as schema_name
+          from sys.databases
+         order by name
     pagination:
       preview: |-
         select *

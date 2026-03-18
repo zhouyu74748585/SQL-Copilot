@@ -68,4 +68,25 @@ public class ConnectionDbTypeVO {
 
     /** 是否支持 AI 生成图表。 */
     private Boolean supportsGenerateChart;
+
+    /** 是否显示主机输入。 */
+    private Boolean requiresHost;
+
+    /** 是否显示端口输入。 */
+    private Boolean requiresPort;
+
+    /** 是否显示数据库名输入。 */
+    private Boolean supportsDatabaseName;
+
+    /** 是否支持预览数据库或 Schema。 */
+    private Boolean supportsDatabasePreview;
+
+    /** 数据库名字段标签。 */
+    private String databaseNameLabel;
+
+    /** 是否显示用户名输入。 */
+    private Boolean supportsUsername;
+
+    /** 是否显示密码输入。 */
+    private Boolean supportsPassword;
 }

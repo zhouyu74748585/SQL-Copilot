@@ -8,6 +8,8 @@ export interface ConnectionVO {
   id: number;
   name: string;
   dbType: string;
+  groupId?: number;
+  groupName?: string;
   host?: string;
   port?: number;
   databaseName?: string;

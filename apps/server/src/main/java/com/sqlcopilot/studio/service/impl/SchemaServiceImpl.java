@@ -115,6 +115,14 @@ public class SchemaServiceImpl implements SchemaService {
 
     @Override
     public SchemaTableStatsVO getTableStats(Long connectionId, String databaseName) {
+        if (!supportsTableStats(connectionId)) {
+            SchemaTableStatsVO vo = new SchemaTableStatsVO();
+            vo.setConnectionId(connectionId);
+            vo.setDatabaseName(databaseName);
+            vo.setRefreshing(Boolean.FALSE);
+            vo.setTableStats(List.of());
+            return vo;
+        }
         String cacheDatabaseName = resolveCacheDatabaseName(connectionId, databaseName);
         SchemaCacheKey cacheKey = new SchemaCacheKey(connectionId, cacheDatabaseName);
         if (tableStatsRefreshIntervalMs >= 0) {
@@ -915,6 +923,9 @@ public class SchemaServiceImpl implements SchemaService {
             return;
         }
         for (SchemaCacheKey cacheKey : cacheKeys) {
+            if (!supportsTableStats(cacheKey.connectionId())) {
+                continue;
+            }
             try {
                 triggerTableStatsRefresh(cacheKey, fromCacheDatabaseName(cacheKey.databaseName()), true);
             } catch (Exception ex) {
@@ -1036,6 +1047,10 @@ public class SchemaServiceImpl implements SchemaService {
     }
 
     private void refreshTableStatsAsync(SchemaCacheKey cacheKey, String databaseName) {
+        if (!supportsTableStats(cacheKey.connectionId())) {
+            tableStatsRefreshingKeys.remove(cacheKey);
+            return;
+        }
         try {
             TableStatsSnapshot snapshot = loadTableStatsSnapshot(
                 cacheKey.connectionId(),
@@ -1052,6 +1067,9 @@ public class SchemaServiceImpl implements SchemaService {
     }
 
     private void triggerTableStatsRefresh(SchemaCacheKey cacheKey, String databaseName, boolean forceRefresh) {
+        if (!supportsTableStats(cacheKey.connectionId())) {
+            return;
+        }
         long now = System.currentTimeMillis();
         TableStatsSnapshot current = tableStatsSnapshotCache.get(cacheKey);
         boolean needRefresh = forceRefresh
@@ -1062,6 +1080,12 @@ public class SchemaServiceImpl implements SchemaService {
         }
         // 关键操作：表行数/大小统计异步执行，避免阻塞对象浏览主链路。
         tableStatsExecutor.submit(() -> refreshTableStatsAsync(cacheKey, databaseName));
+    }
+
+    private boolean supportsTableStats(Long connectionId) {
+        ConnectionEntity connectionEntity = connectionService.getConnectionEntity(connectionId);
+        String dbType = normalize(connectionEntity.getDbType()).toUpperCase(Locale.ROOT);
+        return !"REDIS".equals(dbType) && !"MONGODB".equals(dbType);
     }
 
     private Map<String, TableStat> resolveLatestTableStats(SchemaCacheKey cacheKey) {

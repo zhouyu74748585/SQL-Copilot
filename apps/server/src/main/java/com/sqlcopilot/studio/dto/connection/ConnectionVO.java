@@ -17,6 +17,12 @@ public class ConnectionVO {
     /** 数据库类型。 */
     private String dbType;
 
+    /** 所属连接分组 ID。 */
+    private Long groupId;
+
+    /** 所属连接分组名称。 */
+    private String groupName;
+
     /** 数据库主机地址。 */
     private String host;
 

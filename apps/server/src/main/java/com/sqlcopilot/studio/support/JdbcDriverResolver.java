@@ -53,6 +53,19 @@ public class JdbcDriverResolver {
         return findIntrospectionSql(dbType, INTROSPECTION_SCHEMAS);
     }
 
+    public String findConnectionPreviewSql(String dbType) {
+        String type = normalizeType(dbType);
+        DriverSpec spec = specs.get(type);
+        if (spec == null) {
+            return "";
+        }
+        String configured = trimText(spec.connectionPreviewSqlMap.get("databases"));
+        if (!configured.isBlank()) {
+            return configured;
+        }
+        return trimText(spec.introspectionSqlMap.get(INTROSPECTION_SCHEMAS));
+    }
+
     public List<SupportedDbTypeSpec> listSupportedDbTypes() {
         List<SupportedDbTypeSpec> result = new ArrayList<>();
         for (Map.Entry<String, DriverSpec> entry : specs.entrySet()) {
@@ -230,6 +243,7 @@ public class JdbcDriverResolver {
         aliases.putIfAbsent(defaultVersion, defaultVersion);
 
         Map<String, String> introspectionSqlMap = parseStringMap(node.get("introspection"));
+        Map<String, String> connectionPreviewSqlMap = parseStringMap(node.get("connectionPreview"));
         CreateTableSpec createTableSpec = parseCreateTableSpec(node.get("tableCopy"));
         TableCopyFastPathSpec tableCopyFastPathSpec = parseTableCopyFastPathSpec(node.get("tableCopy"));
         TableOperationSpec tableOperationSpec = parseTableOperationSpec(node.get("tableOperations"));
@@ -252,6 +266,7 @@ public class JdbcDriverResolver {
             driversByVersion,
             aliases,
             introspectionSqlMap,
+            connectionPreviewSqlMap,
             createTableSpec,
             tableCopyFastPathSpec,
             tableOperationSpec,
@@ -424,6 +439,7 @@ public class JdbcDriverResolver {
         private final Map<String, String> driversByVersion;
         private final Map<String, String> resourceAliases;
         private final Map<String, String> introspectionSqlMap;
+        private final Map<String, String> connectionPreviewSqlMap;
         private final CreateTableSpec createTableSpec;
         private final TableCopyFastPathSpec tableCopyFastPathSpec;
         private final TableOperationSpec tableOperationSpec;
@@ -446,6 +462,7 @@ public class JdbcDriverResolver {
                            Map<String, String> driversByVersion,
                            Map<String, String> resourceAliases,
                            Map<String, String> introspectionSqlMap,
+                           Map<String, String> connectionPreviewSqlMap,
                            CreateTableSpec createTableSpec,
                            TableCopyFastPathSpec tableCopyFastPathSpec,
                            TableOperationSpec tableOperationSpec,
@@ -467,6 +484,7 @@ public class JdbcDriverResolver {
             this.driversByVersion = driversByVersion;
             this.resourceAliases = resourceAliases;
             this.introspectionSqlMap = introspectionSqlMap;
+            this.connectionPreviewSqlMap = connectionPreviewSqlMap;
             this.createTableSpec = createTableSpec;
             this.tableCopyFastPathSpec = tableCopyFastPathSpec;
             this.tableOperationSpec = tableOperationSpec;

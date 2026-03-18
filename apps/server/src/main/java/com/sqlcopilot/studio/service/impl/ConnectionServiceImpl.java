@@ -5,10 +5,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sqlcopilot.studio.dialect.JdbcUrlBuilder;
 import com.sqlcopilot.studio.dto.connection.*;
 import com.sqlcopilot.studio.entity.ConnectionEntity;
+import com.sqlcopilot.studio.entity.ConnectionGroupEntity;
+import com.sqlcopilot.studio.mapper.ConnectionGroupMapper;
 import com.sqlcopilot.studio.mapper.ConnectionMapper;
 import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.kv.KvRuntimeClientFactory;
 import com.sqlcopilot.studio.support.JdbcDriverResolver;
+import com.sqlcopilot.studio.support.ConnectionSchemaMigrationRunner;
 import com.sqlcopilot.studio.support.driver.IsolatedJdbcConnectionManager;
 import com.sqlcopilot.studio.support.ssh.SshTunnelManager;
 import com.sqlcopilot.studio.util.BusinessException;
@@ -37,6 +40,7 @@ public class ConnectionServiceImpl implements ConnectionService {
     private static final String SSH_AUTH_KEY_TEXT = "SSH_KEY_TEXT";
 
     private final ConnectionMapper connectionMapper;
+    private final ConnectionGroupMapper connectionGroupMapper;
     private final JdbcDriverResolver jdbcDriverResolver;
     private final IsolatedJdbcConnectionManager isolatedJdbcConnectionManager;
     private final SshTunnelManager sshTunnelManager;
@@ -45,12 +49,14 @@ public class ConnectionServiceImpl implements ConnectionService {
     private final AtomicLong temporaryConnectionIdGenerator = new AtomicLong(-1L);
 
     public ConnectionServiceImpl(ConnectionMapper connectionMapper,
+                                 ConnectionGroupMapper connectionGroupMapper,
                                  JdbcDriverResolver jdbcDriverResolver,
                                  IsolatedJdbcConnectionManager isolatedJdbcConnectionManager,
                                  SshTunnelManager sshTunnelManager,
                                  KvRuntimeClientFactory kvRuntimeClientFactory,
                                  ObjectMapper objectMapper) {
         this.connectionMapper = connectionMapper;
+        this.connectionGroupMapper = connectionGroupMapper;
         this.jdbcDriverResolver = jdbcDriverResolver;
         this.isolatedJdbcConnectionManager = isolatedJdbcConnectionManager;
         this.sshTunnelManager = sshTunnelManager;
@@ -83,8 +89,20 @@ public class ConnectionServiceImpl implements ConnectionService {
             vo.setSupportsExplainQuery(spec.supportsExplainQuery());
             vo.setSupportsAnalyzeQuery(spec.supportsAnalyzeQuery());
             vo.setSupportsGenerateChart(spec.supportsGenerateChart());
+            vo.setRequiresHost(!DB_TYPE_SQLITE.equals(spec.dbType()));
+            vo.setRequiresPort(!DB_TYPE_SQLITE.equals(spec.dbType()));
+            vo.setSupportsDatabaseName(!spec.supportsSelectedDatabases() || DB_TYPE_REDIS.equals(spec.dbType()) || DB_TYPE_SQLITE.equals(spec.dbType()));
+            vo.setSupportsDatabasePreview(spec.supportsSelectedDatabases() && !DB_TYPE_REDIS.equals(spec.dbType()));
+            vo.setDatabaseNameLabel(resolveDatabaseNameLabel(spec.dbType(), spec.namespaceLabel()));
+            vo.setSupportsUsername(!DB_TYPE_SQLITE.equals(spec.dbType()));
+            vo.setSupportsPassword(!DB_TYPE_SQLITE.equals(spec.dbType()));
             return vo;
         }).toList();
+    }
+
+    @Override
+    public List<ConnectionGroupVO> listConnectionGroups() {
+        return connectionGroupMapper.findAll().stream().map(this::toGroupVO).toList();
     }
 
     @Override
@@ -103,7 +121,7 @@ public class ConnectionServiceImpl implements ConnectionService {
         entity.setCreatedAt(now);
         entity.setUpdatedAt(now);
         connectionMapper.insert(entity);
-        return toVO(entity);
+        return toVO(getConnectionEntity(entity.getId()));
     }
 
     @Override
@@ -154,7 +172,7 @@ public class ConnectionServiceImpl implements ConnectionService {
         connectionMapper.update(existing);
         isolatedJdbcConnectionManager.release(existing.getId());
         sshTunnelManager.release(existing.getId());
-        return toVO(existing);
+        return toVO(getConnectionEntity(existing.getId()));
     }
 
     @Override
@@ -166,6 +184,54 @@ public class ConnectionServiceImpl implements ConnectionService {
         ConnectionDatabasePreviewVO vo = new ConnectionDatabasePreviewVO();
         vo.setDatabaseNames(queryDatabaseNames(previewEntity));
         return vo;
+    }
+
+    @Override
+    public ConnectionGroupVO createConnectionGroup(ConnectionGroupCreateReq req) {
+        String name = safeValue(req.getName());
+        validateGroupName(name, null);
+        long now = System.currentTimeMillis();
+        ConnectionGroupEntity entity = new ConnectionGroupEntity();
+        entity.setName(name);
+        entity.setSortOrder(resolveNextGroupSortOrder());
+        entity.setCreatedAt(now);
+        entity.setUpdatedAt(now);
+        connectionGroupMapper.insert(entity);
+        entity.setConnectionCount(0);
+        return toGroupVO(entity);
+    }
+
+    @Override
+    public ConnectionGroupVO renameConnectionGroup(ConnectionGroupRenameReq req) {
+        ConnectionGroupEntity entity = getConnectionGroupEntity(req.getGroupId());
+        if (isDefaultGroup(entity.getName())) {
+            throw new BusinessException(400, "默认分组不支持重命名");
+        }
+        String name = safeValue(req.getName());
+        validateGroupName(name, entity.getId());
+        entity.setName(name);
+        entity.setUpdatedAt(System.currentTimeMillis());
+        connectionGroupMapper.updateName(entity);
+        entity = getConnectionGroupEntity(entity.getId());
+        return toGroupVO(entity);
+    }
+
+    @Override
+    public void removeConnectionGroup(Long groupId) {
+        ConnectionGroupEntity entity = getConnectionGroupEntity(groupId);
+        if (isDefaultGroup(entity.getName())) {
+            throw new BusinessException(400, "默认分组不支持删除");
+        }
+        long defaultGroupId = resolveDefaultGroupId();
+        connectionMapper.moveConnectionsToGroup(groupId, defaultGroupId, System.currentTimeMillis());
+        connectionGroupMapper.deleteById(groupId);
+    }
+
+    @Override
+    public void moveConnectionToGroup(Long connectionId, Long targetGroupId) {
+        getConnectionEntity(connectionId);
+        getConnectionGroupEntity(targetGroupId);
+        connectionMapper.updateGroupId(connectionId, targetGroupId, System.currentTimeMillis());
     }
 
     @Override
@@ -237,6 +303,7 @@ public class ConnectionServiceImpl implements ConnectionService {
     private void fillEntity(ConnectionCreateReq req, ConnectionEntity entity) {
         entity.setName(safeValue(req.getName()));
         entity.setDbType(upper(req.getDbType()));
+        entity.setGroupId(resolveGroupIdOrDefault(req.getGroupId()));
         entity.setHost(safeValue(req.getHost()));
         entity.setPort(req.getPort());
         entity.setDatabaseName(safeValue(req.getDatabaseName()));
@@ -262,6 +329,7 @@ public class ConnectionServiceImpl implements ConnectionService {
     private void fillPreviewEntity(ConnectionDatabasePreviewReq req, ConnectionEntity entity) {
         entity.setName("preview");
         entity.setDbType(upper(req.getDbType()));
+        entity.setGroupId(resolveDefaultGroupId());
         entity.setHost(safeValue(req.getHost()));
         entity.setPort(req.getPort());
         entity.setDatabaseName(safeValue(req.getDatabaseName()));
@@ -288,6 +356,8 @@ public class ConnectionServiceImpl implements ConnectionService {
         vo.setId(entity.getId());
         vo.setName(entity.getName());
         vo.setDbType(entity.getDbType());
+        vo.setGroupId(entity.getGroupId());
+        vo.setGroupName(resolveGroupName(entity));
         vo.setHost(entity.getHost());
         vo.setPort(entity.getPort());
         vo.setDatabaseName(entity.getDatabaseName());
@@ -320,7 +390,7 @@ public class ConnectionServiceImpl implements ConnectionService {
             url,
             safeValue(driverEntity.getUsername()),
             safeValue(driverEntity.getPassword()),
-            JdbcUrlBuilder.parseCustomParameters(driverEntity.getCustomParams())
+            JdbcUrlBuilder.resolveRuntimeProperties(driverEntity)
         );
     }
 
@@ -353,14 +423,11 @@ public class ConnectionServiceImpl implements ConnectionService {
                 jdbcEntity = buildTunneledJdbcEntity(entity, tunnelSession.endpoint());
             }
             try (Connection connection = openJdbcConnection(jdbcEntity, temporaryId)) {
-                return switch (dbType) {
-                    case DB_TYPE_MYSQL -> querySingleColumn(connection, "SHOW DATABASES", 5000);
-                    case DB_TYPE_POSTGRESQL -> querySingleColumn(connection,
-                        "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname", 5000);
-                    case DB_TYPE_SQLSERVER -> querySingleColumn(connection, "SELECT name FROM sys.databases ORDER BY name", 5000);
-                    case DB_TYPE_ORACLE -> querySingleColumn(connection, "SELECT username FROM all_users ORDER BY username", 5000);
-                    default -> List.of();
-                };
+                String previewSql = jdbcDriverResolver.findConnectionPreviewSql(dbType);
+                if (previewSql.isBlank()) {
+                    return List.of();
+                }
+                return querySingleColumn(connection, previewSql, 5000);
             }
         } catch (SQLException ex) {
             throw new BusinessException(500, "读取数据库列表失败: " + ex.getMessage());
@@ -650,6 +717,8 @@ public class ConnectionServiceImpl implements ConnectionService {
         target.setId(source.getId());
         target.setName(source.getName());
         target.setDbType(source.getDbType());
+        target.setGroupId(source.getGroupId());
+        target.setGroupName(source.getGroupName());
         target.setHost(source.getHost());
         target.setPort(source.getPort());
         target.setDatabaseName(source.getDatabaseName());
@@ -670,6 +739,83 @@ public class ConnectionServiceImpl implements ConnectionService {
         target.setSshPrivateKeyPassphrase(source.getSshPrivateKeyPassphrase());
         target.setSelectedDatabasesJson(source.getSelectedDatabasesJson());
         return target;
+    }
+
+    private ConnectionGroupEntity getConnectionGroupEntity(Long groupId) {
+        ConnectionGroupEntity entity = connectionGroupMapper.findById(groupId);
+        if (entity == null) {
+            throw new BusinessException(404, "连接分组不存在: " + groupId);
+        }
+        return entity;
+    }
+
+    private Long resolveDefaultGroupId() {
+        ConnectionGroupEntity entity = connectionGroupMapper.findByName(ConnectionSchemaMigrationRunner.DEFAULT_GROUP_NAME);
+        if (entity == null || entity.getId() == null) {
+            throw new BusinessException(500, "默认连接分组不存在");
+        }
+        return entity.getId();
+    }
+
+    private Long resolveGroupIdOrDefault(Long groupId) {
+        if (groupId == null || groupId <= 0) {
+            return resolveDefaultGroupId();
+        }
+        return getConnectionGroupEntity(groupId).getId();
+    }
+
+    private String resolveGroupName(ConnectionEntity entity) {
+        String groupName = safeValue(entity.getGroupName());
+        if (!groupName.isBlank()) {
+            return groupName;
+        }
+        return ConnectionSchemaMigrationRunner.DEFAULT_GROUP_NAME;
+    }
+
+    private void validateGroupName(String name, Long excludeGroupId) {
+        if (name.isBlank()) {
+            throw new BusinessException(400, "分组名称不能为空");
+        }
+        ConnectionGroupEntity existed = connectionGroupMapper.findByName(name);
+        if (existed != null && !Objects.equals(existed.getId(), excludeGroupId)) {
+            throw new BusinessException(400, "分组名称已存在: " + name);
+        }
+    }
+
+    private int resolveNextGroupSortOrder() {
+        return connectionGroupMapper.findAll().stream()
+            .map(ConnectionGroupEntity::getSortOrder)
+            .filter(Objects::nonNull)
+            .max(Integer::compareTo)
+            .orElse(0) + 1;
+    }
+
+    private ConnectionGroupVO toGroupVO(ConnectionGroupEntity entity) {
+        ConnectionGroupVO vo = new ConnectionGroupVO();
+        vo.setId(entity.getId());
+        vo.setName(entity.getName());
+        vo.setSortOrder(entity.getSortOrder());
+        vo.setConnectionCount(entity.getConnectionCount() == null ? 0 : entity.getConnectionCount());
+        vo.setDefaultGroup(isDefaultGroup(entity.getName()));
+        return vo;
+    }
+
+    private boolean isDefaultGroup(String groupName) {
+        return ConnectionSchemaMigrationRunner.DEFAULT_GROUP_NAME.equals(safeValue(groupName));
+    }
+
+    private String resolveDatabaseNameLabel(String dbType, String namespaceLabel) {
+        String type = upper(dbType);
+        if (DB_TYPE_SQLITE.equals(type)) {
+            return "文件路径";
+        }
+        if (DB_TYPE_REDIS.equals(type)) {
+            return "逻辑库";
+        }
+        if (DB_TYPE_MONGODB.equals(type)) {
+            return "默认库";
+        }
+        return safeValue(namespaceLabel).isBlank() ? "数据库名" : namespaceLabel;
     }
 
     private String upper(String input) {

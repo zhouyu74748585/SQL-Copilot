@@ -29,6 +29,15 @@ public class KvObjectDetailVO {
     /** 样本内容。 */
     private String sampleJson;
 
+    /** 键 TTL 秒数。 */
+    private Long ttlSeconds;
+
+    /** 编辑器模式：text/json。 */
+    private String editorMode;
+
+    /** 可编辑内容。 */
+    private String editorPayload;
+
     /** 补充说明列表。 */
     private List<String> facts;
 }

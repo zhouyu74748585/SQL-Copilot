@@ -9,6 +9,10 @@ import com.sqlcopilot.studio.dto.kv.KvObjectDetailVO;
 import com.sqlcopilot.studio.dto.kv.KvObjectSummaryVO;
 import com.sqlcopilot.studio.dto.kv.KvOverviewVO;
 import com.sqlcopilot.studio.dto.kv.KvQueryExecuteReq;
+import com.sqlcopilot.studio.dto.kv.KvRedisKeyDeleteReq;
+import com.sqlcopilot.studio.dto.kv.KvRedisKeyEntryVO;
+import com.sqlcopilot.studio.dto.kv.KvRedisKeySaveReq;
+import com.sqlcopilot.studio.dto.kv.KvRedisKeySaveVO;
 import com.sqlcopilot.studio.dto.schema.SchemaDatabaseVO;
 import com.sqlcopilot.studio.dto.sql.ColumnMetaVO;
 import com.sqlcopilot.studio.dto.sql.QueryCellVO;
@@ -130,6 +134,33 @@ public class KvServiceImpl implements KvService {
         throw unsupportedDbType(dbType);
     }
 
+    @Override
+    public KvRedisKeySaveVO createRedisKey(KvRedisKeySaveReq req) {
+        return saveRedisKey(req, true);
+    }
+
+    @Override
+    public KvRedisKeySaveVO updateRedisKey(KvRedisKeySaveReq req) {
+        return saveRedisKey(req, false);
+    }
+
+    @Override
+    public void deleteRedisKey(KvRedisKeyDeleteReq req) {
+        ConnectionEntity entity = connectionService.getConnectionEntity(req.getConnectionId());
+        if (!DB_TYPE_REDIS.equals(normalizeType(entity.getDbType()))) {
+            throw unsupportedDbType(entity.getDbType());
+        }
+        kvRuntimeClientFactory.withRedisConnection(entity, req.getConnectionId(), connection -> {
+            RedisCommands<String, String> sync = connection.sync();
+            String keyName = safe(req.getKeyName());
+            if (keyName.isBlank()) {
+                throw new BusinessException(400, "Redis 键名不能为空");
+            }
+            sync.del(keyName);
+            return null;
+        });
+    }
+
     private KvOverviewVO buildMongoOverview(Long connectionId, String databaseName, com.mongodb.client.MongoClient client) {
         MongoDatabase database = client.getDatabase(databaseName);
         List<KvObjectSummaryVO> objects = new ArrayList<>();
@@ -221,6 +252,9 @@ public class KvServiceImpl implements KvService {
         vo.setDescription("Redis 键对象");
         vo.setQueryTemplate(buildRedisQueryTemplate(objectName, type));
         vo.setSampleJson(loadRedisPreview(sync, objectName, type));
+        vo.setTtlSeconds(ttl >= 0 ? ttl : -1L);
+        vo.setEditorMode("string".equals(type) ? "text" : "json");
+        vo.setEditorPayload(loadRedisEditorPayload(sync, objectName, type));
         vo.setFacts(facts);
         return vo;
     }
@@ -605,6 +639,153 @@ public class KvServiceImpl implements KvService {
             default -> sync.get(key);
         };
         return toPrettyJson(preview);
+    }
+
+    private String loadRedisEditorPayload(RedisCommands<String, String> sync, String key, String type) {
+        String normalizedType = safe(type).toLowerCase(Locale.ROOT);
+        if ("string".equals(normalizedType)) {
+            return Objects.toString(sync.get(key), "");
+        }
+        Object payload = switch (normalizedType) {
+            case "hash" -> sync.hgetall(key);
+            case "list" -> sync.lrange(key, 0, -1);
+            case "set" -> {
+                List<String> values = new ArrayList<>(sync.smembers(key));
+                values.sort(String::compareToIgnoreCase);
+                yield values;
+            }
+            case "zset" -> {
+                List<Map<String, Object>> values = new ArrayList<>();
+                for (ScoredValue<String> item : sync.zrangeWithScores(key, 0, -1)) {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("member", item.getValue());
+                    row.put("score", item.getScore());
+                    values.add(row);
+                }
+                yield values;
+            }
+            default -> sync.get(key);
+        };
+        return toPrettyJson(payload);
+    }
+
+    private KvRedisKeySaveVO saveRedisKey(KvRedisKeySaveReq req, boolean createMode) {
+        ConnectionEntity entity = connectionService.getConnectionEntity(req.getConnectionId());
+        if (!DB_TYPE_REDIS.equals(normalizeType(entity.getDbType()))) {
+            throw unsupportedDbType(entity.getDbType());
+        }
+        return kvRuntimeClientFactory.withRedisConnection(entity, req.getConnectionId(), connection -> {
+            RedisCommands<String, String> sync = connection.sync();
+            String keyName = safe(req.getKeyName());
+            String valueType = safe(req.getValueType()).toLowerCase(Locale.ROOT);
+            if (keyName.isBlank()) {
+                throw new BusinessException(400, "Redis 键名不能为空");
+            }
+            boolean exists = sync.exists(keyName) > 0;
+            if (createMode && exists) {
+                throw new BusinessException(400, "Redis 键已存在: " + keyName);
+            }
+            if (!createMode && !exists) {
+                throw new BusinessException(404, "Redis 键不存在: " + keyName);
+            }
+            if (!createMode && exists) {
+                sync.del(keyName);
+            }
+            writeRedisValue(sync, keyName, valueType, req);
+            applyRedisTtl(sync, keyName, req.getTtlSeconds());
+            KvRedisKeySaveVO vo = new KvRedisKeySaveVO();
+            vo.setSuccess(Boolean.TRUE);
+            vo.setMessage(createMode ? "Redis 键创建成功" : "Redis 键更新成功");
+            vo.setKeyName(keyName);
+            vo.setValueType(valueType);
+            return vo;
+        });
+    }
+
+    private void writeRedisValue(RedisCommands<String, String> sync,
+                                 String keyName,
+                                 String valueType,
+                                 KvRedisKeySaveReq req) {
+        switch (valueType) {
+            case "string" -> sync.set(keyName, Objects.toString(req.getStringValue(), ""));
+            case "hash" -> writeRedisHash(sync, keyName, req.getEntries());
+            case "list" -> writeRedisList(sync, keyName, req.getEntries());
+            case "set" -> writeRedisSet(sync, keyName, req.getEntries());
+            case "zset" -> writeRedisZset(sync, keyName, req.getEntries());
+            default -> throw new BusinessException(400, "暂不支持的 Redis 键类型: " + valueType);
+        }
+    }
+
+    private void writeRedisHash(RedisCommands<String, String> sync, String keyName, List<KvRedisKeyEntryVO> entries) {
+        Map<String, String> values = new LinkedHashMap<>();
+        for (KvRedisKeyEntryVO item : safeEntries(entries)) {
+            String field = safe(item.getKey());
+            if (!field.isBlank()) {
+                values.put(field, Objects.toString(item.getValue(), ""));
+            }
+        }
+        if (values.isEmpty()) {
+            throw new BusinessException(400, "Hash 类型至少需要一个字段");
+        }
+        sync.hset(keyName, values);
+    }
+
+    private void writeRedisList(RedisCommands<String, String> sync, String keyName, List<KvRedisKeyEntryVO> entries) {
+        List<String> values = new ArrayList<>();
+        for (KvRedisKeyEntryVO item : safeEntries(entries)) {
+            values.add(Objects.toString(item.getValue(), ""));
+        }
+        if (values.isEmpty()) {
+            throw new BusinessException(400, "List 类型至少需要一个元素");
+        }
+        sync.rpush(keyName, values.toArray(new String[0]));
+    }
+
+    private void writeRedisSet(RedisCommands<String, String> sync, String keyName, List<KvRedisKeyEntryVO> entries) {
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        for (KvRedisKeyEntryVO item : safeEntries(entries)) {
+            values.add(Objects.toString(item.getValue(), ""));
+        }
+        if (values.isEmpty()) {
+            throw new BusinessException(400, "Set 类型至少需要一个成员");
+        }
+        sync.sadd(keyName, values.toArray(new String[0]));
+    }
+
+    private void writeRedisZset(RedisCommands<String, String> sync, String keyName, List<KvRedisKeyEntryVO> entries) {
+        List<KvRedisKeyEntryVO> safeEntries = safeEntries(entries);
+        if (safeEntries.isEmpty()) {
+            throw new BusinessException(400, "ZSet 类型至少需要一个成员");
+        }
+        int written = 0;
+        for (KvRedisKeyEntryVO item : safeEntries) {
+            String member = safe(item.getKey());
+            if (member.isBlank()) {
+                member = safe(item.getValue());
+            }
+            if (member.isBlank()) {
+                continue;
+            }
+            double score = item.getScore() == null ? 0D : item.getScore();
+            sync.zadd(keyName, score, member);
+            written++;
+        }
+        if (written == 0) {
+            throw new BusinessException(400, "ZSet 类型至少需要一个有效成员");
+        }
+    }
+
+    private void applyRedisTtl(RedisCommands<String, String> sync, String keyName, Long ttlSeconds) {
+        long ttl = ttlSeconds == null ? -1L : ttlSeconds;
+        if (ttl > 0) {
+            sync.expire(keyName, ttl);
+            return;
+        }
+        sync.persist(keyName);
+    }
+
+    private List<KvRedisKeyEntryVO> safeEntries(List<KvRedisKeyEntryVO> entries) {
+        return entries == null ? List.of() : entries;
     }
 
     private List<String> tokenize(String text) {

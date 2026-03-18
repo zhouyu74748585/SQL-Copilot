@@ -19,7 +19,7 @@ public final class JdbcUrlBuilder {
 
     public static String build(ConnectionEntity entity) {
         String type = normalize(entity.getDbType()).toUpperCase(Locale.ROOT);
-        String customParams = safe(entity.getCustomParams());
+        String customParams = toParameterText(resolveRuntimeProperties(entity));
         return switch (type) {
             case "MYSQL" -> {
                 Endpoint endpoint = resolveEndpoint(entity.getHost(), entity.getPort(), 3306, "MySQL 主机不能为空");
@@ -100,6 +100,17 @@ public final class JdbcUrlBuilder {
                 }
             }
         }
+        return params;
+    }
+
+    public static Map<String, String> resolveRuntimeProperties(ConnectionEntity entity) {
+        LinkedHashMap<String, String> params = new LinkedHashMap<>();
+        String type = normalize(entity == null ? null : entity.getDbType()).toUpperCase(Locale.ROOT);
+        if ("SQLSERVER".equals(type)) {
+            params.put("encrypt", "true");
+            params.put("trustServerCertificate", "true");
+        }
+        params.putAll(parseCustomParameters(entity == null ? null : entity.getCustomParams()));
         return params;
     }
 
@@ -262,6 +273,15 @@ public final class JdbcUrlBuilder {
             builder.append(key).append('=').append(value);
         });
         return builder.toString();
+    }
+
+    private static String toParameterText(Map<String, String> params) {
+        if (params == null || params.isEmpty()) {
+            return "";
+        }
+        StringJoiner joiner = new StringJoiner("\n");
+        params.forEach((key, value) -> joiner.add(key + "=" + value));
+        return joiner.toString();
     }
 
     private static String urlEncode(String value) {

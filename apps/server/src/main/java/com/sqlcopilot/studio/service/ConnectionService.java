@@ -9,6 +9,8 @@ public interface ConnectionService {
 
     List<ConnectionDbTypeVO> listSupportedDbTypes();
 
+    List<ConnectionGroupVO> listConnectionGroups();
+
     List<ConnectionVO> listConnections();
 
     ConnectionVO createConnection(ConnectionCreateReq req);
@@ -16,6 +18,14 @@ public interface ConnectionService {
     ConnectionVO updateConnection(ConnectionUpdateReq req);
 
     ConnectionDatabasePreviewVO previewDatabases(ConnectionDatabasePreviewReq req);
+
+    ConnectionGroupVO createConnectionGroup(ConnectionGroupCreateReq req);
+
+    ConnectionGroupVO renameConnectionGroup(ConnectionGroupRenameReq req);
+
+    void removeConnectionGroup(Long groupId);
+
+    void moveConnectionToGroup(Long connectionId, Long targetGroupId);
 
     void removeConnection(Long id);
 

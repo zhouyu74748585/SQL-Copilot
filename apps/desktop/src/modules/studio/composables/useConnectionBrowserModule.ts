@@ -17,6 +17,9 @@ import type {StudioRuntime} from './useStudioRuntime';
 type ObjectRow = StudioRuntime['objectRows']['value'][number];
 
 type ContextAction =
+  | 'createGroup'
+  | 'renameGroup'
+  | 'deleteGroup'
   | 'createConnection'
   | 'editConnection'
   | 'testConnection'
@@ -47,6 +50,8 @@ type ContextAction =
   | 'interruptVectorize'
   | 'viewVectorizedData'
   | 'copyKeyName'
+  | 'createKey'
+  | 'editKey'
   | 'deleteKey';
 
 type TreeNodeData = {
@@ -132,6 +137,7 @@ export function useConnectionBrowserModule(
   function closeContextMenu() {
     runtime.contextMenu.visible = false;
     runtime.contextMenu.targetType = 'none';
+    runtime.contextMenu.groupId = 0;
     runtime.contextMenu.databaseName = '';
     runtime.contextMenu.category = '';
     runtime.contextMenu.objectType = '';
@@ -384,11 +390,22 @@ export function useConnectionBrowserModule(
     const spec = currentDbTypeSpec();
     const menu = runtime.contextMenu;
     if (!menu.connectionId && menu.targetType !== 'connection') {
-      return [];
+      if (menu.targetType !== 'group') {
+        return [];
+      }
+    }
+    if (menu.targetType === 'group') {
+      return [
+        { id: 'createConnection', label: '新建连接' },
+        { id: 'createGroup', label: '新建分组' },
+        { id: 'renameGroup', label: '重命名分组' },
+        { id: 'deleteGroup', label: '删除分组', danger: true },
+      ];
     }
     if (menu.targetType === 'connection') {
       const actions: ContextMenuActionItem[] = [
         { id: 'createConnection', label: '新建连接' },
+        { id: 'createGroup', label: '新建分组' },
         { id: 'editConnection', label: '编辑连接' },
         { id: 'testConnection', label: '测试连接' },
         { id: 'disconnectConnection', label: '关闭连接' },
@@ -447,6 +464,8 @@ export function useConnectionBrowserModule(
     if (menu.objectType === 'tables') {
       if (isKvForObject) {
         return [
+          { id: 'createKey', label: '新增键' },
+          { id: 'editKey', label: '编辑键' },
           { id: 'copyKeyName', label: '复制键名' },
           { id: 'deleteKey', label: '删除键', danger: true },
         ];
@@ -515,12 +534,31 @@ export function useConnectionBrowserModule(
     const objectType = runtime.contextMenu.objectType;
     const objectName = runtime.contextMenu.objectName;
     const category = runtime.contextMenu.category;
+    const groupId = runtime.contextMenu.groupId;
     const connection = runtime.connections.value.find((item) => item.id === id) || null;
     const resolvedDatabaseName = databaseName || runtime.getActiveDatabaseName(id);
     const savedQuery = objectType === 'queries'
       ? runtime.savedQueryCache.value[`${id}|${resolvedDatabaseName}`]?.find((item) => item.title === objectName)
       : null;
     closeContextMenu();
+    if (action === 'createGroup') {
+      runtime.openCreateGroupModal();
+      return;
+    }
+    if (action === 'renameGroup') {
+      if (!groupId) {
+        return;
+      }
+      runtime.openRenameGroupModal(groupId);
+      return;
+    }
+    if (action === 'deleteGroup') {
+      if (!groupId) {
+        return;
+      }
+      await runtime.removeConnectionGroup(groupId);
+      return;
+    }
     if (action === 'createConnection') {
       openCreateModal();
       return;
@@ -706,12 +744,19 @@ export function useConnectionBrowserModule(
       void navigator.clipboard.writeText(objectName);
       return;
     }
+    if (action === 'createKey') {
+      runtime.openCreateRedisKeyModal();
+      return;
+    }
+    if (action === 'editKey') {
+      runtime.openEditRedisKeyModal();
+      return;
+    }
     if (action === 'deleteKey') {
       if (targetType !== 'object' || !objectName || objectType !== 'tables' || !databaseName) {
         return;
       }
-      runtime.dropTableName.value = objectName;
-      runtime.dropTableModalOpen.value = true;
+      await runtime.deleteRedisKey(objectName);
       return;
     }
     if (action === 'editSavedQuery') {

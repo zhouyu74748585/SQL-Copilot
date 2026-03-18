@@ -2,6 +2,7 @@ CREATE TABLE IF NOT EXISTS connection_info (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     db_type TEXT NOT NULL,
+    group_id INTEGER,
     host TEXT,
     port INTEGER,
     database_name TEXT,
@@ -26,6 +27,17 @@ CREATE TABLE IF NOT EXISTS connection_info (
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS connection_group (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_connection_group_name
+ON connection_group(name);
 
 CREATE TABLE IF NOT EXISTS query_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

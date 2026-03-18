@@ -30,6 +30,7 @@ import {
   ReloadOutlined,
   SearchOutlined,
   SendOutlined,
+  SafetyCertificateOutlined,
   SettingOutlined,
   SyncOutlined,
   TableOutlined,
@@ -85,6 +86,11 @@ import type {
   ChartConfigVO,
   ChartType,
   ConnectionCreateReq,
+  ConnectionGroupCreateReq,
+  ConnectionGroupMoveReq,
+  ConnectionGroupRemoveReq,
+  ConnectionGroupRenameReq,
+  ConnectionGroupVO,
   ConnectionDbTypeVO,
   ConnectionDatabasePreviewReq,
   ConnectionDatabasePreviewVO,
@@ -99,6 +105,10 @@ import type {
   QueryHistoryVO,
   KvObjectDetailVO,
   KvOverviewVO,
+  KvRedisKeyDeleteReq,
+  KvRedisKeyEntryVO,
+  KvRedisKeySaveReq,
+  KvRedisKeySaveVO,
   RagConfigSaveReq,
   RagConfigVO,
   RagDatabaseVectorizeStatusVO,
@@ -533,6 +543,10 @@ const tableStatsPollIntervalMs = 1500;
 
 const connections = ref<ConnectionVO[]>([]);
 
+const connectionGroups = ref<ConnectionGroupVO[]>([]);
+
+const connectionRuntimeStatusMap = ref<Record<number, 'idle' | 'connected' | 'failed'>>({});
+
 const schemaOverview = ref<SchemaOverviewVO | null>(null);
 
 const kvOverview = ref<KvOverviewVO | null>(null);
@@ -609,6 +623,16 @@ const truncateTableName = ref('');
 const dropTableModalOpen = ref(false);
 
 const dropTableName = ref('');
+
+const groupModalOpen = ref(false);
+
+const groupModalSubmitting = ref(false);
+
+const groupForm = reactive({
+  mode: 'create' as 'create' | 'rename',
+  groupId: 0,
+  name: '',
+});
 
 const renameTableModalOpen = ref(false);
 
@@ -765,6 +789,26 @@ const kvObjectDetail = ref<KvObjectDetailVO | null>(null);
 
 const kvObjectDetailLoading = ref(false);
 
+const redisHierarchyPath = ref('');
+
+const redisKeyModalOpen = ref(false);
+
+const redisKeyModalSubmitting = ref(false);
+
+const redisKeyModalMode = ref<'create' | 'edit'>('create');
+
+const redisKeyForm = reactive<{
+  keyName: string;
+  valueType: 'string' | 'hash' | 'list' | 'set' | 'zset';
+  ttlSeconds: number;
+  editorPayload: string;
+}>({
+  keyName: '',
+  valueType: 'string',
+  ttlSeconds: -1,
+  editorPayload: '',
+});
+
 const objectDefinitionDetail = ref<SchemaObjectDefinitionVO | null>(null);
 
 const objectDefinitionDetailLoading = ref(false);
@@ -842,7 +886,8 @@ const contextMenu = reactive({
   visible: false,
   x: 0,
   y: 0,
-  targetType: 'none' as 'none' | 'connection' | 'database' | 'category' | 'object',
+  targetType: 'none' as 'none' | 'group' | 'connection' | 'database' | 'category' | 'object',
+  groupId: 0,
   connectionId: 0,
   databaseName: '',
   category: '' as '' | 'tables' | 'views' | 'functions' | 'queries',
@@ -1181,6 +1226,12 @@ const connectionSelectOptions = computed(() =>
   connections.value.map((item) => ({ label: `${item.name} (${item.env})`, value: item.id })),
 );
 
+const connectionGroupOptions = computed(() =>
+  connectionGroups.value.map((item) => ({ label: item.name, value: item.id })),
+);
+
+const connectionFormDbTypeSpec = computed(() => findSupportedDbType(connectionForm.dbType));
+
 const isMultiDatabaseFormType = computed(() => isMultiDatabaseType(connectionForm.dbType));
 
 const connectionPreviewSelectOptions = computed(() => {
@@ -1193,16 +1244,16 @@ const connectionPreviewSelectOptions = computed(() => {
 });
 
 const canPreviewDatabases = computed(() => {
-  if (!isMultiDatabaseFormType.value) {
+  if (!connectionFormDbTypeSpec.value?.supportsDatabasePreview || !isMultiDatabaseFormType.value) {
     return false;
   }
-  if (!connectionForm.host?.trim()) {
+  if (connectionFormDbTypeSpec.value.requiresHost !== false && !connectionForm.host?.trim()) {
     return false;
   }
-  if (!connectionForm.port || connectionForm.port <= 0) {
+  if (connectionFormDbTypeSpec.value.requiresPort !== false && (!connectionForm.port || connectionForm.port <= 0)) {
     return false;
   }
-  if (connectionForm.dbType !== 'MONGODB' && !connectionForm.username?.trim()) {
+  if (connectionFormDbTypeSpec.value.supportsUsername !== false && connectionForm.dbType !== 'MONGODB' && !connectionForm.username?.trim()) {
     return false;
   }
   if (connectionForm.sshEnabled) {
@@ -1229,10 +1280,58 @@ const canPreviewDatabases = computed(() => {
 
 const connectionTreeData = computed(() => {
   const keyword = connectionKeyword.value.trim().toLowerCase();
-  const filtered = keyword
-    ? connections.value.filter((item) => item.name.toLowerCase().includes(keyword))
-    : connections.value;
-  return filtered.map((conn) => buildConnectionNode(conn));
+  const groupOrder = connectionGroups.value.length
+    ? connectionGroups.value
+    : [{ id: 0, name: '未分组', defaultGroup: true } satisfies ConnectionGroupVO];
+  return groupOrder
+    .map((group) => {
+      const items = connections.value.filter((conn) => {
+        const belongs = (conn.groupId ?? 0) === group.id || (!conn.groupId && group.defaultGroup);
+        if (!belongs) {
+          return false;
+        }
+        if (!keyword) {
+          return true;
+        }
+        const searchText = [
+          conn.name,
+          conn.dbType,
+          conn.databaseName,
+          conn.groupName,
+        ].map((item) => String(item || '').toLowerCase()).join(' ');
+        return searchText.includes(keyword);
+      });
+      if (!items.length) {
+        return {
+          key: `group-${group.id}`,
+          title: group.name,
+          nodeType: 'group',
+          groupId: group.id,
+          selectable: true,
+          isLeaf: false,
+          children: [
+            {
+              key: `group-${group.id}-empty`,
+              title: '暂无连接',
+              nodeType: 'group-empty',
+              selectable: false,
+              disabled: true,
+              isLeaf: true,
+            },
+          ],
+        };
+      }
+      return {
+        key: `group-${group.id}`,
+        title: group.name,
+        nodeType: 'group',
+        groupId: group.id,
+        selectable: true,
+        isLeaf: false,
+        children: items.map((conn) => buildConnectionNode(conn)),
+      };
+    })
+    .filter((item) => item.children?.length || !keyword);
 });
 
 const objectRows = computed<ObjectRow[]>(() => {
@@ -1311,6 +1410,71 @@ const objectRows = computed<ObjectRow[]>(() => {
   }));
 });
 
+const activeConnectionIsRedis = computed(() =>
+  (connections.value.find((item) => item.id === workflow.connectionId)?.dbType || '') === 'REDIS',
+);
+
+const redisHierarchyTreeData = computed(() => {
+  if (!activeConnectionIsRedis.value) {
+    return [];
+  }
+  type RedisTreeNode = {
+    key: string;
+    title: string;
+    children: RedisTreeNode[];
+    isLeaf?: boolean;
+    objectName?: string;
+    path?: string;
+  };
+  const root: RedisTreeNode[] = [];
+  const branchMap = new Map<string, RedisTreeNode>();
+  for (const item of objectRows.value) {
+    const keyName = item.objectName;
+    const segments = keyName.split(':').filter((segment) => !!segment);
+    let currentChildren = root;
+    let currentPath = '';
+    segments.forEach((segment, index) => {
+      currentPath = currentPath ? `${currentPath}:${segment}` : segment;
+      if (index === segments.length - 1) {
+        currentChildren.push({
+          key: `redis-key-${keyName}`,
+          title: segment,
+          children: [],
+          isLeaf: true,
+          objectName: keyName,
+          path: currentPath,
+        });
+        return;
+      }
+      const branchKey = `redis-path-${currentPath}`;
+      let branch = branchMap.get(branchKey);
+      if (!branch) {
+        branch = {
+          key: branchKey,
+          title: segment,
+          children: [],
+          path: currentPath,
+        };
+        branchMap.set(branchKey, branch);
+        currentChildren.push(branch);
+      }
+      currentChildren = branch.children;
+    });
+  }
+  return root;
+});
+
+const redisVisibleObjectRows = computed(() => {
+  if (!activeConnectionIsRedis.value) {
+    return filteredObjectRows.value;
+  }
+  const prefix = redisHierarchyPath.value.trim();
+  if (!prefix) {
+    return filteredObjectRows.value;
+  }
+  return filteredObjectRows.value.filter((item) => item.objectName === prefix || item.objectName.startsWith(`${prefix}:`));
+});
+
 const selectedObjectRecord = computed(() =>
   objectRows.value.find((item) => item.objectName === selectedObjectName.value) ?? null,
 );
@@ -1321,6 +1485,13 @@ const selectedTreeDetail = computed(() => {
     return null;
   }
   const keyValue = String(key);
+  const groupMatch = keyValue.match(/^group-(\d+)$/);
+  if (groupMatch) {
+    return {
+      kind: 'group' as const,
+      groupId: Number(groupMatch[1]),
+    };
+  }
   const objectMatch = keyValue.match(/^conn-(\d+)-db-(.+?)-obj-([a-z]+)-(.+)$/);
   if (objectMatch) {
     return {
@@ -1361,6 +1532,13 @@ const selectedTreeDetail = computed(() => {
 const selectedTreeConnection = computed(() => {
   const connectionId = selectedTreeDetail.value?.connectionId ?? workflow.connectionId;
   return connections.value.find((item) => item.id === connectionId) ?? null;
+});
+
+const selectedTreeGroup = computed(() => {
+  const groupId = selectedTreeDetail.value?.kind === 'group'
+    ? selectedTreeDetail.value.groupId
+    : (selectedTreeConnection.value?.groupId ?? 0);
+  return connectionGroups.value.find((item) => item.id === groupId) ?? null;
 });
 
 const selectedTreeDatabaseStatusLabel = computed(() => {
@@ -1897,6 +2075,7 @@ function handleManualChartSeriesFieldChange(tab: QueryWorkspaceTab, value: strin
 }
 
 function buildConnectionNode(conn: ConnectionVO) {
+  const title = buildConnectionNodeTitle(conn);
   if (requiresDatabaseLayer(conn)) {
     const databases = visibleDatabasesForConnection(conn);
     const activeDbName = getActiveDatabaseName(conn.id);
@@ -1912,11 +2091,13 @@ function buildConnectionNode(conn: ConnectionVO) {
     }));
     return {
       key: `conn-${conn.id}`,
-      title: conn.name,
+      title,
       nodeType: 'connection',
       connectionId: conn.id,
+      groupId: conn.groupId ?? 0,
       env: conn.env,
       dbType: conn.dbType,
+      connectionName: conn.name,
       children: databaseNodes,
     };
   }
@@ -1924,13 +2105,22 @@ function buildConnectionNode(conn: ConnectionVO) {
   const configuredDbName = getActiveDatabaseName(conn.id);
   return {
     key: `conn-${conn.id}`,
-    title: conn.name,
+    title,
     nodeType: 'connection',
     connectionId: conn.id,
+    groupId: conn.groupId ?? 0,
     env: conn.env,
     dbType: conn.dbType,
+    connectionName: conn.name,
     children: buildCategoryChildren(conn.id, configuredDbName),
   };
+}
+
+function buildConnectionNodeTitle(conn: ConnectionVO) {
+  const spec = findSupportedDbType(conn.dbType);
+  const typeLabel = spec?.displayName || conn.dbType;
+  const dbName = parseConfiguredDatabaseName(conn) || '未指定库';
+  return `${typeLabel} / ${dbName}`;
 }
 
 function buildCategoryChildren(connectionId: number, databaseName: string) {
@@ -2302,6 +2492,16 @@ function invalidateDatabaseListCache(connectionId: number) {
   );
 }
 
+function setConnectionRuntimeStatus(connectionId: number, status: 'idle' | 'connected' | 'failed') {
+  if (!connectionId) {
+    return;
+  }
+  connectionRuntimeStatusMap.value = {
+    ...connectionRuntimeStatusMap.value,
+    [connectionId]: status,
+  };
+}
+
 function collapseConnectionNode(connectionId: number) {
   const prefix = `conn-${connectionId}`;
   expandedTreeKeys.value = expandedTreeKeys.value.filter((key) => {
@@ -2314,6 +2514,7 @@ function resetConnectionRuntimeState(connectionId: number) {
   if (!connectionId) {
     return;
   }
+  setConnectionRuntimeStatus(connectionId, 'idle');
   invalidateConnectionMetadataCaches(connectionId);
   collapseConnectionNode(connectionId);
   const childPrefix = `conn-${connectionId}-`;
@@ -3807,12 +4008,20 @@ async function prepareConnectionTreeData(connectionId: number, options?: { force
 
 async function loadDatabaseListForConnection(connectionId: number, options?: { force?: boolean }) {
   if (!options?.force && databaseListCache.value[connectionId]?.length) {
+    setConnectionRuntimeStatus(connectionId, 'connected');
     return;
   }
   const endpoint = isKvConnectionId(connectionId)
     ? `/api/kv/databases?connectionId=${connectionId}`
     : `/api/schema/databases?connectionId=${connectionId}`;
-  const list = await getApi<SchemaDatabaseVO[]>(endpoint);
+  let list: SchemaDatabaseVO[];
+  try {
+    list = await getApi<SchemaDatabaseVO[]>(endpoint);
+  } catch (error) {
+    setConnectionRuntimeStatus(connectionId, 'failed');
+    throw error;
+  }
+  setConnectionRuntimeStatus(connectionId, 'connected');
   const databaseNames = list.map((item) => item.databaseName).filter((item) => !!item);
   databaseListCache.value = {
     ...databaseListCache.value,
@@ -3941,11 +4150,25 @@ async function loadSupportedDbTypes() {
   ensureConnectionFormDbType();
 }
 
+async function loadConnectionGroups() {
+  const list = await getApi<ConnectionGroupVO[]>('/api/connection/group/list');
+  connectionGroups.value = list;
+  if (!connectionForm.groupId && list.length) {
+    connectionForm.groupId = list[0].id;
+  }
+}
+
 async function loadConnections() {
   connectionRefreshing.value = true;
   try {
+    await loadConnectionGroups();
     const list = await getApi<ConnectionVO[]>('/api/connection/list');
     connections.value = list;
+    const nextRuntimeStatus: Record<number, 'idle' | 'connected' | 'failed'> = {};
+    list.forEach((item) => {
+      nextRuntimeStatus[item.id] = connectionRuntimeStatusMap.value[item.id] || 'idle';
+    });
+    connectionRuntimeStatusMap.value = nextRuntimeStatus;
     queryTabs.value.forEach((tab) => {
       const connection = list.find((item) => item.id === tab.connectionId);
       if (!connection || !isMultiDatabaseType(connection.dbType)) {
@@ -4052,6 +4275,79 @@ async function refreshConnections() {
   await runSafely(async () => {
     await loadConnections();
   });
+}
+
+function openCreateGroupModal() {
+  groupForm.mode = 'create';
+  groupForm.groupId = 0;
+  groupForm.name = '';
+  groupModalOpen.value = true;
+}
+
+function openRenameGroupModal(groupId: number) {
+  const current = connectionGroups.value.find((item) => item.id === groupId);
+  if (!current) {
+    message.warning('未找到连接分组');
+    return;
+  }
+  groupForm.mode = 'rename';
+  groupForm.groupId = groupId;
+  groupForm.name = current.name;
+  groupModalOpen.value = true;
+}
+
+function closeGroupModal() {
+  groupModalOpen.value = false;
+  groupModalSubmitting.value = false;
+  groupForm.mode = 'create';
+  groupForm.groupId = 0;
+  groupForm.name = '';
+}
+
+async function confirmGroupModal() {
+  await runSafely(async () => {
+    const name = groupForm.name.trim();
+    if (!name) {
+      message.warning('请输入分组名称');
+      return;
+    }
+    groupModalSubmitting.value = true;
+    try {
+      if (groupForm.mode === 'create') {
+        await postApi<ConnectionGroupVO>('/api/connection/group/create', {
+          name,
+        } satisfies ConnectionGroupCreateReq);
+        message.success('分组已创建');
+      } else {
+        await postApi<ConnectionGroupVO>('/api/connection/group/rename', {
+          groupId: groupForm.groupId,
+          name,
+        } satisfies ConnectionGroupRenameReq);
+        message.success('分组已更新');
+      }
+      closeGroupModal();
+      await loadConnectionGroups();
+    } finally {
+      groupModalSubmitting.value = false;
+    }
+  });
+}
+
+async function removeConnectionGroup(groupId: number) {
+  await runSafely(async () => {
+    await postApi<boolean>('/api/connection/group/remove', {
+      groupId,
+    } satisfies ConnectionGroupRemoveReq);
+    message.success('分组已删除');
+    await loadConnections();
+  });
+}
+
+async function moveConnectionGroup(connectionId: number, targetGroupId: number) {
+  await postApi<boolean>('/api/connection/group/move', {
+    connectionId,
+    targetGroupId,
+  } satisfies ConnectionGroupMoveReq);
 }
 
 async function saveConnection() {
@@ -4220,7 +4516,9 @@ async function loadOverview(options?: { forceTableStats?: boolean; syncTreeCache
         ? `/api/kv/overview?connectionId=${workflow.connectionId}&databaseName=${encodeURIComponent(databaseName)}`
         : `/api/kv/overview?connectionId=${workflow.connectionId}`;
       const overview = await getApi<KvOverviewVO>(query);
+      setConnectionRuntimeStatus(workflow.connectionId, 'connected');
       kvOverview.value = overview;
+      redisHierarchyPath.value = '';
       schemaOverview.value = null;
       if (options?.syncTreeCaches !== false) {
         const cacheKey = tableCacheKey(workflow.connectionId, databaseName);
@@ -4245,6 +4543,7 @@ async function loadOverview(options?: { forceTableStats?: boolean; syncTreeCache
       ? `/api/schema/overview?connectionId=${workflow.connectionId}&databaseName=${encodeURIComponent(databaseName)}`
       : `/api/schema/overview?connectionId=${workflow.connectionId}`;
     const overview = await getApi<SchemaOverviewVO>(query);
+    setConnectionRuntimeStatus(workflow.connectionId, 'connected');
     schemaOverview.value = overview;
     kvOverview.value = null;
     if (options?.syncTreeCaches !== false) {
@@ -4339,6 +4638,10 @@ async function fetchTableStatsForDatabase(
   databaseName: string,
   options?: { force?: boolean; polling?: boolean },
 ) {
+  if (isKvConnectionId(connectionId)) {
+    clearTableStatsPollingTimer(tableCacheKey(connectionId, databaseName));
+    return;
+  }
   if (!connectionId || !databaseName || databaseName === '未发现数据库') {
     return;
   }
@@ -5311,6 +5614,10 @@ async function loadCategoryObjects(connectionId: number, databaseName: string, c
 }
 
 async function loadTreeChildrenByKey(nodeKey: string) {
+  const groupMatch = nodeKey.match(/^group-(\d+)$/);
+  if (groupMatch) {
+    return;
+  }
   const connectionMatch = nodeKey.match(/^conn-(\d+)$/);
   if (connectionMatch) {
     await prepareConnectionTreeData(Number(connectionMatch[1]));
@@ -5369,6 +5676,13 @@ async function handleTreeSelect(keys: (string | number)[]) {
   }
 
   const connectionMatch = value.match(/^conn-(\d+)$/);
+  const groupMatch = value.match(/^group-(\d+)$/);
+  if (groupMatch) {
+    selectedObjectName.value = '';
+    clearBrowserObjectCollections();
+    clearObjectDetail();
+    return;
+  }
   if (connectionMatch) {
     const connectionId = Number(connectionMatch[1]);
     workflow.connectionId = connectionId;
@@ -5476,10 +5790,63 @@ async function handleTreeExpand(keys: (string | number)[]) {
   scheduleTableStatsForExpandedDatabases(expandedTreeKeys.value);
 }
 
+async function handleConnectionTreeDrop(info: { dragNode?: { key?: string | number }; node?: { key?: string | number } }) {
+  const dragKey = String(info.dragNode?.key || '');
+  const targetKey = String(info.node?.key || '');
+  const dragMatch = dragKey.match(/^conn-(\d+)$/);
+  if (!dragMatch) {
+    return;
+  }
+  const connectionId = Number(dragMatch[1]);
+  let targetGroupId = 0;
+  const groupMatch = targetKey.match(/^group-(\d+)$/);
+  if (groupMatch) {
+    targetGroupId = Number(groupMatch[1]);
+  } else {
+    const emptyGroupMatch = targetKey.match(/^group-(\d+)-empty$/);
+    if (emptyGroupMatch) {
+      targetGroupId = Number(emptyGroupMatch[1]);
+    } else {
+      const targetConnMatch = targetKey.match(/^conn-(\d+)$/);
+      if (targetConnMatch) {
+        const targetConnectionId = Number(targetConnMatch[1]);
+        targetGroupId = connections.value.find((item) => item.id === targetConnectionId)?.groupId ?? 0;
+      }
+    }
+  }
+  if (!targetGroupId) {
+    return;
+  }
+  const currentGroupId = connections.value.find((item) => item.id === connectionId)?.groupId ?? 0;
+  if (currentGroupId === targetGroupId) {
+    return;
+  }
+  await runSafely(async () => {
+    await moveConnectionGroup(connectionId, targetGroupId);
+    message.success('连接分组已更新');
+    await loadConnections();
+  });
+}
+
 async function handleTreeRightClick(event: { event: MouseEvent; node: { key?: string | number } }) {
   event.event.preventDefault();
   event.event.stopPropagation();
   const keyValue = String(event.node?.key ?? '');
+  const groupMatch = keyValue.match(/^group-(\d+)$/);
+  if (groupMatch) {
+    selectedTreeKeys.value = [keyValue];
+    contextMenu.visible = true;
+    contextMenu.x = Math.min(event.event.clientX, window.innerWidth - 220);
+    contextMenu.y = Math.min(event.event.clientY, window.innerHeight - 180);
+    contextMenu.targetType = 'group';
+    contextMenu.groupId = Number(groupMatch[1]);
+    contextMenu.connectionId = 0;
+    contextMenu.databaseName = '';
+    contextMenu.category = '';
+    contextMenu.objectType = '';
+    contextMenu.objectName = '';
+    return;
+  }
   const objectMatch = keyValue.match(/^conn-(\d+)-db-(.+?)-obj-([a-z]+)-(.+)$/);
   if (objectMatch) {
     const connectionId = Number(objectMatch[1]);
@@ -5584,6 +5951,7 @@ async function handleTreeRightClick(event: { event: MouseEvent; node: { key?: st
 function closeContextMenu() {
   contextMenu.visible = false;
   contextMenu.targetType = 'none';
+  contextMenu.groupId = 0;
   contextMenu.databaseName = '';
   contextMenu.category = '';
   contextMenu.objectType = '';
@@ -5683,6 +6051,10 @@ async function interruptDatabaseVectorize(connectionId: number, databaseName: st
 
 async function selectObject(connectionId: number, databaseName: string, objectType: ObjectRow['objectType'], objectName: string) {
   selectedObjectName.value = objectName;
+  if (isKvConnectionId(connectionId) && connections.value.find((item) => item.id === connectionId)?.dbType === 'REDIS') {
+    const parts = objectName.split(':').filter((item) => !!item);
+    redisHierarchyPath.value = parts.slice(0, Math.max(parts.length - 1, 0)).join(':');
+  }
   if (objectType === 'queries') {
     await openSavedQueryTabByTitle(connectionId, databaseName, objectName);
     return;
@@ -5755,6 +6127,135 @@ function clearObjectDetail() {
   kvObjectDetailLoading.value = false;
   objectDefinitionDetail.value = null;
   objectDefinitionDetailLoading.value = false;
+}
+
+function openCreateRedisKeyModal() {
+  redisKeyModalMode.value = 'create';
+  redisKeyForm.keyName = '';
+  redisKeyForm.valueType = 'string';
+  redisKeyForm.ttlSeconds = -1;
+  redisKeyForm.editorPayload = '';
+  redisKeyModalOpen.value = true;
+}
+
+function openEditRedisKeyModal() {
+  if (!selectedObjectRecord.value || !activeConnectionIsKv.value || selectedConnection.value?.dbType !== 'REDIS') {
+    return;
+  }
+  redisKeyModalMode.value = 'edit';
+  redisKeyForm.keyName = selectedObjectRecord.value.objectName;
+  redisKeyForm.valueType = normalizeRedisValueType(kvObjectDetail.value?.valueType);
+  redisKeyForm.ttlSeconds = Number(kvObjectDetail.value?.ttlSeconds ?? -1);
+  redisKeyForm.editorPayload = kvObjectDetail.value?.editorPayload || '';
+  redisKeyModalOpen.value = true;
+}
+
+function closeRedisKeyModal() {
+  redisKeyModalOpen.value = false;
+  redisKeyModalSubmitting.value = false;
+}
+
+function normalizeRedisValueType(value?: string): 'string' | 'hash' | 'list' | 'set' | 'zset' {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'hash' || normalized === 'list' || normalized === 'set' || normalized === 'zset') {
+    return normalized;
+  }
+  return 'string';
+}
+
+function parseRedisEditorEntries(valueType: string, payload: string): KvRedisKeyEntryVO[] {
+  const trimmed = payload.trim();
+  if (!trimmed) {
+    return [];
+  }
+  const parsed = JSON.parse(trimmed);
+  if (valueType === 'hash') {
+    return Object.entries(parsed as Record<string, unknown>).map(([key, value]) => ({
+      key,
+      value: value == null ? '' : String(value),
+    }));
+  }
+  if (valueType === 'list' || valueType === 'set') {
+    return (Array.isArray(parsed) ? parsed : []).map((value) => ({
+      value: value == null ? '' : String(value),
+    }));
+  }
+  if (valueType === 'zset') {
+    return (Array.isArray(parsed) ? parsed : []).map((item) => ({
+      key: String((item as { member?: unknown }).member ?? ''),
+      score: Number((item as { score?: unknown }).score ?? 0),
+    }));
+  }
+  return [];
+}
+
+async function confirmRedisKeyModal() {
+  await runSafely(async () => {
+    if (selectedConnection.value?.dbType !== 'REDIS') {
+      return;
+    }
+    const connectionId = workflow.connectionId;
+    const databaseName = getActiveDatabaseName(connectionId);
+    const valueType = redisKeyForm.valueType;
+    const payload: KvRedisKeySaveReq = {
+      connectionId,
+      databaseName,
+      keyName: redisKeyForm.keyName.trim(),
+      valueType,
+      ttlSeconds: Number(redisKeyForm.ttlSeconds ?? -1),
+      stringValue: valueType === 'string' ? redisKeyForm.editorPayload : undefined,
+      entries: valueType === 'string' ? [] : parseRedisEditorEntries(valueType, redisKeyForm.editorPayload),
+    };
+    redisKeyModalSubmitting.value = true;
+    try {
+      const endpoint = redisKeyModalMode.value === 'create'
+        ? '/api/kv/redis/key/create'
+        : '/api/kv/redis/key/update';
+      const result = await postApi<KvRedisKeySaveVO>(endpoint, payload);
+      message.success(result.message);
+      closeRedisKeyModal();
+      await loadOverview({ forceTableStats: false });
+      await loadObjectDetail(connectionId, databaseName, 'tables', payload.keyName);
+      selectedObjectName.value = payload.keyName;
+    } finally {
+      redisKeyModalSubmitting.value = false;
+    }
+  });
+}
+
+async function deleteRedisKey(keyName: string) {
+  await runSafely(async () => {
+    const connectionId = workflow.connectionId;
+    const databaseName = getActiveDatabaseName(connectionId);
+    await postApi<boolean>('/api/kv/redis/key/delete', {
+      connectionId,
+      databaseName,
+      keyName,
+    } satisfies KvRedisKeyDeleteReq);
+    message.success('Redis 键已删除');
+    if (selectedObjectName.value === keyName) {
+      selectedObjectName.value = '';
+      clearObjectDetail();
+    }
+    await loadOverview({ forceTableStats: false });
+  });
+}
+
+async function handleRedisHierarchySelect(keys: (string | number)[]) {
+  const key = String(keys[0] || '');
+  if (!key) {
+    redisHierarchyPath.value = '';
+    return;
+  }
+  if (key.startsWith('redis-path-')) {
+    redisHierarchyPath.value = key.slice('redis-path-'.length);
+    return;
+  }
+  if (key.startsWith('redis-key-')) {
+    const objectName = key.slice('redis-key-'.length);
+    redisHierarchyPath.value = objectName.split(':').slice(0, -1).join(':');
+    await selectObject(workflow.connectionId, getActiveDatabaseName(workflow.connectionId), 'tables', objectName);
+  }
 }
 
 function openQueryTabByObject(record: ObjectRow, autoExecute = false) {
@@ -8189,18 +8690,27 @@ watch(
 watch(
   () => connectionForm.dbType,
   (dbType) => {
+    const spec = findSupportedDbType(dbType);
     const defaultPort = defaultPortForDbType(dbType);
-    if (dbType === 'SQLITE') {
+    if (spec?.requiresHost === false) {
       connectionForm.host = '';
-      connectionForm.port = defaultPort;
-      connectionForm.username = '';
-      connectionForm.password = '';
-      connectionForm.selectedDatabases = [];
+    }
+    if (spec?.requiresPort === false) {
+      connectionForm.port = 0;
     } else if (defaultPort > 0 && (!connectionForm.port || connectionForm.port <= 0)) {
       connectionForm.port = defaultPort;
     }
-    if (!isMultiDatabaseType(dbType)) {
+    if (spec?.supportsUsername === false || dbType === 'SQLITE') {
+      connectionForm.username = '';
+    }
+    if (spec?.supportsPassword === false || dbType === 'SQLITE') {
+      connectionForm.password = '';
+    }
+    if (!spec?.supportsDatabasePreview || !isMultiDatabaseType(dbType)) {
       connectionForm.selectedDatabases = [];
+    }
+    if (spec?.supportsDatabaseName === false) {
+      connectionForm.databaseName = '';
     } else if (connectionForm.databaseName === 'sample.db') {
       connectionForm.databaseName = '';
     }
@@ -8402,10 +8912,10 @@ function envTagClass(value?: string) {
 function envTagIcon(value?: string) {
   const env = normalizeEnv(value);
   if (env === 'PROD') {
-    return CloseCircleOutlined;
+    return SafetyCertificateOutlined;
   }
   if (env === 'TEST') {
-    return CheckCircleOutlined;
+    return ExperimentOutlined;
   }
   return ToolOutlined;
 }
@@ -8414,12 +8924,11 @@ function connectionStatusClass(connectionId?: number) {
   if (!connectionId) {
     return 'is-unknown';
   }
-  const conn = connections.value.find((item) => item.id === connectionId);
-  const status = conn?.lastTestStatus;
-  if (status === 'SUCCESS') {
+  const status = connectionRuntimeStatusMap.value[connectionId] || 'idle';
+  if (status === 'connected') {
     return 'is-success';
   }
-  if (status === 'FAIL') {
+  if (status === 'failed') {
     return 'is-failed';
   }
   return 'is-unknown';
@@ -8427,20 +8936,25 @@ function connectionStatusClass(connectionId?: number) {
 
 function connectionStatusText(connectionId?: number) {
   if (!connectionId) {
-    return '未测试';
+    return '未连接';
   }
-  const conn = connections.value.find((item) => item.id === connectionId);
-  const status = conn?.lastTestStatus;
-  if (status === 'SUCCESS') {
+  const status = connectionRuntimeStatusMap.value[connectionId] || 'idle';
+  if (status === 'connected') {
     return '已连接';
   }
-  if (status === 'FAIL') {
+  if (status === 'failed') {
     return '连接失败';
   }
-  return '未测试';
+  return '未连接';
 }
 
 function nodeIconComponent(dataRef: { nodeType?: string }) {
+  if (dataRef.nodeType === 'group') {
+    return FolderOpenOutlined;
+  }
+  if (dataRef.nodeType === 'group-empty') {
+    return MinusCircleOutlined;
+  }
   if (dataRef.nodeType === 'database') {
     return DatabaseOutlined;
   }
@@ -8779,6 +9293,7 @@ function defaultConnectionForm(): ConnectionCreateReq {
   return {
     name: '新建连接',
     dbType: 'MYSQL',
+    groupId: undefined,
     host: '',
     port: 0,
     databaseName: '',
@@ -8803,6 +9318,9 @@ function defaultConnectionForm(): ConnectionCreateReq {
 
 function resetConnectionForm() {
   Object.assign(connectionForm, defaultConnectionForm());
+  if (connectionGroups.value.length) {
+    connectionForm.groupId = connectionGroups.value[0].id;
+  }
   ensureConnectionFormDbType();
 }
 
@@ -8810,6 +9328,7 @@ function fillConnectionForm(connection: ConnectionVO) {
   Object.assign(connectionForm, {
     name: connection.name,
     dbType: connection.dbType,
+    groupId: connection.groupId,
     host: connection.host ?? '',
     port: connection.port ?? 0,
     databaseName: connection.databaseName ?? '',
@@ -8944,6 +9463,7 @@ function resetConnectionModalState() {
 }
 
   return {
+    connectionGroups,
     ragLocalOnnxEnabled,
     ragProviderTypeOptions,
     browserTabKey,
@@ -8987,6 +9507,9 @@ function resetConnectionModalState() {
     vectorizeOverviewModalOpen,
     vectorizeOverviewLoading,
     vectorizeOverviewData,
+    groupModalOpen,
+    groupModalSubmitting,
+    groupForm,
     saveQueryModalOpen,
     saveQuerySubmitting,
     saveQueryTitle,
@@ -9061,6 +9584,11 @@ function resetConnectionModalState() {
     tableDetailLoading,
     kvObjectDetail,
     kvObjectDetailLoading,
+    redisHierarchyPath,
+    redisKeyModalOpen,
+    redisKeyModalSubmitting,
+    redisKeyModalMode,
+    redisKeyForm,
     objectDefinitionDetail,
     objectDefinitionDetailLoading,
     queryEditorPaneRef,
@@ -9146,14 +9674,20 @@ function resetConnectionModalState() {
     canCreateView,
     canCreateFunction,
     connectionSelectOptions,
+    connectionGroupOptions,
+    connectionFormDbTypeSpec,
     isMultiDatabaseFormType,
     connectionPreviewSelectOptions,
     canPreviewDatabases,
     connectionTreeData,
     objectRows,
+    activeConnectionIsRedis,
+    redisHierarchyTreeData,
+    redisVisibleObjectRows,
     selectedObjectRecord,
     selectedTreeDetail,
     selectedTreeConnection,
+    selectedTreeGroup,
     selectedTreeDatabaseStatusLabel,
     selectedTreeDatabaseTableCount,
     selectedTreeDatabaseColumnCount,
@@ -9275,6 +9809,11 @@ function resetConnectionModalState() {
     stopVectorizeStatusPolling,
     loadConnections,
     refreshConnections,
+    openCreateGroupModal,
+    openRenameGroupModal,
+    closeGroupModal,
+    confirmGroupModal,
+    removeConnectionGroup,
     saveConnection,
     previewConnectionDatabases,
     testConnection,
@@ -9316,6 +9855,7 @@ function resetConnectionModalState() {
     loadTreeChildrenByKey,
     handleTreeSelect,
     handleTreeExpand,
+    handleConnectionTreeDrop,
     handleTreeRightClick,
     closeContextMenu,
     loadSavedQueries,
@@ -9326,6 +9866,12 @@ function resetConnectionModalState() {
     selectObject,
     loadObjectDetail,
     clearObjectDetail,
+    openCreateRedisKeyModal,
+    openEditRedisKeyModal,
+    closeRedisKeyModal,
+    confirmRedisKeyModal,
+    deleteRedisKey,
+    handleRedisHierarchySelect,
     openQueryTabByObject,
     openSaveQueryModal,
     saveCurrentQuery,
