@@ -24,12 +24,13 @@ function createWindow() {
     ...(useTitleBarOverlay
       ? {
           titleBarOverlay: {
-            color: '#00000000',
-            height: 35,
+            color: '#ececec',
+            symbolColor: '#1e1e1e',
+            height: 38,
           },
         }
       : {}),
-    backgroundColor: '#f8faff',
+    backgroundColor: '#ececec',
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,

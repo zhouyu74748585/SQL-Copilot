@@ -306,10 +306,10 @@
                   @dblclick.stop="handleTreeNodeDblclick(dataRef)"
                 >
                   <img
-                    v-if="dataRef.nodeType === 'connection' && dbIconUrl(dataRef.dbType)"
+                    v-if="treeTitleIconSrc(dataRef)"
                     class="tree-icon-img"
-                    :src="dbIconUrl(dataRef.dbType)"
-                    alt="db"
+                    :src="treeTitleIconSrc(dataRef)"
+                    alt=""
                   />
                   <component
                     v-else
@@ -3834,7 +3834,7 @@ const {
     copyTextContent,
     copyCreateTableSql,
     copyTableEditorSql,
-    dbIconUrl,
+    treeTitleIconSrc,
     normalizeModelOptions,
     nextModelOptionId,
     addOpenAiModelOption,

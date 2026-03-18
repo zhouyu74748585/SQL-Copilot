@@ -47,13 +47,20 @@ import {getApi, postApi, postSseApi} from '../../../api/client';
 import QueryChartPanel from '../../../components/QueryChartPanel.vue';
 import ErDiagramPanel from '../../../components/ErDiagramPanel.vue';
 import TableEditor from '../../../components/TableEditor.vue';
-import mongodbIcon from '../../../assets/db/mongodb.svg';
-import mysqlIcon from '../../../assets/db/mysql.svg';
-import oracleIcon from '../../../assets/db/oracle.svg';
-import postgresqlIcon from '../../../assets/db/postgresql.svg';
-import redisIcon from '../../../assets/db/redis.svg';
-import sqliteIcon from '../../../assets/db/sqlite.svg';
-import sqlserverIcon from '../../../assets/db/sqlserver.svg';
+import mongoIcon from '../../../assets/icons/mongo.png';
+import mysqlIcon from '../../../assets/icons/mysql.png';
+import oracleIcon from '../../../assets/icons/oracle.png';
+import postgresqlIcon from '../../../assets/icons/postgresql.svg';
+import redisIcon from '../../../assets/icons/redis.png';
+import sqliteIcon from '../../../assets/icons/sqlite.png';
+import sqlserverIcon from '../../../assets/icons/sqlserver.svg';
+import treeDatabaseIcon from '../../../assets/icons/tree-database.png';
+import treeTablesGroupIcon from '../../../assets/icons/tree-tables-group.png';
+import treeViewsGroupIcon from '../../../assets/icons/tree-views-group.png';
+import treeTableIcon from '../../../assets/icons/tree-table.png';
+import treeViewIcon from '../../../assets/icons/tree-view.png';
+import treeFunctionIcon from '../../../assets/icons/tree-function.png';
+import treeQueryIcon from '../../../assets/icons/tree-query.png';
 import {
   normalizeRagProviderByPackage,
   ragLocalOnnxEnabled,
@@ -1045,16 +1052,22 @@ const isDarkTheme = computed(() => uiTheme.value === 'dark');
 
 const monacoTheme = computed(() => (isDarkTheme.value ? 'vs-dark' : 'vs'));
 
+const antdFont =
+  "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', 'PingFang SC', 'Microsoft YaHei', sans-serif";
+
 const antdThemeConfig = computed(() => ({
   algorithm: isDarkTheme.value ? darkAlgorithm : defaultAlgorithm,
   token: {
-    colorPrimary: isDarkTheme.value ? '#5aa2ff' : '#1677ff',
-    colorInfo: isDarkTheme.value ? '#5aa2ff' : '#1677ff',
-    colorSuccess: isDarkTheme.value ? '#33c2a0' : '#16a085',
-    colorWarning: isDarkTheme.value ? '#efb24f' : '#d9902b',
-    colorError: isDarkTheme.value ? '#ee7b96' : '#d65b78',
-    borderRadius: 0,
+    colorPrimary: isDarkTheme.value ? '#569cd6' : '#4078c0',
+    colorInfo: isDarkTheme.value ? '#569cd6' : '#4078c0',
+    colorSuccess: isDarkTheme.value ? '#3cbf9a' : '#2d8f6b',
+    colorWarning: isDarkTheme.value ? '#d4a520' : '#b8860b',
+    colorError: isDarkTheme.value ? '#e0788f' : '#c44c6a',
+    colorBgContainer: isDarkTheme.value ? '#252526' : '#f7f7f7',
+    colorBorderSecondary: isDarkTheme.value ? 'rgba(255,255,255,0.09)' : 'rgba(0,0,0,0.1)',
+    borderRadius: 2,
     wireframe: false,
+    fontFamily: antdFont,
   },
   components: {
     Button: {
@@ -1065,6 +1078,9 @@ const antdThemeConfig = computed(() => ({
     },
     Select: {
       controlHeightSM: 28,
+    },
+    Tree: {
+      titleHeight: 22,
     },
   },
 }));
@@ -8585,7 +8601,7 @@ function dbIconUrl(dbType: string) {
     return mysqlIcon;
   }
   if (dbType === 'MONGODB') {
-    return mongodbIcon;
+    return mongoIcon;
   }
   if (dbType === 'POSTGRESQL') {
     return postgresqlIcon;
@@ -8603,6 +8619,37 @@ function dbIconUrl(dbType: string) {
     return oracleIcon;
   }
   return '';
+}
+
+/** 对象树非连接节点用 Icons8 资源；events/backups 等返回空串以回退 Ant 图标 */
+function treeNodeIconUrl(dataRef: { nodeType?: string; objectName?: string }) {
+  const t = dataRef.nodeType;
+  if (!t || t === 'connection') {
+    return '';
+  }
+  if (t === 'database') {
+    return treeDatabaseIcon;
+  }
+  if (t === 'tables') {
+    return dataRef.objectName ? treeTableIcon : treeTablesGroupIcon;
+  }
+  if (t === 'views') {
+    return dataRef.objectName ? treeViewIcon : treeViewsGroupIcon;
+  }
+  if (t === 'functions') {
+    return treeFunctionIcon;
+  }
+  if (t === 'queries') {
+    return treeQueryIcon;
+  }
+  return '';
+}
+
+function treeTitleIconSrc(dataRef: { nodeType?: string; dbType?: string; objectName?: string }) {
+  if (dataRef.nodeType === 'connection') {
+    return dbIconUrl(String(dataRef.dbType || ''));
+  }
+  return treeNodeIconUrl(dataRef);
 }
 
 function normalizeModelOptions(options: AiModelOption[] | undefined) {
@@ -9342,6 +9389,8 @@ function resetConnectionModalState() {
     copyCreateTableSql,
     copyTableEditorSql,
     dbIconUrl,
+    treeNodeIconUrl,
+    treeTitleIconSrc,
     normalizeModelOptions,
     nextModelOptionId,
     addOpenAiModelOption,

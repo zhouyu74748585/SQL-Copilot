@@ -4,6 +4,11 @@ const path = require('path');
 const electronBinary = require('electron');
 const rawArgs = process.argv.slice(2);
 const env = { ...process.env };
+if (!env.NO_PROXY) {
+  env.NO_PROXY = 'localhost,127.0.0.1';
+} else if (!env.NO_PROXY.includes('localhost') && !env.NO_PROXY.includes('127.0.0.1')) {
+  env.NO_PROXY = `localhost,127.0.0.1,${env.NO_PROXY}`;
+}
 const electronArgs = [];
 
 delete env.ELECTRON_RUN_AS_NODE;
