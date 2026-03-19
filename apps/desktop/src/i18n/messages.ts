@@ -89,6 +89,7 @@ const zhToEnExact: Record<string, string> = {
   '键树表': 'Key Tree Table',
   '层级结构': 'Hierarchy',
   '键列表': 'Key List',
+  '键名称': 'Key Name',
   '节点类型': 'Node Type',
   '目录': 'Folder',
   '键': 'Key',

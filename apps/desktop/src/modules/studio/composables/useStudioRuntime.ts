@@ -1885,7 +1885,7 @@ const objectColumns = computed(() => {
     if (isKvDbType(activeDbType)) {
       if (activeDbType === 'REDIS') {
         return [
-          { title: '名称', dataIndex: 'nodeName', key: 'nodeName', width: 320, ellipsis: true },
+          { title: '键名称', dataIndex: 'nodeName', key: 'nodeName', width: 320, ellipsis: true },
           { title: '节点类型', dataIndex: 'redisNodeType', key: 'redisNodeType', width: 120 },
           { title: '值类型', dataIndex: 'tableSize', key: 'tableSize', width: 140 },
           { title: 'TTL', dataIndex: 'ttlSeconds', key: 'ttlSeconds', width: 120 },
