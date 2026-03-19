@@ -66,3 +66,345 @@
 ## 遗留项
 - 当前为兼容老旧 SQL Server，后端默认开启了 legacy TLS 能力；如目标环境不需要兼容 TLS1.0/TLS1.1，可通过 `-Dsqlcopilot.legacy-tls.enabled=false` 或环境变量 `SQLCOPILOT_LEGACY_TLS_ENABLED=false` 关闭。
 - 本轮验证发现 `18080` 端口已被现有进程占用，因此 clean 启动验证改在 `18084` 完成；当前保留 `18084` 后端实例和 `4173` 前端预览实例供继续回归。
+
+
+### 2026-03-19 11:42:22
+
+## 本次目标
+- 将 Redis 中间区域改为单一可展开树表格，保留右侧详情展示。
+- 将 Redis 键浏览与搜索从全量拉取改为服务端按需扫描，降低大库下的卡顿。
+
+## 关键改动
+- `apps/server/src/main/java/com/sqlcopilot/studio/controller/KvController.java`
+  - 新增 `GET /api/kv/redis/browser`，支持 `connectionId/databaseName/parentPath/keyword/cursor/pageSize` 查询。
+- `apps/server/src/main/java/com/sqlcopilot/studio/service/KvService.java`
+  - 新增 Redis 树表浏览服务方法。
+- `apps/server/src/main/java/com/sqlcopilot/studio/service/impl/KvServiceImpl.java`
+  - Redis 浏览改为“当前路径 + 服务端分页 SCAN”。
+  - 返回直接子节点（PATH/KEY），并对当前页 KEY 批量补齐 `TYPE/TTL`。
+  - 增加最大扫描轮次与较大批次扫描，避免根层级为凑满一页而长时间阻塞。
+  - Redis `overview` 不再承担中间区全量键扫描职责。
+- `apps/server/src/main/java/com/sqlcopilot/studio/dto/kv/KvRedisBrowserPageVO.java`
+  - 新增 Redis 树表分页结果 DTO。
+- `apps/server/src/main/java/com/sqlcopilot/studio/dto/kv/KvRedisBrowserNodeVO.java`
+  - 新增 Redis 树表节点 DTO。
+- `apps/desktop/src/modules/studio/composables/useStudioRuntime.ts`
+  - 新增 Redis 树表状态：根路径、展开行、分页缓存、子节点加载状态。
+  - 顶部搜索改为 300ms 防抖后走后端 `/api/kv/redis/browser`。
+  - 路径切换、展开子节点、加载更多、刷新当前路径均改为按需请求。
+  - 右侧详情继续复用 `GET /api/kv/object/detail`，点击路径节点不清空当前键详情。
+- `apps/desktop/src/modules/studio/composables/useConnectionBrowserModule.ts`
+  - Redis 行交互改造：PATH 行切换当前路径，LOAD_MORE 行继续分页，KEY 行保留现有详情/右键行为。
+- `apps/desktop/src/modules/studio/components/StudioShell.vue`
+  - 删除原有“左层级树 + 右列表”布局，改为单一树表格。
+  - 树表格列调整为“名称 / 节点类型 / 值类型 / TTL / 说明”。
+  - 顶部新增“返回上级 / 根层级”入口。
+- `apps/desktop/src/types/index.ts` 与 `apps/desktop/src/i18n/messages.ts`
+  - 补齐 Redis 树表相关前端类型与中英双语文案。
+
+## 验证结果
+- 前端类型检查通过：`npm run type-check`
+- 前端构建通过：`npm run build`
+- 后端 Maven clean 打包通过：`mvn -f apps/server/pom.xml clean package`
+- 后端 clean 启动通过：`SQLCOPILOT_DATA_DIR=/Users/zhouyu/IdeaProjects/SQL_Copilot mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18086`
+- 前端预览通过：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4174 --strictPort`
+- 探活通过：`curl http://127.0.0.1:18086/actuator`
+- Redis 树表接口通过：
+  - `GET /api/kv/redis/browser?connectionId=2&databaseName=0&parentPath=&keyword=&cursor=0&pageSize=20` 成功返回根层路径节点。
+  - `GET /api/kv/redis/browser?...&parentPath=07061f03-49ce-43f8-bf58-219372285524` 成功返回子层路径节点。
+  - `GET /api/kv/redis/browser?...&keyword=account_refresh_token` 成功返回命中搜索结果的路径节点。
+  - 递归浏览后 `GET /api/kv/object/detail?connectionId=2&databaseName=0&objectName=account_refresh_token:045fe994-1438-4835-9e07-9cf79ab9123d` 成功返回详情。
+
+## 遗留项
+- 当前桌面前端 `apps/desktop/src/api/client.ts` 仍固定请求 `http://localhost:18080`；本轮因 `18080` 已被现有 Java 进程占用，clean 启动验证改在 `18086` 完成，因此 preview 的人工点击联调若要命中新后端，需要先释放 `18080` 或后续将前端 API 基址改为可配置。
+- 当前保留了后端 `18086` 与前端 preview `4174` 进程，方便继续人工回归。
+
+
+### 2026-03-19 13:49:23
+
+## 本次目标
+- 将 Redis 树表改为同页内联展开，不再通过点击 PATH 节点进入内层页面。
+- 让 PATH 节点支持右键递归删除整棵前缀。
+- 将 Redis 键搜索改为全库 Redis glob 通配符搜索。
+
+## 关键改动
+- `apps/server/src/main/java/com/sqlcopilot/studio/dto/kv/KvRedisKeyDeleteReq.java`
+  - 删除请求从单一 `keyName` 升级为 `targetType + targetValue`。
+- `apps/server/src/main/java/com/sqlcopilot/studio/dto/kv/KvRedisKeyDeleteVO.java`
+  - 新增 Redis 删除结果对象，返回目标类型、目标值、删除数量与消息。
+- `apps/server/src/main/java/com/sqlcopilot/studio/controller/KvController.java`
+  - `/api/kv/redis/key/delete` 改为返回结构化删除结果。
+- `apps/server/src/main/java/com/sqlcopilot/studio/service/KvService.java`
+  - Redis 删除服务签名改为返回 `KvRedisKeyDeleteVO`。
+- `apps/server/src/main/java/com/sqlcopilot/studio/service/impl/KvServiceImpl.java`
+  - PATH 删除改为按前缀执行递归扫描与批量删除。
+  - Redis 搜索不再转义 `*`、`?`、`[]`，直接按 glob 语法匹配。
+  - 搜索结果改为“命中 key + 祖先 PATH 节点”的树化返回。
+- `apps/desktop/src/modules/studio/composables/useConnectionBrowserModule.ts`
+  - PATH 点击/双击改为同页展开/收起。
+  - PATH 节点右键菜单放开，仅提供递归删除入口；LOAD_MORE 仍不弹菜单。
+- `apps/desktop/src/modules/studio/composables/useStudioRuntime.ts`
+  - 搜索态与浏览态分离：搜索态直接构建命中树并自动展开 PATH；浏览态继续保留分支懒加载与展开记忆。
+  - Redis 删除统一增加确认弹窗，并按 KEY/PATH 区分提示文案。
+- `apps/desktop/src/modules/studio/components/StudioShell.vue`
+  - 移除“返回上级 / 根层级”的页面级导航按钮。
+  - 顶部改为展示当前 glob 搜索标签；中间树表仅保留同页内联展开。
+- `apps/desktop/src/types/index.ts` 与 `apps/desktop/src/i18n/messages.ts`
+  - 补齐 Redis 删除结果、请求模型与新增文案映射。
+
+## 验证结果
+- 前端类型检查通过：`npm run type-check`
+- 前端构建通过：`npm run build`
+- 后端 Maven clean 打包通过：`mvn -f apps/server/pom.xml clean package`
+- 后端 clean 启动通过：`SQLCOPILOT_DATA_DIR=/Users/zhouyu/IdeaProjects/SQL_Copilot mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18088`
+- 前端预览通过：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4176 --strictPort`
+- 探活通过：`curl http://127.0.0.1:18088/actuator`
+- Redis 根层浏览通过：`GET /api/kv/redis/browser?connectionId=2&databaseName=0&parentPath=&keyword=&cursor=0&pageSize=20`
+- Redis glob 搜索通过：`GET /api/kv/redis/browser?connectionId=2&databaseName=0&parentPath=&keyword=account_refresh_token*&cursor=0&pageSize=20`
+- 非破坏性 KEY 删除验证通过：删除不存在键 `__codex_nonexistent_key__` 返回 `deletedCount=0`
+
+## 遗留项
+- 对 live Redis 执行“PATH 不存在前缀”的非破坏性删除验证时，请求在 40s 内未返回；这是因为当前实现按计划使用 `SCAN + 批量 DEL` 做整库前缀扫描，面对大库即使目标不存在也需要完整遍历。
+- 当前桌面前端 API 基址仍固定为 `http://localhost:18080`，而本轮 clean 启动验证在 `18088` 完成；因此若要在 preview 中手工联调最新后端能力，需要先释放 `18080` 或后续将前端 API 基址改为可配置。
+- 当前保留了后端 `18088` 与前端 preview `4176` 进程供继续回归。
+
+
+### 2026-03-19 14:12:57
+
+## 本次目标
+- 调整 Redis “新增键”入口位置：从右侧详情区移到中间工具栏，并放在“新建查询”旁边。
+
+## 关键改动
+- `apps/desktop/src/modules/studio/components/StudioShell.vue`
+  - 在 Redis 对象浏览场景下，将“新增键”按钮添加到中间工具栏的“新建查询”右侧。
+  - 从右侧详情区的“键操作”中移除“新增键”按钮，保留“编辑键”“删除键”。
+
+## 验证结果
+- 前端类型检查通过：`npm run type-check`
+- 前端构建通过：`npm run build`
+- 后端 clean 启动通过：`SQLCOPILOT_DATA_DIR=/Users/zhouyu/IdeaProjects/SQL_Copilot mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18089`
+- 前端预览通过：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4177 --strictPort`
+- 探活通过：`curl http://127.0.0.1:18089/actuator` 与 `curl -I http://127.0.0.1:4177/`
+
+## 遗留项
+- 当前桌面前端 API 基址仍固定指向 `http://localhost:18080`，本轮 clean 启动验证使用的是 `18089`，因此 preview 的人工点击联调若要命中新后端，仍需要释放 `18080` 或后续将前端 API 基址改为可配置。
+- 当前保留了后端 `18089` 与前端 preview `4177` 进程，便于继续回归。
+
+
+### 2026-03-19 14:24:24
+
+## 本次目标
+- 让 Redis 树表格的展开按钮默认显示，避免依赖组件默认行为导致展开列不稳定。
+
+## 关键改动
+- `apps/desktop/src/modules/studio/components/StudioShell.vue`
+  - 为 Redis 树表格的 `expandable` 显式补齐 `showExpandColumn: true`。
+  - 固定展开列位置与宽度：`expandIconColumnIndex: 0`、`columnWidth: 52`。
+
+## 验证结果
+- 前端类型检查通过：`npm run type-check`
+- 前端构建通过：`npm run build`
+- 后端 clean 启动通过：`SQLCOPILOT_DATA_DIR=/Users/zhouyu/IdeaProjects/SQL_Copilot mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18089`
+- 前端预览通过：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4177 --strictPort`
+- 探活通过：`curl http://127.0.0.1:18089/actuator` 与 `curl -I http://127.0.0.1:4177/`
+
+## 遗留项
+- 当前 preview 仍默认请求 `18080`，而 clean 启动验证使用的是 `18089`；若要继续人工联调最新后端，仍建议后续将前端 API 基址改为可配置。
+
+
+### 2026-03-19 14:30:15
+
+## 本次目标
+- 修复目录节点右键删除误按精确 KEY 删除的问题，确保 PATH 节点能正确按前缀删除。
+
+## 关键改动
+- `apps/desktop/src/modules/studio/composables/useConnectionBrowserModule.ts`
+  - 在触发右键动作前，先缓存 `redisNodeType`，避免 `closeContextMenu()` 清空状态后把 PATH 误判成 KEY。
+  - `copy/edit/delete` Redis 菜单动作统一改为使用缓存后的 `redisNodeType`。
+
+## 验证结果
+- 前端类型检查通过：`npm run type-check`
+- 前端构建通过：`npm run build`
+- 后端 clean 启动通过：`SQLCOPILOT_DATA_DIR=/Users/zhouyu/IdeaProjects/SQL_Copilot mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18090`
+- 前端预览通过：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4178 --strictPort`
+- 探活通过：`curl http://127.0.0.1:18090/actuator` 与 `curl -I http://127.0.0.1:4178/`
+
+## 遗留项
+- 当前 preview 仍默认请求 `18080`，而 clean 启动验证使用的是 `18090`；若要继续人工联调最新后端，仍建议后续将前端 API 基址改为可配置。
+
+
+### 2026-03-19 14:46:06
+
+## 本次目标
+- 修复目录节点删除时误走精确 KEY 删除的问题。
+- 删除目录时补上路径分隔符，避免误删同前缀但不同层级的键。
+- 删除确认后前端不再阻塞等待整个请求返回。
+
+## 关键改动
+- `apps/server/src/main/java/com/sqlcopilot/studio/service/impl/KvServiceImpl.java`
+  - PATH 删除改为：先删除精确键 `path`，再按 `path:*` 扫描与删除，不再使用 `path*` 模糊前缀。
+  - 这样可避免把 `foobar` 这类同前缀但非子层级键误删。
+- `apps/desktop/src/modules/studio/composables/useStudioRuntime.ts`
+  - Redis 删除确认弹窗点击“删除”后立即关闭，后台继续执行删除与刷新，避免用户长时间卡在确认态。
+  - PATH 删除后的选中详情清理也改为仅匹配精确路径或 `path:` 下级，不再用宽松 `startsWith(path)`。
+
+## 验证结果
+- 前端类型检查通过：`npm run type-check && npm run build`
+- 后端 Maven clean 打包通过：`mvn -f apps/server/pom.xml clean package`
+- 本轮以构建验证为主；当前仍保留之前的 clean 启动实例可继续人工回归。
+
+## 遗留项
+- 当前 preview 仍默认请求 `18080`，如果要人工验证最新后端行为，仍建议后续将前端 API 基址改为可配置。
+- 目录删除在大库下仍可能耗时，因为后端仍需执行前缀扫描；本轮主要修复的是“误删范围”和“前端等待体验”。
+
+
+### 2026-03-19 14:54:49
+
+## 本次目标
+- 调整 PATH 删除规则：目录节点只删除 `path:*`，不再额外删除精确 `path`。
+- 删除确认后立即关闭确认框，避免前端看起来一直在等待。
+
+## 关键改动
+- `apps/server/src/main/java/com/sqlcopilot/studio/service/impl/KvServiceImpl.java`
+  - `deleteRedisPath()` 去掉精确键删除，改为仅按 `normalizedPrefix + ":*"` 扫描和删除。
+  - 这样目录节点删除严格限定在子层级键上。
+- `apps/desktop/src/modules/studio/composables/useStudioRuntime.ts`
+  - 删除确认弹窗 `onOk` 改为先 `resolve()` 关闭弹窗，再异步执行删除和刷新。
+  - 保留删除成功后的提示和树表刷新逻辑。
+
+## 验证结果
+- 前端类型检查与构建通过：`npm run type-check && npm run build`
+- 后端 Maven clean 打包通过：`mvn -f apps/server/pom.xml clean package`
+- 后端 clean 启动通过：`SQLCOPILOT_DATA_DIR=/Users/zhouyu/IdeaProjects/SQL_Copilot mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18091`
+- 前端预览通过：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4179 --strictPort`
+- 探活通过：`curl http://127.0.0.1:18091/actuator` 与 `curl -I http://127.0.0.1:4179/`
+
+## 遗留项
+- 目录删除在大库下仍可能耗时，因为后端仍需执行 `SCAN path:*` 全量遍历；本轮修的是误删范围和前端等待体验。
+- 当前 preview 仍默认请求 `18080`，若要人工联调最新后端行为，仍建议后续将前端 API 基址改为可配置。
+
+
+### 2026-03-19 15:40:09
+
+## 本次目标
+- 使用 `apps/desktop/src/assets/icons` 中的资源统一替换左侧树和中间对象展示区的图标。
+- 确保相同类型对象在左树和中间区使用同一套图标。
+- 区分 Redis PATH 节点的展开/收起图标。
+
+## 关键改动
+- `apps/desktop/src/modules/studio/composables/useStudioRuntime.ts`
+  - 新增统一的对象图标映射 `browserObjectIconSrc`。
+  - 左树 `treeTitleIconSrc` 增加展开态参数：分组/目录展开时使用打开文件夹图标，收起时使用关闭文件夹图标。
+  - 补齐 schema、Redis key、load more 等资源图标映射。
+- `apps/desktop/src/modules/studio/components/StudioShell.vue`
+  - 左树标题区改为按节点展开态选择图片图标。
+  - 中间表格行和卡片统一改为图片图标，不再使用 Ant Design 字体图标。
+  - Redis PATH 行图标会随展开/收起在关闭文件夹与打开文件夹之间切换。
+- `apps/desktop/src/modules/studio/styles/shell.css`
+  - 新增对象行图标与对象卡片图标样式，统一图片尺寸和对齐。
+
+## 验证结果
+- 前端类型检查与构建通过：`npm run type-check && npm run build`
+- 后端 clean 启动通过：`SQLCOPILOT_DATA_DIR=/Users/zhouyu/IdeaProjects/SQL_Copilot mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18092`
+- 前端预览通过：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4180 --strictPort`
+- 探活通过：`curl http://127.0.0.1:18092/actuator` 与 `curl -I http://127.0.0.1:4180/`
+
+## 遗留项
+- 当前 preview 仍默认请求 `18080`，若要人工联调最新后端行为，仍建议后续将前端 API 基址改为可配置。
+
+
+### 2026-03-19 15:57:13
+
+## 本次目标
+- 按要求仅使用 `apps/desktop/src/assets/icons` 下的图标资源。
+- 隐藏 Redis 树表格前置加减展开列，改为直接点击目录行展开/收起。
+- 将“新建分组 / 新建表 / 新建查询 / 智能ER图 / 新增键”等入口改为图标按钮并通过 hover 显示说明；“新建连接”保留文字。
+
+## 关键改动
+- `apps/desktop/src/modules/studio/components/StudioShell.vue`
+  - 左侧“新建连接”改为资源图标 + 文字；“新建分组”改为图标按钮 + tooltip。
+  - 中间工具栏中的“新建表 / 新建查询 / 智能ER图 / 新增键”统一改为图标按钮 + tooltip。
+  - Redis 树表的 `expandable.showExpandColumn` 改为 `false`，不再显示前置加减号展开列。
+- `apps/desktop/src/modules/studio/styles/shell.css`
+  - 新增工具栏资源图标样式，统一按钮尺寸和图标尺寸。
+
+## 验证结果
+- 前端类型检查与构建通过：`npm run type-check && npm run build`
+- 后端 clean 启动通过：`SQLCOPILOT_DATA_DIR=/Users/zhouyu/IdeaProjects/SQL_Copilot mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18093`
+- 前端预览通过：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4181 --strictPort`
+- 探活通过：`curl http://127.0.0.1:18093/actuator` 与 `curl -I http://127.0.0.1:4181/`
+
+## 遗留项
+- 当前 preview 仍默认请求 `18080`，若要人工联调最新后端行为，仍建议后续将前端 API 基址改为可配置。
+
+
+### 2026-03-19 16:10:52
+
+## 本次目标
+- 让 Redis 目录节点直接点击图标/行展开下级，不再依赖前置加减号。
+- 将左侧“我的连接”区域的“新建连接 / 新建分组 / 刷新”移动到标题同一行右侧。
+- 将“新建连接”也改成仅显示图标，通过 hover 显示说明。
+
+## 关键改动
+- `apps/desktop/src/modules/studio/components/StudioShell.vue`
+  - 左侧“我的连接”面板改用 `#extra` 槽位，在标题同一行右侧放置“新建连接 / 新建分组 / 刷新”图标按钮。
+  - “新建连接”改为图标按钮 + tooltip，不再直接显示文字。
+  - Redis 树表 `expandable.showExpandColumn` 改为 `false`，去掉前置加减号展开列。
+  - 中间工具栏中“新建分组 / 新建表 / 新建查询 / 智能ER图 / 新增键”等继续保持图标 + hover 提示。
+- `apps/desktop/src/modules/studio/styles/shell.css`
+  - 补充标题行工具按钮与图标样式，保证同一行对齐与 hover 呈现一致。
+
+## 验证结果
+- 前端类型检查与构建通过：`npm run type-check && npm run build`
+- 后端 clean 启动通过：`SQLCOPILOT_DATA_DIR=/Users/zhouyu/IdeaProjects/SQL_Copilot mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18094`
+- 前端预览通过：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4182 --strictPort`
+- 探活通过：`curl http://127.0.0.1:18094/actuator` 与 `curl -I http://127.0.0.1:4182/`
+
+## 遗留项
+- 当前 preview 仍默认请求 `18080`，若要人工联调最新后端行为，仍建议后续将前端 API 基址改为可配置。
+
+
+### 2026-03-19 16:21:53
+
+## 本次目标
+- 修复“新建表”按钮 hover 文案错误。
+- 进一步按要求把左侧“我的连接”标题行按钮移到同一行右侧，并把“新建连接”改为图标 + hover。
+
+## 关键改动
+- `apps/desktop/src/modules/studio/components/StudioShell.vue`
+  - 将“新建表”按钮 tooltip 从误用的智能 ER 提示改为“新建表”。
+  - 左侧“我的连接”面板改用 `#extra` 槽位承载“新建连接 / 新建分组 / 刷新”按钮。
+  - “新建连接”改为图标按钮 + tooltip，不再直接显示文字。
+- `apps/desktop/src/modules/studio/styles/shell.css`
+  - 复用并补齐工具栏图标按钮样式，保证标题行右侧按钮展示一致。
+
+## 验证结果
+- 前端类型检查与构建通过：`npm run type-check && npm run build`
+- 后端 clean 启动通过：`SQLCOPILOT_DATA_DIR=/Users/zhouyu/IdeaProjects/SQL_Copilot mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18095`
+- 前端预览通过：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4183 --strictPort`
+- 探活通过：`curl http://127.0.0.1:18095/actuator` 与 `curl -I http://127.0.0.1:4183/`
+
+## 遗留项
+- 当前 preview 仍默认请求 `18080`，若要人工联调最新后端行为，仍建议后续将前端 API 基址改为可配置。
+
+
+### 2026-03-19 16:31:28
+
+## 本次目标
+- 将视图、函数、知识中心中的“新建”按钮统一成图标 + hover 提示交互。
+
+## 关键改动
+- `apps/desktop/src/modules/studio/components/StudioShell.vue`
+  - “新建视图”改为 `tree-view.png` 图标按钮 + tooltip。
+  - “新建函数”改为 `tree-function.png` 图标按钮 + tooltip。
+  - 知识中心“新建术语/样例”改为图标按钮 + tooltip，沿用 `tree-add-folder.png` 资源保持统一风格。
+  - 相关“新建查询”按钮继续保持图标按钮风格，不再混用文字按钮。
+
+## 验证结果
+- 前端类型检查与构建通过：`npm run type-check && npm run build`
+- 后端 clean 启动通过：`SQLCOPILOT_DATA_DIR=/Users/zhouyu/IdeaProjects/SQL_Copilot mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18096`
+- 前端预览通过：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4184 --strictPort`
+- 探活通过：`curl http://127.0.0.1:18096/actuator` 与 `curl -I http://127.0.0.1:4184/`
+
+## 遗留项
+- 当前 preview 仍默认请求 `18080`，若要人工联调最新后端行为，仍建议后续将前端 API 基址改为可配置。

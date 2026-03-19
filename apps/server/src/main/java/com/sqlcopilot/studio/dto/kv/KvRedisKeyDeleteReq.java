@@ -4,7 +4,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 
-/** 删除 Redis 键请求对象。 */
+/** 删除 Redis 键/路径请求对象。 */
 @Data
 public class KvRedisKeyDeleteReq {
 
@@ -15,7 +15,11 @@ public class KvRedisKeyDeleteReq {
     /** 逻辑库名称。 */
     private String databaseName;
 
-    /** 键名。 */
+    /** 目标类型：KEY/PATH。 */
     @NotBlank
-    private String keyName;
+    private String targetType;
+
+    /** 目标值：键名或路径前缀。 */
+    @NotBlank
+    private String targetValue;
 }
