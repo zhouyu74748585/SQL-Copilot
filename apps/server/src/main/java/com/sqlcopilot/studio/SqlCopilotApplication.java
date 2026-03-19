@@ -12,9 +12,11 @@ import org.springframework.boot.autoconfigure.mongo.MongoAutoConfiguration;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
+import java.security.Security;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Objects;
+import java.util.StringJoiner;
 
 @SpringBootApplication(exclude = {
     MongoAutoConfiguration.class,
@@ -34,9 +36,13 @@ public class SqlCopilotApplication {
     private static final String DJL_CACHE_DIR_KEY = "DJL_CACHE_DIR";
     private static final String ENGINE_CACHE_DIR_KEY = "ENGINE_CACHE_DIR";
     private static final String SQLCOPILOT_DJL_CACHE_DIR_KEY = "sqlcopilot.djl.cache-dir";
+    private static final String SQLCOPILOT_LEGACY_TLS_ENABLED_KEY = "sqlcopilot.legacy-tls.enabled";
+    private static final String JDK_TLS_CLIENT_PROTOCOLS = "jdk.tls.client.protocols";
+    private static final String JDK_TLS_DISABLED_ALGORITHMS = "jdk.tls.disabledAlgorithms";
 
     public static void main(String[] args) {
         configureDjlCacheDir();
+        configureLegacyTlsCompatibility();
         SpringApplication.run(SqlCopilotApplication.class, args);
     }
 
@@ -94,6 +100,47 @@ public class SqlCopilotApplication {
             log.warn("Cannot use DJL cache dir {}: {}", cacheDir, ex.getMessage());
             return false;
         }
+    }
+
+    private static void configureLegacyTlsCompatibility() {
+        String enabled = trimToNull(System.getProperty(SQLCOPILOT_LEGACY_TLS_ENABLED_KEY));
+        if (enabled == null) {
+            enabled = trimToNull(System.getenv("SQLCOPILOT_LEGACY_TLS_ENABLED"));
+        }
+        if ("false".equalsIgnoreCase(enabled)) {
+            log.info("Legacy TLS compatibility disabled by config.");
+            return;
+        }
+
+        String currentProtocols = trimToNull(System.getProperty(JDK_TLS_CLIENT_PROTOCOLS));
+        if (currentProtocols == null || !currentProtocols.contains("TLSv1")) {
+            System.setProperty(JDK_TLS_CLIENT_PROTOCOLS, "TLSv1,TLSv1.1,TLSv1.2,TLSv1.3");
+        }
+
+        String originalDisabledAlgorithms = Objects.toString(Security.getProperty(JDK_TLS_DISABLED_ALGORITHMS), "");
+        String relaxedAlgorithms = removeDisabledLegacyTls(originalDisabledAlgorithms);
+        if (!Objects.equals(originalDisabledAlgorithms, relaxedAlgorithms)) {
+            Security.setProperty(JDK_TLS_DISABLED_ALGORITHMS, relaxedAlgorithms);
+        }
+        log.warn("Legacy TLS compatibility enabled for old database servers; disable with -D{}=false if not needed.",
+            SQLCOPILOT_LEGACY_TLS_ENABLED_KEY);
+    }
+
+    private static String removeDisabledLegacyTls(String originalValue) {
+        if (originalValue == null || originalValue.isBlank()) {
+            return Objects.toString(originalValue, "");
+        }
+        StringJoiner joiner = new StringJoiner(", ");
+        for (String item : originalValue.split(",")) {
+            String normalized = item == null ? "" : item.trim();
+            if ("TLSv1".equalsIgnoreCase(normalized) || "TLSv1.1".equalsIgnoreCase(normalized)) {
+                continue;
+            }
+            if (!normalized.isEmpty()) {
+                joiner.add(normalized);
+            }
+        }
+        return joiner.toString();
     }
 
     private static String trimToNull(String value) {

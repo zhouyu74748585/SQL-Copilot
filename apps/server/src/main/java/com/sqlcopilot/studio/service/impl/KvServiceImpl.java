@@ -65,26 +65,15 @@ public class KvServiceImpl implements KvService {
             return kvRuntimeClientFactory.withMongoClient(entity, connectionId, client -> {
                 List<SchemaDatabaseVO> result = new ArrayList<>();
                 for (String name : client.listDatabaseNames()) {
-                    SchemaDatabaseVO vo = new SchemaDatabaseVO();
-                    vo.setDatabaseName(name);
-                    vo.setVectorizeStatus("NOT_VECTORIZED");
-                    vo.setVectorizeMessage("KV 类型不进行元数据向量化");
-                    result.add(vo);
+                    result.add(buildKvDatabaseVo(name));
                 }
                 return result;
             });
         }
         if (DB_TYPE_REDIS.equals(dbType)) {
-            // Redis 默认有 16 个数据库 (0-15)
-            List<SchemaDatabaseVO> result = new ArrayList<>();
-            for (int i = 0; i < 16; i++) {
-                SchemaDatabaseVO vo = new SchemaDatabaseVO();
-                vo.setDatabaseName(String.valueOf(i));
-                vo.setVectorizeStatus("NOT_VECTORIZED");
-                vo.setVectorizeMessage("KV 类型不进行元数据向量化");
-                result.add(vo);
-            }
-            return result;
+            return kvRuntimeClientFactory.listRedisDatabases(entity, connectionId).stream()
+                .map(this::buildKvDatabaseVo)
+                .toList();
         }
         throw unsupportedDbType(dbType);
     }
@@ -837,6 +826,14 @@ public class KvServiceImpl implements KvService {
     private String resolveRedisDatabaseName(String databaseName) {
         String resolved = safe(databaseName);
         return resolved.isBlank() ? "0" : resolved;
+    }
+
+    private SchemaDatabaseVO buildKvDatabaseVo(String databaseName) {
+        SchemaDatabaseVO vo = new SchemaDatabaseVO();
+        vo.setDatabaseName(databaseName);
+        vo.setVectorizeStatus("NOT_VECTORIZED");
+        vo.setVectorizeMessage("KV 类型不进行元数据向量化");
+        return vo;
     }
 
     private long safeLong(Long value) {

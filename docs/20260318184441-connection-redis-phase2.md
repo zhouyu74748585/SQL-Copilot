@@ -31,3 +31,38 @@
 ## 遗留项
 - 当前已完成构建与启动验证，但尚未对“连接分组拖拽、Redis 层级导航、Redis 键 CRUD、SQL Server 默认 SSL 覆盖”等场景做完整人工点击回归。
 - `apps/server/src/main/java/com/sqlcopilot/studio/dto/connection/ConnectionUpdateReq.java` 在 Maven 编译阶段仍有 Lombok `equals/hashCode` 的既有 warning，本轮未扩散处理。
+
+
+### 2026-03-19 10:09:24
+
+## 本次目标
+- 修复 SQL Server 读取数据库列表时因服务端仅支持 TLS1.0 导致的握手失败。
+- 修复 Redis 连接树再次只展示单个逻辑库的问题。
+
+## 关键改动
+- `apps/server/src/main/java/com/sqlcopilot/studio/SqlCopilotApplication.java`
+  - 应用启动期预置 legacy TLS 兼容配置，允许老旧数据库服务器协商 `TLSv1/TLSv1.1`。
+  - 新增可选关闭开关 `-Dsqlcopilot.legacy-tls.enabled=false`。
+- `apps/server/src/main/java/com/sqlcopilot/studio/service/impl/ConnectionServiceImpl.java`
+  - SQL Server 建连改为三段兼容策略：默认 SSL -> 非加密降级 -> legacy TLS 重试。
+  - Redis 预览库列表改为复用统一的 Redis 库枚举逻辑。
+- `apps/server/src/main/java/com/sqlcopilot/studio/service/kv/KvRuntimeClientFactory.java`
+  - 新增 Redis 逻辑库枚举能力，优先通过 `CONFIG GET databases` 读取真实库数，失败时回退默认范围。
+- `apps/server/src/main/java/com/sqlcopilot/studio/service/impl/KvServiceImpl.java`
+  - Redis `/api/kv/databases` 改为走统一库枚举逻辑，不再写死单一路径。
+- `apps/desktop/src/modules/studio/composables/useStudioRuntime.ts`
+  - 去掉 Redis 数据库列表的单库硬编码，恢复按后端返回的逻辑库列表渲染连接树。
+
+## 验证结果
+- 前端类型检查通过：`npm run type-check`
+- 前端构建通过：`npm run build`
+- 后端 Maven clean 打包通过：`mvn -f apps/server/pom.xml clean package`
+- 后端 clean 启动通过：`SQLCOPILOT_DATA_DIR=/Users/zhouyu/IdeaProjects/SQL_Copilot mvn -f apps/server/pom.xml clean spring-boot:run -Dspring-boot.run.arguments=--server.port=18084`
+- 前端预览通过：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4173 --strictPort`
+- 探活通过：`curl http://127.0.0.1:18084/actuator`
+- Redis 实测通过：`curl http://127.0.0.1:18084/api/kv/databases?connectionId=2` 返回 `0-15` 共 16 个逻辑库。
+- SQL Server 实测通过：`curl http://127.0.0.1:18084/api/schema/databases?connectionId=3` 成功返回 `master/model/msdb/tempdb/WyglDB...` 等数据库列表。
+
+## 遗留项
+- 当前为兼容老旧 SQL Server，后端默认开启了 legacy TLS 能力；如目标环境不需要兼容 TLS1.0/TLS1.1，可通过 `-Dsqlcopilot.legacy-tls.enabled=false` 或环境变量 `SQLCOPILOT_LEGACY_TLS_ENABLED=false` 关闭。
+- 本轮验证发现 `18080` 端口已被现有进程占用，因此 clean 启动验证改在 `18084` 完成；当前保留 `18084` 后端实例和 `4173` 前端预览实例供继续回归。

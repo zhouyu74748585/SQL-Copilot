@@ -15,8 +15,11 @@ import com.sqlcopilot.studio.support.ConnectionSchemaMigrationRunner;
 import com.sqlcopilot.studio.support.driver.IsolatedJdbcConnectionManager;
 import com.sqlcopilot.studio.support.ssh.SshTunnelManager;
 import com.sqlcopilot.studio.util.BusinessException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.security.Security;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -26,6 +29,11 @@ import java.util.concurrent.atomic.AtomicLong;
 
 @Service
 public class ConnectionServiceImpl implements ConnectionService {
+
+    private static final Logger log = LoggerFactory.getLogger(ConnectionServiceImpl.class);
+    private static final Object SQLSERVER_LEGACY_TLS_LOCK = new Object();
+    private static final String JDK_TLS_CLIENT_PROTOCOLS = "jdk.tls.client.protocols";
+    private static final String JDK_TLS_DISABLED_ALGORITHMS = "jdk.tls.disabledAlgorithms";
 
     private static final String DB_TYPE_MYSQL = "MYSQL";
     private static final String DB_TYPE_POSTGRESQL = "POSTGRESQL";
@@ -384,6 +392,44 @@ public class ConnectionServiceImpl implements ConnectionService {
     private Connection openJdbcConnection(ConnectionEntity jdbcEntity, Long connectionId) throws SQLException {
         ConnectionEntity driverEntity = cloneForRuntime(jdbcEntity);
         driverEntity.setId(connectionId);
+        try {
+            return openJdbcConnectionOnce(driverEntity);
+        } catch (SQLException ex) {
+            if (!shouldRetrySqlServerWithoutEncryption(driverEntity, ex)) {
+                throw ex;
+            }
+            log.warn("SQL Server TLS 握手失败，自动降级为非加密连接重试, connectionId={}, host={}, port={}, reason={}",
+                connectionId,
+                safeValue(driverEntity.getHost()),
+                driverEntity.getPort(),
+                flattenExceptionMessage(ex));
+            // 关键兼容：优先尝试非加密连接，兼容未强制 SSL 的老版本 SQL Server。
+            ConnectionEntity fallbackEntity = buildSqlServerPlainConnectionEntity(driverEntity);
+            try {
+                return openJdbcConnectionOnce(fallbackEntity);
+            } catch (SQLException fallbackEx) {
+                fallbackEx.addSuppressed(ex);
+                if (!isSqlServerTlsProtocolFailure(fallbackEx)) {
+                    throw fallbackEx;
+                }
+                // 关键兼容：服务端强制 TLS 且仅支持 TLS1.0/1.1 时，临时放开本次握手协议重试。
+                ConnectionEntity legacyTlsEntity = buildSqlServerLegacyTlsConnectionEntity(driverEntity);
+                log.warn("SQL Server 仍返回旧版 TLS 协议，临时启用 legacy TLS 兼容重试, connectionId={}, host={}, port={}, reason={}",
+                    connectionId,
+                    safeValue(driverEntity.getHost()),
+                    driverEntity.getPort(),
+                    flattenExceptionMessage(fallbackEx));
+                try {
+                    return openJdbcConnectionWithLegacyTls(legacyTlsEntity);
+                } catch (SQLException legacyTlsEx) {
+                    legacyTlsEx.addSuppressed(fallbackEx);
+                    throw legacyTlsEx;
+                }
+            }
+        }
+    }
+
+    private Connection openJdbcConnectionOnce(ConnectionEntity driverEntity) throws SQLException {
         String url = JdbcUrlBuilder.build(driverEntity);
         return isolatedJdbcConnectionManager.open(
             driverEntity,
@@ -410,7 +456,7 @@ public class ConnectionServiceImpl implements ConnectionService {
             });
         }
         if (DB_TYPE_REDIS.equals(dbType)) {
-            return List.of(resolveRedisDatabaseName(entity.getDatabaseName()));
+            return kvRuntimeClientFactory.listRedisDatabases(entity, null);
         }
 
         long temporaryId = temporaryConnectionIdGenerator.decrementAndGet();
@@ -496,6 +542,118 @@ public class ConnectionServiceImpl implements ConnectionService {
         if (isSshEnabled(entity)) {
             validateSshConfig(entity);
         }
+    }
+
+    private boolean shouldRetrySqlServerWithoutEncryption(ConnectionEntity entity, SQLException ex) {
+        if (!DB_TYPE_SQLSERVER.equals(upper(entity.getDbType()))) {
+            return false;
+        }
+        Map<String, String> customParams = JdbcUrlBuilder.parseCustomParameters(entity.getCustomParams());
+        boolean encryptConfigured = customParams.keySet().stream().anyMatch(key -> "encrypt".equalsIgnoreCase(key));
+        if (encryptConfigured) {
+            return false;
+        }
+        return isSqlServerTlsProtocolFailure(ex);
+    }
+
+    private ConnectionEntity buildSqlServerPlainConnectionEntity(ConnectionEntity source) {
+        ConnectionEntity fallback = cloneForRuntime(source);
+        LinkedHashMap<String, String> params = new LinkedHashMap<>(JdbcUrlBuilder.parseCustomParameters(source.getCustomParams()));
+        params.put("encrypt", "false");
+        params.put("trustServerCertificate", "false");
+        fallback.setCustomParams(toCustomParameterText(params));
+        return fallback;
+    }
+
+    private ConnectionEntity buildSqlServerLegacyTlsConnectionEntity(ConnectionEntity source) {
+        ConnectionEntity fallback = cloneForRuntime(source);
+        LinkedHashMap<String, String> params = new LinkedHashMap<>(JdbcUrlBuilder.parseCustomParameters(source.getCustomParams()));
+        params.put("encrypt", "true");
+        params.put("trustServerCertificate", "true");
+        params.put("sslProtocol", "TLSv1");
+        fallback.setCustomParams(toCustomParameterText(params));
+        return fallback;
+    }
+
+    private Connection openJdbcConnectionWithLegacyTls(ConnectionEntity driverEntity) throws SQLException {
+        synchronized (SQLSERVER_LEGACY_TLS_LOCK) {
+            String originalClientProtocols = System.getProperty(JDK_TLS_CLIENT_PROTOCOLS);
+            String originalDisabledAlgorithms = Security.getProperty(JDK_TLS_DISABLED_ALGORITHMS);
+            try {
+                System.setProperty(JDK_TLS_CLIENT_PROTOCOLS, "TLSv1,TLSv1.1,TLSv1.2,TLSv1.3");
+                Security.setProperty(JDK_TLS_DISABLED_ALGORITHMS, relaxTlsDisabledAlgorithms(originalDisabledAlgorithms));
+                return openJdbcConnectionOnce(driverEntity);
+            } finally {
+                if (originalClientProtocols == null) {
+                    System.clearProperty(JDK_TLS_CLIENT_PROTOCOLS);
+                } else {
+                    System.setProperty(JDK_TLS_CLIENT_PROTOCOLS, originalClientProtocols);
+                }
+                if (originalDisabledAlgorithms != null) {
+                    Security.setProperty(JDK_TLS_DISABLED_ALGORITHMS, originalDisabledAlgorithms);
+                }
+            }
+        }
+    }
+
+    private String relaxTlsDisabledAlgorithms(String originalValue) {
+        String value = Objects.toString(originalValue, "");
+        if (value.isBlank()) {
+            return value;
+        }
+        StringJoiner joiner = new StringJoiner(", ");
+        for (String item : value.split(",")) {
+            String normalized = safeValue(item);
+            if ("TLSv1".equalsIgnoreCase(normalized) || "TLSv1.1".equalsIgnoreCase(normalized)) {
+                continue;
+            }
+            if (!normalized.isBlank()) {
+                joiner.add(normalized);
+            }
+        }
+        return joiner.toString();
+    }
+
+    private String toCustomParameterText(Map<String, String> params) {
+        if (params == null || params.isEmpty()) {
+            return "";
+        }
+        StringJoiner joiner = new StringJoiner("\n");
+        params.forEach((key, value) -> {
+            String normalizedKey = safeValue(key);
+            if (!normalizedKey.isBlank()) {
+                joiner.add(normalizedKey + "=" + safeValue(value));
+            }
+        });
+        return joiner.toString();
+    }
+
+    private boolean isSqlServerTlsProtocolFailure(Throwable throwable) {
+        String message = flattenExceptionMessage(throwable).toLowerCase(Locale.ROOT);
+        boolean sslContextFailure = message.contains("\"encrypt\" property")
+            || message.contains("trustservercertificate")
+            || message.contains("secure sockets layer")
+            || message.contains("ssl");
+        boolean protocolRejected = message.contains("tls")
+            || message.contains("protocol version")
+            || message.contains("no appropriate protocol")
+            || message.contains("protocol is disabled")
+            || message.contains("selected protocol version");
+        return sslContextFailure && protocolRejected;
+    }
+
+    private String flattenExceptionMessage(Throwable throwable) {
+        StringJoiner joiner = new StringJoiner(" | ");
+        Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        Throwable cursor = throwable;
+        while (cursor != null && visited.add(cursor)) {
+            String message = safeValue(cursor.getMessage());
+            if (!message.isBlank()) {
+                joiner.add(message);
+            }
+            cursor = cursor.getCause();
+        }
+        return joiner.toString();
     }
 
     private void validateSshConfig(ConnectionEntity entity) {

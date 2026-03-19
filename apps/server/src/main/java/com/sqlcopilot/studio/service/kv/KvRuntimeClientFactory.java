@@ -10,10 +10,12 @@ import com.sqlcopilot.studio.support.ssh.SshTunnelManager;
 import com.sqlcopilot.studio.util.BusinessException;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
+import io.lettuce.core.api.sync.RedisCommands;
 import io.lettuce.core.api.StatefulRedisConnection;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -43,6 +45,19 @@ public class KvRuntimeClientFactory {
 
     public <T> T withRedisConnection(ConnectionEntity entity, Long runtimeId, RedisConnectionCallback<T> callback) {
         return withRedisConnection(entity, runtimeId, null, callback);
+    }
+
+    public List<String> listRedisDatabases(ConnectionEntity entity, Long runtimeId) {
+        int configuredIndex = parseRedisDatabaseQuietly(entity == null ? null : entity.getDatabaseName());
+        int fallbackCount = Math.max(configuredIndex + 1, 16);
+        return withRedisConnection(entity, runtimeId, "0", connection -> {
+            int databaseCount = resolveRedisDatabaseCount(connection.sync(), fallbackCount);
+            List<String> result = new ArrayList<>(databaseCount);
+            for (int index = 0; index < databaseCount; index++) {
+                result.add(String.valueOf(index));
+            }
+            return result;
+        });
     }
 
     public <T> T withRedisConnection(ConnectionEntity entity,
@@ -116,6 +131,34 @@ public class KvRuntimeClientFactory {
         } catch (NumberFormatException ex) {
             throw new BusinessException(400, "Redis logical db 必须是非负整数");
         }
+    }
+
+    private int parseRedisDatabaseQuietly(String databaseName) {
+        String text = safe(databaseName);
+        if (text.isBlank()) {
+            return 0;
+        }
+        try {
+            int index = Integer.parseInt(text);
+            return Math.max(index, 0);
+        } catch (NumberFormatException ex) {
+            return 0;
+        }
+    }
+
+    private int resolveRedisDatabaseCount(RedisCommands<String, String> commands, int fallbackCount) {
+        try {
+            String value = safe(commands.configGet("databases").get("databases"));
+            if (!value.isBlank()) {
+                int parsed = Integer.parseInt(value);
+                if (parsed > 0) {
+                    return parsed;
+                }
+            }
+        } catch (Exception ignored) {
+            // 兼容禁用 CONFIG GET 的托管 Redis，回退到默认库范围。
+        }
+        return fallbackCount;
     }
 
     private RuntimeEndpoint resolveRuntimeEndpoint(ConnectionEntity entity, Long runtimeId) {

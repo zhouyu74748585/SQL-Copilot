@@ -4137,19 +4137,6 @@ async function prepareConnectionTreeData(connectionId: number, options?: { force
 
 async function loadDatabaseListForConnection(connectionId: number, options?: { force?: boolean }) {
   const connection = connections.value.find((item) => item.id === connectionId);
-  if (connection?.dbType === 'REDIS') {
-    const configuredDatabaseName = parseConfiguredDatabaseName(connection) || '0';
-    databaseListCache.value = {
-      ...databaseListCache.value,
-      [connectionId]: [configuredDatabaseName],
-    };
-    activeDatabaseMap.value = {
-      ...activeDatabaseMap.value,
-      [connectionId]: (activeDatabaseMap.value[connectionId] || configuredDatabaseName).trim() || configuredDatabaseName,
-    };
-    setConnectionRuntimeStatus(connectionId, 'connected');
-    return;
-  }
   if (!options?.force && databaseListCache.value[connectionId]?.length) {
     setConnectionRuntimeStatus(connectionId, 'connected');
     return;
@@ -4173,6 +4160,18 @@ async function loadDatabaseListForConnection(connectionId: number, options?: { f
   if (connection) {
     const visibleNames = visibleDatabasesForConnection(connection);
     const current = (activeDatabaseMap.value[connectionId] || '').trim();
+    if (!current && connection.dbType === 'REDIS') {
+      const configuredDatabaseName = parseConfiguredDatabaseName(connection);
+      const preferredDatabaseName = (configuredDatabaseName && databaseNames.includes(configuredDatabaseName))
+        ? configuredDatabaseName
+        : (databaseNames[0] || configuredDatabaseName || '0');
+      if (preferredDatabaseName) {
+        activeDatabaseMap.value = {
+          ...activeDatabaseMap.value,
+          [connectionId]: preferredDatabaseName,
+        };
+      }
+    }
     if (current && visibleNames.length && !isDatabaseContextVisibleForConnection(connection, current)) {
       activeDatabaseMap.value = {
         ...activeDatabaseMap.value,
