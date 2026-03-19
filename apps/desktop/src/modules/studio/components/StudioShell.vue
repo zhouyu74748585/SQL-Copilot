@@ -498,12 +498,6 @@
             <div class="object-browser-content">
               <div v-if="activeConnectionIsRedis && currentObjectType === 'tables'" class="redis-browser-layout">
                 <section class="redis-list-pane redis-table-pane">
-                  <div class="redis-hierarchy-toolbar">
-                    <div class="redis-toolbar-main">
-                      <span>键树表</span>
-                      <a-tag v-if="tableKeyword.trim()" color="blue">glob: {{ tableKeyword }}</a-tag>
-                    </div>
-                  </div>
                   <a-table
                     class="object-list-table redis-browser-table"
                     size="small"
