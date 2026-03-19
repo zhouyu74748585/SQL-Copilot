@@ -538,6 +538,14 @@ interface KnowledgeWorkspaceTab {
   updatedAt: number;
 }
 
+interface MemoryWorkspaceTab {
+  key: string;
+  node: 'entries' | 'history-sql';
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 type ErLineType = 'POLYLINE' | 'STRAIGHT';
 
 const browserTabKey = 'browser';
@@ -727,6 +735,8 @@ const tableDataTabs = ref<TableDataWorkspaceTab[]>([]);
 const objectDefinitionEditorTabs = ref<ObjectDefinitionEditorTab[]>([]);
 
 const knowledgeTabs = ref<KnowledgeWorkspaceTab[]>([]);
+
+const memoryTabs = ref<MemoryWorkspaceTab[]>([]);
 
 const erTableSelectModalOpen = ref(false);
 
@@ -1089,6 +1099,10 @@ const activeObjectDefinitionEditorTab = computed(() =>
 
 const activeKnowledgeTab = computed(() =>
   knowledgeTabs.value.find((item) => item.key === activeWorkbenchTab.value) ?? null,
+);
+
+const activeMemoryTab = computed(() =>
+  memoryTabs.value.find((item) => item.key === activeWorkbenchTab.value) ?? null,
 );
 
 const activeErConfidenceThreshold = computed(() => {
@@ -1954,7 +1968,7 @@ const workbenchStyle = computed(() => {
   if (viewportWidth.value < 1200) {
     return {};
   }
-  if (activeWorkbenchTab.value === browserTabKey || activeKnowledgeTab.value) {
+  if (activeWorkbenchTab.value === browserTabKey || activeKnowledgeTab.value || activeMemoryTab.value) {
     return {
       gridTemplateColumns: `${leftPaneWidth.value}px 1px minmax(460px, 1fr) 1px ${browserRightPaneWidth.value}px`,
     };
@@ -3369,6 +3383,7 @@ function hasWorkbenchTab(tabKey: string) {
   return queryTabs.value.some((item) => item.key === tabKey)
     || erTabs.value.some((item) => item.key === tabKey)
     || knowledgeTabs.value.some((item) => item.key === tabKey)
+    || memoryTabs.value.some((item) => item.key === tabKey)
     || tableEditorTabs.value.some((item) => item.key === tabKey)
     || objectDefinitionEditorTabs.value.some((item) => item.key === tabKey)
     || tableDataTabs.value.some((item) => item.key === tabKey);
@@ -3381,6 +3396,7 @@ function ensureActiveWorkbenchTab() {
   activeWorkbenchTab.value = queryTabs.value[0]?.key
     ?? erTabs.value[0]?.key
     ?? knowledgeTabs.value[0]?.key
+    ?? memoryTabs.value[0]?.key
     ?? tableEditorTabs.value[0]?.key
     ?? objectDefinitionEditorTabs.value[0]?.key
     ?? tableDataTabs.value[0]?.key
@@ -10436,6 +10452,7 @@ function resetConnectionModalState() {
     tableDataTabs,
     objectDefinitionEditorTabs,
     knowledgeTabs,
+    memoryTabs,
     erTableSelectModalOpen,
     erTableSelectSubmitting,
     erSelectConnectionId,
@@ -10549,6 +10566,7 @@ function resetConnectionModalState() {
     activeTableDataTab,
     activeObjectDefinitionEditorTab,
     activeKnowledgeTab,
+    activeMemoryTab,
     activeErConfidenceThreshold,
     activeErAiRelationTotal,
     activeErDisplayGraph,

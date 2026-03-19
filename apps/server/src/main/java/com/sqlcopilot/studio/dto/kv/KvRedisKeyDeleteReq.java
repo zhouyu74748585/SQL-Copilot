@@ -15,7 +15,12 @@ public class KvRedisKeyDeleteReq {
     /** 逻辑库名称。 */
     private String databaseName;
 
-    /** 键名。 */
-    @NotBlank
+    /** 删除目标类型：KEY/PATH。 */
+    private String targetType;
+
+    /** 删除目标值：键名或路径前缀。 */
+    private String targetValue;
+
+    /** 兼容旧请求结构的键名字段。 */
     private String keyName;
 }

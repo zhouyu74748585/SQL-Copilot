@@ -4,7 +4,9 @@ import com.sqlcopilot.studio.dto.common.ApiResponse;
 import com.sqlcopilot.studio.dto.kv.KvObjectDetailVO;
 import com.sqlcopilot.studio.dto.kv.KvOverviewVO;
 import com.sqlcopilot.studio.dto.kv.KvQueryExecuteReq;
+import com.sqlcopilot.studio.dto.kv.KvRedisBrowserPageVO;
 import com.sqlcopilot.studio.dto.kv.KvRedisKeyDeleteReq;
+import com.sqlcopilot.studio.dto.kv.KvRedisKeyDeleteVO;
 import com.sqlcopilot.studio.dto.kv.KvRedisKeySaveReq;
 import com.sqlcopilot.studio.dto.kv.KvRedisKeySaveVO;
 import com.sqlcopilot.studio.dto.schema.SchemaDatabaseVO;
@@ -38,6 +40,16 @@ public class KvController {
         return ApiResponse.success(kvService.getOverview(connectionId, databaseName));
     }
 
+    @GetMapping("/redis/browser")
+    public ApiResponse<KvRedisBrowserPageVO> browseRedis(@RequestParam("connectionId") Long connectionId,
+                                                         @RequestParam(value = "databaseName", required = false) String databaseName,
+                                                         @RequestParam(value = "parentPath", required = false) String parentPath,
+                                                         @RequestParam(value = "keyword", required = false) String keyword,
+                                                         @RequestParam(value = "cursor", required = false) String cursor,
+                                                         @RequestParam(value = "pageSize", required = false) Integer pageSize) {
+        return ApiResponse.success(kvService.browseRedis(connectionId, databaseName, parentPath, keyword, cursor, pageSize));
+    }
+
     @GetMapping("/object/detail")
     public ApiResponse<KvObjectDetailVO> objectDetail(@RequestParam("connectionId") Long connectionId,
                                                       @RequestParam(value = "databaseName", required = false) String databaseName,
@@ -61,8 +73,7 @@ public class KvController {
     }
 
     @PostMapping("/redis/key/delete")
-    public ApiResponse<Boolean> deleteRedisKey(@Valid @RequestBody KvRedisKeyDeleteReq req) {
-        kvService.deleteRedisKey(req);
-        return ApiResponse.success(Boolean.TRUE);
+    public ApiResponse<KvRedisKeyDeleteVO> deleteRedisKey(@Valid @RequestBody KvRedisKeyDeleteReq req) {
+        return ApiResponse.success(kvService.deleteRedisKey(req));
     }
 }

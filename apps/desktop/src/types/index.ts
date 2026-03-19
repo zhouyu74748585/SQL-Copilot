@@ -765,6 +765,8 @@ export interface SavedQueryRemoveReq {
 
 export type KnowledgeScope = 'GLOBAL' | 'CONNECTION' | 'DATABASE';
 
+export type MemoryScope = 'CONNECTION' | 'DATABASE';
+
 export interface KnowledgeTermVO {
   id: number;
   scope: KnowledgeScope;
@@ -812,6 +814,61 @@ export interface KnowledgeVectorRebuildVO {
   exampleCount: number;
   rebuiltAt?: number;
   message?: string;
+}
+
+export interface MemoryEntryVO {
+  id: number;
+  scope: MemoryScope;
+  connectionId: number;
+  databaseName?: string;
+  title: string;
+  summary: string;
+  sourceType: 'AUTO_SESSION' | 'PROMOTED_SQL' | 'MANUAL';
+  sourceSessionId?: string;
+  sourceHistoryIds?: number[];
+  hitCount?: number;
+  lastUsedAt?: number;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface MemoryEntrySaveReq {
+  id?: number;
+  scope: MemoryScope;
+  connectionId?: number;
+  databaseName?: string;
+  title: string;
+  summary: string;
+}
+
+export interface MemoryEntryPageVO {
+  pageNo: number;
+  pageSize: number;
+  total: number;
+  hasMore: boolean;
+  items: MemoryEntryVO[];
+}
+
+export interface MemoryHistoryVO {
+  historyId: number;
+  connectionId: number;
+  sessionId?: string;
+  promptText?: string;
+  sqlText: string;
+  databaseName?: string;
+  semanticSummary?: string;
+  tables?: string[];
+  sourceType?: string;
+  executionMs?: number;
+  createdAt?: number;
+}
+
+export interface MemoryHistoryPageVO {
+  pageNo: number;
+  pageSize: number;
+  total: number;
+  hasMore: boolean;
+  items: MemoryHistoryVO[];
 }
 
 export interface ChartCacheSaveReq {
@@ -1023,7 +1080,7 @@ export interface RagVectorizeOverviewVO {
   schemaTableVectorCount: number;
   schemaColumnVectorCount: number;
   sqlHistoryVectorCount: number;
-  sqlFragmentVectorCount: number;
+  managedMemoryVectorCount: number;
   metricTermVectorCount: number;
   exampleSqlVectorCount: number;
   globalVectorCount: number;

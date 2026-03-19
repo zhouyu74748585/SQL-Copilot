@@ -3,6 +3,7 @@ package com.sqlcopilot.studio.service.impl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sqlcopilot.studio.dto.ai.AiGenerateSqlReq;
 import com.sqlcopilot.studio.service.AiConfigService;
+import com.sqlcopilot.studio.service.MemoryService;
 import com.sqlcopilot.studio.service.SchemaService;
 import com.sqlcopilot.studio.service.llm.LlmGatewayService;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
@@ -24,6 +25,9 @@ class AiConversationContextManagerRetrievalInputTest {
     private AiConfigService aiConfigService;
 
     @Mock
+    private MemoryService memoryService;
+
+    @Mock
     private QdrantClientService qdrantClientService;
 
     @Mock
@@ -37,6 +41,7 @@ class AiConversationContextManagerRetrievalInputTest {
         AiConversationContextManager manager = new AiConversationContextManager(
             schemaService,
             aiConfigService,
+            memoryService,
             null,
             ragEmbeddingService,
             qdrantClientService,

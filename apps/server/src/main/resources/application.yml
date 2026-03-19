@@ -42,9 +42,9 @@ rag:
     schema-table: schema_table
     schema-column: schema_column
     sql-history: sql_history
+    managed-memory: managed_memory
     metric-term: metric_term
     example-sql: example_sql
-    sql-fragment: sql_fragment
   embedding:
     provider-type: ONLINE_OPENAI_COMPAT
     model-dir: ""
@@ -88,6 +88,3 @@ rag:
       base-url: https://api.openai.com/v1
       api-key: ""
       model: ""
-  sql-fragment:
-    enabled: true
-    max-count: 8

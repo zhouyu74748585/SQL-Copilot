@@ -23,6 +23,6 @@ public class RagCollectionNames {
     /** SQL 样例语义集合。 */
     private String exampleSql;
 
-    /** SQL 片段语义集合。 */
-    private String sqlFragment;
+    /** 长期记忆语义集合。 */
+    private String managedMemory;
 }

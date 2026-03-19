@@ -188,3 +188,25 @@ CREATE TABLE IF NOT EXISTS knowledge_example_sql (
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS memory_entry (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope TEXT NOT NULL,
+    connection_id INTEGER NOT NULL,
+    database_name TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    source_session_id TEXT,
+    source_history_ids_json TEXT,
+    hit_count INTEGER NOT NULL DEFAULT 0,
+    last_used_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_entry_scope_ctx_updated
+ON memory_entry(scope, connection_id, database_name, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_memory_entry_source_session
+ON memory_entry(source_type, source_session_id, connection_id, database_name);

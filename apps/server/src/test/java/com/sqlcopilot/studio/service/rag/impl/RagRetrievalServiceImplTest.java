@@ -3,6 +3,7 @@ package com.sqlcopilot.studio.service.rag.impl;
 import com.sqlcopilot.studio.dto.rag.RagConfigVO;
 import com.sqlcopilot.studio.dto.schema.SchemaOverviewVO;
 import com.sqlcopilot.studio.dto.schema.TableDetailVO;
+import com.sqlcopilot.studio.service.MemoryService;
 import com.sqlcopilot.studio.service.RagConfigService;
 import com.sqlcopilot.studio.service.SchemaService;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
@@ -38,6 +39,9 @@ class RagRetrievalServiceImplTest {
 
     @Mock
     private SchemaService schemaService;
+
+    @Mock
+    private MemoryService memoryService;
 
     @Mock
     private RagEmbeddingService ragEmbeddingService;
@@ -112,9 +116,9 @@ class RagRetrievalServiceImplTest {
             "schema_table",
             "schema_column",
             "sql_history",
+            "managed_memory",
             "metric_term",
             "example_sql",
-            "sql_fragment",
             10,
             20,
             8,
@@ -126,6 +130,7 @@ class RagRetrievalServiceImplTest {
             0.05D,
             ragConfigService,
             schemaService,
+            memoryService,
             ragEmbeddingService,
             qdrantClientService,
             ragRerankService
@@ -186,9 +191,9 @@ class RagRetrievalServiceImplTest {
             "schema_table",
             "schema_column",
             "sql_history",
+            "managed_memory",
             "metric_term",
             "example_sql",
-            "sql_fragment",
             10,
             20,
             8,
@@ -200,6 +205,7 @@ class RagRetrievalServiceImplTest {
             0.05D,
             ragConfigService,
             schemaService,
+            memoryService,
             ragEmbeddingService,
             qdrantClientService,
             ragRerankService
@@ -289,9 +295,9 @@ class RagRetrievalServiceImplTest {
             "schema_table",
             "schema_column",
             "sql_history",
+            "managed_memory",
             "metric_term",
             "example_sql",
-            "sql_fragment",
             10,
             20,
             8,
@@ -303,6 +309,7 @@ class RagRetrievalServiceImplTest {
             0.05D,
             ragConfigService,
             schemaService,
+            memoryService,
             ragEmbeddingService,
             qdrantClientService,
             ragRerankService

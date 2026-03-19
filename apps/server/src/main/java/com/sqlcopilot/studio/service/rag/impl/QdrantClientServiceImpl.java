@@ -96,6 +96,19 @@ public class QdrantClientServiceImpl implements QdrantClientService {
     }
 
     @Override
+    public void dropCollection(String collectionName) {
+        if (collectionName == null || collectionName.isBlank()) {
+            return;
+        }
+        HttpResponse<String> response = send(buildRequest("DELETE", "/collections/" + collectionName, null));
+        if (response.statusCode() != 200 && response.statusCode() != 202 && response.statusCode() != 404) {
+            throw new BusinessException(500,
+                "删除 Qdrant 集合失败: HTTP " + response.statusCode() + " - " + response.body());
+        }
+        ensuredCollectionVectorSizeCache.remove(collectionName);
+    }
+
+    @Override
     public void upsertPoints(String collectionName, List<QdrantPoint> points) {
         if (points == null || points.isEmpty()) {
             return;
@@ -162,6 +175,79 @@ public class QdrantClientServiceImpl implements QdrantClientService {
         if (response.statusCode() != 200) {
             throw new BusinessException(500,
                 "检索 Qdrant 向量失败: HTTP " + response.statusCode() + " - " + response.body());
+        }
+        validateQdrantResponse(response.body());
+        return parseSearchResults(response.body());
+    }
+
+    @Override
+    public List<QdrantScoredPoint> scrollPointsByFilters(String collectionName,
+                                                         List<QdrantPayloadFilter> filters,
+                                                         Integer limit) {
+        if (collectionName == null || collectionName.isBlank() || filters == null || filters.isEmpty()) {
+            return List.of();
+        }
+
+        ScrollReq req = new ScrollReq();
+        req.setLimit(limit == null || limit <= 0 ? 64 : limit);
+        req.setWithPayload(true);
+        req.setFilter(buildFilter(filters));
+
+        HttpResponse<String> response = send(buildRequest(
+            "POST",
+            "/collections/" + collectionName + "/points/scroll",
+            toJson(req)
+        ));
+        if (response.statusCode() == 404) {
+            return List.of();
+        }
+        if (response.statusCode() != 200) {
+            throw new BusinessException(500,
+                "滚动查询 Qdrant 点位失败: HTTP " + response.statusCode() + " - " + response.body());
+        }
+        validateQdrantResponse(response.body());
+        return parseSearchResults(response.body());
+    }
+
+    @Override
+    public List<QdrantScoredPoint> scrollPointsByFieldValues(String collectionName,
+                                                             String fieldName,
+                                                             List<?> values,
+                                                             List<QdrantPayloadFilter> baseFilters,
+                                                             Integer limit) {
+        if (collectionName == null || collectionName.isBlank()) {
+            return List.of();
+        }
+        String normalizedFieldName = Objects.toString(fieldName, "").trim();
+        if (normalizedFieldName.isBlank() || values == null || values.isEmpty()) {
+            return List.of();
+        }
+        List<Object> normalizedValues = new ArrayList<>();
+        for (Object value : values) {
+            if (value != null) {
+                normalizedValues.add(value);
+            }
+        }
+        if (normalizedValues.isEmpty()) {
+            return List.of();
+        }
+
+        ScrollReq req = new ScrollReq();
+        req.setLimit(limit == null || limit <= 0 ? normalizedValues.size() : limit);
+        req.setWithPayload(true);
+        req.setFilter(buildFilterWithAnyValues(normalizedFieldName, normalizedValues, baseFilters));
+
+        HttpResponse<String> response = send(buildRequest(
+            "POST",
+            "/collections/" + collectionName + "/points/scroll",
+            toJson(req)
+        ));
+        if (response.statusCode() == 404) {
+            return List.of();
+        }
+        if (response.statusCode() != 200) {
+            throw new BusinessException(500,
+                "按字段滚动查询 Qdrant 点位失败: HTTP " + response.statusCode() + " - " + response.body());
         }
         validateQdrantResponse(response.body());
         return parseSearchResults(response.body());
@@ -373,14 +459,14 @@ public class QdrantClientServiceImpl implements QdrantClientService {
 
     private FilterReq buildFilter(Long connectionId, String databaseName, String sessionId) {
         List<FilterConditionReq> mustConditions = new ArrayList<>();
-        mustConditions.add(new FilterConditionReq("connection_id", new MatchReq(connectionId)));
+        mustConditions.add(new FilterConditionReq("connection_id", MatchReq.value(connectionId)));
         String normalizedDatabaseName = Objects.toString(databaseName, "").trim();
         if (!normalizedDatabaseName.isBlank()) {
-            mustConditions.add(new FilterConditionReq("database_name", new MatchReq(normalizedDatabaseName)));
+            mustConditions.add(new FilterConditionReq("database_name", MatchReq.value(normalizedDatabaseName)));
         }
         String normalizedSessionId = Objects.toString(sessionId, "").trim();
         if (!normalizedSessionId.isBlank()) {
-            mustConditions.add(new FilterConditionReq("session_id", new MatchReq(normalizedSessionId)));
+            mustConditions.add(new FilterConditionReq("session_id", MatchReq.value(normalizedSessionId)));
         }
         return new FilterReq(mustConditions);
     }
@@ -396,8 +482,29 @@ public class QdrantClientServiceImpl implements QdrantClientService {
             if (key.isBlank() || value == null) {
                 continue;
             }
-            mustConditions.add(new FilterConditionReq(key, new MatchReq(value)));
+            mustConditions.add(new FilterConditionReq(key, MatchReq.value(value)));
         }
+        return new FilterReq(mustConditions);
+    }
+
+    private FilterReq buildFilterWithAnyValues(String fieldName,
+                                               List<Object> values,
+                                               List<QdrantPayloadFilter> baseFilters) {
+        List<FilterConditionReq> mustConditions = new ArrayList<>();
+        if (baseFilters != null) {
+            for (QdrantPayloadFilter filter : baseFilters) {
+                if (filter == null) {
+                    continue;
+                }
+                String key = Objects.toString(filter.key(), "").trim();
+                Object value = filter.value();
+                if (key.isBlank() || value == null) {
+                    continue;
+                }
+                mustConditions.add(new FilterConditionReq(key, MatchReq.value(value)));
+            }
+        }
+        mustConditions.add(new FilterConditionReq(fieldName, MatchReq.any(values)));
         return new FilterReq(mustConditions);
     }
 
@@ -517,6 +624,38 @@ public class QdrantClientServiceImpl implements QdrantClientService {
         }
     }
 
+    private static class ScrollReq {
+        private Integer limit;
+        private Boolean withPayload;
+        private FilterReq filter;
+
+        public Integer getLimit() {
+            return limit;
+        }
+
+        public void setLimit(Integer limit) {
+            this.limit = limit;
+        }
+
+        @JsonProperty("with_payload")
+        public Boolean getWithPayload() {
+            return withPayload;
+        }
+
+        @JsonProperty("with_payload")
+        public void setWithPayload(Boolean withPayload) {
+            this.withPayload = withPayload;
+        }
+
+        public FilterReq getFilter() {
+            return filter;
+        }
+
+        public void setFilter(FilterReq filter) {
+            this.filter = filter;
+        }
+    }
+
     private static class FilterReq {
         private List<FilterConditionReq> must;
 
@@ -532,6 +671,29 @@ public class QdrantClientServiceImpl implements QdrantClientService {
     private record FilterConditionReq(String key, MatchReq match) {
     }
 
-    private record MatchReq(Object value) {
+    private static class MatchReq {
+        private Object value;
+        private List<Object> any;
+
+        private MatchReq(Object value, List<Object> any) {
+            this.value = value;
+            this.any = any;
+        }
+
+        static MatchReq value(Object value) {
+            return new MatchReq(value, null);
+        }
+
+        static MatchReq any(List<Object> any) {
+            return new MatchReq(null, any);
+        }
+
+        public Object getValue() {
+            return value;
+        }
+
+        public List<Object> getAny() {
+            return any;
+        }
     }
 }

@@ -9,7 +9,10 @@ import com.sqlcopilot.studio.dto.kv.KvObjectDetailVO;
 import com.sqlcopilot.studio.dto.kv.KvObjectSummaryVO;
 import com.sqlcopilot.studio.dto.kv.KvOverviewVO;
 import com.sqlcopilot.studio.dto.kv.KvQueryExecuteReq;
+import com.sqlcopilot.studio.dto.kv.KvRedisBrowserNodeVO;
+import com.sqlcopilot.studio.dto.kv.KvRedisBrowserPageVO;
 import com.sqlcopilot.studio.dto.kv.KvRedisKeyDeleteReq;
+import com.sqlcopilot.studio.dto.kv.KvRedisKeyDeleteVO;
 import com.sqlcopilot.studio.dto.kv.KvRedisKeyEntryVO;
 import com.sqlcopilot.studio.dto.kv.KvRedisKeySaveReq;
 import com.sqlcopilot.studio.dto.kv.KvRedisKeySaveVO;
@@ -43,6 +46,8 @@ public class KvServiceImpl implements KvService {
     private static final String DB_TYPE_REDIS = "REDIS";
     private static final int DEFAULT_MAX_ROWS = 100;
     private static final int MAX_BROWSER_OBJECTS = 200;
+    private static final int DEFAULT_REDIS_BROWSER_PAGE_SIZE = 100;
+    private static final int MAX_REDIS_BROWSER_PAGE_SIZE = 200;
     private static final Pattern TOKEN_PATTERN = Pattern.compile("\"([^\"]*)\"|'([^']*)'|(\\S+)");
 
     private final ConnectionService connectionService;
@@ -111,6 +116,32 @@ public class KvServiceImpl implements KvService {
     }
 
     @Override
+    public KvRedisBrowserPageVO browseRedis(Long connectionId,
+                                            String databaseName,
+                                            String parentPath,
+                                            String keyword,
+                                            String cursor,
+                                            Integer pageSize) {
+        ConnectionEntity entity = connectionService.getConnectionEntity(connectionId);
+        if (!DB_TYPE_REDIS.equals(normalizeType(entity.getDbType()))) {
+            throw unsupportedDbType(entity.getDbType());
+        }
+        String resolvedDatabaseName = resolveRedisDatabaseName(databaseName);
+        String normalizedParentPath = normalizeRedisPath(parentPath);
+        String normalizedKeyword = safe(keyword);
+        String normalizedCursor = safe(cursor).isBlank() ? "0" : safe(cursor);
+        int normalizedPageSize = normalizeRedisBrowserPageSize(pageSize);
+        return kvRuntimeClientFactory.withRedisConnection(entity, connectionId, resolvedDatabaseName, connection ->
+            buildRedisBrowserPage(connectionId,
+                resolvedDatabaseName,
+                normalizedParentPath,
+                normalizedKeyword,
+                normalizedCursor,
+                normalizedPageSize,
+                connection.sync()));
+    }
+
+    @Override
     public SqlExecuteVO executeQuery(KvQueryExecuteReq req) {
         ConnectionEntity entity = connectionService.getConnectionEntity(req.getConnectionId());
         String dbType = normalizeType(entity.getDbType());
@@ -137,7 +168,7 @@ public class KvServiceImpl implements KvService {
     }
 
     @Override
-    public void deleteRedisKey(KvRedisKeyDeleteReq req) {
+    public KvRedisKeyDeleteVO deleteRedisKey(KvRedisKeyDeleteReq req) {
         ConnectionEntity entity = connectionService.getConnectionEntity(req.getConnectionId());
         if (!DB_TYPE_REDIS.equals(normalizeType(entity.getDbType()))) {
             throw unsupportedDbType(entity.getDbType());
@@ -145,13 +176,10 @@ public class KvServiceImpl implements KvService {
         String resolvedDatabaseName = resolveRedisDatabaseName(req.getDatabaseName());
         kvRuntimeClientFactory.withRedisConnection(entity, req.getConnectionId(), resolvedDatabaseName, connection -> {
             RedisCommands<String, String> sync = connection.sync();
-            String keyName = safe(req.getKeyName());
-            if (keyName.isBlank()) {
-                throw new BusinessException(400, "Redis 键名不能为空");
-            }
-            sync.del(keyName);
-            return null;
+            return deleteRedisTarget(sync, req);
         });
+        return kvRuntimeClientFactory.withRedisConnection(entity, req.getConnectionId(), resolvedDatabaseName, connection ->
+            deleteRedisTarget(connection.sync(), req));
     }
 
     private KvOverviewVO buildMongoOverview(Long connectionId, String databaseName, com.mongodb.client.MongoClient client) {
@@ -171,6 +199,47 @@ public class KvServiceImpl implements KvService {
         vo.setObjectLabel("集合");
         vo.setObjectCount(objects.size());
         vo.setObjects(objects);
+        return vo;
+    }
+
+    private KvRedisBrowserPageVO buildRedisBrowserPage(Long connectionId,
+                                                       String databaseName,
+                                                       String parentPath,
+                                                       String keyword,
+                                                       String cursor,
+                                                       int pageSize,
+                                                       RedisCommands<String, String> sync) {
+        LinkedHashMap<String, KvRedisBrowserNodeVO> nodes = new LinkedHashMap<>();
+        ScanCursor scanCursor = ScanCursor.of(cursor);
+        int scanLimit = Math.max(pageSize * 6, pageSize);
+        do {
+            ScanArgs args = ScanArgs.Builder.limit(scanLimit);
+            if (!keyword.isBlank()) {
+                args.match(keyword);
+            }
+            KeyScanCursor<String> result = sync.scan(scanCursor, args);
+            for (String key : result.getKeys()) {
+                if (keyword.isBlank()) {
+                    appendRedisBrowseNode(nodes, parentPath, key, sync);
+                } else {
+                    appendRedisSearchNodes(nodes, key, sync);
+                }
+                if (nodes.size() >= pageSize) {
+                    break;
+                }
+            }
+            scanCursor = ScanCursor.of(result.getCursor());
+        } while (!scanCursor.isFinished() && nodes.size() < pageSize);
+
+        KvRedisBrowserPageVO vo = new KvRedisBrowserPageVO();
+        vo.setConnectionId(connectionId);
+        vo.setDatabaseName(databaseName);
+        vo.setParentPath(parentPath);
+        vo.setKeyword(keyword);
+        vo.setCursor(cursor);
+        vo.setNextCursor(scanCursor.getCursor());
+        vo.setFinished(scanCursor.isFinished());
+        vo.setItems(sortRedisBrowserNodes(nodes.values()));
         return vo;
     }
 
@@ -250,6 +319,100 @@ public class KvServiceImpl implements KvService {
         vo.setEditorPayload(loadRedisEditorPayload(sync, objectName, type));
         vo.setFacts(facts);
         return vo;
+    }
+
+    private void appendRedisBrowseNode(Map<String, KvRedisBrowserNodeVO> nodes,
+                                       String parentPath,
+                                       String redisKey,
+                                       RedisCommands<String, String> sync) {
+        String normalizedKey = safe(redisKey);
+        if (normalizedKey.isBlank()) {
+            return;
+        }
+        if (!parentPath.isBlank()) {
+            String prefix = parentPath + ":";
+            if (!normalizedKey.startsWith(prefix)) {
+                return;
+            }
+            normalizedKey = normalizedKey.substring(prefix.length());
+        }
+        if (normalizedKey.isBlank()) {
+            return;
+        }
+        int nextSeparator = normalizedKey.indexOf(':');
+        if (nextSeparator < 0) {
+            String fullKey = parentPath.isBlank() ? normalizedKey : parentPath + ":" + normalizedKey;
+            nodes.computeIfAbsent("key:" + fullKey, ignored -> buildRedisKeyNode(fullKey, sync));
+            return;
+        }
+        String nodeName = normalizedKey.substring(0, nextSeparator);
+        if (nodeName.isBlank()) {
+            return;
+        }
+        String fullPath = parentPath.isBlank() ? nodeName : parentPath + ":" + nodeName;
+        nodes.computeIfAbsent("path:" + fullPath, ignored -> buildRedisPathNode(fullPath, nodeName));
+    }
+
+    private void appendRedisSearchNodes(Map<String, KvRedisBrowserNodeVO> nodes,
+                                        String redisKey,
+                                        RedisCommands<String, String> sync) {
+        String[] parts = Arrays.stream(safe(redisKey).split(":"))
+            .filter(part -> !part.isBlank())
+            .toArray(String[]::new);
+        if (parts.length == 0) {
+            return;
+        }
+        StringBuilder currentPath = new StringBuilder();
+        for (int index = 0; index < parts.length - 1; index++) {
+            if (index > 0) {
+                currentPath.append(':');
+            }
+            currentPath.append(parts[index]);
+            String fullPath = currentPath.toString();
+            String nodeName = parts[index];
+            nodes.computeIfAbsent("path:" + fullPath, ignored -> buildRedisPathNode(fullPath, nodeName));
+        }
+        nodes.computeIfAbsent("key:" + redisKey, ignored -> buildRedisKeyNode(redisKey, sync));
+    }
+
+    private KvRedisBrowserNodeVO buildRedisPathNode(String fullPath, String nodeName) {
+        KvRedisBrowserNodeVO vo = new KvRedisBrowserNodeVO();
+        vo.setNodeKey("path:" + fullPath);
+        vo.setNodeName(nodeName);
+        vo.setFullPath(fullPath);
+        vo.setNodeType("PATH");
+        vo.setHasChildren(Boolean.TRUE);
+        vo.setDescription("Redis 路径");
+        return vo;
+    }
+
+    private KvRedisBrowserNodeVO buildRedisKeyNode(String redisKey, RedisCommands<String, String> sync) {
+        String[] parts = Arrays.stream(safe(redisKey).split(":"))
+            .filter(part -> !part.isBlank())
+            .toArray(String[]::new);
+        String nodeName = parts.length == 0 ? redisKey : parts[parts.length - 1];
+        String valueType = safe(sync.type(redisKey)).toLowerCase(Locale.ROOT);
+        long ttlSeconds = safeLong(sync.ttl(redisKey));
+
+        KvRedisBrowserNodeVO vo = new KvRedisBrowserNodeVO();
+        vo.setNodeKey("key:" + redisKey);
+        vo.setNodeName(nodeName);
+        vo.setFullPath(redisKey);
+        vo.setNodeType("KEY");
+        vo.setHasChildren(Boolean.FALSE);
+        vo.setObjectName(redisKey);
+        vo.setValueType(valueType);
+        vo.setTtlSeconds(ttlSeconds);
+        vo.setDescription(ttlSeconds >= 0 ? ("TTL " + ttlSeconds + "s") : "永久键");
+        return vo;
+    }
+
+    private List<KvRedisBrowserNodeVO> sortRedisBrowserNodes(Collection<KvRedisBrowserNodeVO> nodes) {
+        return nodes.stream()
+            .sorted(Comparator
+                .comparing((KvRedisBrowserNodeVO item) -> !"PATH".equalsIgnoreCase(safe(item.getNodeType())))
+                .thenComparing(item -> safe(item.getNodeName()), String.CASE_INSENSITIVE_ORDER))
+            .toList();
     }
 
     private SqlExecuteVO executeMongoQuery(ConnectionEntity entity,
@@ -559,6 +722,48 @@ public class KvServiceImpl implements KvService {
         return keys;
     }
 
+    private KvRedisKeyDeleteVO deleteRedisTarget(RedisCommands<String, String> sync, KvRedisKeyDeleteReq req) {
+        String targetType = normalizeRedisDeleteTargetType(req.getTargetType());
+        String targetValue = resolveRedisDeleteTargetValue(req);
+        int deletedCount;
+        if ("PATH".equals(targetType)) {
+            deletedCount = deleteRedisPath(sync, targetValue);
+        } else {
+            deletedCount = Math.toIntExact(sync.del(targetValue));
+        }
+        KvRedisKeyDeleteVO vo = new KvRedisKeyDeleteVO();
+        vo.setTargetType(targetType);
+        vo.setTargetValue(targetValue);
+        vo.setDeletedCount(deletedCount);
+        vo.setMessage("PATH".equals(targetType)
+            ? "Redis 路径删除完成，共删除 " + deletedCount + " 个键"
+            : (deletedCount > 0 ? "Redis 键删除成功" : "Redis 键不存在，无需删除"));
+        return vo;
+    }
+
+    private int deleteRedisPath(RedisCommands<String, String> sync, String pathPrefix) {
+        String normalizedPrefix = normalizeRedisPath(pathPrefix);
+        if (normalizedPrefix.isBlank()) {
+            throw new BusinessException(400, "Redis 路径不能为空");
+        }
+        List<String> matchedKeys = new ArrayList<>();
+        ScanCursor cursor = ScanCursor.INITIAL;
+        ScanArgs args = ScanArgs.Builder.limit(MAX_BROWSER_OBJECTS).match(normalizedPrefix + "*");
+        do {
+            KeyScanCursor<String> result = sync.scan(cursor, args);
+            for (String key : result.getKeys()) {
+                if (key.equals(normalizedPrefix) || key.startsWith(normalizedPrefix + ":")) {
+                    matchedKeys.add(key);
+                }
+            }
+            cursor = ScanCursor.of(result.getCursor());
+        } while (!cursor.isFinished());
+        if (matchedKeys.isEmpty()) {
+            return 0;
+        }
+        return Math.toIntExact(sync.del(matchedKeys.toArray(new String[0])));
+    }
+
     private Document parseDocumentNode(JsonNode node) {
         if (node == null || node.isNull() || node.isMissingNode()) {
             return new Document();
@@ -826,6 +1031,31 @@ public class KvServiceImpl implements KvService {
     private String resolveRedisDatabaseName(String databaseName) {
         String resolved = safe(databaseName);
         return resolved.isBlank() ? "0" : resolved;
+    }
+
+    private int normalizeRedisBrowserPageSize(Integer pageSize) {
+        int value = pageSize == null ? DEFAULT_REDIS_BROWSER_PAGE_SIZE : pageSize;
+        return Math.min(Math.max(value, 1), MAX_REDIS_BROWSER_PAGE_SIZE);
+    }
+
+    private String normalizeRedisPath(String path) {
+        return safe(path).replaceAll("^:+", "").replaceAll(":+$", "");
+    }
+
+    private String normalizeRedisDeleteTargetType(String targetType) {
+        String normalized = safe(targetType).toUpperCase(Locale.ROOT);
+        return normalized.isBlank() ? "KEY" : normalized;
+    }
+
+    private String resolveRedisDeleteTargetValue(KvRedisKeyDeleteReq req) {
+        String targetValue = safe(req.getTargetValue());
+        if (targetValue.isBlank()) {
+            targetValue = safe(req.getKeyName());
+        }
+        if (targetValue.isBlank()) {
+            throw new BusinessException(400, "Redis 删除目标不能为空");
+        }
+        return targetValue;
     }
 
     private SchemaDatabaseVO buildKvDatabaseVo(String databaseName) {

@@ -1,6 +1,7 @@
 package com.sqlcopilot.studio.service.impl;
 
 import com.sqlcopilot.studio.service.MetadataChangeSyncService;
+import com.sqlcopilot.studio.service.MemoryService;
 import com.sqlcopilot.studio.service.RagVectorizeQueueService;
 import com.sqlcopilot.studio.service.SchemaService;
 import com.sqlcopilot.studio.service.rag.RagIngestionService;
@@ -18,13 +19,16 @@ public class MetadataChangeSyncServiceImpl implements MetadataChangeSyncService 
     private final SchemaService schemaService;
     private final RagVectorizeQueueService ragVectorizeQueueService;
     private final RagIngestionService ragIngestionService;
+    private final MemoryService memoryService;
 
     public MetadataChangeSyncServiceImpl(SchemaService schemaService,
                                          RagVectorizeQueueService ragVectorizeQueueService,
-                                         RagIngestionService ragIngestionService) {
+                                         RagIngestionService ragIngestionService,
+                                         MemoryService memoryService) {
         this.schemaService = schemaService;
         this.ragVectorizeQueueService = ragVectorizeQueueService;
         this.ragIngestionService = ragIngestionService;
+        this.memoryService = memoryService;
     }
 
     @Override
@@ -35,6 +39,7 @@ public class MetadataChangeSyncServiceImpl implements MetadataChangeSyncService 
         runSafely("连接级Schema缓存清理", () -> schemaService.refreshConnectionSchemaCaches(connectionId));
         runSafely("连接级向量状态清理", () -> ragVectorizeQueueService.clearConnectionState(connectionId));
         runSafely("连接级向量数据清理", () -> ragIngestionService.removeConnectionArtifacts(connectionId));
+        runSafely("连接级长期记忆清理", () -> memoryService.removeConnectionArtifacts(connectionId));
     }
 
     @Override
@@ -51,6 +56,8 @@ public class MetadataChangeSyncServiceImpl implements MetadataChangeSyncService 
             () -> ragVectorizeQueueService.clearDatabaseState(connectionId, sourceDatabaseName));
         runSafely("旧库向量数据清理",
             () -> ragIngestionService.removeDatabaseArtifacts(connectionId, sourceDatabaseName));
+        runSafely("旧库长期记忆清理",
+            () -> memoryService.removeDatabaseArtifacts(connectionId, sourceDatabaseName));
         revectorizeDatabase(connectionId, targetDatabaseName);
     }
 
@@ -61,6 +68,8 @@ public class MetadataChangeSyncServiceImpl implements MetadataChangeSyncService 
             () -> ragVectorizeQueueService.clearDatabaseState(connectionId, databaseName));
         runSafely("库向量数据清理",
             () -> ragIngestionService.removeDatabaseArtifacts(connectionId, databaseName));
+        runSafely("库长期记忆清理",
+            () -> memoryService.removeDatabaseArtifacts(connectionId, databaseName));
     }
 
     @Override
