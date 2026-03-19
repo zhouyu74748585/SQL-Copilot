@@ -266,25 +266,29 @@
       <aside class="pane pane-left">
         <a-collapse class="left-nav-collapse" :default-active-key="['connections', 'knowledge']" :bordered="false">
           <a-collapse-panel key="connections" header="我的连接">
-            <div class="pane-title-actions left-nav-panel-actions">
-              <a-button size="small" type="text" @click="openCreateModal" title="新建连接">
-                <template #icon>
-                  <link-outlined />
-                </template>
-                新建连接
-              </a-button>
-              <a-button size="small" type="text" @click="openCreateGroupModal" title="新建分组">
-                <template #icon>
-                  <folder-add-outlined />
-                </template>
-                新建分组
-              </a-button>
-              <a-button size="small" type="text" :loading="connectionRefreshing" @click="refreshConnections" title="刷新连接列表">
-                <template #icon>
-                  <reload-outlined />
-                </template>
-              </a-button>
-            </div>
+            <template #extra>
+              <div class="pane-title-actions left-nav-panel-actions" @click.stop>
+                <a-tooltip title="新建连接">
+                  <a-button size="small" type="text" class="toolbar-icon-btn" @click.stop="openCreateModal">
+                    <template #icon>
+                      <img class="toolbar-action-icon" :src="createConnectionIcon" alt="" />
+                    </template>
+                  </a-button>
+                </a-tooltip>
+                <a-tooltip title="新建分组">
+                  <a-button size="small" type="text" class="toolbar-icon-btn" @click.stop="openCreateGroupModal">
+                    <template #icon>
+                      <img class="toolbar-action-icon" :src="createGroupIcon" alt="" />
+                    </template>
+                  </a-button>
+                </a-tooltip>
+                <a-tooltip title="刷新连接列表">
+                  <a-button size="small" type="text" class="toolbar-icon-btn" :loading="connectionRefreshing" @click.stop="refreshConnections">
+                    <template #icon><img class="toolbar-action-icon" :src="refreshIcon" alt="" /></template>
+                  </a-button>
+                </a-tooltip>
+              </div>
+            </template>
             <div class="pane-search">
               <a-input v-model:value="connectionKeyword" size="small" placeholder="搜索连接" allow-clear>
                 <template #prefix>
@@ -314,9 +318,9 @@
                   @dblclick.stop="handleTreeNodeDblclick(dataRef)"
                 >
                   <img
-                    v-if="treeTitleIconSrc(dataRef)"
+                    v-if="treeTitleIconSrc(dataRef, isTreeNodeExpanded(dataRef))"
                     class="tree-icon-img"
-                    :src="treeTitleIconSrc(dataRef)"
+                    :src="treeTitleIconSrc(dataRef, isTreeNodeExpanded(dataRef))"
                     alt=""
                   />
                   <component
@@ -363,7 +367,7 @@
               @click="openKnowledgeNode('example-sql')"
             >
               <span>样例SQL</span>
-              <span>{{ knowledgeExampleItems.length }}</span>
+              <span>{{ knowledgeGlobalExampleCount }}</span>
             </button>
             <button
               class="knowledge-nav-item"
@@ -371,7 +375,7 @@
               @click="openKnowledgeNode('terms')"
             >
               <span>术语管理</span>
-              <span>{{ knowledgeTermItems.length }}</span>
+              <span>{{ knowledgeGlobalTermCount }}</span>
             </button>
           </a-collapse-panel>
         </a-collapse>
@@ -383,67 +387,82 @@
           <section class="pane pane-center browser-center-pane">
             <div class="center-toolbar">
               <div v-if="currentObjectType === 'tables' && !activeConnectionIsKv" class="center-toolbar-left">
-                <a-button
-                  size="small"
-                  :type="canCreateTable ? 'primary' : 'default'"
-                  :disabled="!canCreateTable"
-                  @click="openNewTableEditor()"
-                >
-                  <template #icon><plus-outlined /></template>
-                  新建表
-                </a-button>
-                <a-button size="small" :disabled="!workflow.connectionId" @click="openAiQueryTab()">
-                  <template #icon><plus-outlined /></template>
-                  新建查询
-                </a-button>
+                <a-tooltip title="新建表">
+                  <a-button
+                    size="small"
+                    type="default"
+                    :disabled="!canCreateTable"
+                    class="toolbar-icon-btn"
+                    @click="openNewTableEditor()"
+                  >
+                    <template #icon><img class="toolbar-action-icon" :src="createTableIcon" alt="" /></template>
+                  </a-button>
+                </a-tooltip>
+                <a-tooltip title="新建查询">
+                  <a-button size="small" :disabled="!workflow.connectionId" class="toolbar-icon-btn" @click="openAiQueryTab()">
+                    <template #icon><img class="toolbar-action-icon" :src="addQueryIcon" alt="" /></template>
+                  </a-button>
+                </a-tooltip>
                 <a-tooltip :title="browserErEntryTooltip">
-                  <a-button size="small" :disabled="!canOpenBrowserErFeature" @click="openErTableSelectModal()">
-                    <template #icon><apartment-outlined /></template>
-                    智能ER图
+                  <a-button size="small" :disabled="!canOpenBrowserErFeature" class="toolbar-icon-btn" @click="openErTableSelectModal()">
+                    <template #icon><img class="toolbar-action-icon" :src="erEntryIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
               </div>
               <div v-else-if="currentObjectType === 'tables' && activeConnectionIsKv" class="center-toolbar-left">
-                <a-button size="small" type="primary" :disabled="!workflow.connectionId" @click="openAiQueryTab()">
-                  <template #icon><plus-outlined /></template>
-                  新建查询
-                </a-button>
+                <a-tooltip title="新建查询">
+                  <a-button size="small" type="default" :disabled="!workflow.connectionId" class="toolbar-icon-btn" @click="openAiQueryTab()">
+                    <template #icon><img class="toolbar-action-icon" :src="addQueryIcon" alt="" /></template>
+                  </a-button>
+                </a-tooltip>
+                <a-tooltip v-if="activeConnectionIsRedis" title="新增键">
+                  <a-button size="small" class="toolbar-icon-btn" @click="openCreateRedisKeyModal">
+                    <template #icon><img class="toolbar-action-icon" :src="createRedisKeyIcon" alt="" /></template>
+                  </a-button>
+                </a-tooltip>
               </div>
               <div v-else-if="currentObjectType === 'views'" class="center-toolbar-left">
-                <a-button
-                  size="small"
-                  :type="canCreateView ? 'primary' : 'default'"
-                  :disabled="!canCreateView"
-                  @click="openNewObjectDefinitionEditor(workflow.connectionId, getActiveDatabaseName(workflow.connectionId), 'views')"
-                >
-                  <template #icon><plus-outlined /></template>
-                  新建视图
-                </a-button>
-                <a-button size="small" :disabled="!workflow.connectionId" @click="openAiQueryTab()">
-                  <template #icon><plus-outlined /></template>
-                  新建查询
-                </a-button>
+                <a-tooltip title="新建视图">
+                  <a-button
+                    size="small"
+                    type="default"
+                    :disabled="!canCreateView"
+                    class="toolbar-icon-btn"
+                    @click="openNewObjectDefinitionEditor(workflow.connectionId, getActiveDatabaseName(workflow.connectionId), 'views')"
+                  >
+                    <template #icon><img class="toolbar-action-icon" :src="createViewIcon" alt="" /></template>
+                  </a-button>
+                </a-tooltip>
+                <a-tooltip title="新建查询">
+                  <a-button size="small" :disabled="!workflow.connectionId" class="toolbar-icon-btn" @click="openAiQueryTab()">
+                    <template #icon><img class="toolbar-action-icon" :src="addQueryIcon" alt="" /></template>
+                  </a-button>
+                </a-tooltip>
               </div>
               <div v-else-if="currentObjectType === 'functions'" class="center-toolbar-left">
-                <a-button
-                  size="small"
-                  :type="canCreateFunction ? 'primary' : 'default'"
-                  :disabled="!canCreateFunction"
-                  @click="openNewObjectDefinitionEditor(workflow.connectionId, getActiveDatabaseName(workflow.connectionId), 'functions')"
-                >
-                  <template #icon><plus-outlined /></template>
-                  新建函数
-                </a-button>
-                <a-button size="small" :disabled="!workflow.connectionId" @click="openAiQueryTab()">
-                  <template #icon><plus-outlined /></template>
-                  新建查询
-                </a-button>
+                <a-tooltip title="新建函数">
+                  <a-button
+                    size="small"
+                    type="default"
+                    :disabled="!canCreateFunction"
+                    class="toolbar-icon-btn"
+                    @click="openNewObjectDefinitionEditor(workflow.connectionId, getActiveDatabaseName(workflow.connectionId), 'functions')"
+                  >
+                    <template #icon><img class="toolbar-action-icon" :src="createFunctionIcon" alt="" /></template>
+                  </a-button>
+                </a-tooltip>
+                <a-tooltip title="新建查询">
+                  <a-button size="small" :disabled="!workflow.connectionId" class="toolbar-icon-btn" @click="openAiQueryTab()">
+                    <template #icon><img class="toolbar-action-icon" :src="addQueryIcon" alt="" /></template>
+                  </a-button>
+                </a-tooltip>
               </div>
               <div v-else-if="currentObjectType === 'queries'" class="center-toolbar-left">
-                <a-button size="small" type="primary" :disabled="!workflow.connectionId" @click="openAiQueryTab()">
-                  <template #icon><plus-outlined /></template>
-                  新建查询
-                </a-button>
+                <a-tooltip title="新建查询">
+                  <a-button size="small" type="default" :disabled="!workflow.connectionId" class="toolbar-icon-btn" @click="openAiQueryTab()">
+                    <template #icon><img class="toolbar-action-icon" :src="addQueryIcon" alt="" /></template>
+                  </a-button>
+                </a-tooltip>
               </div>
               <div class="center-toolbar-right">
                 <a-input
@@ -478,42 +497,37 @@
 
             <div class="object-browser-content">
               <div v-if="activeConnectionIsRedis && currentObjectType === 'tables'" class="redis-browser-layout">
-                <aside class="redis-hierarchy-pane">
+                <section class="redis-list-pane redis-table-pane">
                   <div class="redis-hierarchy-toolbar">
-                    <span>层级结构</span>
-                    <a-tag color="blue">{{ redisHierarchyPath || '根层级' }}</a-tag>
-                  </div>
-                  <a-tree
-                    class="redis-hierarchy-tree"
-                    :tree-data="redisHierarchyTreeData"
-                    :selected-keys="redisHierarchySelectedKeys"
-                    :expanded-keys="redisHierarchyExpandedKeys"
-                    block-node
-                    @select="handleRedisHierarchySelect"
-                  />
-                </aside>
-
-                <section class="redis-list-pane">
-                  <div class="redis-hierarchy-toolbar">
-                    <span>键列表</span>
-                    <span class="redis-current-path">当前路径：{{ redisHierarchyPath || '/' }}</span>
+                    <div class="redis-toolbar-main">
+                      <span>键树表</span>
+                      <a-tag v-if="tableKeyword.trim()" color="blue">glob: {{ tableKeyword }}</a-tag>
+                    </div>
                   </div>
                   <a-table
                     class="object-list-table"
                     size="small"
+                    :loading="redisBrowserLoading"
                     :pagination="false"
                     :columns="objectColumns"
-                    :data-source="currentObjectRows"
-                    row-key="objectName"
+                    :data-source="redisBrowserRows"
+                    row-key="nodeKey"
                     :scroll="{ y: tableScrollY }"
                     :custom-row="onObjectRow"
+                    :expandable="redisTableExpandable"
                   >
                     <template #bodyCell="{ column, record }">
-                      <template v-if="column.key === 'objectName'">
-                        <div class="table-name-cell" :class="{ 'is-active': selectedObjectName === record.objectName, 'is-queryable': record.objectType === 'tables' || record.objectType === 'queries' }" @dblclick.stop="onObjectRow(record).onDblclick()">
-                          <database-outlined />
-                          <span>{{ record.objectName }}</span>
+                      <template v-if="column.key === 'nodeName'">
+                        <div class="table-name-cell" :class="{ 'is-active': redisRowIsActive(record), 'is-queryable': record.redisNodeType === 'KEY' || record.redisNodeType === 'LOAD_MORE', 'is-path-row': record.redisNodeType === 'PATH' }" @dblclick.stop="onObjectRow(record).onDblclick()">
+                          <img class="object-row-icon" :src="objectRowIconSrc(record)" alt="" />
+                          <span>{{ record.nodeName || record.objectName }}</span>
                         </div>
+                      </template>
+                      <template v-else-if="column.key === 'redisNodeType'">
+                        <span>{{ redisNodeTypeLabel(record) }}</span>
+                      </template>
+                      <template v-else-if="column.key === 'ttlSeconds'">
+                        <span>{{ redisTtlLabel(record) }}</span>
                       </template>
                       <template v-else-if="column.key === 'description'">
                         <span class="object-desc-ellipsis">{{ record.description || '-' }}</span>
@@ -538,7 +552,7 @@
                   <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'objectName'">
                       <div class="table-name-cell" :class="{ 'is-active': selectedObjectName === record.objectName, 'is-queryable': record.objectType === 'tables' || record.objectType === 'queries' }" @dblclick.stop="onObjectRow(record).onDblclick()">
-                        <database-outlined />
+                        <img class="object-row-icon" :src="objectRowIconSrc(record)" alt="" />
                         <span>{{ record.objectName }}</span>
                       </div>
                     </template>
@@ -566,7 +580,10 @@
                     @dblclick="onObjectRow(item).onDblclick()"
                     @contextmenu.prevent.stop="onObjectRow(item).onContextmenu($event)"
                   >
-                    <div class="object-card-title">{{ item.objectName }}</div>
+                    <div class="object-card-title">
+                      <img class="object-card-icon" :src="objectRowIconSrc(item)" alt="" />
+                      <span>{{ item.objectName }}</span>
+                    </div>
                     <div class="object-card-meta">{{ currentObjectType === 'queries' ? '保存查询' : objectTypeLabel(item.objectType) }}</div>
                     <div v-if="currentObjectType !== 'queries' && !activeConnectionIsKv" class="object-card-vectorize" :class="databaseStatusClass(item.vectorizeStatus)">
                       <component :is="databaseStatusIcon(item.vectorizeStatus)" class="object-vectorize-icon" />
@@ -581,7 +598,7 @@
             <div class="center-status">
               <span>对象: {{ currentObjectRows.length }}</span>
               <span>类型: {{ currentObjectType === 'queries' ? '保存查询' : objectTypeLabel(currentObjectType) }}</span>
-              <span v-if="activeConnectionIsRedis && currentObjectType === 'tables'">路径: {{ redisHierarchyPath || '/' }}</span>
+              <span v-if="activeConnectionIsRedis && currentObjectType === 'tables'">搜索: {{ tableKeyword.trim() || '无' }}</span>
             </div>
           </section>
 
@@ -625,10 +642,6 @@
                   <div class="detail-code-head">
                     <span>键操作</span>
                     <div class="redis-detail-actions">
-                      <a-button size="small" type="primary" ghost @click="openCreateRedisKeyModal">
-                        <template #icon><plus-outlined /></template>
-                        新增键
-                      </a-button>
                       <a-button size="small" @click="openEditRedisKeyModal" :disabled="kvObjectDetailLoading">
                         <template #icon><edit-outlined /></template>
                         编辑键
@@ -705,7 +718,7 @@
               <div class="detail-code-head">
                 <span>分组操作</span>
                 <div class="redis-detail-actions">
-                  <a-button size="small" type="primary" ghost @click="openCreateModal">
+                  <a-button size="small" type="default"  @click="openCreateModal">
                     <template #icon><link-outlined /></template>
                     新建连接
                   </a-button>
@@ -732,30 +745,40 @@
       </template>
 
       <template v-else-if="activeKnowledgeTab">
-        <StudioConnectionContextBar
-          :connection-id="knowledgeConnectionId"
-          :database-name="knowledgeDatabaseName"
-          :connection-options="knowledgeConnectionOptions"
-          :database-options="knowledgeDatabaseOptions"
-          :database-disabled="!knowledgeConnectionId"
-          @connection-change="handleKnowledgeConnectionSelectorChange"
-          @database-change="handleKnowledgeDatabaseSelectorChange"
-        />
-
         <section class="pane pane-center">
-          <div class="pane-title">知识中心 · {{ knowledgeActiveNode === 'terms' ? '术语管理' : '样例SQL' }}</div>
           <div class="center-toolbar">
             <div class="center-toolbar-left">
-              <a-button size="small" type="primary" @click="knowledgeActiveNode === 'terms' ? resetKnowledgeTermForm() : resetKnowledgeExampleForm()">
-                <template #icon><plus-outlined /></template>
-                新建{{ knowledgeActiveNode === 'terms' ? '术语' : '样例' }}
-              </a-button>
-              <a-button size="small" :loading="knowledgeRebuildLoading" @click="rebuildKnowledgeVectors">
-                <template #icon><sync-outlined /></template>
-                手动重建向量
-              </a-button>
+              <a-tooltip :title="knowledgeActiveNode === 'terms' ? '新建术语' : '新建样例'">
+                <a-button size="small"  type="default" class="toolbar-icon-btn" @click="knowledgeActiveNode === 'terms' ? resetKnowledgeTermForm() : resetKnowledgeExampleForm()">
+                  <template #icon><img class="toolbar-action-icon" :src="createGroupIcon" alt="" /></template>
+                </a-button>
+              </a-tooltip>
+              <a-tooltip title="手动重建向量">
+                <a-button size="small" class="toolbar-icon-btn knowledge-vector-btn" :loading="knowledgeRebuildLoading" @click="rebuildKnowledgeVectors">
+                  <template #icon><img class="toolbar-action-icon knowledge-vector-icon" :src="vectorIcon" alt="" /></template>
+                </a-button>
+              </a-tooltip>
             </div>
-            <div class="center-toolbar-right">
+            <div class="center-toolbar-right knowledge-toolbar-right">
+              <a-select
+                :value="knowledgeFilterConnectionId || undefined"
+                size="small"
+                class="knowledge-toolbar-select"
+                allow-clear
+                placeholder="筛选连接"
+                :options="knowledgeConnectionOptions"
+                @change="handleKnowledgeFilterConnectionSelectorChange"
+              />
+              <a-select
+                :value="knowledgeFilterDatabaseName || undefined"
+                size="small"
+                class="knowledge-toolbar-select"
+                allow-clear
+                placeholder="筛选数据库"
+                :disabled="!knowledgeFilterConnectionId"
+                :options="knowledgeFilterDatabaseOptions"
+                @change="handleKnowledgeFilterDatabaseSelectorChange"
+              />
               <a-input v-model:value="knowledgeKeyword" size="small" placeholder="搜索知识内容" allow-clear>
                 <template #prefix><search-outlined /></template>
               </a-input>
@@ -800,14 +823,35 @@
               <div class="detail-summary">
                 <div class="detail-row"><span>术语</span><strong>{{ knowledgeTermForm.term || '未命名术语' }}</strong></div>
                 <div class="detail-row"><span>作用域</span><strong>{{ knowledgeScopeLabel(knowledgeTermForm.scope) }}</strong></div>
-                <div class="detail-row"><span>连接</span><strong>{{ queryTabConnectionNameById(knowledgeConnectionId) || '-' }}</strong></div>
-                <div class="detail-row"><span>数据库</span><strong>{{ knowledgeDatabaseName || '-' }}</strong></div>
+                <div class="detail-row"><span>连接</span><strong>{{ queryTabConnectionNameById(knowledgeTermForm.connectionId || 0) || '-' }}</strong></div>
+                <div class="detail-row"><span>数据库</span><strong>{{ knowledgeTermForm.databaseName || '-' }}</strong></div>
                 <div class="detail-row detail-row-description"><span>说明</span><strong>{{ knowledgeTermForm.description || '-' }}</strong></div>
               </div>
               <div class="detail-form-panel knowledge-form">
                 <a-form layout="vertical" size="small">
                   <a-form-item label="作用域">
-                    <a-select v-model:value="knowledgeTermForm.scope" :options="knowledgeScopeOptions" />
+                    <a-select v-model:value="knowledgeTermForm.scope" :options="knowledgeScopeOptions" @change="handleKnowledgeTermScopeSelectorChange" />
+                  </a-form-item>
+                  <a-form-item v-if="knowledgeTermForm.scope !== 'GLOBAL'" label="目标连接">
+                    <a-select
+                      :value="knowledgeTermForm.connectionId"
+                      size="small"
+                      show-search
+                      placeholder="目标连接"
+                      :options="knowledgeConnectionOptions"
+                      @change="handleKnowledgeTermTargetConnectionSelectorChange"
+                    />
+                  </a-form-item>
+                  <a-form-item v-if="knowledgeTermForm.scope === 'DATABASE'" label="目标数据库">
+                    <a-select
+                      :value="knowledgeTermForm.databaseName || undefined"
+                      size="small"
+                      show-search
+                      placeholder="目标数据库"
+                      :disabled="!knowledgeTermForm.connectionId"
+                      :options="knowledgeTermTargetDatabaseOptions"
+                      @change="handleKnowledgeTermTargetDatabaseSelectorChange"
+                    />
                   </a-form-item>
                   <a-form-item label="术语">
                     <a-input v-model:value="knowledgeTermForm.term" maxlength="120" />
@@ -828,21 +872,42 @@
               <div class="detail-summary">
                 <div class="detail-row"><span>样例</span><strong>{{ knowledgeExampleForm.description || '未命名样例' }}</strong></div>
                 <div class="detail-row"><span>作用域</span><strong>{{ knowledgeScopeLabel(knowledgeExampleForm.scope) }}</strong></div>
-                <div class="detail-row"><span>连接</span><strong>{{ queryTabConnectionNameById(knowledgeConnectionId) || '-' }}</strong></div>
-                <div class="detail-row"><span>数据库</span><strong>{{ knowledgeDatabaseName || '-' }}</strong></div>
+                <div class="detail-row"><span>连接</span><strong>{{ queryTabConnectionNameById(knowledgeExampleForm.connectionId || 0) || '-' }}</strong></div>
+                <div class="detail-row"><span>数据库</span><strong>{{ knowledgeExampleForm.databaseName || '-' }}</strong></div>
                 <div class="detail-row"><span>关联术语</span><strong>{{ knowledgeExampleForm.termIds.length }}</strong></div>
                 <div class="detail-row detail-row-description"><span>说明</span><strong>{{ knowledgeExampleForm.description || '-' }}</strong></div>
               </div>
               <div class="detail-form-panel knowledge-form">
                 <a-form layout="vertical" size="small">
                   <a-form-item label="作用域">
-                    <a-select v-model:value="knowledgeExampleForm.scope" :options="knowledgeScopeOptions" />
+                    <a-select v-model:value="knowledgeExampleForm.scope" :options="knowledgeScopeOptions" @change="handleKnowledgeExampleScopeSelectorChange" />
+                  </a-form-item>
+                  <a-form-item v-if="knowledgeExampleForm.scope !== 'GLOBAL'" label="目标连接">
+                    <a-select
+                      :value="knowledgeExampleForm.connectionId"
+                      size="small"
+                      show-search
+                      placeholder="目标连接"
+                      :options="knowledgeConnectionOptions"
+                      @change="handleKnowledgeExampleTargetConnectionSelectorChange"
+                    />
+                  </a-form-item>
+                  <a-form-item v-if="knowledgeExampleForm.scope === 'DATABASE'" label="目标数据库">
+                    <a-select
+                      :value="knowledgeExampleForm.databaseName || undefined"
+                      size="small"
+                      show-search
+                      placeholder="目标数据库"
+                      :disabled="!knowledgeExampleForm.connectionId"
+                      :options="knowledgeExampleTargetDatabaseOptions"
+                      @change="handleKnowledgeExampleTargetDatabaseSelectorChange"
+                    />
                   </a-form-item>
                   <a-form-item label="关联术语">
                     <a-select
                       v-model:value="knowledgeExampleForm.termIds"
                       mode="multiple"
-                      :options="knowledgeTermItems.map((item) => ({ label: item.term, value: item.id }))"
+                      :options="knowledgeVisibleExampleTermOptions"
                     />
                   </a-form-item>
                   <a-form-item label="说明">
@@ -3382,6 +3447,16 @@ import ErDiagramPanel from '../../../components/ErDiagramPanel.vue';
 import TableEditor from '../../../components/TableEditor.vue';
 import StudioConnectionContextBar from './StudioConnectionContextBar.vue';
 import TableDataVirtualGrid from './TableDataVirtualGrid.vue';
+import addQueryIcon from '../../../assets/icons/add_query.png';
+import createTableIcon from '../../../assets/icons/create-table.png';
+import createGroupIcon from '../../../assets/icons/tree-add-folder.png';
+import createConnectionIcon from '../../../assets/icons/tree-connected.png';
+import erEntryIcon from '../../../assets/icons/ER.png';
+import createRedisKeyIcon from '../../../assets/icons/key.svg';
+import createViewIcon from '../../../assets/icons/tree-view.png';
+import createFunctionIcon from '../../../assets/icons/tree-function.png';
+import refreshIcon from '../../../assets/icons/refresh.svg';
+import vectorIcon from '../../../assets/icons/vector.svg';
 import type {StudioController} from '../composables/useStudioController';
 
 const {currentLocale, antLocale, localeSelectOptions, setLocale, useDomI18n} = useAppI18n();
@@ -3507,7 +3582,9 @@ const {
     tableDetailLoading,
     kvObjectDetail,
     kvObjectDetailLoading,
-    redisHierarchyPath,
+    redisBrowserRows,
+    redisBrowserLoading,
+    redisExpandedRowKeys,
     redisKeyModalOpen,
     redisKeyModalSubmitting,
     redisKeyModalMode,
@@ -3605,8 +3682,6 @@ const {
     connectionTreeData,
     objectRows,
     activeConnectionIsRedis,
-    redisHierarchyTreeData,
-    redisVisibleObjectRows,
     selectedObjectRecord,
     selectedTreeGroup,
     selectedTreeDetail,
@@ -3862,7 +3937,7 @@ const {
     closeRedisKeyModal,
     confirmRedisKeyModal,
     deleteRedisKey,
-    handleRedisHierarchySelect,
+    handleRedisBrowserExpand,
     startResizeLeftPane,
     handleResizeLeftPane,
     stopResizeLeftPane,
@@ -3976,21 +4051,32 @@ const {
     knowledgeSaving,
     knowledgeRebuildLoading,
     knowledgeKeyword,
-    knowledgeConnectionId,
-    knowledgeDatabaseName,
+    knowledgeFilterConnectionId,
+    knowledgeFilterDatabaseName,
     knowledgeConnectionOptions,
-    knowledgeDatabaseOptions,
+    knowledgeFilterDatabaseOptions,
+    knowledgeTermTargetDatabaseOptions,
+    knowledgeExampleTargetDatabaseOptions,
+    knowledgeGlobalTermCount,
+    knowledgeGlobalExampleCount,
     knowledgeTermItems,
     knowledgeExampleItems,
     filteredKnowledgeTermItems,
     filteredKnowledgeExampleItems,
+    knowledgeVisibleExampleTermOptions,
     knowledgeTermForm,
     knowledgeExampleForm,
     knowledgeScopeOptions,
     openKnowledgeNode,
     closeKnowledgeTab,
-    handleKnowledgeConnectionChange,
-    handleKnowledgeDatabaseChange,
+    handleKnowledgeFilterConnectionChange,
+    handleKnowledgeFilterDatabaseChange,
+    handleKnowledgeTermScopeChange,
+    handleKnowledgeTermTargetConnectionChange,
+    handleKnowledgeTermTargetDatabaseChange,
+    handleKnowledgeExampleScopeChange,
+    handleKnowledgeExampleTargetConnectionChange,
+    handleKnowledgeExampleTargetDatabaseChange,
     resetKnowledgeTermForm,
     resetKnowledgeExampleForm,
     selectKnowledgeTerm,
@@ -4064,6 +4150,7 @@ const {
     copyTextContent,
     copyCreateTableSql,
     copyTableEditorSql,
+    browserObjectIconSrc,
     treeTitleIconSrc,
     normalizeModelOptions,
     nextModelOptionId,
@@ -4199,8 +4286,8 @@ function handleKnowledgeExampleSqlEditorMount(
 ) {
   handleSqlEditorMount(editor, monaco, {
     getContext: () => ({
-      connectionId: knowledgeConnectionId.value,
-      databaseName: knowledgeDatabaseName.value,
+      connectionId: knowledgeExampleForm.connectionId || 0,
+      databaseName: knowledgeExampleForm.databaseName || '',
     }),
     enableSelectionActions: false,
   });
@@ -4224,14 +4311,42 @@ function handleObjectDefinitionSqlEditorMount(
   });
 }
 
-function handleKnowledgeConnectionSelectorChange(value: string | number) {
-  knowledgeConnectionId.value = Number(value);
-  void handleKnowledgeConnectionChange();
+function handleKnowledgeFilterConnectionSelectorChange(value: string | number | undefined) {
+  knowledgeFilterConnectionId.value = value ? Number(value) : 0;
+  void handleKnowledgeFilterConnectionChange();
 }
 
-function handleKnowledgeDatabaseSelectorChange(value: string) {
-  knowledgeDatabaseName.value = value;
-  void handleKnowledgeDatabaseChange();
+function handleKnowledgeFilterDatabaseSelectorChange(value: string | undefined) {
+  knowledgeFilterDatabaseName.value = value || '';
+  void handleKnowledgeFilterDatabaseChange();
+}
+
+function handleKnowledgeTermScopeSelectorChange() {
+  void handleKnowledgeTermScopeChange();
+}
+
+function handleKnowledgeTermTargetConnectionSelectorChange(value: string | number | undefined) {
+  knowledgeTermForm.connectionId = value ? Number(value) : undefined;
+  void handleKnowledgeTermTargetConnectionChange();
+}
+
+function handleKnowledgeTermTargetDatabaseSelectorChange(value: string | undefined) {
+  knowledgeTermForm.databaseName = value || '';
+  handleKnowledgeTermTargetDatabaseChange();
+}
+
+function handleKnowledgeExampleScopeSelectorChange() {
+  void handleKnowledgeExampleScopeChange();
+}
+
+function handleKnowledgeExampleTargetConnectionSelectorChange(value: string | number | undefined) {
+  knowledgeExampleForm.connectionId = value ? Number(value) : undefined;
+  void handleKnowledgeExampleTargetConnectionChange();
+}
+
+function handleKnowledgeExampleTargetDatabaseSelectorChange(value: string | undefined) {
+  knowledgeExampleForm.databaseName = value || '';
+  handleKnowledgeExampleTargetDatabaseChange();
 }
 
 function handleLocaleChange(value: string) {
@@ -4240,37 +4355,66 @@ function handleLocaleChange(value: string) {
 
 const currentObjectRows = computed(() => (
   activeConnectionIsRedis.value && currentObjectType.value === 'tables'
-    ? redisVisibleObjectRows.value
+    ? redisBrowserRows.value
     : filteredObjectRows.value
 ));
 
-const redisHierarchySelectedKeys = computed(() => {
-  if (selectedObjectName.value) {
-    return [`redis-key-${selectedObjectName.value}`];
-  }
-  if (redisHierarchyPath.value) {
-    return [`redis-path-${redisHierarchyPath.value}`];
-  }
-  return [] as string[];
-});
+function isTreeNodeExpanded(dataRef: { key?: string | number }) {
+  const key = String(dataRef.key || '');
+  return !!key && expandedTreeKeys.value.includes(key);
+}
 
-const redisHierarchyExpandedKeys = computed(() => {
-  const keys: string[] = [];
-  const pushPath = (value: string) => {
-    let current = '';
-    value.split(':').filter((item) => !!item).forEach((segment) => {
-      current = current ? `${current}:${segment}` : segment;
-      keys.push(`redis-path-${current}`);
-    });
-  };
-  if (redisHierarchyPath.value) {
-    pushPath(redisHierarchyPath.value);
+function isRedisRowExpanded(record: { redisNodeType?: string; nodeKey?: string }) {
+  return record.redisNodeType === 'PATH'
+    && !!record.nodeKey
+    && redisExpandedRowKeys.value.includes(record.nodeKey);
+}
+
+function objectRowIconSrc(record: {
+  redisNodeType?: string;
+  nodeKey?: string;
+  objectType?: string;
+}) {
+  return browserObjectIconSrc(record as never, {
+    expanded: isRedisRowExpanded(record),
+  });
+}
+
+const redisTableExpandable = computed(() => ({
+  expandedRowKeys: redisExpandedRowKeys.value,
+  showExpandColumn: false,
+  expandIconColumnIndex: 0,
+  columnWidth: 52,
+  childrenColumnName: 'children',
+  rowExpandable: (record: { redisNodeType?: string }) => record.redisNodeType === 'PATH',
+  onExpand: (expanded: boolean, record: unknown) => {
+    void handleRedisBrowserExpand(expanded, record as never);
+  },
+}));
+
+function redisNodeTypeLabel(record: { redisNodeType?: string }) {
+  if (record.redisNodeType === 'PATH') {
+    return '目录';
   }
-  if (selectedObjectName.value) {
-    pushPath(selectedObjectName.value.split(':').slice(0, -1).join(':'));
+  if (record.redisNodeType === 'LOAD_MORE') {
+    return '更多';
   }
-  return Array.from(new Set(keys));
-});
+  return '键';
+}
+
+function redisTtlLabel(record: { redisNodeType?: string; ttlSeconds?: number }) {
+  if (record.redisNodeType !== 'KEY') {
+    return '-';
+  }
+  return record.ttlSeconds != null && Number(record.ttlSeconds) >= 0 ? `${record.ttlSeconds}s` : '永久';
+}
+
+function redisRowIsActive(record: { redisNodeType?: string; objectName?: string; fullPath?: string }) {
+  if (record.redisNodeType === 'KEY') {
+    return selectedObjectName.value === record.objectName;
+  }
+  return false;
+}
 
 const redisDetailValueText = computed(() => (
   kvObjectDetail.value?.editorPayload
@@ -4364,25 +4508,18 @@ function handleTableEditorDatabaseSelectorChange(
 }
 
 .redis-browser-layout {
-  display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
-  gap: 12px;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
   height: 100%;
 }
 
-.redis-hierarchy-pane,
 .redis-list-pane {
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-
-.redis-hierarchy-pane {
-  border-right: 1px solid var(--ant-color-border-secondary);
-  padding-right: 12px;
 }
 
 .redis-hierarchy-toolbar {
@@ -4394,6 +4531,13 @@ function handleTableEditorDatabaseSelectorChange(
   color: var(--ant-color-text-secondary);
 }
 
+.redis-toolbar-main,
+.redis-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .redis-current-path {
   max-width: 60%;
   overflow: hidden;
@@ -4401,17 +4545,15 @@ function handleTableEditorDatabaseSelectorChange(
   white-space: nowrap;
 }
 
-.redis-hierarchy-tree {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-}
-
 .redis-detail-actions {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.is-path-row {
+  font-weight: 500;
 }
 
 .redis-detail-value {

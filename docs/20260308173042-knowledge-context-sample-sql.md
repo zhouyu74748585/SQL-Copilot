@@ -169,3 +169,66 @@
   - `mvn spring-boot:stop "-Dspring-boot.stop.jmxPort=9007"` 通过。
 - 前端预览验证：
   - `GET http://127.0.0.1:55061/` 返回 `200`。
+
+
+### 2026-03-19 17:27:46
+
+## 20260319172530 追加记录
+
+### 本轮目标
+- 将知识中心“手动重建向量”按钮从“图标 + 常驻文案”调整为纯图标展示。
+- 保留向量图标 hover 反馈，并通过 hover tooltip 展示“手动重建向量”说明。
+
+### 关键改动
+- 修改文件：`apps/desktop/src/modules/studio/components/StudioShell.vue`
+  - 将“手动重建向量”按钮外层改为 `a-tooltip`。
+  - 去掉按钮内直接显示的“手动重建向量”文字，仅保留 `vector.svg` 图标。
+  - 按钮继续复用重建向量点击逻辑与 loading 状态。
+- 修改文件：`apps/desktop/src/modules/studio/styles/shell.css`
+  - 保留 `knowledge-vector-btn` / `knowledge-vector-icon` 的 hover 与 active 视觉反馈，适配 icon-only 形态。
+- 修改文件：`apps/desktop/src/assets/icons/vector.svg`
+  - 将 XML 头编码声明调整为 UTF-8。
+
+### 验证结果
+- 前端类型检查：`npm run -w @sqlcopilot/desktop type-check` 通过。
+- 前端构建（clean）：`npm run -w @sqlcopilot/desktop build` 通过。
+- 前端预览验证：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 55061` 启动成功；`curl -I http://127.0.0.1:55061/` 返回 `HTTP/1.1 200 OK`。
+- 后端启动验证（clean）：`mvn clean spring-boot:run "-Dspring-boot.run.arguments=--server.port=18087"` 启动成功；`curl --noproxy '*' http://127.0.0.1:18087/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+
+### 说明
+- 当前终端环境设置了 `http_proxy` / `https_proxy` / `all_proxy` 指向本地代理，访问本地后端端口时需要使用 `--noproxy '*'` 才能得到真实探活结果。
+
+
+### 2026-03-19 18:24:06
+
+## 20260319182300 追加记录
+
+### 本轮目标
+- 将知识中心的列表筛选与表单保存目标拆分，移除顶部连接工具条。
+- 为术语和样例表单增加独立的目标连接、目标数据库选择。
+- 将左侧知识中心数量改为全局统计，并限制样例 SQL 关联术语只可选择当前样例目标范围内可见的术语。
+
+### 关键改动
+- 修改文件：apps/desktop/src/modules/studio/composables/useKnowledgeModule.ts
+  - 将知识中心状态拆分为列表筛选上下文、术语表单目标、样例表单目标三套状态，避免筛选条件污染保存目标。
+  - 新增全局术语/样例统计加载逻辑，左侧导航数量不再复用当前筛选列表长度。
+  - 样例 SQL 的关联术语候选改为基于样例自身作用域、目标连接、目标数据库动态过滤，并在目标变化时即时清理不可见术语。
+  - 重建向量改为使用当前列表筛选上下文；筛选为空时走全局重建。
+- 修改文件：apps/desktop/src/modules/studio/components/StudioShell.vue
+  - 移除知识中心顶部连接工具条，在搜索框前加入连接筛选和数据库筛选下拉，默认空值。
+  - 术语详情、样例详情表单增加目标连接和目标数据库选择，并让详情摘要显示表单目标而非列表筛选。
+  - 样例 SQL 编辑器的补全上下文改为跟随样例表单目标连接和数据库。
+  - 左侧知识中心导航的样例 SQL、术语管理数量切换为全局总数显示。
+- 修改文件：apps/desktop/src/modules/studio/styles/shell.css
+  - 为知识中心工具栏新增筛选下拉宽度与布局样式。
+- 修改文件：apps/desktop/src/i18n/messages.ts
+  - 补充筛选连接、筛选数据库、目标连接、目标数据库、知识中心详情与目标校验文案的中英映射。
+
+### 验证结果
+- 前端类型检查：npm run -w @sqlcopilot/desktop type-check 通过。
+- 前端构建（clean）：npm run -w @sqlcopilot/desktop build 通过。
+- 前端预览验证：npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 55061 启动成功；curl -I http://127.0.0.1:55061/ 返回 HTTP/1.1 200 OK。
+- 后端启动验证（clean）：mvn clean spring-boot:run "-Dspring-boot.run.arguments=--server.port=18087" 启动成功；curl --noproxy '*' http://127.0.0.1:18087/api/health 返回 {"code":0,"message":"success","data":"ok"}。
+
+### 说明
+- 当前终端环境配置了 http_proxy、https_proxy、all_proxy，本地后端探活需要显式加上 --noproxy '*' 才能拿到真实响应。

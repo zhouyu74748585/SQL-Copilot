@@ -21,32 +21,48 @@ interface SaveQueryAsExampleDraft {
   sqlText: string;
 }
 
+interface KnowledgeScopedPayload {
+  scope: KnowledgeScope;
+  connectionId?: number;
+  databaseName?: string;
+}
+
 export interface KnowledgeModule {
   knowledgeActiveNode: ComputedRef<KnowledgeNode>;
   knowledgeLoading: Ref<boolean>;
   knowledgeSaving: Ref<boolean>;
   knowledgeRebuildLoading: Ref<boolean>;
   knowledgeKeyword: Ref<string>;
-  knowledgeConnectionId: Ref<number>;
-  knowledgeDatabaseName: Ref<string>;
+  knowledgeFilterConnectionId: Ref<number>;
+  knowledgeFilterDatabaseName: Ref<string>;
   knowledgeConnectionOptions: ComputedRef<SelectOption<number>[]>;
-  knowledgeDatabaseOptions: ComputedRef<SelectOption<string>[]>;
+  knowledgeFilterDatabaseOptions: ComputedRef<SelectOption<string>[]>;
+  knowledgeTermTargetDatabaseOptions: ComputedRef<SelectOption<string>[]>;
+  knowledgeExampleTargetDatabaseOptions: ComputedRef<SelectOption<string>[]>;
+  knowledgeGlobalTermCount: Ref<number>;
+  knowledgeGlobalExampleCount: Ref<number>;
   knowledgeTermItems: Ref<KnowledgeTermVO[]>;
   knowledgeExampleItems: Ref<KnowledgeExampleSqlVO[]>;
   filteredKnowledgeTermItems: ComputedRef<KnowledgeTermVO[]>;
   filteredKnowledgeExampleItems: ComputedRef<KnowledgeExampleSqlVO[]>;
+  knowledgeVisibleExampleTermOptions: ComputedRef<SelectOption<number>[]>;
   knowledgeTermForm: KnowledgeTermSaveReq;
   knowledgeExampleForm: KnowledgeExampleSqlSaveReq;
   knowledgeScopeOptions: Array<{ label: string; value: KnowledgeScope }>;
-  knowledgeContextText: ComputedRef<string>;
   saveQueryAsExampleModalOpen: Ref<boolean>;
   saveQueryAsExampleSubmitting: Ref<boolean>;
   saveQueryAsExampleDescription: Ref<string>;
   saveQueryAsExampleContextText: ComputedRef<string>;
   openKnowledgeNode: (node: KnowledgeNode) => Promise<void>;
   closeKnowledgeTab: (tabKey: string) => void;
-  handleKnowledgeConnectionChange: () => Promise<void>;
-  handleKnowledgeDatabaseChange: () => Promise<void>;
+  handleKnowledgeFilterConnectionChange: () => Promise<void>;
+  handleKnowledgeFilterDatabaseChange: () => Promise<void>;
+  handleKnowledgeTermScopeChange: () => Promise<void>;
+  handleKnowledgeTermTargetConnectionChange: () => Promise<void>;
+  handleKnowledgeTermTargetDatabaseChange: () => void;
+  handleKnowledgeExampleScopeChange: () => Promise<void>;
+  handleKnowledgeExampleTargetConnectionChange: () => Promise<void>;
+  handleKnowledgeExampleTargetDatabaseChange: () => void;
   resetKnowledgeTermForm: () => void;
   resetKnowledgeExampleForm: () => void;
   selectKnowledgeTerm: (item: KnowledgeTermVO) => void;
@@ -68,8 +84,11 @@ export function useKnowledgeModule(runtime: StudioRuntime): KnowledgeModule {
   const knowledgeSaving = ref(false);
   const knowledgeRebuildLoading = ref(false);
   const knowledgeKeyword = ref('');
-  const knowledgeConnectionId = ref(0);
-  const knowledgeDatabaseName = ref('');
+  const knowledgeFilterConnectionId = ref(0);
+  const knowledgeFilterDatabaseName = ref('');
+  const knowledgeGlobalTermCount = ref(0);
+  const knowledgeGlobalExampleCount = ref(0);
+  const knowledgeAllTermItems = ref<KnowledgeTermVO[]>([]);
   const knowledgeTermItems = ref<KnowledgeTermVO[]>([]);
   const knowledgeExampleItems = ref<KnowledgeExampleSqlVO[]>([]);
   const saveQueryAsExampleModalOpen = ref(false);
@@ -88,45 +107,78 @@ export function useKnowledgeModule(runtime: StudioRuntime): KnowledgeModule {
   ];
 
   const knowledgeTermForm = reactive<KnowledgeTermSaveReq>({
-    scope: 'DATABASE',
+    scope: 'GLOBAL',
+    connectionId: undefined,
+    databaseName: '',
     term: '',
     description: '',
   });
 
   const knowledgeExampleForm = reactive<KnowledgeExampleSqlSaveReq>({
-    scope: 'DATABASE',
+    scope: 'GLOBAL',
+    connectionId: undefined,
+    databaseName: '',
     sqlText: '',
     description: '',
     termIds: [],
   });
 
   const knowledgeActiveNode = computed<KnowledgeNode>(() => runtime.activeKnowledgeTab.value?.node ?? 'example-sql');
-
   const knowledgeConnectionOptions = computed(() => runtime.connectionSelectOptions.value);
 
-  const knowledgeDatabaseOptions = computed<SelectOption<string>[]>(() => {
-    const connection = runtime.connections.value.find((item) => item.id === knowledgeConnectionId.value);
+  function normalizeDatabaseName(value?: string) {
+    return (value || '').trim();
+  }
+
+  function normalizeConnectionId(value?: number | string | null) {
+    const next = Number(value || 0);
+    return Number.isFinite(next) && next > 0 ? next : 0;
+  }
+
+  function hasConnection(connectionId: number) {
+    return runtime.connections.value.some((item) => item.id === connectionId);
+  }
+
+  function buildDatabaseOptions(connectionId: number, fallbackDatabaseName = '') {
+    if (!connectionId) {
+      return [] as SelectOption<string>[];
+    }
+    const connection = runtime.connections.value.find((item) => item.id === connectionId);
     const cached = connection ? runtime.visibleDatabasesForConnection(connection) : [];
-    const fallback = knowledgeDatabaseName.value || (
-      knowledgeConnectionId.value ? runtime.getActiveDatabaseName(knowledgeConnectionId.value) : ''
-    );
+    const fallback = normalizeDatabaseName(fallbackDatabaseName);
     const merged = Array.from(new Set([
       ...cached,
       ...((fallback && !cached.includes(fallback)) ? [fallback] : []),
     ].filter((item) => !!item)));
     return merged.map((item) => ({label: item, value: item}));
-  });
+  }
 
-  const currentContext = computed(() => ({
-    connectionId: knowledgeConnectionId.value,
-    databaseName: knowledgeDatabaseName.value.trim(),
-  }));
+  function normalizeSelectedDatabase(options: SelectOption<string>[], databaseName?: string) {
+    const normalized = normalizeDatabaseName(databaseName);
+    if (!normalized) {
+      return '';
+    }
+    return options.some((item) => item.value === normalized) ? normalized : '';
+  }
 
-  const knowledgeContextText = computed(() => {
-    const connectionName = runtime.connections.value.find((item) => item.id === currentContext.value.connectionId)?.name || '未选择连接';
-    const databaseName = currentContext.value.databaseName || '未选择数据库';
-    return `${connectionName} / ${databaseName}`;
-  });
+  async function ensureConnectionDatabasesLoaded(connectionId: number) {
+    if (!connectionId) {
+      return;
+    }
+    await runtime.prepareConnectionTreeData(connectionId);
+  }
+
+  const knowledgeFilterDatabaseOptions = computed<SelectOption<string>[]>(() => (
+    buildDatabaseOptions(knowledgeFilterConnectionId.value, knowledgeFilterDatabaseName.value)
+  ));
+
+  const knowledgeTermTargetDatabaseOptions = computed<SelectOption<string>[]>(() => (
+    buildDatabaseOptions(normalizeConnectionId(knowledgeTermForm.connectionId), knowledgeTermForm.databaseName)
+  ));
+
+  const knowledgeExampleTargetDatabaseOptions = computed<SelectOption<string>[]>(() => (
+    buildDatabaseOptions(normalizeConnectionId(knowledgeExampleForm.connectionId), knowledgeExampleForm.databaseName)
+  ));
 
   const saveQueryAsExampleContextText = computed(() => {
     const connectionName = runtime.connections.value.find((item) => item.id === saveQueryAsExampleDraft.connectionId)?.name || '未选择连接';
@@ -155,17 +207,13 @@ export function useKnowledgeModule(runtime: StudioRuntime): KnowledgeModule {
   });
 
   function scopeForContext(connectionId: number, databaseName: string): KnowledgeScope {
-    if (connectionId && databaseName) {
+    if (connectionId && normalizeDatabaseName(databaseName)) {
       return 'DATABASE';
     }
     if (connectionId) {
       return 'CONNECTION';
     }
     return 'GLOBAL';
-  }
-
-  function preferredScope(): KnowledgeScope {
-    return scopeForContext(currentContext.value.connectionId, currentContext.value.databaseName);
   }
 
   function touchKnowledgeTab(node: KnowledgeNode) {
@@ -176,67 +224,108 @@ export function useKnowledgeModule(runtime: StudioRuntime): KnowledgeModule {
     currentTab.updatedAt = Date.now();
   }
 
-  function buildScopePayload<T extends { scope: KnowledgeScope; connectionId?: number; databaseName?: string }>(payload: T): T {
+  function normalizeScopePayload<T extends KnowledgeScopedPayload>(payload: T): T {
     const next = {...payload};
     if (next.scope === 'GLOBAL') {
       next.connectionId = undefined;
       next.databaseName = '';
       return next;
     }
-    next.connectionId = currentContext.value.connectionId || undefined;
-    next.databaseName = next.scope === 'DATABASE' ? currentContext.value.databaseName : '';
+    next.connectionId = normalizeConnectionId(next.connectionId) || undefined;
+    next.databaseName = next.scope === 'DATABASE' ? normalizeDatabaseName(next.databaseName) : '';
     return next;
   }
 
-  function resolvePreferredContext() {
-    const connectionId = runtime.activeQueryTab.value?.connectionId
-      || runtime.workflow.connectionId
-      || runtime.connections.value[0]?.id
-      || 0;
-    return {
-      connectionId,
-      databaseName: connectionId ? runtime.getActiveDatabaseName(connectionId) || '' : '',
-    };
+  function buildKnowledgeQuery(connectionId: number, databaseName: string) {
+    const params = new URLSearchParams();
+    if (connectionId) {
+      params.set('connectionId', String(connectionId));
+    }
+    const normalizedDatabaseName = normalizeDatabaseName(databaseName);
+    if (normalizedDatabaseName) {
+      params.set('databaseName', normalizedDatabaseName);
+    }
+    const query = params.toString();
+    return query ? `?${query}` : '';
   }
 
-  function resolveKnowledgeDatabaseName(connectionId: number, preferredDatabaseName = '') {
+  async function loadKnowledgeGlobalData() {
+    const [allTerms, allExamples] = await Promise.all([
+      getApi<KnowledgeTermVO[]>('/api/knowledge/term/list'),
+      getApi<KnowledgeExampleSqlVO[]>('/api/knowledge/example/list'),
+    ]);
+    knowledgeAllTermItems.value = allTerms;
+    knowledgeGlobalTermCount.value = allTerms.length;
+    knowledgeGlobalExampleCount.value = allExamples.length;
+    sanitizeKnowledgeExampleTermIds();
+  }
+
+  function matchesExampleVisibleTerm(term: KnowledgeTermVO) {
+    if (knowledgeExampleForm.scope === 'GLOBAL') {
+      return true;
+    }
+    const connectionId = normalizeConnectionId(knowledgeExampleForm.connectionId);
     if (!connectionId) {
-      return '';
+      return term.scope === 'GLOBAL';
     }
-    const preferred = preferredDatabaseName.trim();
-    const availableValues = knowledgeDatabaseOptions.value.map((item) => item.value);
-    if (!availableValues.length) {
-      return preferred || runtime.getActiveDatabaseName(connectionId) || '';
+    if (knowledgeExampleForm.scope === 'CONNECTION') {
+      return term.scope === 'GLOBAL'
+        || (term.scope === 'CONNECTION' && normalizeConnectionId(term.connectionId) === connectionId);
     }
-    if (preferred && availableValues.includes(preferred)) {
-      return preferred;
-    }
-    const activeDatabaseName = runtime.getActiveDatabaseName(connectionId);
-    if (activeDatabaseName && availableValues.includes(activeDatabaseName)) {
-      return activeDatabaseName;
-    }
-    return availableValues[0] || '';
+    const databaseName = normalizeDatabaseName(knowledgeExampleForm.databaseName);
+    return term.scope === 'GLOBAL'
+      || (term.scope === 'CONNECTION' && normalizeConnectionId(term.connectionId) === connectionId)
+      || (
+        term.scope === 'DATABASE'
+        && normalizeConnectionId(term.connectionId) === connectionId
+        && normalizeDatabaseName(term.databaseName) === databaseName
+      );
   }
 
-  async function syncKnowledgeContextFromRuntime(force = false) {
-    const preferred = resolvePreferredContext();
-    if (!preferred.connectionId) {
-      knowledgeConnectionId.value = 0;
-      knowledgeDatabaseName.value = '';
-      return;
+  const knowledgeVisibleExampleTermOptions = computed<SelectOption<number>[]>(() => (
+    knowledgeAllTermItems.value
+      .filter((item) => matchesExampleVisibleTerm(item))
+      .map((item) => ({label: item.term, value: item.id}))
+  ));
+
+  function sanitizeKnowledgeExampleTermIds() {
+    const allowedIds = new Set(knowledgeVisibleExampleTermOptions.value.map((item) => item.value));
+    knowledgeExampleForm.termIds = knowledgeExampleForm.termIds.filter((item) => allowedIds.has(item));
+  }
+
+  function resetKnowledgeTermForm() {
+    knowledgeTermForm.id = undefined;
+    knowledgeTermForm.scope = 'GLOBAL';
+    knowledgeTermForm.connectionId = undefined;
+    knowledgeTermForm.databaseName = '';
+    knowledgeTermForm.term = '';
+    knowledgeTermForm.description = '';
+  }
+
+  function resetKnowledgeExampleForm() {
+    knowledgeExampleForm.id = undefined;
+    knowledgeExampleForm.scope = 'GLOBAL';
+    knowledgeExampleForm.connectionId = undefined;
+    knowledgeExampleForm.databaseName = '';
+    knowledgeExampleForm.sqlText = '';
+    knowledgeExampleForm.description = '';
+    knowledgeExampleForm.termIds = [];
+    sanitizeKnowledgeExampleTermIds();
+  }
+
+  async function loadKnowledgeData() {
+    knowledgeLoading.value = true;
+    try {
+      const query = buildKnowledgeQuery(knowledgeFilterConnectionId.value, knowledgeFilterDatabaseName.value);
+      const [terms, examples] = await Promise.all([
+        getApi<KnowledgeTermVO[]>(`/api/knowledge/term/list${query}`),
+        getApi<KnowledgeExampleSqlVO[]>(`/api/knowledge/example/list${query}`),
+      ]);
+      knowledgeTermItems.value = terms;
+      knowledgeExampleItems.value = examples;
+    } finally {
+      knowledgeLoading.value = false;
     }
-    if (
-      force
-      || !knowledgeConnectionId.value
-      || !runtime.connections.value.some((item) => item.id === knowledgeConnectionId.value)
-    ) {
-      knowledgeConnectionId.value = preferred.connectionId;
-    }
-    await runtime.prepareConnectionTreeData(knowledgeConnectionId.value);
-    knowledgeDatabaseName.value = resolveKnowledgeDatabaseName(
-      knowledgeConnectionId.value,
-      force ? preferred.databaseName : knowledgeDatabaseName.value || preferred.databaseName,
-    );
   }
 
   function ensureKnowledgeTab(node: KnowledgeNode) {
@@ -256,52 +345,13 @@ export function useKnowledgeModule(runtime: StudioRuntime): KnowledgeModule {
     return tab;
   }
 
-  function resetKnowledgeTermForm() {
-    knowledgeTermForm.id = undefined;
-    knowledgeTermForm.scope = preferredScope();
-    knowledgeTermForm.term = '';
-    knowledgeTermForm.description = '';
-    knowledgeTermForm.connectionId = currentContext.value.connectionId || undefined;
-    knowledgeTermForm.databaseName = currentContext.value.databaseName;
-  }
-
-  function resetKnowledgeExampleForm() {
-    knowledgeExampleForm.id = undefined;
-    knowledgeExampleForm.scope = preferredScope();
-    knowledgeExampleForm.sqlText = '';
-    knowledgeExampleForm.description = '';
-    knowledgeExampleForm.termIds = [];
-    knowledgeExampleForm.connectionId = currentContext.value.connectionId || undefined;
-    knowledgeExampleForm.databaseName = currentContext.value.databaseName;
-  }
-
-  async function loadKnowledgeData() {
-    knowledgeLoading.value = true;
-    try {
-      const params = new URLSearchParams();
-      if (currentContext.value.connectionId) {
-        params.set('connectionId', String(currentContext.value.connectionId));
-      }
-      if (currentContext.value.databaseName) {
-        params.set('databaseName', currentContext.value.databaseName);
-      }
-      const query = params.toString() ? `?${params.toString()}` : '';
-      const [terms, examples] = await Promise.all([
-        getApi<KnowledgeTermVO[]>(`/api/knowledge/term/list${query}`),
-        getApi<KnowledgeExampleSqlVO[]>(`/api/knowledge/example/list${query}`),
-      ]);
-      knowledgeTermItems.value = terms;
-      knowledgeExampleItems.value = examples;
-    } finally {
-      knowledgeLoading.value = false;
-    }
-  }
-
   async function openKnowledgeNode(node: KnowledgeNode) {
     const tab = ensureKnowledgeTab(node);
     runtime.activeWorkbenchTab.value = tab.key;
-    await syncKnowledgeContextFromRuntime(!knowledgeConnectionId.value);
-    await loadKnowledgeData();
+    await Promise.all([
+      loadKnowledgeData(),
+      loadKnowledgeGlobalData(),
+    ]);
     if (node === 'terms' && !knowledgeTermForm.term) {
       resetKnowledgeTermForm();
     }
@@ -323,26 +373,133 @@ export function useKnowledgeModule(runtime: StudioRuntime): KnowledgeModule {
     }
   }
 
-  async function handleKnowledgeConnectionChange() {
-    if (!knowledgeConnectionId.value) {
-      knowledgeDatabaseName.value = '';
-      resetKnowledgeTermForm();
-      resetKnowledgeExampleForm();
+  async function handleKnowledgeFilterConnectionChange() {
+    const connectionId = normalizeConnectionId(knowledgeFilterConnectionId.value);
+    knowledgeFilterConnectionId.value = connectionId;
+    if (!connectionId) {
+      knowledgeFilterDatabaseName.value = '';
       await loadKnowledgeData();
       return;
     }
-    await runtime.prepareConnectionTreeData(knowledgeConnectionId.value);
-    knowledgeDatabaseName.value = resolveKnowledgeDatabaseName(knowledgeConnectionId.value);
-    resetKnowledgeTermForm();
-    resetKnowledgeExampleForm();
+    await ensureConnectionDatabasesLoaded(connectionId);
+    knowledgeFilterDatabaseName.value = normalizeSelectedDatabase(
+      buildDatabaseOptions(connectionId, knowledgeFilterDatabaseName.value),
+      knowledgeFilterDatabaseName.value,
+    );
     await loadKnowledgeData();
   }
 
-  async function handleKnowledgeDatabaseChange() {
-    knowledgeDatabaseName.value = resolveKnowledgeDatabaseName(knowledgeConnectionId.value, knowledgeDatabaseName.value);
-    resetKnowledgeTermForm();
-    resetKnowledgeExampleForm();
+  async function handleKnowledgeFilterDatabaseChange() {
+    const connectionId = normalizeConnectionId(knowledgeFilterConnectionId.value);
+    knowledgeFilterDatabaseName.value = normalizeSelectedDatabase(
+      buildDatabaseOptions(connectionId, knowledgeFilterDatabaseName.value),
+      knowledgeFilterDatabaseName.value,
+    );
     await loadKnowledgeData();
+  }
+
+  async function handleKnowledgeTermScopeChange() {
+    if (knowledgeTermForm.scope === 'GLOBAL') {
+      knowledgeTermForm.connectionId = undefined;
+      knowledgeTermForm.databaseName = '';
+      return;
+    }
+    const connectionId = normalizeConnectionId(knowledgeTermForm.connectionId);
+    knowledgeTermForm.connectionId = connectionId || undefined;
+    if (!connectionId) {
+      knowledgeTermForm.databaseName = '';
+      return;
+    }
+    await ensureConnectionDatabasesLoaded(connectionId);
+    if (knowledgeTermForm.scope === 'CONNECTION') {
+      knowledgeTermForm.databaseName = '';
+      return;
+    }
+    knowledgeTermForm.databaseName = normalizeSelectedDatabase(
+      buildDatabaseOptions(connectionId, knowledgeTermForm.databaseName),
+      knowledgeTermForm.databaseName,
+    );
+  }
+
+  async function handleKnowledgeTermTargetConnectionChange() {
+    const connectionId = normalizeConnectionId(knowledgeTermForm.connectionId);
+    knowledgeTermForm.connectionId = connectionId || undefined;
+    if (!connectionId) {
+      knowledgeTermForm.databaseName = '';
+      return;
+    }
+    await ensureConnectionDatabasesLoaded(connectionId);
+    if (knowledgeTermForm.scope !== 'DATABASE') {
+      knowledgeTermForm.databaseName = '';
+      return;
+    }
+    knowledgeTermForm.databaseName = normalizeSelectedDatabase(
+      buildDatabaseOptions(connectionId, knowledgeTermForm.databaseName),
+      knowledgeTermForm.databaseName,
+    );
+  }
+
+  function handleKnowledgeTermTargetDatabaseChange() {
+    knowledgeTermForm.databaseName = normalizeSelectedDatabase(
+      buildDatabaseOptions(normalizeConnectionId(knowledgeTermForm.connectionId), knowledgeTermForm.databaseName),
+      knowledgeTermForm.databaseName,
+    );
+  }
+
+  async function handleKnowledgeExampleScopeChange() {
+    if (knowledgeExampleForm.scope === 'GLOBAL') {
+      knowledgeExampleForm.connectionId = undefined;
+      knowledgeExampleForm.databaseName = '';
+      sanitizeKnowledgeExampleTermIds();
+      return;
+    }
+    const connectionId = normalizeConnectionId(knowledgeExampleForm.connectionId);
+    knowledgeExampleForm.connectionId = connectionId || undefined;
+    if (!connectionId) {
+      knowledgeExampleForm.databaseName = '';
+      sanitizeKnowledgeExampleTermIds();
+      return;
+    }
+    await ensureConnectionDatabasesLoaded(connectionId);
+    if (knowledgeExampleForm.scope === 'CONNECTION') {
+      knowledgeExampleForm.databaseName = '';
+      sanitizeKnowledgeExampleTermIds();
+      return;
+    }
+    knowledgeExampleForm.databaseName = normalizeSelectedDatabase(
+      buildDatabaseOptions(connectionId, knowledgeExampleForm.databaseName),
+      knowledgeExampleForm.databaseName,
+    );
+    sanitizeKnowledgeExampleTermIds();
+  }
+
+  async function handleKnowledgeExampleTargetConnectionChange() {
+    const connectionId = normalizeConnectionId(knowledgeExampleForm.connectionId);
+    knowledgeExampleForm.connectionId = connectionId || undefined;
+    if (!connectionId) {
+      knowledgeExampleForm.databaseName = '';
+      sanitizeKnowledgeExampleTermIds();
+      return;
+    }
+    await ensureConnectionDatabasesLoaded(connectionId);
+    if (knowledgeExampleForm.scope !== 'DATABASE') {
+      knowledgeExampleForm.databaseName = '';
+      sanitizeKnowledgeExampleTermIds();
+      return;
+    }
+    knowledgeExampleForm.databaseName = normalizeSelectedDatabase(
+      buildDatabaseOptions(connectionId, knowledgeExampleForm.databaseName),
+      knowledgeExampleForm.databaseName,
+    );
+    sanitizeKnowledgeExampleTermIds();
+  }
+
+  function handleKnowledgeExampleTargetDatabaseChange() {
+    knowledgeExampleForm.databaseName = normalizeSelectedDatabase(
+      buildDatabaseOptions(normalizeConnectionId(knowledgeExampleForm.connectionId), knowledgeExampleForm.databaseName),
+      knowledgeExampleForm.databaseName,
+    );
+    sanitizeKnowledgeExampleTermIds();
   }
 
   function selectKnowledgeTerm(item: KnowledgeTermVO) {
@@ -350,8 +507,11 @@ export function useKnowledgeModule(runtime: StudioRuntime): KnowledgeModule {
     knowledgeTermForm.scope = item.scope;
     knowledgeTermForm.term = item.term;
     knowledgeTermForm.description = item.description || '';
-    knowledgeTermForm.connectionId = item.connectionId;
-    knowledgeTermForm.databaseName = item.databaseName || '';
+    knowledgeTermForm.connectionId = normalizeConnectionId(item.connectionId) || undefined;
+    knowledgeTermForm.databaseName = normalizeDatabaseName(item.databaseName);
+    if (knowledgeTermForm.connectionId) {
+      void ensureConnectionDatabasesLoaded(knowledgeTermForm.connectionId);
+    }
     touchKnowledgeTab('terms');
   }
 
@@ -361,8 +521,12 @@ export function useKnowledgeModule(runtime: StudioRuntime): KnowledgeModule {
     knowledgeExampleForm.sqlText = item.sqlText;
     knowledgeExampleForm.description = item.description || '';
     knowledgeExampleForm.termIds = [...(item.termIds || [])];
-    knowledgeExampleForm.connectionId = item.connectionId;
-    knowledgeExampleForm.databaseName = item.databaseName || '';
+    knowledgeExampleForm.connectionId = normalizeConnectionId(item.connectionId) || undefined;
+    knowledgeExampleForm.databaseName = normalizeDatabaseName(item.databaseName);
+    if (knowledgeExampleForm.connectionId) {
+      void ensureConnectionDatabasesLoaded(knowledgeExampleForm.connectionId);
+    }
+    sanitizeKnowledgeExampleTermIds();
     touchKnowledgeTab('example-sql');
   }
 
@@ -371,20 +535,27 @@ export function useKnowledgeModule(runtime: StudioRuntime): KnowledgeModule {
       message.warning('术语不能为空');
       return;
     }
-    if (knowledgeTermForm.scope !== 'GLOBAL' && !currentContext.value.connectionId) {
-      message.warning('当前作用域需要先选择连接');
+    if (knowledgeTermForm.scope !== 'GLOBAL' && !normalizeConnectionId(knowledgeTermForm.connectionId)) {
+      message.warning('当前作用域需要先选择目标连接');
       return;
     }
-    if (knowledgeTermForm.scope === 'DATABASE' && !currentContext.value.databaseName) {
-      message.warning('数据库级术语需要先选择数据库');
+    if (knowledgeTermForm.scope === 'DATABASE' && !normalizeDatabaseName(knowledgeTermForm.databaseName)) {
+      message.warning('数据库级术语需要先选择目标数据库');
       return;
     }
     knowledgeSaving.value = true;
     try {
-      const payload = buildScopePayload({...knowledgeTermForm});
+      const payload = normalizeScopePayload({
+        ...knowledgeTermForm,
+        connectionId: normalizeConnectionId(knowledgeTermForm.connectionId) || undefined,
+        databaseName: normalizeDatabaseName(knowledgeTermForm.databaseName),
+      });
       await postApi<KnowledgeTermVO>('/api/knowledge/term/save', payload);
       message.success(knowledgeTermForm.id ? '术语已更新' : '术语已保存');
-      await loadKnowledgeData();
+      await Promise.all([
+        loadKnowledgeData(),
+        loadKnowledgeGlobalData(),
+      ]);
       resetKnowledgeTermForm();
       touchKnowledgeTab('terms');
     } finally {
@@ -404,7 +575,10 @@ export function useKnowledgeModule(runtime: StudioRuntime): KnowledgeModule {
     try {
       await postApi<boolean>('/api/knowledge/term/remove', {id: knowledgeTermForm.id});
       message.success('术语已删除');
-      await loadKnowledgeData();
+      await Promise.all([
+        loadKnowledgeData(),
+        loadKnowledgeGlobalData(),
+      ]);
       resetKnowledgeTermForm();
       touchKnowledgeTab('terms');
     } finally {
@@ -417,20 +591,29 @@ export function useKnowledgeModule(runtime: StudioRuntime): KnowledgeModule {
       message.warning('样例 SQL 不能为空');
       return;
     }
-    if (knowledgeExampleForm.scope !== 'GLOBAL' && !currentContext.value.connectionId) {
-      message.warning('当前作用域需要先选择连接');
+    if (knowledgeExampleForm.scope !== 'GLOBAL' && !normalizeConnectionId(knowledgeExampleForm.connectionId)) {
+      message.warning('当前作用域需要先选择目标连接');
       return;
     }
-    if (knowledgeExampleForm.scope === 'DATABASE' && !currentContext.value.databaseName) {
-      message.warning('数据库级样例需要先选择数据库');
+    if (knowledgeExampleForm.scope === 'DATABASE' && !normalizeDatabaseName(knowledgeExampleForm.databaseName)) {
+      message.warning('数据库级样例需要先选择目标数据库');
       return;
     }
+    sanitizeKnowledgeExampleTermIds();
     knowledgeSaving.value = true;
     try {
-      const payload = buildScopePayload({...knowledgeExampleForm, termIds: [...knowledgeExampleForm.termIds]});
+      const payload = normalizeScopePayload({
+        ...knowledgeExampleForm,
+        connectionId: normalizeConnectionId(knowledgeExampleForm.connectionId) || undefined,
+        databaseName: normalizeDatabaseName(knowledgeExampleForm.databaseName),
+        termIds: [...knowledgeExampleForm.termIds],
+      });
       await postApi<KnowledgeExampleSqlVO>('/api/knowledge/example/save', payload);
       message.success(knowledgeExampleForm.id ? '样例 SQL 已更新' : '样例 SQL 已保存');
-      await loadKnowledgeData();
+      await Promise.all([
+        loadKnowledgeData(),
+        loadKnowledgeGlobalData(),
+      ]);
       resetKnowledgeExampleForm();
       touchKnowledgeTab('example-sql');
     } finally {
@@ -450,7 +633,10 @@ export function useKnowledgeModule(runtime: StudioRuntime): KnowledgeModule {
     try {
       await postApi<boolean>('/api/knowledge/example/remove', {id: knowledgeExampleForm.id});
       message.success('样例 SQL 已删除');
-      await loadKnowledgeData();
+      await Promise.all([
+        loadKnowledgeData(),
+        loadKnowledgeGlobalData(),
+      ]);
       resetKnowledgeExampleForm();
       touchKnowledgeTab('example-sql');
     } finally {
@@ -491,7 +677,10 @@ export function useKnowledgeModule(runtime: StudioRuntime): KnowledgeModule {
       saveQueryAsExampleModalOpen.value = false;
       message.success('已保存为样例 SQL');
       if (runtime.activeKnowledgeTab.value) {
-        await loadKnowledgeData();
+        await Promise.all([
+          loadKnowledgeData(),
+          loadKnowledgeGlobalData(),
+        ]);
       }
     } finally {
       saveQueryAsExampleSubmitting.value = false;
@@ -502,8 +691,8 @@ export function useKnowledgeModule(runtime: StudioRuntime): KnowledgeModule {
     knowledgeRebuildLoading.value = true;
     try {
       const result = await postApi<KnowledgeVectorRebuildVO>('/api/knowledge/vectorize/rebuild', {
-        connectionId: currentContext.value.connectionId || undefined,
-        databaseName: currentContext.value.databaseName || '',
+        connectionId: knowledgeFilterConnectionId.value || undefined,
+        databaseName: normalizeDatabaseName(knowledgeFilterDatabaseName.value),
       });
       message.success(result.message || '知识向量已重建');
       await loadKnowledgeData();
@@ -536,12 +725,27 @@ export function useKnowledgeModule(runtime: StudioRuntime): KnowledgeModule {
     () => runtime.connections.value.map((item) => item.id).join(','),
     () => {
       if (!runtime.connections.value.length) {
-        knowledgeConnectionId.value = 0;
-        knowledgeDatabaseName.value = '';
+        knowledgeFilterConnectionId.value = 0;
+        knowledgeFilterDatabaseName.value = '';
+        knowledgeTermForm.connectionId = undefined;
+        knowledgeTermForm.databaseName = '';
+        knowledgeExampleForm.connectionId = undefined;
+        knowledgeExampleForm.databaseName = '';
+        sanitizeKnowledgeExampleTermIds();
         return;
       }
-      if (!runtime.connections.value.some((item) => item.id === knowledgeConnectionId.value)) {
-        void syncKnowledgeContextFromRuntime(true);
+      if (knowledgeFilterConnectionId.value && !hasConnection(knowledgeFilterConnectionId.value)) {
+        knowledgeFilterConnectionId.value = 0;
+        knowledgeFilterDatabaseName.value = '';
+      }
+      if (normalizeConnectionId(knowledgeTermForm.connectionId) && !hasConnection(normalizeConnectionId(knowledgeTermForm.connectionId))) {
+        knowledgeTermForm.connectionId = undefined;
+        knowledgeTermForm.databaseName = '';
+      }
+      if (normalizeConnectionId(knowledgeExampleForm.connectionId) && !hasConnection(normalizeConnectionId(knowledgeExampleForm.connectionId))) {
+        knowledgeExampleForm.connectionId = undefined;
+        knowledgeExampleForm.databaseName = '';
+        sanitizeKnowledgeExampleTermIds();
       }
     },
     {immediate: true},
@@ -553,7 +757,10 @@ export function useKnowledgeModule(runtime: StudioRuntime): KnowledgeModule {
       if (!tabKey) {
         return;
       }
-      void loadKnowledgeData();
+      void Promise.all([
+        loadKnowledgeData(),
+        loadKnowledgeGlobalData(),
+      ]);
     },
   );
 
@@ -566,26 +773,36 @@ export function useKnowledgeModule(runtime: StudioRuntime): KnowledgeModule {
     knowledgeSaving,
     knowledgeRebuildLoading,
     knowledgeKeyword,
-    knowledgeConnectionId,
-    knowledgeDatabaseName,
+    knowledgeFilterConnectionId,
+    knowledgeFilterDatabaseName,
     knowledgeConnectionOptions,
-    knowledgeDatabaseOptions,
+    knowledgeFilterDatabaseOptions,
+    knowledgeTermTargetDatabaseOptions,
+    knowledgeExampleTargetDatabaseOptions,
+    knowledgeGlobalTermCount,
+    knowledgeGlobalExampleCount,
     knowledgeTermItems,
     knowledgeExampleItems,
     filteredKnowledgeTermItems,
     filteredKnowledgeExampleItems,
+    knowledgeVisibleExampleTermOptions,
     knowledgeTermForm,
     knowledgeExampleForm,
     knowledgeScopeOptions,
-    knowledgeContextText,
     saveQueryAsExampleModalOpen,
     saveQueryAsExampleSubmitting,
     saveQueryAsExampleDescription,
     saveQueryAsExampleContextText,
     openKnowledgeNode,
     closeKnowledgeTab,
-    handleKnowledgeConnectionChange,
-    handleKnowledgeDatabaseChange,
+    handleKnowledgeFilterConnectionChange,
+    handleKnowledgeFilterDatabaseChange,
+    handleKnowledgeTermScopeChange,
+    handleKnowledgeTermTargetConnectionChange,
+    handleKnowledgeTermTargetDatabaseChange,
+    handleKnowledgeExampleScopeChange,
+    handleKnowledgeExampleTargetConnectionChange,
+    handleKnowledgeExampleTargetDatabaseChange,
     resetKnowledgeTermForm,
     resetKnowledgeExampleForm,
     selectKnowledgeTerm,

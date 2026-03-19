@@ -151,6 +151,7 @@ export function useConnectionBrowserModule(
     runtime.contextMenu.category = '';
     runtime.contextMenu.objectType = '';
     runtime.contextMenu.objectName = '';
+    runtime.contextMenu.redisNodeType = '';
   }
 
   function openCreateModal(defaultGroupId?: number) {
@@ -510,7 +511,7 @@ export function useConnectionBrowserModule(
         actions.push({ id: 'createDatabase', label: '新建库' });
       }
       if (!isKv && supportsSchemaCreateAction()) {
-        actions.push({ id: 'createSchema', label: '新建Schema' });
+        actions.push({ id: 'createSchema', label: '新建模式' });
       }
       if (!isSchemaContext && spec?.supportsNamespaceRename && !isKv) {
         actions.push({ id: 'renameNamespace', label: `编辑${namespaceLabel()}` });
@@ -555,6 +556,11 @@ export function useConnectionBrowserModule(
     const isKvForObject = menu.objectType === 'tables' && runtime.isKvConnectionId(menu.connectionId);
     if (menu.objectType === 'tables') {
       if (isKvForObject) {
+        if (menu.redisNodeType === 'PATH') {
+          return [
+            { id: 'deleteKey', label: '删除该路径下全部键', danger: true },
+          ];
+        }
         return [
           { id: 'createKey', label: '新增键' },
           { id: 'editKey', label: '编辑键' },
@@ -625,6 +631,7 @@ export function useConnectionBrowserModule(
     const targetType = runtime.contextMenu.targetType;
     const objectType = runtime.contextMenu.objectType;
     const objectName = runtime.contextMenu.objectName;
+    const redisNodeType = runtime.contextMenu.redisNodeType;
     const category = runtime.contextMenu.category;
     const groupId = runtime.contextMenu.groupId;
     const connection = runtime.connections.value.find((item) => item.id === id) || null;
@@ -848,7 +855,7 @@ export function useConnectionBrowserModule(
       return;
     }
     if (action === 'copyKeyName') {
-      if (targetType !== 'object' || !objectName || objectType !== 'tables' || !databaseName) {
+      if (targetType !== 'object' || !objectName || objectType !== 'tables' || !databaseName || redisNodeType !== 'KEY') {
         return;
       }
       void navigator.clipboard.writeText(objectName);
@@ -859,6 +866,9 @@ export function useConnectionBrowserModule(
       return;
     }
     if (action === 'editKey') {
+      if (redisNodeType !== 'KEY') {
+        return;
+      }
       runtime.openEditRedisKeyModal();
       return;
     }
@@ -866,7 +876,7 @@ export function useConnectionBrowserModule(
       if (targetType !== 'object' || !objectName || objectType !== 'tables' || !databaseName) {
         return;
       }
-      await runtime.deleteRedisKey(objectName);
+      await runtime.deleteRedisKey(objectName, redisNodeType === 'PATH' ? 'PATH' : 'KEY');
       return;
     }
     if (action === 'editSavedQuery') {
@@ -963,12 +973,36 @@ export function useConnectionBrowserModule(
     return {
       onClick: () => {
         closeContextMenu();
+        if (runtime.activeConnectionIsRedis.value && record.redisNodeType === 'PATH') {
+          void runtime.runSafely(async () => {
+            await runtime.toggleRedisBrowserPath(record);
+          });
+          return;
+        }
+        if (runtime.activeConnectionIsRedis.value && record.redisNodeType === 'LOAD_MORE') {
+          void runtime.runSafely(async () => {
+            await runtime.loadMoreRedisBrowserRows(record);
+          });
+          return;
+        }
         const databaseName = runtime.getActiveDatabaseName(runtime.workflow.connectionId);
         void runtime.runSafely(async () => {
           await runtime.selectObject(runtime.workflow.connectionId, databaseName, record.objectType, record.objectName);
         });
       },
       onDblclick: () => {
+        if (runtime.activeConnectionIsRedis.value && record.redisNodeType === 'PATH') {
+          void runtime.runSafely(async () => {
+            await runtime.toggleRedisBrowserPath(record);
+          });
+          return;
+        }
+        if (runtime.activeConnectionIsRedis.value && record.redisNodeType === 'LOAD_MORE') {
+          void runtime.runSafely(async () => {
+            await runtime.loadMoreRedisBrowserRows(record);
+          });
+          return;
+        }
         if (record.objectType === 'tables' || record.objectType === 'views') {
           if (runtime.isKvConnectionId(runtime.workflow.connectionId)) {
             return;
@@ -999,13 +1033,21 @@ export function useConnectionBrowserModule(
         runtime.openQueryTabByObject(record);
       },
       onContextmenu: (event: MouseEvent) => {
+        if (runtime.activeConnectionIsRedis.value && record.redisNodeType === 'LOAD_MORE') {
+          event.preventDefault();
+          event.stopPropagation();
+          closeContextMenu();
+          return;
+        }
         event.preventDefault();
         event.stopPropagation();
         closeContextMenu();
         const databaseName = runtime.getActiveDatabaseName(runtime.workflow.connectionId);
-        void runtime.runSafely(async () => {
-          await runtime.selectObject(runtime.workflow.connectionId, databaseName, record.objectType, record.objectName);
-        });
+        if (!(runtime.activeConnectionIsRedis.value && record.redisNodeType === 'PATH')) {
+          void runtime.runSafely(async () => {
+            await runtime.selectObject(runtime.workflow.connectionId, databaseName, record.objectType, record.objectName);
+          });
+        }
         runtime.contextMenu.visible = true;
         runtime.contextMenu.x = Math.min(event.clientX, window.innerWidth - 220);
         runtime.contextMenu.y = Math.min(event.clientY, window.innerHeight - 180);
@@ -1014,7 +1056,10 @@ export function useConnectionBrowserModule(
         runtime.contextMenu.databaseName = databaseName;
         runtime.contextMenu.category = '';
         runtime.contextMenu.objectType = record.objectType;
-        runtime.contextMenu.objectName = record.objectName;
+        runtime.contextMenu.objectName = record.redisNodeType === 'PATH'
+          ? (record.fullPath || record.objectName)
+          : record.objectName;
+        runtime.contextMenu.redisNodeType = record.redisNodeType || '';
       },
     };
   }

@@ -146,6 +146,29 @@ export interface KvOverviewVO {
   objects: KvObjectSummaryVO[];
 }
 
+export interface KvRedisBrowserNodeVO {
+  nodeKey: string;
+  nodeName: string;
+  fullPath: string;
+  nodeType: 'PATH' | 'KEY';
+  hasChildren?: boolean;
+  objectName?: string;
+  valueType?: string;
+  ttlSeconds?: number;
+  description?: string;
+}
+
+export interface KvRedisBrowserPageVO {
+  connectionId: number;
+  databaseName?: string;
+  parentPath?: string;
+  keyword?: string;
+  cursor?: string;
+  nextCursor?: string;
+  finished?: boolean;
+  items: KvRedisBrowserNodeVO[];
+}
+
 export interface KvObjectDetailVO {
   connectionId: number;
   databaseName?: string;
@@ -194,7 +217,15 @@ export interface KvRedisKeySaveVO {
 export interface KvRedisKeyDeleteReq {
   connectionId: number;
   databaseName?: string;
-  keyName: string;
+  targetType: 'KEY' | 'PATH';
+  targetValue: string;
+}
+
+export interface KvRedisKeyDeleteVO {
+  targetType: 'KEY' | 'PATH';
+  targetValue: string;
+  deletedCount: number;
+  message: string;
 }
 
 export interface SchemaOverviewVO {

@@ -62,6 +62,11 @@ import treeTableIcon from '../../../assets/icons/tree-table.png';
 import treeViewIcon from '../../../assets/icons/tree-view.png';
 import treeFunctionIcon from '../../../assets/icons/tree-function.png';
 import treeQueryIcon from '../../../assets/icons/tree-query.png';
+import treeSchemaIcon from '../../../assets/icons/tree-schema.png';
+import treeConnectedIcon from '../../../assets/icons/tree-connected.png';
+import treeOpenedFolderIcon from '../../../assets/icons/tree-opened-folder.svg';
+import folderClosedIcon from '../../../assets/icons/folde.png';
+import keyIcon from '../../../assets/icons/key.svg';
 import {
   normalizeRagProviderByPackage,
   ragLocalOnnxEnabled,
@@ -105,7 +110,10 @@ import type {
   QueryHistoryVO,
   KvObjectDetailVO,
   KvOverviewVO,
+  KvRedisBrowserNodeVO,
+  KvRedisBrowserPageVO,
   KvRedisKeyDeleteReq,
+  KvRedisKeyDeleteVO,
   KvRedisKeyEntryVO,
   KvRedisKeySaveReq,
   KvRedisKeySaveVO,
@@ -157,6 +165,14 @@ interface DesktopBridge {
 }
 
 interface ObjectRow {
+  nodeKey?: string;
+  nodeName?: string;
+  fullPath?: string;
+  redisNodeType?: 'PATH' | 'KEY' | 'LOAD_MORE';
+  hasChildren?: boolean;
+  ttlSeconds?: number;
+  children?: ObjectRow[];
+  nextCursor?: string;
   objectName: string;
   objectType: 'tables' | 'views' | 'functions' | 'events' | 'queries' | 'backups';
   rowEstimate: number;
@@ -800,6 +816,22 @@ const kvObjectDetailLoading = ref(false);
 
 const redisHierarchyPath = ref('');
 
+const redisBrowserRows = ref<ObjectRow[]>([]);
+
+const redisBrowserLoading = ref(false);
+
+const redisExpandedRowKeys = ref<string[]>([]);
+
+const redisBrowseExpandedRowKeys = ref<string[]>([]);
+
+const redisSelectedRowKey = ref('');
+
+const redisBrowserContextKey = ref('');
+
+const redisBrowserPageCache = ref<Record<string, KvRedisBrowserPageVO>>({});
+
+const redisBrowserChildLoadingMap = ref<Record<string, boolean>>({});
+
 const redisKeyModalOpen = ref(false);
 
 const redisKeyModalSubmitting = ref(false);
@@ -903,6 +935,7 @@ const contextMenu = reactive({
   category: '' as '' | 'tables' | 'views' | 'functions' | 'queries',
   objectType: '' as '' | ObjectRow['objectType'],
   objectName: '',
+  redisNodeType: '' as '' | 'PATH' | 'KEY' | 'LOAD_MORE',
 });
 
 const connectionForm = reactive<ConnectionCreateReq>(defaultConnectionForm());
@@ -993,6 +1026,8 @@ let sqlEditorMouseDownDisposable: IDisposable | null = null;
 let sqlEditorMouseUpDisposable: IDisposable | null = null;
 
 let sqlAutoSuggestTimer: number | null = null;
+
+let redisBrowserSearchTimer: number | null = null;
 
 let activeSqlEditorInstance: MonacoApi.editor.IStandaloneCodeEditor | null = null;
 
@@ -1354,6 +1389,9 @@ const objectRows = computed<ObjectRow[]>(() => {
 
   if (currentObjectType.value === 'tables') {
     if (kvContext) {
+      if (activeDbType === 'REDIS') {
+        return flattenRedisBrowserRows(redisBrowserRows.value);
+      }
       return (kvOverview.value?.objects ?? []).map((item) => ({
         objectName: item.objectName,
         objectType: 'tables',
@@ -1424,70 +1462,255 @@ const activeConnectionIsRedis = computed(() =>
   (connections.value.find((item) => item.id === workflow.connectionId)?.dbType || '') === 'REDIS',
 );
 
-const redisHierarchyTreeData = computed(() => {
-  if (!activeConnectionIsRedis.value) {
-    return [];
-  }
-  type RedisTreeNode = {
-    key: string;
-    title: string;
-    children: RedisTreeNode[];
-    isLeaf?: boolean;
-    objectName?: string;
-    path?: string;
+function flattenRedisBrowserRows(rows: ObjectRow[]) {
+  const result: ObjectRow[] = [];
+  rows.forEach((item) => {
+    result.push(item);
+    if (item.children?.length) {
+      result.push(...flattenRedisBrowserRows(item.children));
+    }
+  });
+  return result;
+}
+
+function buildRedisBrowserCacheKey(connectionId: number, databaseName: string, parentPath: string, keyword: string, cursor = '0') {
+  return `${connectionId}|${databaseName || '__default__'}|${parentPath || '__root__'}|${keyword || '__all__'}|${cursor || '0'}`;
+}
+
+function buildRedisBrowserRow(item: KvRedisBrowserNodeVO): ObjectRow {
+  return {
+    nodeKey: item.nodeKey,
+    nodeName: item.nodeName,
+    fullPath: item.fullPath,
+    redisNodeType: item.nodeType,
+    hasChildren: item.hasChildren,
+    ttlSeconds: item.ttlSeconds,
+    objectName: item.objectName || item.fullPath,
+    objectType: 'tables',
+    rowEstimate: 0,
+    tableSize: item.valueType || '-',
+    description: item.description || '',
+    vectorizeStatus: 'NOT_VECTORIZED',
+    vectorizeMessage: 'KV 类型不进行向量化',
+    vectorizeUpdatedAt: undefined,
   };
-  const root: RedisTreeNode[] = [];
-  const branchMap = new Map<string, RedisTreeNode>();
-  for (const item of objectRows.value) {
-    const keyName = item.objectName;
-    const segments = keyName.split(':').filter((segment) => !!segment);
-    let currentChildren = root;
-    let currentPath = '';
-    segments.forEach((segment, index) => {
-      currentPath = currentPath ? `${currentPath}:${segment}` : segment;
-      if (index === segments.length - 1) {
-        currentChildren.push({
-          key: `redis-key-${keyName}`,
-          title: segment,
-          children: [],
-          isLeaf: true,
-          objectName: keyName,
-          path: currentPath,
-        });
-        return;
+}
+
+function buildRedisBrowserLoadMoreRow(parentPath: string, nextCursor: string): ObjectRow {
+  return {
+    nodeKey: `load-more:${parentPath || '__root__'}:${nextCursor}`,
+    nodeName: '加载更多',
+    fullPath: parentPath,
+    redisNodeType: 'LOAD_MORE',
+    hasChildren: false,
+    nextCursor,
+    objectName: `__redis_load_more__:${parentPath}:${nextCursor}`,
+    objectType: 'tables',
+    rowEstimate: 0,
+    tableSize: '-',
+    description: '继续加载当前层更多节点',
+    vectorizeStatus: 'NOT_VECTORIZED',
+    vectorizeMessage: 'KV 类型不进行向量化',
+    vectorizeUpdatedAt: undefined,
+  };
+}
+
+function normalizeRedisBrowserRows(items: KvRedisBrowserNodeVO[], parentPath: string, nextCursor?: string, finished?: boolean) {
+  const rows = items.map(buildRedisBrowserRow);
+  if (!finished && nextCursor && nextCursor !== '0') {
+    rows.push(buildRedisBrowserLoadMoreRow(parentPath, nextCursor));
+  }
+  return rows;
+}
+
+function redisParentPathOfRow(record: { redisNodeType?: string; fullPath?: string; objectName?: string }) {
+  const fullPath = (record.redisNodeType === 'KEY' ? record.objectName : record.fullPath) || '';
+  const segments = fullPath.split(':').filter((item) => !!item);
+  segments.pop();
+  return segments.join(':');
+}
+
+function sortRedisTreeRows(rows: ObjectRow[]): ObjectRow[] {
+  return [...rows]
+    .sort((left, right) => {
+      const leftTypeWeight = left.redisNodeType === 'PATH' ? 0 : left.redisNodeType === 'KEY' ? 1 : 2;
+      const rightTypeWeight = right.redisNodeType === 'PATH' ? 0 : right.redisNodeType === 'KEY' ? 1 : 2;
+      if (leftTypeWeight !== rightTypeWeight) {
+        return leftTypeWeight - rightTypeWeight;
       }
-      const branchKey = `redis-path-${currentPath}`;
-      let branch = branchMap.get(branchKey);
-      if (!branch) {
-        branch = {
-          key: branchKey,
-          title: segment,
-          children: [],
-          path: currentPath,
-        };
-        branchMap.set(branchKey, branch);
-        currentChildren.push(branch);
-      }
-      currentChildren = branch.children;
+      return String(left.nodeName || left.objectName).localeCompare(String(right.nodeName || right.objectName), 'zh-CN');
+    })
+    .map((item) => ({
+      ...item,
+      children: item.children?.length ? sortRedisTreeRows(item.children) : item.children,
+    }));
+}
+
+function buildRedisSearchTreeRows(items: KvRedisBrowserNodeVO[], nextCursor?: string, finished?: boolean) {
+  const rowMap = new Map<string, ObjectRow>();
+  items.forEach((item) => {
+    rowMap.set(item.nodeKey, {
+      ...buildRedisBrowserRow(item),
+      children: [],
     });
+  });
+  const roots: ObjectRow[] = [];
+  rowMap.forEach((row) => {
+    const parentPath = redisParentPathOfRow(row);
+    const parentKey = parentPath ? `path:${parentPath}` : '';
+    const parent = parentKey ? rowMap.get(parentKey) : null;
+    if (parent) {
+      parent.children = parent.children ?? [];
+      parent.children.push(row);
+      return;
+    }
+    roots.push(row);
+  });
+  const sortedRoots = sortRedisTreeRows(roots);
+  if (!finished && nextCursor && nextCursor !== '0') {
+    sortedRoots.push(buildRedisBrowserLoadMoreRow('', nextCursor));
   }
-  return root;
-});
+  return sortedRoots;
+}
 
-const redisVisibleObjectRows = computed(() => {
-  if (!activeConnectionIsRedis.value) {
-    return filteredObjectRows.value;
+function mergeRedisSearchTreeRows(currentRows: ObjectRow[], nextRows: ObjectRow[]) {
+  const mergedMap = new Map<string, ObjectRow>();
+  const appendRow = (row: ObjectRow) => {
+    const existing = row.nodeKey ? mergedMap.get(row.nodeKey) : null;
+    if (!existing || !row.nodeKey) {
+      mergedMap.set(row.nodeKey || `${row.objectName}-${mergedMap.size}`, {
+        ...row,
+        children: row.children ? mergeRedisSearchTreeRows([], row.children) : row.children,
+      });
+      return;
+    }
+    existing.children = mergeRedisSearchTreeRows(existing.children ?? [], row.children ?? []);
+    existing.tableSize = row.tableSize || existing.tableSize;
+    existing.description = row.description || existing.description;
+    existing.ttlSeconds = row.ttlSeconds ?? existing.ttlSeconds;
+  };
+  [...currentRows.filter((item) => item.redisNodeType !== 'LOAD_MORE'), ...nextRows.filter((item) => item.redisNodeType !== 'LOAD_MORE')]
+    .forEach(appendRow);
+  const mergedRoots = sortRedisTreeRows(Array.from(mergedMap.values()));
+  const loadMoreRow = [...nextRows, ...currentRows].find((item) => item.redisNodeType === 'LOAD_MORE');
+  if (loadMoreRow) {
+    mergedRoots.push(loadMoreRow);
   }
-  const prefix = redisHierarchyPath.value.trim();
-  if (!prefix) {
-    return filteredObjectRows.value;
-  }
-  return filteredObjectRows.value.filter((item) => item.objectName === prefix || item.objectName.startsWith(`${prefix}:`));
-});
+  return mergedRoots;
+}
 
-const selectedObjectRecord = computed(() =>
-  objectRows.value.find((item) => item.objectName === selectedObjectName.value) ?? null,
-);
+function collectRedisPathNodeKeys(rows: ObjectRow[]) {
+  const keys: string[] = [];
+  rows.forEach((item) => {
+    if (item.redisNodeType === 'PATH' && item.nodeKey) {
+      keys.push(item.nodeKey);
+    }
+    if (item.children?.length) {
+      keys.push(...collectRedisPathNodeKeys(item.children));
+    }
+  });
+  return keys;
+}
+
+function replaceRedisBranchRows(rows: ObjectRow[], parentPath: string, nextRows: ObjectRow[]): ObjectRow[] {
+  return rows.map((item) => {
+    if (item.redisNodeType === 'PATH' && item.fullPath === parentPath) {
+      return {
+        ...item,
+        children: nextRows,
+      };
+    }
+    if (!item.children?.length) {
+      return item;
+    }
+    return {
+      ...item,
+      children: replaceRedisBranchRows(item.children, parentPath, nextRows),
+    };
+  });
+}
+
+function appendRedisBranchRows(rows: ObjectRow[], parentPath: string, nextRows: ObjectRow[]): ObjectRow[] {
+  return rows.map((item) => {
+    if (item.redisNodeType === 'PATH' && item.fullPath === parentPath) {
+      const merged = [...(item.children ?? []).filter((child) => child.redisNodeType !== 'LOAD_MORE'), ...nextRows];
+      return {
+        ...item,
+        children: merged,
+      };
+    }
+    if (!item.children?.length) {
+      return item;
+    }
+    return {
+      ...item,
+      children: appendRedisBranchRows(item.children, parentPath, nextRows),
+    };
+  });
+}
+
+function findRedisBrowserRowByNodeKey(rows: ObjectRow[], nodeKey: string): ObjectRow | null {
+  for (const item of rows) {
+    if (item.nodeKey === nodeKey) {
+      return item;
+    }
+    if (item.children?.length) {
+      const matched = findRedisBrowserRowByNodeKey(item.children, nodeKey);
+      if (matched) {
+        return matched;
+      }
+    }
+  }
+  return null;
+}
+
+function findRedisSelectedObjectRow(rows: ObjectRow[], objectName: string): ObjectRow | null {
+  for (const item of rows) {
+    if (item.redisNodeType === 'KEY' && item.objectName === objectName) {
+      return item;
+    }
+    if (item.children?.length) {
+      const matched = findRedisSelectedObjectRow(item.children, objectName);
+      if (matched) {
+        return matched;
+      }
+    }
+  }
+  return null;
+}
+
+const redisVisibleObjectRows = computed(() => redisBrowserRows.value);
+
+const redisHierarchyTreeData = computed(() => []);
+
+const selectedObjectRecord = computed(() => {
+  if (activeConnectionIsRedis.value) {
+    const browserRow = findRedisSelectedObjectRow(redisBrowserRows.value, selectedObjectName.value);
+    if (browserRow) {
+      return browserRow;
+    }
+    if (kvObjectDetail.value?.objectName === selectedObjectName.value && selectedObjectName.value) {
+      return {
+        nodeKey: `key:${selectedObjectName.value}`,
+        nodeName: selectedObjectName.value.split(':').filter((item) => !!item).pop() || selectedObjectName.value,
+        fullPath: selectedObjectName.value,
+        redisNodeType: 'KEY',
+        hasChildren: false,
+        ttlSeconds: Number(kvObjectDetail.value.ttlSeconds ?? -1),
+        objectName: selectedObjectName.value,
+        objectType: 'tables',
+        rowEstimate: 0,
+        tableSize: kvObjectDetail.value.valueType || '-',
+        description: kvObjectDetail.value.description || '',
+        vectorizeStatus: 'NOT_VECTORIZED',
+        vectorizeMessage: 'KV 类型不进行向量化',
+        vectorizeUpdatedAt: undefined,
+      } satisfies ObjectRow;
+    }
+    return null;
+  }
+  return objectRows.value.find((item) => item.objectName === selectedObjectName.value) ?? null;
+});
 
 const selectedTreeDetail = computed(() => {
   const key = selectedTreeKeys.value[0];
@@ -1646,6 +1869,9 @@ const tableEditorSqlHighlighted = computed(() => {
 });
 
 const filteredObjectRows = computed(() => {
+  if (activeConnectionIsRedis.value && currentObjectType.value === 'tables') {
+    return objectRows.value;
+  }
   const keyword = tableKeyword.value.trim().toLowerCase();
   if (!keyword) {
     return objectRows.value;
@@ -1657,6 +1883,15 @@ const objectColumns = computed(() => {
   const activeDbType = connections.value.find((item) => item.id === workflow.connectionId)?.dbType || '';
   if (currentObjectType.value === 'tables') {
     if (isKvDbType(activeDbType)) {
+      if (activeDbType === 'REDIS') {
+        return [
+          { title: '名称', dataIndex: 'nodeName', key: 'nodeName', width: 320, ellipsis: true },
+          { title: '节点类型', dataIndex: 'redisNodeType', key: 'redisNodeType', width: 120 },
+          { title: '值类型', dataIndex: 'tableSize', key: 'tableSize', width: 140 },
+          { title: 'TTL', dataIndex: 'ttlSeconds', key: 'ttlSeconds', width: 120 },
+          { title: '说明', dataIndex: 'description', key: 'description', width: 320, ellipsis: true },
+        ];
+      }
       return [
         { title: primaryObjectLabelByDbType(activeDbType), dataIndex: 'objectName', key: 'objectName', width: 280, ellipsis: true },
         { title: '值类型', dataIndex: 'tableSize', key: 'tableSize', width: 160 },
@@ -2438,6 +2673,9 @@ function vectorizeStatusCacheKey(connectionId: number, databaseName: string) {
 function clearBrowserObjectCollections() {
   browserObjectNameList.value = [];
   browserSavedQueryList.value = [];
+  redisBrowserRows.value = [];
+  redisExpandedRowKeys.value = [];
+  redisSelectedRowKey.value = '';
 }
 
 function invalidateConnectionMetadataCaches(connectionId: number) {
@@ -2474,6 +2712,17 @@ function invalidateConnectionMetadataCaches(connectionId: number) {
   queryTableDetailCache.value = Object.fromEntries(
     Object.entries(queryTableDetailCache.value).filter(([key]) => !key.startsWith(`${connectionId}|`)),
   );
+  redisBrowserPageCache.value = Object.fromEntries(
+    Object.entries(redisBrowserPageCache.value).filter(([key]) => !key.startsWith(`${connectionId}|`)),
+  );
+  redisBrowserChildLoadingMap.value = {};
+  redisBrowserRows.value = [];
+  redisExpandedRowKeys.value = [];
+  redisBrowseExpandedRowKeys.value = [];
+  redisSelectedRowKey.value = '';
+  if (workflow.connectionId === connectionId) {
+    redisBrowserContextKey.value = '';
+  }
   tableStatsCache.value = Object.fromEntries(
     Object.entries(tableStatsCache.value).filter(([key]) => !key.startsWith(`${connectionId}|`)),
   );
@@ -2653,6 +2902,7 @@ function resetConnectionRuntimeState(connectionId: number) {
   if (workflow.connectionId === connectionId) {
     currentObjectType.value = 'tables';
     selectedObjectName.value = '';
+    redisHierarchyPath.value = '';
     clearBrowserObjectCollections();
     clearObjectDetail();
   }
@@ -4675,35 +4925,295 @@ async function syncSchema(targetConnectionId?: number) {
   });
 }
 
+function normalizeRedisBrowserPath(path: string) {
+  return path.replace(/^:+/, '').replace(/:+$/, '').trim();
+}
+
+function buildRedisBrowserQueryUrl(
+  connectionId: number,
+  databaseName: string,
+  parentPath: string,
+  keyword: string,
+  cursor = '0',
+  pageSize = 100,
+) {
+  const params = new URLSearchParams({
+    connectionId: String(connectionId),
+    databaseName,
+    parentPath,
+    keyword,
+    cursor,
+    pageSize: String(pageSize),
+  });
+  return `/api/kv/redis/browser?${params.toString()}`;
+}
+
+function invalidateRedisBrowserCache(connectionId: number, databaseName?: string) {
+  const targetDatabaseName = (databaseName || '').trim();
+  redisBrowserPageCache.value = Object.fromEntries(
+    Object.entries(redisBrowserPageCache.value).filter(([key]) => {
+      if (!targetDatabaseName) {
+        return !key.startsWith(`${connectionId}|`);
+      }
+      return !key.startsWith(`${connectionId}|${targetDatabaseName}|`);
+    }),
+  );
+  redisBrowserChildLoadingMap.value = {};
+  redisBrowserRows.value = [];
+  redisExpandedRowKeys.value = [];
+  redisBrowseExpandedRowKeys.value = [];
+}
+
+async function fetchRedisBrowserPage(
+  connectionId: number,
+  databaseName: string,
+  parentPath: string,
+  keyword: string,
+  cursor = '0',
+  options?: { force?: boolean; pageSize?: number },
+) {
+  const normalizedParentPath = normalizeRedisBrowserPath(parentPath);
+  const normalizedKeyword = keyword.trim();
+  const normalizedCursor = (cursor || '').trim() || '0';
+  const cacheKey = buildRedisBrowserCacheKey(connectionId, databaseName, normalizedParentPath, normalizedKeyword, normalizedCursor);
+  if (!options?.force && redisBrowserPageCache.value[cacheKey]) {
+    return redisBrowserPageCache.value[cacheKey];
+  }
+  const page = await getApi<KvRedisBrowserPageVO>(
+    buildRedisBrowserQueryUrl(
+      connectionId,
+      databaseName,
+      normalizedParentPath,
+      normalizedKeyword,
+      normalizedCursor,
+      options?.pageSize ?? 100,
+    ),
+  );
+  redisBrowserPageCache.value = {
+    ...redisBrowserPageCache.value,
+    [cacheKey]: page,
+  };
+  return page;
+}
+
+async function loadRedisBrowserRows(options?: { force?: boolean }) {
+  const connectionId = workflow.connectionId;
+  const databaseName = getActiveDatabaseName(connectionId);
+  if (!connectionId || !databaseName) {
+    redisBrowserRows.value = [];
+    return;
+  }
+  const contextKey = `${connectionId}|${databaseName}`;
+  if (redisBrowserContextKey.value !== contextKey) {
+    redisBrowserContextKey.value = contextKey;
+    redisExpandedRowKeys.value = [];
+    redisBrowseExpandedRowKeys.value = [];
+  }
+  redisBrowserLoading.value = true;
+  try {
+    const keyword = tableKeyword.value.trim();
+    const page = await fetchRedisBrowserPage(
+      connectionId,
+      databaseName,
+      keyword ? '' : '',
+      keyword,
+      '0',
+      { force: options?.force },
+    );
+    if (keyword) {
+      redisBrowserRows.value = buildRedisSearchTreeRows(page.items ?? [], page.nextCursor, page.finished);
+      redisExpandedRowKeys.value = Array.from(new Set(collectRedisPathNodeKeys(redisBrowserRows.value)));
+    } else {
+      const previousExpandedKeys = [...redisBrowseExpandedRowKeys.value];
+      redisBrowserRows.value = normalizeRedisBrowserRows(page.items ?? [], '', page.nextCursor, page.finished);
+      redisExpandedRowKeys.value = [];
+      for (const nodeKey of previousExpandedKeys) {
+        const path = nodeKey.startsWith('path:') ? nodeKey.slice('path:'.length) : '';
+        if (!path) {
+          continue;
+        }
+        await loadRedisBrowserChildren(path);
+        if (!redisExpandedRowKeys.value.includes(nodeKey)) {
+          redisExpandedRowKeys.value = [...redisExpandedRowKeys.value, nodeKey];
+        }
+      }
+      redisBrowseExpandedRowKeys.value = [...redisExpandedRowKeys.value];
+    }
+    setConnectionRuntimeStatus(connectionId, 'connected');
+  } catch (error) {
+    setConnectionRuntimeStatus(connectionId, 'failed');
+    throw error;
+  } finally {
+    redisBrowserLoading.value = false;
+  }
+}
+
+async function loadRedisBrowserChildren(parentPath: string, options?: { force?: boolean; cursor?: string; append?: boolean }) {
+  if (tableKeyword.value.trim()) {
+    return;
+  }
+  const connectionId = workflow.connectionId;
+  const databaseName = getActiveDatabaseName(connectionId);
+  if (!connectionId || !databaseName) {
+    return;
+  }
+  const normalizedParentPath = normalizeRedisBrowserPath(parentPath);
+  const loadingKey = normalizedParentPath || '__root__';
+  if (redisBrowserChildLoadingMap.value[loadingKey]) {
+    return;
+  }
+  redisBrowserChildLoadingMap.value = {
+    ...redisBrowserChildLoadingMap.value,
+    [loadingKey]: true,
+  };
+  try {
+    const page = await fetchRedisBrowserPage(
+      connectionId,
+      databaseName,
+      normalizedParentPath,
+      '',
+      options?.cursor || '0',
+      { force: options?.force },
+    );
+    const nextRows = normalizeRedisBrowserRows(
+      page.items ?? [],
+      normalizedParentPath,
+      page.nextCursor,
+      page.finished,
+    );
+    redisBrowserRows.value = options?.append
+      ? appendRedisBranchRows(redisBrowserRows.value, normalizedParentPath, nextRows)
+      : replaceRedisBranchRows(redisBrowserRows.value, normalizedParentPath, nextRows);
+    setConnectionRuntimeStatus(connectionId, 'connected');
+  } catch (error) {
+    setConnectionRuntimeStatus(connectionId, 'failed');
+    throw error;
+  } finally {
+    const nextLoadingMap = {...redisBrowserChildLoadingMap.value};
+    delete nextLoadingMap[loadingKey];
+    redisBrowserChildLoadingMap.value = nextLoadingMap;
+  }
+}
+
+async function handleRedisBrowserExpand(expanded: boolean, record: ObjectRow) {
+  if (record.redisNodeType !== 'PATH' || !record.nodeKey || !record.fullPath) {
+    return;
+  }
+  if (!expanded) {
+    redisExpandedRowKeys.value = redisExpandedRowKeys.value.filter((item) => item !== record.nodeKey);
+    if (!tableKeyword.value.trim()) {
+      redisBrowseExpandedRowKeys.value = [...redisExpandedRowKeys.value];
+    }
+    return;
+  }
+  if (!redisExpandedRowKeys.value.includes(record.nodeKey)) {
+    redisExpandedRowKeys.value = [...redisExpandedRowKeys.value, record.nodeKey];
+  }
+  if (tableKeyword.value.trim()) {
+    return;
+  }
+  redisBrowseExpandedRowKeys.value = [...redisExpandedRowKeys.value];
+  const hasLoadedChildren = !!record.children?.some((item) => item.redisNodeType !== 'LOAD_MORE');
+  if (hasLoadedChildren) {
+    return;
+  }
+  await loadRedisBrowserChildren(record.fullPath);
+}
+
+async function toggleRedisBrowserPath(record: ObjectRow) {
+  if (record.redisNodeType !== 'PATH' || !record.nodeKey) {
+    return;
+  }
+  const expanded = redisExpandedRowKeys.value.includes(record.nodeKey);
+  await handleRedisBrowserExpand(!expanded, record);
+}
+
+async function loadMoreRedisBrowserRows(record: ObjectRow) {
+  if (record.redisNodeType !== 'LOAD_MORE' || !record.nextCursor) {
+    return;
+  }
+  const databaseName = getActiveDatabaseName(workflow.connectionId);
+  if (!databaseName) {
+    return;
+  }
+  const keyword = tableKeyword.value.trim();
+  if (keyword) {
+    const page = await fetchRedisBrowserPage(
+      workflow.connectionId,
+      databaseName,
+      '',
+      keyword,
+      record.nextCursor,
+    );
+    const nextRows = buildRedisSearchTreeRows(page.items ?? [], page.nextCursor, page.finished);
+    redisBrowserRows.value = mergeRedisSearchTreeRows(redisBrowserRows.value, nextRows);
+    redisExpandedRowKeys.value = Array.from(new Set(collectRedisPathNodeKeys(redisBrowserRows.value)));
+    return;
+  }
+  const parentPath = normalizeRedisBrowserPath(record.fullPath || '');
+  if (!parentPath) {
+    const page = await fetchRedisBrowserPage(
+      workflow.connectionId,
+      databaseName,
+      '',
+      '',
+      record.nextCursor,
+    );
+    const nextRows = normalizeRedisBrowserRows(
+      page.items ?? [],
+      '',
+      page.nextCursor,
+      page.finished,
+    );
+    redisBrowserRows.value = [
+      ...redisBrowserRows.value.filter((item) => item.redisNodeType !== 'LOAD_MORE'),
+      ...nextRows,
+    ];
+    return;
+  }
+  await loadRedisBrowserChildren(parentPath, {
+    cursor: record.nextCursor,
+    append: true,
+  });
+}
+
 async function loadOverview(options?: { forceTableStats?: boolean; syncTreeCaches?: boolean }) {
   ensureConnection();
   await runSafely(async () => {
     const databaseName = getActiveDatabaseName(workflow.connectionId);
     if (isKvConnectionId(workflow.connectionId)) {
-      const query = databaseName
-        ? `/api/kv/overview?connectionId=${workflow.connectionId}&databaseName=${encodeURIComponent(databaseName)}`
-        : `/api/kv/overview?connectionId=${workflow.connectionId}`;
-      const overview = await getApi<KvOverviewVO>(query);
-      setConnectionRuntimeStatus(workflow.connectionId, 'connected');
-      kvOverview.value = overview;
-      redisHierarchyPath.value = '';
       schemaOverview.value = null;
-      if (options?.syncTreeCaches !== false) {
-        const cacheKey = tableCacheKey(workflow.connectionId, databaseName);
-        const names = (overview.objects ?? []).map((item) => item.objectName);
-        tableNameCache.value = {
-          ...tableNameCache.value,
-          [cacheKey]: names,
-        };
-        tableNameLoadedCache.value = {
-          ...tableNameLoadedCache.value,
-          [cacheKey]: true,
-        };
-        objectNameCache.value = {
-          ...objectNameCache.value,
-          [objectCacheKey(workflow.connectionId, databaseName, 'tables')]: names,
-        };
+      if (activeConnectionIsRedis.value) {
+        kvOverview.value = null;
+        if (options?.forceTableStats) {
+          invalidateRedisBrowserCache(workflow.connectionId, databaseName);
+        }
+        await loadRedisBrowserRows({ force: options?.forceTableStats });
+      } else {
+        const query = databaseName
+          ? `/api/kv/overview?connectionId=${workflow.connectionId}&databaseName=${encodeURIComponent(databaseName)}`
+          : `/api/kv/overview?connectionId=${workflow.connectionId}`;
+        const overview = await getApi<KvOverviewVO>(query);
+        setConnectionRuntimeStatus(workflow.connectionId, 'connected');
+        kvOverview.value = overview;
+        if (options?.syncTreeCaches !== false) {
+          const cacheKey = tableCacheKey(workflow.connectionId, databaseName);
+          const names = (overview.objects ?? []).map((item) => item.objectName);
+          tableNameCache.value = {
+            ...tableNameCache.value,
+            [cacheKey]: names,
+          };
+          tableNameLoadedCache.value = {
+            ...tableNameLoadedCache.value,
+            [cacheKey]: true,
+          };
+          objectNameCache.value = {
+            ...objectNameCache.value,
+            [objectCacheKey(workflow.connectionId, databaseName, 'tables')]: names,
+          };
+        }
       }
+      schemaOverview.value = null;
       expandConnectionNode(workflow.connectionId);
       return;
     }
@@ -4882,6 +5392,27 @@ async function loadTableNamesByConnection(connectionId: number, databaseName: st
     return [];
   }
   if (isKvConnectionId(connectionId)) {
+    const connection = connections.value.find((item) => item.id === connectionId);
+    if (connection?.dbType === 'REDIS') {
+      const page = await fetchRedisBrowserPage(connectionId, databaseName, '', '', '0');
+      const names = (page.items ?? [])
+        .filter((item) => item.nodeType === 'KEY' && item.objectName)
+        .map((item) => item.objectName as string);
+      const cacheKey = tableCacheKey(connectionId, databaseName);
+      tableNameCache.value = {
+        ...tableNameCache.value,
+        [cacheKey]: names,
+      };
+      tableNameLoadedCache.value = {
+        ...tableNameLoadedCache.value,
+        [cacheKey]: true,
+      };
+      objectNameCache.value = {
+        ...objectNameCache.value,
+        [objectCacheKey(connectionId, databaseName, 'tables')]: names,
+      };
+      return names;
+    }
     const query = `/api/kv/overview?connectionId=${connectionId}&databaseName=${encodeURIComponent(databaseName)}`;
     const overview = await getApi<KvOverviewVO>(query);
     const names = (overview.objects ?? []).map((item) => item.objectName);
@@ -5714,6 +6245,9 @@ async function refreshCurrentObjects(options?: { force?: boolean }) {
       invalidateDatabaseListCache(connectionId);
       if (databaseName && databaseName !== '未发现数据库') {
         invalidateDatabaseMetadataCaches(connectionId, databaseName);
+        if (activeConnectionIsRedis.value) {
+          invalidateRedisBrowserCache(connectionId, databaseName);
+        }
       } else {
         invalidateConnectionMetadataCaches(connectionId);
       }
@@ -5745,8 +6279,11 @@ async function refreshCurrentPageObjects(options?: { force?: boolean }) {
       clearBrowserObjectCollections();
       if (options?.force) {
         clearDatabaseTableStatsCache(connectionId, databaseName);
+        if (activeConnectionIsRedis.value) {
+          invalidateRedisBrowserCache(connectionId, databaseName);
+        }
       }
-      await loadOverview({ forceTableStats: false, syncTreeCaches: false });
+      await loadOverview({ forceTableStats: !!options?.force, syncTreeCaches: false });
     } else if (currentObjectType.value === 'queries') {
       browserSavedQueryList.value = await loadSavedQueries(connectionId, databaseName, { syncCache: false });
       browserObjectNameList.value = [];
@@ -6285,8 +6822,7 @@ async function interruptDatabaseVectorize(connectionId: number, databaseName: st
 async function selectObject(connectionId: number, databaseName: string, objectType: ObjectRow['objectType'], objectName: string) {
   selectedObjectName.value = objectName;
   if (isKvConnectionId(connectionId) && connections.value.find((item) => item.id === connectionId)?.dbType === 'REDIS') {
-    const parts = objectName.split(':').filter((item) => !!item);
-    redisHierarchyPath.value = parts.slice(0, Math.max(parts.length - 1, 0)).join(':');
+    redisSelectedRowKey.value = `key:${objectName}`;
   }
   if (objectType === 'queries') {
     await openSavedQueryTabByTitle(connectionId, databaseName, objectName);
@@ -6456,37 +6992,63 @@ async function confirmRedisKeyModal() {
   });
 }
 
-async function deleteRedisKey(keyName: string) {
-  await runSafely(async () => {
-    const connectionId = workflow.connectionId;
-    const databaseName = getActiveDatabaseName(connectionId);
-    await postApi<boolean>('/api/kv/redis/key/delete', {
-      connectionId,
-      databaseName,
-      keyName,
-    } satisfies KvRedisKeyDeleteReq);
-    message.success('Redis 键已删除');
-    if (selectedObjectName.value === keyName) {
-      selectedObjectName.value = '';
-      clearObjectDetail();
-    }
-    await loadOverview({ forceTableStats: false });
+async function deleteRedisKey(targetValue: string, targetType: 'KEY' | 'PATH' = 'KEY') {
+  await new Promise<void>((resolve) => {
+    Modal.confirm({
+      title: targetType === 'PATH' ? '删除路径下全部键' : '删除键',
+      content: targetType === 'PATH'
+        ? `将递归删除此前缀下所有 keys：${targetValue}`
+        : `确定删除键：${targetValue}？`,
+      okType: 'danger',
+      okText: '删除',
+      cancelText: '取消',
+      onOk() {
+        resolve();
+        void runSafely(async () => {
+          const connectionId = workflow.connectionId;
+          const databaseName = getActiveDatabaseName(connectionId);
+          const result = await postApi<KvRedisKeyDeleteVO>('/api/kv/redis/key/delete', {
+            connectionId,
+            databaseName,
+            targetType,
+            targetValue,
+          } satisfies KvRedisKeyDeleteReq);
+          message.success(result.message);
+          if (targetType === 'KEY' && selectedObjectName.value === targetValue) {
+            selectedObjectName.value = '';
+            clearObjectDetail();
+          }
+          if (targetType === 'PATH' && selectedObjectName.value
+            && (selectedObjectName.value === targetValue || selectedObjectName.value.startsWith(`${targetValue}:`))) {
+            selectedObjectName.value = '';
+            clearObjectDetail();
+          }
+          invalidateRedisBrowserCache(connectionId, databaseName);
+          await loadOverview({ forceTableStats: true });
+        });
+      },
+      onCancel() {
+        resolve();
+      },
+    });
   });
 }
 
 async function handleRedisHierarchySelect(keys: (string | number)[]) {
   const key = String(keys[0] || '');
   if (!key) {
-    redisHierarchyPath.value = '';
+    redisSelectedRowKey.value = '';
     return;
   }
   if (key.startsWith('redis-path-')) {
-    redisHierarchyPath.value = key.slice('redis-path-'.length);
+    const record = findRedisBrowserRowByNodeKey(redisBrowserRows.value, `path:${key.slice('redis-path-'.length)}`);
+    if (record) {
+      await toggleRedisBrowserPath(record);
+    }
     return;
   }
   if (key.startsWith('redis-key-')) {
     const objectName = key.slice('redis-key-'.length);
-    redisHierarchyPath.value = objectName.split(':').slice(0, -1).join(':');
     await selectObject(workflow.connectionId, getActiveDatabaseName(workflow.connectionId), 'tables', objectName);
   }
 }
@@ -8888,6 +9450,10 @@ onBeforeUnmount(() => {
     window.clearTimeout(sqlAutoSuggestTimer);
     sqlAutoSuggestTimer = null;
   }
+  if (redisBrowserSearchTimer !== null) {
+    window.clearTimeout(redisBrowserSearchTimer);
+    redisBrowserSearchTimer = null;
+  }
 });
 
 watch(
@@ -9002,6 +9568,23 @@ watch(
       connectionForm.sshPassword = '';
       connectionForm.sshPrivateKeyPath = '';
     }
+  },
+);
+
+watch(
+  () => tableKeyword.value,
+  () => {
+    if (!activeConnectionIsRedis.value || currentObjectType.value !== 'tables' || !workflow.connectionId) {
+      return;
+    }
+    if (redisBrowserSearchTimer !== null) {
+      window.clearTimeout(redisBrowserSearchTimer);
+    }
+    redisBrowserSearchTimer = window.setTimeout(() => {
+      void runSafely(async () => {
+        await loadRedisBrowserRows();
+      });
+    }, 300);
   },
 );
 
@@ -9469,12 +10052,18 @@ function dbIconUrl(dbType: string) {
 }
 
 /** 对象树非连接节点用 Icons8 资源；events/backups 等返回空串以回退 Ant 图标 */
-function treeNodeIconUrl(dataRef: { nodeType?: string; objectName?: string }) {
+function treeNodeIconUrl(dataRef: { nodeType?: string; objectName?: string; namespaceName?: string }, expanded = false) {
   const t = dataRef.nodeType;
   if (!t || t === 'connection') {
     return '';
   }
+  if (t === 'group' || t === 'group-empty') {
+    return expanded ? treeOpenedFolderIcon : folderClosedIcon;
+  }
   if (t === 'database' || t === 'database-root') {
+    if (dataRef.namespaceName) {
+      return treeSchemaIcon;
+    }
     return treeDatabaseIcon;
   }
   if (t === 'tables') {
@@ -9492,11 +10081,36 @@ function treeNodeIconUrl(dataRef: { nodeType?: string; objectName?: string }) {
   return '';
 }
 
-function treeTitleIconSrc(dataRef: { nodeType?: string; dbType?: string; objectName?: string }) {
+function treeTitleIconSrc(dataRef: { nodeType?: string; dbType?: string; objectName?: string; namespaceName?: string }, expanded = false) {
   if (dataRef.nodeType === 'connection') {
     return dbIconUrl(String(dataRef.dbType || ''));
   }
-  return treeNodeIconUrl(dataRef);
+  return treeNodeIconUrl(dataRef, expanded);
+}
+
+function browserObjectIconSrc(record: ObjectRow, options?: { expanded?: boolean }) {
+  if (record.redisNodeType === 'PATH') {
+    return options?.expanded ? treeOpenedFolderIcon : folderClosedIcon;
+  }
+  if (record.redisNodeType === 'KEY') {
+    return keyIcon;
+  }
+  if (record.redisNodeType === 'LOAD_MORE') {
+    return treeConnectedIcon;
+  }
+  if (record.objectType === 'tables') {
+    return treeTableIcon;
+  }
+  if (record.objectType === 'views') {
+    return treeViewIcon;
+  }
+  if (record.objectType === 'functions') {
+    return treeFunctionIcon;
+  }
+  if (record.objectType === 'queries') {
+    return treeQueryIcon;
+  }
+  return treeDatabaseIcon;
 }
 
 function normalizeModelOptions(options: AiModelOption[] | undefined) {
@@ -9866,6 +10480,10 @@ function resetConnectionModalState() {
     kvObjectDetail,
     kvObjectDetailLoading,
     redisHierarchyPath,
+    redisBrowserRows,
+    redisBrowserLoading,
+    redisExpandedRowKeys,
+    redisSelectedRowKey,
     redisKeyModalOpen,
     redisKeyModalSubmitting,
     redisKeyModalMode,
@@ -10153,6 +10771,9 @@ function resetConnectionModalState() {
     closeRedisKeyModal,
     confirmRedisKeyModal,
     deleteRedisKey,
+    handleRedisBrowserExpand,
+    toggleRedisBrowserPath,
+    loadMoreRedisBrowserRows,
     handleRedisHierarchySelect,
     openQueryTabByObject,
     openSaveQueryModal,
@@ -10274,6 +10895,7 @@ function resetConnectionModalState() {
     copyTableEditorSql,
     dbIconUrl,
     treeNodeIconUrl,
+    browserObjectIconSrc,
     treeTitleIconSrc,
     normalizeModelOptions,
     nextModelOptionId,
