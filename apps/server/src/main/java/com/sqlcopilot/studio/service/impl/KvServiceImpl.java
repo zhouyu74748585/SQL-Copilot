@@ -286,8 +286,8 @@ public class KvServiceImpl implements KvService {
                     break;
                 }
             }
-            scanCursor = ScanCursor.of(result.getCursor());
-            finished = scanCursor.isFinished();
+            scanCursor = result;
+            finished = result.isFinished();
         } while (!finished && nodeMap.size() < pageSize && scanRounds < REDIS_BROWSER_MAX_SCAN_ROUNDS);
 
         List<KvRedisBrowserNodeVO> items = new ArrayList<>(nodeMap.values());
@@ -326,8 +326,8 @@ public class KvServiceImpl implements KvService {
             ScanArgs args = ScanArgs.Builder.limit(Math.max(pageSize * 4, REDIS_BROWSER_SCAN_BATCH)).match(keyword);
             KeyScanCursor<String> result = sync.scan(scanCursor, args);
             matchedKeys.addAll(result.getKeys());
-            scanCursor = ScanCursor.of(result.getCursor());
-            finished = scanCursor.isFinished();
+            scanCursor = result;
+            finished = result.isFinished();
         } while (!finished && matchedKeys.size() < pageSize && scanRounds < REDIS_BROWSER_MAX_SCAN_ROUNDS);
 
         List<KvRedisBrowserNodeVO> items = buildRedisSearchTreeItems(matchedKeys.stream().limit(pageSize).toList());
@@ -839,7 +839,7 @@ public class KvServiceImpl implements KvService {
         do {
             KeyScanCursor<String> result = sync.scan(cursor, args);
             keys.addAll(result.getKeys());
-            cursor = ScanCursor.of(result.getCursor());
+            cursor = result;
             if (keys.size() >= maxKeys) {
                 break;
             }
@@ -916,7 +916,7 @@ public class KvServiceImpl implements KvService {
             if (!keys.isEmpty()) {
                 deletedCount += safeLong(sync.del(keys.toArray(String[]::new)));
             }
-            cursor = ScanCursor.of(result.getCursor());
+            cursor = result;
         } while (!cursor.isFinished());
         return deletedCount;
     }

@@ -508,11 +508,16 @@
                     row-key="nodeKey"
                     :scroll="{ y: tableScrollY }"
                     :custom-row="onObjectRow"
-                    :expandable="redisTableExpandable"
+                    :expanded-row-keys="redisExpandedRowKeys"
+                    :children-column-name="'children'"
+                    :row-expandable="redisRowExpandable"
+                    :show-expand-column="false"
+                    :expand-icon-column-index="0"
+                    @expand="handleRedisBrowserExpand"
                   >
                     <template #bodyCell="{ column, record }">
                       <template v-if="column.key === 'nodeName'">
-                        <div class="table-name-cell" :class="{ 'is-active': redisRowIsActive(record), 'is-queryable': record.redisNodeType === 'KEY' || record.redisNodeType === 'LOAD_MORE', 'is-path-row': record.redisNodeType === 'PATH' }" @dblclick.stop="onObjectRow(record).onDblclick()">
+                        <div class="table-name-cell" :class="{ 'is-active': redisRowIsActive(record), 'is-queryable': record.redisNodeType === 'KEY' || record.redisNodeType === 'LOAD_MORE', 'is-path-row': record.redisNodeType === 'PATH' }" :style="redisRowIndentStyle(record)" @dblclick.stop="onObjectRow(record).onDblclick()">
                           <img class="object-row-icon" :src="objectRowIconSrc(record)" alt="" />
                           <span>{{ record.nodeName || record.objectName }}</span>
                         </div>
@@ -4370,17 +4375,42 @@ function objectRowIconSrc(record: {
   });
 }
 
-const redisTableExpandable = computed(() => ({
-  expandedRowKeys: redisExpandedRowKeys.value,
-  showExpandColumn: false,
-  expandIconColumnIndex: 0,
-  columnWidth: 52,
-  childrenColumnName: 'children',
-  rowExpandable: (record: { redisNodeType?: string }) => record.redisNodeType === 'PATH',
-  onExpand: (expanded: boolean, record: unknown) => {
-    void handleRedisBrowserExpand(expanded, record as never);
-  },
-}));
+function redisRowExpandable(record: { redisNodeType?: string }) {
+  return record.redisNodeType === 'PATH';
+}
+
+function redisRowDepth(record: {
+  redisNodeType?: string;
+  fullPath?: string;
+  objectName?: string;
+}) {
+  const rawPath = record.redisNodeType === 'KEY'
+    ? (record.objectName || '')
+    : (record.fullPath || '');
+  const normalizedPath = rawPath.replace(/^:+/, '').replace(/:+$/, '').trim();
+  if (!normalizedPath) {
+    return 0;
+  }
+  const depth = normalizedPath.split(':').filter((segment) => !!segment).length - 1;
+  if (record.redisNodeType === 'LOAD_MORE') {
+    return depth + 1;
+  }
+  return Math.max(depth, 0);
+}
+
+function redisRowIndentStyle(record: {
+  redisNodeType?: string;
+  fullPath?: string;
+  objectName?: string;
+}) {
+  const depth = redisRowDepth(record);
+  if (depth <= 0) {
+    return undefined;
+  }
+  return {
+    paddingLeft: `${depth * 18}px`,
+  };
+}
 
 function redisNodeTypeLabel(record: { redisNodeType?: string }) {
   if (record.redisNodeType === 'PATH') {

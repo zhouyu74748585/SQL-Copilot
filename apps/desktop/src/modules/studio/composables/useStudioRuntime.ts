@@ -1493,6 +1493,7 @@ function buildRedisBrowserRow(item: KvRedisBrowserNodeVO): ObjectRow {
     vectorizeStatus: 'NOT_VECTORIZED',
     vectorizeMessage: 'KV 类型不进行向量化',
     vectorizeUpdatedAt: undefined,
+    children: item.nodeType === 'PATH' && item.hasChildren ? [] : undefined,
   };
 }
 
@@ -5106,18 +5107,21 @@ async function handleRedisBrowserExpand(expanded: boolean, record: ObjectRow) {
     }
     return;
   }
+  if (tableKeyword.value.trim()) {
+    if (!redisExpandedRowKeys.value.includes(record.nodeKey)) {
+      redisExpandedRowKeys.value = [...redisExpandedRowKeys.value, record.nodeKey];
+    }
+    return;
+  }
+  const hasLoadedChildren = !!record.children?.some((item) => item.redisNodeType !== 'LOAD_MORE');
+  if (!hasLoadedChildren) {
+    await loadRedisBrowserChildren(record.fullPath);
+    await nextTick();
+  }
   if (!redisExpandedRowKeys.value.includes(record.nodeKey)) {
     redisExpandedRowKeys.value = [...redisExpandedRowKeys.value, record.nodeKey];
   }
-  if (tableKeyword.value.trim()) {
-    return;
-  }
   redisBrowseExpandedRowKeys.value = [...redisExpandedRowKeys.value];
-  const hasLoadedChildren = !!record.children?.some((item) => item.redisNodeType !== 'LOAD_MORE');
-  if (hasLoadedChildren) {
-    return;
-  }
-  await loadRedisBrowserChildren(record.fullPath);
 }
 
 async function toggleRedisBrowserPath(record: ObjectRow) {
