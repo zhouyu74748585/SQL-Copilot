@@ -661,11 +661,7 @@
                   </div>
                   <pre class="detail-code-block"><code>{{ kvObjectDetail?.queryTemplate || '-- 暂无查询模板' }}</code></pre>
                   <div class="detail-code-head detail-code-head-secondary">
-                    <span>样本内容</span>
-                  </div>
-                  <pre class="detail-code-block"><code>{{ kvObjectDetail?.sampleJson || '-- 暂无样本内容' }}</code></pre>
-                  <div class="detail-code-head detail-code-head-secondary">
-                    <span>可编辑内容</span>
+                    <span>值详情</span>
                   </div>
                   <pre class="detail-code-block redis-detail-value"><code>{{ redisDetailValueText }}</code></pre>
                   <div v-if="kvObjectDetail?.facts?.length" class="detail-note">
