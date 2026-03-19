@@ -505,7 +505,7 @@
                     </div>
                   </div>
                   <a-table
-                    class="object-list-table"
+                    class="object-list-table redis-browser-table"
                     size="small"
                     :loading="redisBrowserLoading"
                     :pagination="false"

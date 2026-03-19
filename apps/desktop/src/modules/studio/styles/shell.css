@@ -884,11 +884,19 @@ body {
   gap: 6px;
 }
 
+.table-name-cell.is-path-row {
+  cursor: pointer;
+}
+
 .object-row-icon {
   width: 16px;
   height: 16px;
   flex-shrink: 0;
   object-fit: contain;
+}
+
+.redis-browser-table .ant-table-row-expand-icon {
+  display: none;
 }
 
 .table-name-cell.is-active {
