@@ -15,3 +15,4 @@ apps/server/exports
 /docs/review/
 /release/
 /.vscode/
+/output/
