@@ -67,7 +67,7 @@ import treeConnectedIcon from '../../../assets/icons/tree-connected.png';
 import treeOpenedFolderIcon from '../../../assets/icons/tree-opened-folder.svg';
 import folderClosedIcon from '../../../assets/icons/folde.png';
 import keyIcon from '../../../assets/icons/key.svg';
-import {useAppI18n} from '../../../i18n';
+import {translateText, useAppI18n} from '../../../i18n';
 import {
   getRagProviderOptions,
   normalizeRagProviderByPackage,
@@ -146,6 +146,10 @@ import type {
 export function useStudioRuntime() {
 const {currentLocale} = useAppI18n();
 const ragProviderTypeOptions = computed(() => getRagProviderOptions(currentLocale.value));
+const tt = (text: string) => {
+  void currentLocale.value;
+  return translateText(text);
+};
 interface DesktopDialogFilter {
   name: string;
   extensions: string[];
@@ -1888,39 +1892,39 @@ const objectColumns = computed(() => {
     if (isKvDbType(activeDbType)) {
       if (activeDbType === 'REDIS') {
         return [
-          { title: '键名称', dataIndex: 'nodeName', key: 'nodeName', width: 320, ellipsis: true },
-          { title: '节点类型', dataIndex: 'redisNodeType', key: 'redisNodeType', width: 120 },
-          { title: '值类型', dataIndex: 'tableSize', key: 'tableSize', width: 140 },
+          { title: tt('键名称'), dataIndex: 'nodeName', key: 'nodeName', width: 320, ellipsis: true },
+          { title: tt('节点类型'), dataIndex: 'redisNodeType', key: 'redisNodeType', width: 120 },
+          { title: tt('值类型'), dataIndex: 'tableSize', key: 'tableSize', width: 140 },
           { title: 'TTL', dataIndex: 'ttlSeconds', key: 'ttlSeconds', width: 120 },
-          { title: '说明', dataIndex: 'description', key: 'description', width: 320, ellipsis: true },
+          { title: tt('说明'), dataIndex: 'description', key: 'description', width: 320, ellipsis: true },
         ];
       }
       return [
         { title: primaryObjectLabelByDbType(activeDbType), dataIndex: 'objectName', key: 'objectName', width: 280, ellipsis: true },
-        { title: '值类型', dataIndex: 'tableSize', key: 'tableSize', width: 160 },
-        { title: '数量', dataIndex: 'rowEstimate', key: 'rowEstimate', width: 120 },
-        { title: '说明', dataIndex: 'description', key: 'description', width: 320, ellipsis: true },
+        { title: tt('值类型'), dataIndex: 'tableSize', key: 'tableSize', width: 160 },
+        { title: tt('数量'), dataIndex: 'rowEstimate', key: 'rowEstimate', width: 120 },
+        { title: tt('说明'), dataIndex: 'description', key: 'description', width: 320, ellipsis: true },
       ];
     }
     return [
-      { title: '对象', dataIndex: 'objectName', key: 'objectName', width: 250, ellipsis: true },
-      { title: '行数', dataIndex: 'rowEstimate', key: 'rowEstimate', width: 120 },
-      { title: '数据大小', dataIndex: 'tableSize', key: 'tableSize', width: 120 },
-      { title: '向量状态', dataIndex: 'vectorizeStatus', key: 'vectorizeStatus', width: 150 },
-      { title: '说明', dataIndex: 'description', key: 'description', width: 300, ellipsis: true },
+      { title: tt('对象'), dataIndex: 'objectName', key: 'objectName', width: 250, ellipsis: true },
+      { title: tt('行数'), dataIndex: 'rowEstimate', key: 'rowEstimate', width: 120 },
+      { title: tt('数据大小'), dataIndex: 'tableSize', key: 'tableSize', width: 120 },
+      { title: tt('向量状态'), dataIndex: 'vectorizeStatus', key: 'vectorizeStatus', width: 150 },
+      { title: tt('说明'), dataIndex: 'description', key: 'description', width: 300, ellipsis: true },
     ];
   }
   if (currentObjectType.value === 'queries') {
     return [
-      { title: '名称', dataIndex: 'objectName', key: 'objectName', width: 260, ellipsis: true },
-      { title: '最近更新', dataIndex: 'tableSize', key: 'tableSize', width: 160 },
-      { title: 'SQL 摘要', dataIndex: 'description', key: 'description', width: 420, ellipsis: true },
+      { title: tt('名称'), dataIndex: 'objectName', key: 'objectName', width: 260, ellipsis: true },
+      { title: tt('最近更新'), dataIndex: 'tableSize', key: 'tableSize', width: 160 },
+      { title: tt('SQL 摘要'), dataIndex: 'description', key: 'description', width: 420, ellipsis: true },
     ];
   }
   return [
-    { title: '对象', dataIndex: 'objectName', key: 'objectName', width: 320, ellipsis: true },
-    { title: '说明', dataIndex: 'description', key: 'description', width: 180, ellipsis: true },
-    { title: '向量状态', dataIndex: 'vectorizeStatus', key: 'vectorizeStatus', width: 150 },
+    { title: tt('对象'), dataIndex: 'objectName', key: 'objectName', width: 320, ellipsis: true },
+    { title: tt('说明'), dataIndex: 'description', key: 'description', width: 180, ellipsis: true },
+    { title: tt('向量状态'), dataIndex: 'vectorizeStatus', key: 'vectorizeStatus', width: 150 },
   ];
 });
 
@@ -2137,13 +2141,13 @@ function rebuildQueryResultTableCache(tab: QueryWorkspaceTab) {
   syncActiveStatementResultFromTab(tab);
 }
 
-const chartTypeOptions = [
-  { label: '折线图', value: 'LINE' as ChartType },
-  { label: '柱状图', value: 'BAR' as ChartType },
-  { label: '饼图', value: 'PIE' as ChartType },
-  { label: '散点图', value: 'SCATTER' as ChartType },
-  { label: '趋势图', value: 'TREND' as ChartType },
-];
+const chartTypeOptions = computed(() => [
+  { label: tt('折线图'), value: 'LINE' as ChartType },
+  { label: tt('柱状图'), value: 'BAR' as ChartType },
+  { label: tt('饼图'), value: 'PIE' as ChartType },
+  { label: tt('散点图'), value: 'SCATTER' as ChartType },
+  { label: tt('趋势图'), value: 'TREND' as ChartType },
+]);
 
 const chartSortDirectionOptions = [
   { label: '不排序', value: 'NONE' as SortDirection },
@@ -2151,16 +2155,16 @@ const chartSortDirectionOptions = [
   { label: '降序', value: 'DESC' as SortDirection },
 ];
 
-const erLayoutModeOptions = [
-  { label: '网格布局', value: 'GRID' as ErLayoutMode },
-  { label: '环形布局', value: 'CIRCLE' as ErLayoutMode },
-  { label: '分层布局', value: 'HIERARCHICAL' as ErLayoutMode },
-];
+const erLayoutModeOptions = computed(() => [
+  { label: tt('网格布局'), value: 'GRID' as ErLayoutMode },
+  { label: tt('环形布局'), value: 'CIRCLE' as ErLayoutMode },
+  { label: tt('分层布局'), value: 'HIERARCHICAL' as ErLayoutMode },
+]);
 
-const erLineTypeOptions = [
-  { label: '折线', value: 'POLYLINE' as ErLineType },
-  { label: '直线', value: 'STRAIGHT' as ErLineType },
-];
+const erLineTypeOptions = computed(() => [
+  { label: tt('折线'), value: 'POLYLINE' as ErLineType },
+  { label: tt('直线'), value: 'STRAIGHT' as ErLineType },
+]);
 
 const activeChartRows = computed(() => activeResultRows.value.map((row) => {
   const normalized: Record<string, string | null> = {};

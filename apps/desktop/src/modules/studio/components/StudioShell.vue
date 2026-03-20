@@ -108,7 +108,7 @@
                   placeholder="按标题搜索会话"
                   @pressEnter="applyHistoryKeywordSearch"
                 />
-                <a-button size="small" class="history-search-btn" @click="applyHistoryKeywordSearch">搜索</a-button>
+                <a-button size="small" class="history-search-btn" @click="applyHistoryKeywordSearch">{{ tt('搜索') }}</a-button>
               </div>
               <div class="history-menu-list" @scroll="handleHistoryMenuScroll">
                 <div v-if="!sessionHistoryTabs.length" class="history-menu-empty">暂无 AI 会话</div>
@@ -180,7 +180,7 @@
                   placeholder="按名称或数据库搜索"
                   @pressEnter="applyErSnapshotKeywordSearch"
                 />
-                <a-button size="small" class="history-search-btn" @click="applyErSnapshotKeywordSearch">搜索</a-button>
+                <a-button size="small" class="history-search-btn" @click="applyErSnapshotKeywordSearch">{{ tt('搜索') }}</a-button>
               </div>
               <div class="history-menu-list" @scroll="handleErSnapshotMenuScroll">
                 <div v-if="!erSnapshotItems.length" class="history-menu-empty">暂无 ER 图快照</div>
@@ -468,7 +468,7 @@
                 <a-input
                   v-model:value="tableKeyword"
                   size="small"
-                  :placeholder="currentObjectType === 'queries' ? '搜索保存查询' : `搜索${objectTypeLabel(currentObjectType)}`"
+                  :placeholder="tt(currentObjectType === 'queries' ? '搜索保存查询' : `搜索${objectTypeLabel(currentObjectType)}`)"
                   allow-clear
                 >
                   <template #prefix><search-outlined /></template>
@@ -943,7 +943,7 @@
             <a-space size="small">
               <a-button size="small" @click="openErTableSelectModal(activeErTab)">
                 <template #icon><appstore-outlined /></template>
-                重选
+                {{ tt('重选') }}
               </a-button>
               <a-button
                 size="small"
@@ -960,7 +960,7 @@
               </a-button>
               <a-button size="small" @click="downloadActiveErDiagram(activeErTab)">
                 <template #icon><download-outlined /></template>
-                导出
+                {{ tt('导出') }}
               </a-button>
             </a-space>
             <a-space size="small">
@@ -1289,7 +1289,7 @@
         <section class="pane pane-center table-data-center-pane">
           <div class="pane-title pane-title-with-action">
             <div class="table-data-title-main">
-              <span>数据浏览 · {{ activeTableDataTab.tableName }}</span>
+              <span>{{ tt(`数据 · ${activeTableDataTab.tableName}`) }}</span>
               <a-tooltip :title="activeTableDataTab.filterPanelVisible ? '收起筛选与排序' : '展开筛选与排序'">
                 <a-button size="small" type="text" class="table-data-icon-btn" @click.stop="toggleTableDataFilterPanel(activeTableDataTab)">
                   <template #icon><filter-outlined /></template>
@@ -1311,7 +1311,7 @@
           <div v-show="activeTableDataTab.filterPanelVisible" class="table-data-filter-panel">
             <div class="table-data-filter-block">
               <div class="table-data-filter-head">
-                <span>筛选</span>
+                <span>{{ tt('筛选') }}</span>
                 <a-button size="small" type="text" class="table-data-rule-add-btn" @click="addTableDataFilter(activeTableDataTab)">
                   <template #icon><plus-outlined /></template>
                 </a-button>
@@ -1338,7 +1338,7 @@
                   size="small"
                   style="width: 200px"
                   :disabled="filter.operator === 'IS_NULL' || filter.operator === 'IS_NOT_NULL'"
-                  placeholder="过滤值"
+                  :placeholder="tt('过滤值')"
                 />
                 <a-button size="small" type="text" danger class="table-data-icon-btn" @click="removeTableDataFilter(activeTableDataTab, filter.key)">
                   <template #icon><delete-outlined /></template>
@@ -1348,7 +1348,7 @@
 
             <div class="table-data-filter-block">
               <div class="table-data-filter-head">
-                <span>排序方式</span>
+                <span>{{ tt('排序方式') }}</span>
                 <a-button size="small" type="text" class="table-data-rule-add-btn" @click="addTableDataSort(activeTableDataTab)">
                   <template #icon><plus-outlined /></template>
                 </a-button>
@@ -1378,7 +1378,7 @@
 
             <div class="table-data-filter-actions">
               <a-button size="small" type="primary" :disabled="activeTableDataTab.loading" @click="applyTableDataFilters(activeTableDataTab)">
-                应用筛选 & 排序
+                {{ tt('应用筛选 & 排序') }}
               </a-button>
             </div>
           </div>
@@ -1829,7 +1829,7 @@
               <a-textarea
                 v-model:value="activeQueryTab.prompt"
                 :rows="4"
-                placeholder="例如：查询近 7 天订单量，并按天聚合"
+                :placeholder="tt('例如：查询近 7 天订单量，并按天聚合')"
                 @input="handleChatComposerInput($event, activeQueryTab)"
                 @click="handleChatComposerCursorChange($event, activeQueryTab)"
                 @keyup="handleChatComposerCursorChange($event, activeQueryTab)"
@@ -2453,10 +2453,10 @@
 
     <a-modal
       v-model:open="createModalOpen"
-      :title="isEditMode ? '编辑连接' : '新建连接'"
+      :title="tt(isEditMode ? '编辑连接' : '新建连接')"
       width="640px"
-      :ok-text="isEditMode ? '保存' : '创建'"
-      cancel-text="取消"
+      :ok-text="tt(isEditMode ? '保存' : '创建')"
+      :cancel-text="tt('取消')"
       @ok="saveConnection"
       @cancel="resetConnectionModalState"
     >
@@ -2541,7 +2541,7 @@
                     :disabled="!canPreviewDatabases"
                     @click="previewConnectionDatabases"
                   >
-                    获取数据库
+                    {{ tt('获取数据库') }}
                   </a-button>
                 </div>
                 <div class="connection-db-selector-tip">不勾选时，连接树显示该连接下全部数据库</div>
@@ -2560,7 +2560,7 @@
           <a-textarea
             v-model:value="connectionForm.customParams"
             :rows="4"
-            placeholder="每行一个 key=value，例如：&#10;encrypt=true&#10;trustServerCertificate=true"
+            :placeholder="tt('每行一个 key=value，例如： encrypt=true trustServerCertificate=true')"
           />
           <div class="connection-custom-params-tip">
             连接时会自动拼接到 JDBC 配置中。推荐每行填写一个参数，例如 `encrypt=true`。
@@ -2750,7 +2750,7 @@
                 </a-col>
                 <a-col :span="8">
                   <a-form-item label="展示名称">
-                    <a-input v-model:value="item.name" placeholder="GPT-4.1 / 本地 Codex CLI" />
+                    <a-input v-model:value="item.name" :placeholder="tt('GPT-4.1 / 本地 Codex CLI')" />
                   </a-form-item>
                 </a-col>
                 <a-col :span="8">
@@ -2787,7 +2787,7 @@
                 <a-row :gutter="12">
                   <a-col :span="12">
                     <a-form-item label="CLI 命令">
-                      <a-input v-model:value="item.cliCommand" placeholder="codex / claude / 其他命令" />
+                      <a-input v-model:value="item.cliCommand" :placeholder="tt('codex / claude / 其他命令')" />
                     </a-form-item>
                   </a-col>
                   <a-col :span="12">
@@ -2919,8 +2919,8 @@
       v-model:open="erTableSelectModalOpen"
       title="选择ER图目标表"
       width="620px"
-      ok-text="确认生成"
-      cancel-text="取消"
+      :ok-text="tt('确认生成')"
+      :cancel-text="tt('取消')"
       :confirm-loading="erTableSelectSubmitting"
       @ok="confirmErTableSelection"
     >
@@ -2945,7 +2945,7 @@
           v-model:value="erSelectTableKeyword"
           size="small"
           allow-clear
-          placeholder="搜索表名"
+          :placeholder="tt('搜索表名')"
         >
           <template #prefix><search-outlined /></template>
         </a-input>
@@ -2971,8 +2971,8 @@
       v-model:open="erSnapshotSaveModalOpen"
       title="保存 ER 图快照"
       width="480px"
-      ok-text="保存"
-      cancel-text="取消"
+      :ok-text="tt('保存')"
+      :cancel-text="tt('取消')"
       :confirm-loading="erSnapshotSaveSubmitting"
       @ok="confirmSaveErSnapshot"
     >
@@ -3039,8 +3039,8 @@
     <a-modal
       v-model:open="groupModalOpen"
       :title="groupForm.mode === 'create' ? '新建分组' : '重命名分组'"
-      :ok-text="groupForm.mode === 'create' ? '创建' : '保存'"
-      cancel-text="取消"
+      :ok-text="tt(groupForm.mode === 'create' ? '创建' : '保存')"
+      :cancel-text="tt('取消')"
       :confirm-loading="groupModalSubmitting"
       @ok="confirmGroupModal"
       @cancel="closeGroupModal"
@@ -3060,8 +3060,8 @@
     <a-modal
       v-model:open="redisKeyModalOpen"
       :title="redisKeyModalMode === 'create' ? '新增键' : '编辑键'"
-      :ok-text="redisKeyModalMode === 'create' ? '创建' : '保存'"
-      cancel-text="取消"
+      :ok-text="tt(redisKeyModalMode === 'create' ? '创建' : '保存')"
+      :cancel-text="tt('取消')"
       :confirm-loading="redisKeyModalSubmitting"
       width="720px"
       @ok="confirmRedisKeyModal"
@@ -3071,7 +3071,7 @@
         <a-row :gutter="12">
           <a-col :span="14">
             <a-form-item label="键名">
-              <a-input v-model:value="redisKeyForm.keyName" :disabled="redisKeyModalMode === 'edit'" placeholder="例如：user:1:profile" />
+              <a-input v-model:value="redisKeyForm.keyName" :disabled="redisKeyModalMode === 'edit'" :placeholder="tt('例如：user:1:profile')" />
             </a-form-item>
           </a-col>
           <a-col :span="10">
@@ -3109,21 +3109,21 @@
 
     <a-modal
       v-model:open="namespaceModalOpen"
-      :title="namespaceForm.mode === 'create' ? `新建${namespaceForm.namespaceLabel}` : `编辑${namespaceForm.namespaceLabel}`"
-      :ok-text="namespaceForm.mode === 'create' ? '创建' : '保存'"
-      cancel-text="取消"
+      :title="tt(namespaceForm.mode === 'create' ? `新建${namespaceForm.namespaceLabel}` : `编辑${namespaceForm.namespaceLabel}`)"
+      :ok-text="tt(namespaceForm.mode === 'create' ? '创建' : '保存')"
+      :cancel-text="tt('取消')"
       :confirm-loading="namespaceModalSubmitting"
       @ok="confirmNamespaceModal"
       @cancel="closeNamespaceModal"
     >
       <a-form layout="vertical">
-        <a-form-item v-if="namespaceForm.mode === 'rename'" :label="`原${namespaceForm.namespaceLabel}名称`">
+        <a-form-item v-if="namespaceForm.mode === 'rename'" :label="tt(`原${namespaceForm.namespaceLabel}名称`)">
           <a-input :value="namespaceForm.sourceNamespaceName" disabled />
         </a-form-item>
-        <a-form-item :label="`${namespaceForm.mode === 'create' ? '新' : ''}${namespaceForm.namespaceLabel}名称`">
+        <a-form-item :label="tt(`${namespaceForm.mode === 'create' ? '新' : ''}${namespaceForm.namespaceLabel}名称`)">
           <a-input
             v-model:value="namespaceForm.targetNamespaceName"
-            :placeholder="`请输入${namespaceForm.namespaceLabel}名称`"
+            :placeholder="tt(`请输入${namespaceForm.namespaceLabel}名称`)"
             maxlength="128"
             @pressEnter="confirmNamespaceModal"
           />
@@ -3134,8 +3134,8 @@
     <a-modal
       v-model:open="renameTableModalOpen"
       title="重命名表"
-      ok-text="确认重命名"
-      cancel-text="取消"
+      :ok-text="tt('确认重命名')"
+      :cancel-text="tt('取消')"
       :confirm-loading="renameTableSubmitting"
       @ok="confirmRenameTable"
       @cancel="closeRenameTableModal"
@@ -3185,18 +3185,19 @@
 
     <a-modal
       v-model:open="saveQueryModalOpen"
-      title="保存查询"
+      :title="tt('保存查询')"
       width="480px"
-      ok-text="保存"
+      :ok-text="tt('保存')"
+      :cancel-text="tt('取消')"
       :confirm-loading="saveQuerySubmitting"
       @ok="activeQueryTab && saveCurrentQuery(activeQueryTab)"
       @cancel="saveQueryModalOpen = false"
     >
       <a-form layout="vertical">
-        <a-form-item label="名称" required>
-          <a-input v-model:value="saveQueryTitle" maxlength="80" show-count placeholder="请输入保存查询名称" />
+        <a-form-item :label="tt('名称')" required>
+          <a-input v-model:value="saveQueryTitle" maxlength="80" show-count :placeholder="tt('请输入保存查询名称')" />
         </a-form-item>
-        <a-form-item label="保存位置">
+        <a-form-item :label="tt('保存位置')">
           <div class="save-query-context">{{ activeQueryTab ? queryTabConnectionName(activeQueryTab) : '-' }} / {{ activeQueryTab?.databaseName || '未指定库' }}</div>
         </a-form-item>
       </a-form>
@@ -3204,22 +3205,23 @@
 
     <a-modal
       v-model:open="saveQueryAsExampleModalOpen"
-      title="保存为样例 SQL"
+      :title="tt('保存为样例 SQL')"
       width="520px"
-      ok-text="保存"
+      :ok-text="tt('保存')"
+      :cancel-text="tt('取消')"
       :confirm-loading="saveQueryAsExampleSubmitting"
       @ok="confirmSaveQueryAsExample"
       @cancel="saveQueryAsExampleModalOpen = false"
     >
       <a-form layout="vertical">
-        <a-form-item label="保存位置">
+        <a-form-item :label="tt('保存位置')">
           <div class="save-query-context">{{ saveQueryAsExampleContextText }}</div>
         </a-form-item>
-        <a-form-item label="说明">
+        <a-form-item :label="tt('说明')">
           <a-textarea
             v-model:value="saveQueryAsExampleDescription"
             :rows="4"
-            placeholder="补充这段样例 SQL 的用途、适用场景或注意事项"
+            :placeholder="tt('补充这段样例 SQL 的用途、适用场景或注意事项')"
           />
         </a-form-item>
       </a-form>
@@ -3320,8 +3322,8 @@
       v-model:open="tablePasteModalOpen"
       title="跨库复制表"
       :confirm-loading="tablePasteSubmitting"
-      ok-text="开始复制"
-      cancel-text="取消"
+      :ok-text="tt('开始复制')"
+      :cancel-text="tt('取消')"
       @ok="confirmTablePaste"
       @cancel="closeTablePasteModal"
     >
@@ -3331,23 +3333,23 @@
             {{ tablePasteForm.sourceConnectionId }} / {{ tablePasteForm.sourceDatabaseName || '-' }} / {{ tablePasteForm.sourceTableName }}
           </div>
         </a-form-item>
-        <a-form-item label="目标库">
+        <a-form-item :label="tt('目标库')">
           <div class="table-copy-summary">
             {{ tablePasteForm.targetConnectionId }} / {{ tablePasteForm.targetDatabaseName || '-' }}
           </div>
         </a-form-item>
-        <a-form-item label="目标表名">
+        <a-form-item :label="tt('目标表名')">
           <a-input
             v-model:value="tablePasteForm.targetTableName"
             maxlength="128"
-            placeholder="请输入目标表名"
+            :placeholder="tt('请输入目标表名')"
             @pressEnter="confirmTablePaste"
           />
         </a-form-item>
-        <a-form-item v-if="tablePasteForm.preferredCopyMode === 'STRUCTURE_AND_DATA'" label="复制数据">
+        <a-form-item v-if="tablePasteForm.preferredCopyMode === 'STRUCTURE_AND_DATA'" :label="tt('复制数据')">
           <div class="table-copy-switch-row">
             <a-switch v-model:checked="tablePasteForm.copyData" />
-            <span class="table-copy-switch-text">{{ tablePasteForm.copyData ? '复制结构和数据' : '仅复制结构' }}</span>
+            <span class="table-copy-switch-text">{{ tt(tablePasteForm.copyData ? '复制结构和数据' : '仅复制结构') }}</span>
           </div>
         </a-form-item>
       </a-form>
@@ -4444,12 +4446,12 @@ function redisRowIsActive(record: { redisNodeType?: string; objectName?: string;
 const redisDetailValueText = computed(() => (
   kvObjectDetail.value?.editorPayload
   || kvObjectDetail.value?.sampleJson
-  || '-- 暂无内容'
+  || `-- ${tt('暂无数据')}`
 ));
 
 const redisEditorPlaceholder = computed(() => {
   if (redisKeyForm.valueType === 'string') {
-    return '请输入字符串值';
+    return tt('请输入字符串值');
   }
   if (redisKeyForm.valueType === 'hash') {
     return '{\n  "field": "value"\n}';

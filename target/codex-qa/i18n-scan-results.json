@@ -1,0 +1,132 @@
+[
+  {
+    "name": "browser-tables",
+    "count": 0,
+    "hits": []
+  },
+  {
+    "name": "browser-views",
+    "count": 0,
+    "hits": []
+  },
+  {
+    "name": "browser-queries",
+    "count": 0,
+    "hits": []
+  },
+  {
+    "name": "query-workbench",
+    "count": 0,
+    "hits": []
+  },
+  {
+    "name": "table-data",
+    "count": 0,
+    "hits": []
+  },
+  {
+    "name": "table-editor",
+    "count": 0,
+    "hits": []
+  },
+  {
+    "name": "object-definition",
+    "count": 0,
+    "hits": []
+  },
+  {
+    "name": "er-generated",
+    "count": 0,
+    "hits": []
+  },
+  {
+    "name": "history-dropdown",
+    "count": 0,
+    "hits": []
+  },
+  {
+    "name": "er-snapshot-dropdown",
+    "count": 0,
+    "hits": []
+  },
+  {
+    "name": "knowledge-example",
+    "count": 0,
+    "hits": []
+  },
+  {
+    "name": "knowledge-term",
+    "count": 0,
+    "hits": []
+  },
+  {
+    "name": "settings-general",
+    "count": 0,
+    "hits": []
+  },
+  {
+    "name": "settings-model",
+    "count": 0,
+    "hits": []
+  },
+  {
+    "name": "settings-embedding",
+    "count": 0,
+    "hits": []
+  },
+  {
+    "name": "connection-modal-create",
+    "count": 0,
+    "hits": []
+  },
+  {
+    "name": "group-modal-create",
+    "count": 0,
+    "hits": []
+  },
+  {
+    "name": "save-query-modal",
+    "count": 0,
+    "hits": []
+  },
+  {
+    "name": "save-example-modal",
+    "count": 0,
+    "hits": []
+  },
+  {
+    "name": "er-snapshot-save-modal",
+    "count": 0,
+    "hits": []
+  },
+  {
+    "name": "redis-browser",
+    "count": 0,
+    "hits": []
+  },
+  {
+    "name": "redis-key-modal",
+    "count": 0,
+    "hits": []
+  },
+  {
+    "name": "rename-table-modal",
+    "count": 0,
+    "hits": []
+  },
+  {
+    "name": "table-copy-modal",
+    "count": 0,
+    "hits": []
+  },
+  {
+    "name": "vectorize-overview-modal",
+    "count": 0,
+    "hits": []
+  },
+  {
+    "name": "namespace-modal",
+    "count": 0,
+    "hits": []
+  }
+]
