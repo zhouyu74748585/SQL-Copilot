@@ -117,7 +117,9 @@ public class IsolatedJdbcConnectionManager {
                     Files.copy(in, tempJar, StandardCopyOption.REPLACE_EXISTING);
                 }
                 URL url = tempJar.toUri().toURL();
-                isolatedLoader = new URLClassLoader(new URL[]{url}, ClassLoader.getPlatformClassLoader());
+                // Reuse the application class loader as parent so isolated drivers can still see
+                // shared logging and JDBC support classes bundled in the main app.
+                isolatedLoader = new URLClassLoader(new URL[]{url}, IsolatedJdbcConnectionManager.class.getClassLoader());
                 classLoader = isolatedLoader;
             } catch (IOException ex) {
                 throw new SQLException("加载隔离驱动包失败: " + ex.getMessage(), ex);

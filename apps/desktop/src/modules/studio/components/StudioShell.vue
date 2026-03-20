@@ -802,7 +802,7 @@
                   <a-tag :color="knowledgeScopeColor(item.scope)">{{ knowledgeScopeLabel(item.scope) }}</a-tag>
                 </div>
                 <div class="knowledge-card-desc">{{ item.sqlText }}</div>
-                <div class="knowledge-card-meta">关联术语 {{ item.termIds?.length || 0 }} · {{ formatTime(item.updatedAt) }}</div>
+                <div class="knowledge-card-meta">{{ tt('关联术语') }} {{ item.termIds?.length || 0 }} · {{ formatTime(item.updatedAt) }}</div>
               </button>
               <div v-if="!filteredKnowledgeExampleItems.length" class="empty-pane">暂无样例 SQL 数据</div>
             </div>
@@ -856,9 +856,9 @@
                   </a-form-item>
                 </a-form>
                 <a-space class="detail-form-actions">
-                  <a-button type="primary" size="small" :loading="knowledgeSaving" @click="saveKnowledgeTerm">保存</a-button>
-                  <a-button size="small" @click="resetKnowledgeTermForm">重置</a-button>
-                  <a-button v-if="knowledgeTermForm.id" danger size="small" :loading="knowledgeSaving" @click="removeKnowledgeTerm">删除</a-button>
+                  <a-button type="primary" size="small" :loading="knowledgeSaving" @click="saveKnowledgeTerm">{{ tt('保存') }}</a-button>
+                  <a-button size="small" @click="resetKnowledgeTermForm">{{ tt('重置') }}</a-button>
+                  <a-button v-if="knowledgeTermForm.id" danger size="small" :loading="knowledgeSaving" @click="removeKnowledgeTerm">{{ tt('删除') }}</a-button>
                 </a-space>
               </div>
             </div>
@@ -927,9 +927,9 @@
                   </a-form-item>
                 </a-form>
                 <a-space class="detail-form-actions">
-                  <a-button type="primary" size="small" :loading="knowledgeSaving" @click="saveKnowledgeExample">保存</a-button>
-                  <a-button size="small" @click="resetKnowledgeExampleForm">重置</a-button>
-                  <a-button v-if="knowledgeExampleForm.id" danger size="small" :loading="knowledgeSaving" @click="removeKnowledgeExample">删除</a-button>
+                  <a-button type="primary" size="small" :loading="knowledgeSaving" @click="saveKnowledgeExample">{{ tt('保存') }}</a-button>
+                  <a-button size="small" @click="resetKnowledgeExampleForm">{{ tt('重置') }}</a-button>
+                  <a-button v-if="knowledgeExampleForm.id" danger size="small" :loading="knowledgeSaving" @click="removeKnowledgeExample">{{ tt('删除') }}</a-button>
                 </a-space>
               </div>
             </div>
@@ -2636,18 +2636,18 @@
 
     <a-modal
       v-model:open="aiConfigModalOpen"
-      title="设置"
+      :title="tt('设置')"
       width="760px"
-      ok-text="保存配置"
-      cancel-text="取消"
+      :ok-text="tt('保存配置')"
+      :cancel-text="tt('取消')"
       @ok="saveAiConfig"
     >
       <a-form layout="vertical">
         <a-tabs v-model:activeKey="aiConfigActiveTab">
-          <a-tab-pane key="general" tab="界面设置">
+          <a-tab-pane key="general" :tab="tt('界面设置')">
             <a-row :gutter="12">
               <a-col :span="12">
-                <a-form-item label="界面语言">
+                <a-form-item :label="tt('界面语言')">
                   <a-select
                     :value="currentLocale"
                     :options="localeSelectOptions"
@@ -2656,7 +2656,7 @@
                 </a-form-item>
               </a-col>
               <a-col :span="12">
-                <a-form-item label="深色模式">
+                <a-form-item :label="tt('深色模式')">
                   <a-switch :checked="isDarkTheme" @change="toggleTheme" />
                 </a-form-item>
               </a-col>
@@ -2664,11 +2664,11 @@
             <a-divider style="margin: 12px 0;" />
             <a-row :gutter="12" align="middle">
               <a-col :span="12">
-                <a-form-item label="关于" style="margin-bottom: 0;">
+                <a-form-item :label="tt('关于')" style="margin-bottom: 0;">
                   <a-space>
                     <a-button size="small" @click="openPrivacyPolicy">
                       <template #icon><FileProtectOutlined /></template>
-                      隐私政策
+                      {{ tt('隐私政策') }}
                     </a-button>
                   </a-space>
                 </a-form-item>
@@ -3436,7 +3436,7 @@ import {
 import {Editor as MonacoEditor} from '@guolao/vue-monaco-editor';
 import type * as MonacoApi from 'monaco-editor';
 import {computed, nextTick, ref, watch} from 'vue';
-import {useAppI18n, type AppLocale} from '../../../i18n';
+import {translateText, useAppI18n, type AppLocale} from '../../../i18n';
 import QueryChartPanel from '../../../components/QueryChartPanel.vue';
 import ErDiagramPanel from '../../../components/ErDiagramPanel.vue';
 import TableEditor from '../../../components/TableEditor.vue';
@@ -3456,6 +3456,11 @@ import type {StudioController} from '../composables/useStudioController';
 
 const {currentLocale, antLocale, localeSelectOptions, setLocale, useDomI18n} = useAppI18n();
 useDomI18n();
+
+function tt(text: string) {
+  void currentLocale.value;
+  return translateText(text);
+}
 
 const embeddingModelRepoUrl = 'https://huggingface.co/hooman650/bge-m3-onnx-o4/tree/main';
 const rerankModelRepoUrl = 'https://huggingface.co/swulling/bge-reranker-base-onnx-o4/tree/main';

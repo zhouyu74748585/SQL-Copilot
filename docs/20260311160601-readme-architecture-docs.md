@@ -96,3 +96,42 @@
 
 ### 说明
 - 本轮未调整业务代码，仅修复文档资源引用路径。
+
+### 2026-03-20 08:51:47
+
+## 追加记录（2026-03-20）- README 模块画廊与最新截图更新
+
+### 本次目标
+- 将 README 的“应用截图”从 4 张核心图扩展为覆盖主要模块的模块画廊。
+- 用本轮真实运行态采集的截图替换旧图，并补齐表结构编辑、对象定义编辑、历史菜单、知识中心、Redis 浏览和设置界面。
+
+### 关键改动
+- 更新 `README.md` 的“应用截图”章节：
+  - 保留原有对话式查询、对象浏览、表数据、ER 图的展示方向，但全部换成本轮最新截图。
+  - 新增 `table-editor.png`、`object-definition-editor.png`、`history-snapshots.png`、`knowledge-center.png`、`redis-browser.png`、`settings-appearance.png` 六张模块图。
+  - 将截图说明改为模块画廊式组织，按页面用途描述，而不是只保留 4 个大类页面。
+- 更新 `docs/img` 目录截图资产：
+  - 覆盖 `query-workbench.png`
+  - 覆盖 `object-browser.png`
+  - 覆盖 `data-browser.png`
+  - 覆盖 `er-diagram.png`
+  - 新增 `table-editor.png`
+  - 新增 `object-definition-editor.png`
+  - 新增 `history-snapshots.png`
+  - 新增 `knowledge-center.png`
+  - 新增 `redis-browser.png`
+  - 新增 `settings-appearance.png`
+
+### 截图来源
+- 所有截图均来自桌面端真实运行态。
+- 统一使用中文浅色主题。
+- 演示数据基于本轮补充的本地 SQLite 样例库与本地元数据库记录。
+
+### 验证结果
+- 前端 clean 构建：`npm run build` 通过。
+- 前端预览：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6068 --strictPort` 启动成功。
+- `http://127.0.0.1:6068/` 返回 `HTTP 200`。
+- 后端健康检查：`http://127.0.0.1:18080/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+
+### 说明
+- 本轮 README 更新同时依赖前端/后端运行态联调，因此除文档和图片外，还包含为截图准备的演示数据与一处 JDBC 驱动类加载修复。

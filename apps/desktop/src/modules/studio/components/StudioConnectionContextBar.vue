@@ -1,7 +1,7 @@
 <template>
   <div class="query-shared-meta">
     <div class="query-meta-item">
-      <span>{{ connectionLabel }}</span>
+      <span>{{ resolvedConnectionLabel }}</span>
       <a-select
         :value="connectionId"
         size="small"
@@ -12,7 +12,7 @@
       />
     </div>
     <div class="query-meta-item">
-      <span>{{ databaseLabel }}</span>
+      <span>{{ resolvedDatabaseLabel }}</span>
       <a-select
         :value="databaseName"
         size="small"
@@ -26,6 +26,9 @@
 </template>
 
 <script setup lang="ts">
+import {computed} from 'vue';
+import {translateText, useAppI18n} from '../../../i18n';
+
 type SelectValue = string | number;
 
 interface SelectOption {
@@ -46,14 +49,24 @@ const props = withDefaults(defineProps<{
 }>(), {
   connectionDisabled: false,
   databaseDisabled: false,
-  connectionLabel: '连接',
-  databaseLabel: '数据库',
+  connectionLabel: '',
+  databaseLabel: '',
 });
 
 const emit = defineEmits<{
   connectionChange: [value: SelectValue];
   databaseChange: [value: string];
 }>();
+
+const {currentLocale} = useAppI18n();
+
+function tt(text: string) {
+  void currentLocale.value;
+  return translateText(text);
+}
+
+const resolvedConnectionLabel = computed(() => props.connectionLabel || tt('连接'));
+const resolvedDatabaseLabel = computed(() => props.databaseLabel || tt('数据库'));
 
 function handleConnectionChange(value: SelectValue) {
   emit('connectionChange', value);

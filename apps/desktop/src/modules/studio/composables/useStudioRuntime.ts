@@ -67,10 +67,11 @@ import treeConnectedIcon from '../../../assets/icons/tree-connected.png';
 import treeOpenedFolderIcon from '../../../assets/icons/tree-opened-folder.svg';
 import folderClosedIcon from '../../../assets/icons/folde.png';
 import keyIcon from '../../../assets/icons/key.svg';
+import {useAppI18n} from '../../../i18n';
 import {
+  getRagProviderOptions,
   normalizeRagProviderByPackage,
   ragLocalOnnxEnabled,
-  ragProviderOptions,
 } from '../../../config/packageVariant';
 import type {
   AiAutoQueryVO,
@@ -143,7 +144,8 @@ import type {
 } from '../../../types';
 
 export function useStudioRuntime() {
-const ragProviderTypeOptions = ragProviderOptions;
+const {currentLocale} = useAppI18n();
+const ragProviderTypeOptions = computed(() => getRagProviderOptions(currentLocale.value));
 interface DesktopDialogFilter {
   name: string;
   extensions: string[];

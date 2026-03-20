@@ -100,7 +100,7 @@
       </div>
 
       <div v-if="!rows.length" class="table-data-virtual-grid-empty">
-        暂无数据
+        {{ emptyText }}
       </div>
     </div>
   </div>
@@ -109,6 +109,7 @@
 <script setup lang="ts">
 import {computed, nextTick, onBeforeUnmount, onMounted, ref, watch} from 'vue';
 import type {PropType} from 'vue';
+import {translateText, useAppI18n} from '../../../i18n';
 
 type TableDataEditorType = 'text' | 'date' | 'datetime' | 'time';
 
@@ -180,6 +181,7 @@ const bodyRef = ref<HTMLDivElement | null>(null);
 const scrollTop = ref(0);
 const scrollLeft = ref(0);
 const measuredBodyHeight = ref(0);
+const {currentLocale} = useAppI18n();
 
 const ROW_HEIGHT = 28;
 const OVERSCAN_COUNT = 8;
@@ -200,6 +202,10 @@ const visibleEnd = computed(() =>
 const offsetTop = computed(() => visibleStart.value * ROW_HEIGHT);
 const visibleRows = computed(() => props.rows.slice(visibleStart.value, visibleEnd.value));
 const selectedRowKey = computed(() => props.tab.selectedRowKey);
+const emptyText = computed(() => {
+  void currentLocale.value;
+  return translateText('暂无数据');
+});
 
 watch(
   () => props.resetKey,

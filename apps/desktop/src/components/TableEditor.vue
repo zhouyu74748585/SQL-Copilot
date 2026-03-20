@@ -2,20 +2,20 @@
   <div class="table-editor">
     <div class="table-editor-toolbar">
       <a-form layout="inline" class="table-editor-form">
-        <a-form-item label="表名">
+        <a-form-item :label="tt('表名')">
           <a-input v-model:value="tableName" size="small" :disabled="tab.mode === 'edit'" style="width: 180px" />
         </a-form-item>
-        <a-form-item label="备注">
+        <a-form-item :label="tt('备注')">
           <a-input v-model:value="tableComment" size="small" style="width: 200px" />
         </a-form-item>
       </a-form>
     </div>
 
     <a-tabs v-model:activeKey="activeTab" size="small" class="table-editor-tabs">
-      <a-tab-pane key="columns" tab="字段">
+      <a-tab-pane key="columns" :tab="tt('字段')">
         <div class="panel-head">
-          <span>字段定义</span>
-          <a-button size="small" type="link" @click="addColumn"><template #icon><plus-outlined /></template>添加字段</a-button>
+          <span>{{ tt('字段定义') }}</span>
+          <a-button size="small" type="link" @click="addColumn"><template #icon><plus-outlined /></template>{{ tt('添加字段') }}</a-button>
         </div>
         <div ref="columnsTableHost" class="table-grid-host">
           <a-table
@@ -63,17 +63,17 @@
             <template #expandedRowRender="{ record }">
               <div class="column-inline-detail">
                 <div class="column-inline-detail-head">
-                  <span class="detail-title">{{ record.columnName || '未命名字段' }}</span>
+                  <span class="detail-title">{{ record.columnName || tt('未命名字段') }}</span>
                   <span class="detail-type">{{ typeWithSize(record) }}</span>
                 </div>
                 <div class="column-inline-detail-grid">
-                  <a-checkbox v-model:checked="record.nullable" size="small">允许空值</a-checkbox>
+                  <a-checkbox v-model:checked="record.nullable" size="small">{{ tt('允许空值') }}</a-checkbox>
                   <a-checkbox v-model:checked="record.primaryKey" size="small">
-                    <span class="detail-checkbox-label"><key-outlined class="pk-icon" />主键字段</span>
+                    <span class="detail-checkbox-label"><key-outlined class="pk-icon" />{{ tt('主键字段') }}</span>
                   </a-checkbox>
-                  <a-checkbox v-model:checked="record.autoIncrement" size="small" :disabled="!record.primaryKey">自动递增</a-checkbox>
+                  <a-checkbox v-model:checked="record.autoIncrement" size="small" :disabled="!record.primaryKey">{{ tt('自动递增') }}</a-checkbox>
                   <label class="inline-field">
-                    <span class="detail-label">默认值</span>
+                    <span class="detail-label">{{ tt('默认值') }}</span>
                     <a-input v-model:value="record.defaultValue" size="small" :disabled="record.defaultCurrentTimestamp" />
                   </label>
                   <a-checkbox
@@ -82,10 +82,10 @@
                     :disabled="!isTemporalType(record.dataType)"
                     @change="handleTemporalChange(record)"
                   >
-                    默认当前时间
+                    {{ tt('默认当前时间') }}
                   </a-checkbox>
                   <a-checkbox v-model:checked="record.onUpdateCurrentTimestamp" size="small" :disabled="!isTemporalType(record.dataType)">
-                    更新时自动刷新
+                    {{ tt('更新时自动刷新') }}
                   </a-checkbox>
                 </div>
               </div>
@@ -94,10 +94,10 @@
         </div>
       </a-tab-pane>
 
-      <a-tab-pane key="indexes" tab="索引">
+      <a-tab-pane key="indexes" :tab="tt('索引')">
         <div class="panel-head">
-          <span>索引管理</span>
-          <a-button size="small" type="link" @click="addIndex"><template #icon><plus-outlined /></template>添加索引</a-button>
+          <span>{{ tt('索引管理') }}</span>
+          <a-button size="small" type="link" @click="addIndex"><template #icon><plus-outlined /></template>{{ tt('添加索引') }}</a-button>
         </div>
         <div ref="indexesTableHost" class="table-grid-host">
           <a-table class="compact-schema-table indexes-table" :columns="indexColumns" :data-source="indexes" :pagination="false" size="small" row-key="uuid" bordered :scroll="{ x: 920, y: indexesTableScrollY }">
@@ -128,6 +128,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef, wa
 import { message } from 'ant-design-vue';
 import { DeleteOutlined, FileTextOutlined, KeyOutlined, PlayCircleOutlined, PlusOutlined } from '@ant-design/icons-vue';
 import { postApi } from '../api/client';
+import {translateText, useAppI18n} from '../i18n';
 import type { TableDetailVO } from '../types';
 
 type Mode = 'create' | 'edit';
@@ -189,30 +190,39 @@ const columnsTableHostHeight = ref(0);
 const indexesTableHostHeight = ref(0);
 const TABLE_SCROLL_BODY_OFFSET = 54;
 let layoutObserver: ResizeObserver | null = null;
+const {currentLocale} = useAppI18n();
 
 const expandedColumnKeys = computed(() => (selectedColumnUuid.value ? [selectedColumnUuid.value] : []));
 const columnsTableScrollY = computed(() => resolveTableScrollY(columnsTableHostHeight.value));
 const indexesTableScrollY = computed(() => resolveTableScrollY(indexesTableHostHeight.value));
 
+function tt(text: string) {
+  void currentLocale.value;
+  return translateText(text);
+}
+
 const dataTypeOptions = [
   'INT', 'BIGINT', 'VARCHAR', 'TEXT', 'DECIMAL', 'DATETIME', 'TIMESTAMP', 'DATE', 'TIME', 'JSON', 'BOOLEAN', 'DOUBLE', 'FLOAT', 'CHAR', 'BLOB',
 ].map((v) => ({ value: v, label: v }));
-const indexTypeOptions = [{ value: false, label: '普通索引' }, { value: true, label: '唯一索引' }];
+const indexTypeOptions = computed(() => [
+  { value: false, label: tt('普通索引') },
+  { value: true, label: tt('唯一索引') },
+]);
 
-const columnColumns = [
-  { title: '字段名', key: 'columnName', width: 180 },
-  { title: '类型', key: 'dataType', width: 120 },
-  { title: '长度', key: 'length', width: 70 },
-  { title: '精度', key: 'scale', width: 70 },
-  { title: '备注', key: 'comment', width: 160 },
+const columnColumns = computed(() => [
+  { title: tt('字段名'), key: 'columnName', width: 180 },
+  { title: tt('类型'), key: 'dataType', width: 120 },
+  { title: tt('长度'), key: 'length', width: 70 },
+  { title: tt('精度'), key: 'scale', width: 70 },
+  { title: tt('备注'), key: 'comment', width: 160 },
   { title: '', key: 'actions', width: 50 },
-];
-const indexColumns = [
-  { title: '索引名', key: 'indexName', width: 220 },
-  { title: '类型', key: 'indexType', width: 120 },
-  { title: '字段', key: 'columns', width: 500 },
+]);
+const indexColumns = computed(() => [
+  { title: tt('索引名'), key: 'indexName', width: 220 },
+  { title: tt('类型'), key: 'indexType', width: 120 },
+  { title: tt('字段'), key: 'columns', width: 500 },
   { title: '', key: 'actions', width: 56 },
-];
+]);
 
 const columnOptions = computed(() => {
   const seen = new Set<string>();
@@ -445,8 +455,8 @@ function draftEq(a: Draft, b: Draft) {
 }
 
 function createSql() {
-  if (!norm(tableName.value)) return '-- 请先输入表名';
-  for (const c of columns.value) if (!norm(c.columnName) || !norm(c.dataType)) return '-- 请先完善字段定义';
+  if (!norm(tableName.value)) return `-- ${tt('请先输入表名')}`;
+  for (const c of columns.value) if (!norm(c.columnName) || !norm(c.dataType)) return `-- ${tt('请先完善字段定义')}`;
   const defs = columns.value.map((c) => `  ${columnSql(c)}`);
   const pks = columns.value.filter((c) => c.primaryKey).map((c) => quoteId(c.columnName));
   if (pks.length) defs.push(`  PRIMARY KEY (${pks.join(', ')})`);
@@ -458,8 +468,8 @@ function createSql() {
 }
 
 function alterSql() {
-  if (!baseline.value) return '-- 等待加载原始表结构';
-  for (const c of columns.value) if (!norm(c.columnName) || !norm(c.dataType)) return '-- 请先完善字段定义';
+  if (!baseline.value) return `-- ${tt('等待加载原始表结构')}`;
+  for (const c of columns.value) if (!norm(c.columnName) || !norm(c.dataType)) return `-- ${tt('请先完善字段定义')}`;
   const acts: string[] = [];
   const oldMap = new Map(baseline.value.columns.map((c) => [idNorm(c.columnName), c]));
   const newMap = new Map(columns.value.map((c) => [idNorm(c.columnName), c]));
@@ -487,7 +497,7 @@ function alterSql() {
     if (!oldI || idxSig(oldI) !== idxSig(newI)) acts.push(indexSql(newI, true));
   }
   if (norm(baseline.value.tableComment) !== norm(tableComment.value)) acts.push(`COMMENT = ${quoteStr(tableComment.value)}`);
-  if (!acts.length) return '-- 未检测到结构变更';
+  if (!acts.length) return `-- ${tt('未检测到结构变更')}`;
   return `ALTER TABLE ${quoteId(tableName.value)}\n  ${acts.join(',\n  ')};`;
 }
 
@@ -621,7 +631,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .table-editor { display: flex; flex: 1 1 auto; flex-direction: column; height: 100%; min-height: 0; }
-.table-editor-toolbar { display: flex; justify-content: space-between; gap: 10px; padding: 8px 10px; border-bottom: 1px solid var(--line, #e8e8e8); }
+.table-editor-toolbar { display: flex; justify-content: space-between; gap: 10px; padding: 8px 10px; border-bottom: 1px solid var(--line, #e8e8e8); background: var(--surface-1, #ebebeb); }
 .table-editor-form { flex: 1; min-width: 0; }
 .table-editor-tabs { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .table-editor-tabs :deep(.ant-tabs-nav) { margin-bottom: 8px; }
@@ -646,18 +656,18 @@ onBeforeUnmount(() => {
 .table-editor-tabs :deep(.compact-schema-table .ant-table-cell .ant-select-selection-placeholder) { line-height: 22px; font-size: 12px; }
 .table-editor-tabs :deep(.compact-schema-table .ant-input-number-input) { height: 22px; font-size: 12px; }
 .table-editor-tabs :deep(.compact-schema-table .ant-btn.ant-btn-sm) { height: 24px; padding: 0 6px; font-size: 12px; }
-.panel-head { display: flex; justify-content: space-between; align-items: center; padding: 4px 10px; border-bottom: 1px solid var(--line, #e8e8e8); font-weight: 600; }
+.panel-head { display: flex; justify-content: space-between; align-items: center; padding: 4px 10px; border-bottom: 1px solid var(--line, #e8e8e8); background: color-mix(in srgb, var(--surface-1, #ebebeb) 92%, transparent); color: var(--text, inherit); font-weight: 600; }
 .table-grid-host { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .column-name-cell { display: flex; align-items: center; gap: 6px; cursor: pointer; }
-.pk-icon { color: #faad14; font-size: 12px; flex-shrink: 0; }
-.selected-row { background-color: rgba(24, 144, 255, 0.1) !important; }
-.column-inline-detail { padding: 8px 12px 9px; background: linear-gradient(180deg, rgba(250, 250, 250, 0.96), rgba(245, 247, 250, 0.92)); border-top: 1px solid rgba(0, 0, 0, 0.04); }
+.pk-icon { color: #d7992d; font-size: 12px; flex-shrink: 0; }
+.selected-row { background-color: var(--accent-soft, rgba(24, 144, 255, 0.1)) !important; }
+.column-inline-detail { padding: 8px 12px 9px; background: color-mix(in srgb, var(--surface-1, #ebebeb) 94%, transparent); border-top: 1px solid var(--line, rgba(0, 0, 0, 0.08)); }
 .column-inline-detail-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-.detail-title { font-weight: 600; font-size: 12px; }
-.detail-type { color: #666; font-size: 11px; }
+.detail-title { color: var(--text, inherit); font-weight: 600; font-size: 12px; }
+.detail-type { color: var(--text-sub, #666); font-size: 11px; }
 .column-inline-detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px 12px; align-items: center; }
 .inline-field { display: grid; grid-template-columns: 44px minmax(0, 1fr); align-items: center; gap: 6px; }
-.detail-label { color: #666; font-size: 11px; }
+.detail-label { color: var(--text-sub, #666); font-size: 11px; }
 .detail-checkbox-label { display: inline-flex; align-items: center; gap: 4px; }
 @media (max-width: 1400px) { .table-editor-toolbar { flex-direction: column; } }
 </style>
