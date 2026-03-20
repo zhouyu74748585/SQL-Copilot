@@ -1,13 +1,28 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import {execSync} from 'node:child_process';
+import { execSync } from 'node:child_process';
 
-const releaseTag = process.env.QDRANT_VERSION || 'v1.13.4';
+function parseArgs(argv) {
+  const values = {};
+  for (const arg of argv) {
+    if (!arg.startsWith('--')) {
+      continue;
+    }
+    const [key, rawValue = ''] = arg.slice(2).split('=');
+    values[key] = rawValue.trim();
+  }
+  return values;
+}
+
+const args = parseArgs(process.argv.slice(2));
+const releaseTag = args['release-tag'] || process.env.QDRANT_VERSION || 'v1.13.4';
 const cwd = process.cwd();
+const requestedPlatformKey = args['platform-key'] || '';
+const requestedTargetDir = args['target-dir'] || '';
 const platform = process.platform;
 const arch = process.arch;
 
-const platformKey = (() => {
+const platformKey = requestedPlatformKey || (() => {
   if (platform === 'darwin') {
     return arch === 'arm64' ? 'darwin-arm64' : 'darwin-x64';
   }
@@ -17,10 +32,12 @@ const platformKey = (() => {
   return arch === 'arm64' ? 'linux-arm64' : 'linux-x64';
 })();
 
-const targetDir = path.join(cwd, 'resources', 'qdrant', platformKey);
-const binaryName = platform === 'win32' ? 'qdrant.exe' : 'qdrant';
+const targetDir = requestedTargetDir
+  ? path.resolve(cwd, requestedTargetDir)
+  : path.join(cwd, 'resources', 'qdrant', platformKey);
+const binaryName = platformKey.startsWith('win32-') ? 'qdrant.exe' : 'qdrant';
 const targetBinary = path.join(targetDir, binaryName);
-const tempDir = path.join(cwd, '.qdrant-download-tmp');
+const tempDir = path.join(cwd, '.qdrant-download-tmp', platformKey);
 
 fs.mkdirSync(targetDir, { recursive: true });
 fs.rmSync(tempDir, { recursive: true, force: true });
@@ -59,7 +76,7 @@ execSync(`curl -fL ${candidate.browser_download_url} -o ${archivePath}`, { stdio
 if (archivePath.endsWith('.tar.gz')) {
   execSync(`tar -xzf ${archivePath} -C ${tempDir}`, { stdio: 'inherit' });
 } else if (archivePath.endsWith('.zip')) {
-  execSync(`unzip -o ${archivePath} -d ${tempDir}`, { stdio: 'inherit' });
+  execSync(`powershell -NoLogo -NoProfile -NonInteractive -Command "Expand-Archive -LiteralPath '${archivePath.replace(/'/g, "''")}' -DestinationPath '${tempDir.replace(/'/g, "''")}' -Force"`, { stdio: 'inherit' });
 } else {
   throw new Error(`Unsupported archive type: ${archivePath}`);
 }
@@ -87,7 +104,7 @@ if (!downloadedBinary) {
 }
 
 fs.copyFileSync(downloadedBinary, targetBinary);
-if (platform !== 'win32') {
+if (!platformKey.startsWith('win32-')) {
   fs.chmodSync(targetBinary, 0o755);
 }
 

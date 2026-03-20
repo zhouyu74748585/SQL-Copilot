@@ -13,8 +13,15 @@ const DESKTOP_DIR = path.join(ROOT_DIR, 'apps', 'desktop');
 const DESKTOP_BACKEND_STAGE_DIR = path.join(DESKTOP_DIR, 'resources', 'backend');
 const RELEASE_DIR = path.join(ROOT_DIR, 'release');
 const TEMP_DIR = path.join(RELEASE_DIR, '.jlink-temp');
-const DESKTOP_RELEASE_DIR = path.join(RELEASE_DIR, 'desktop');
-const BACKEND_RELEASE_DIR = path.join(RELEASE_DIR, 'backend');
+const DESKTOP_RELEASE_ROOT = path.join(RELEASE_DIR, 'desktop');
+const BACKEND_RELEASE_ROOT = path.join(RELEASE_DIR, 'backend');
+const TOOLCHAIN_CACHE_DIR = path.join(RELEASE_DIR, '.toolchains');
+const DESKTOP_PACKAGER_STAGE_ROOT = path.join(RELEASE_DIR, '.desktop-package-stage');
+const ELECTRON_PACKAGER_CLI = path.join(ROOT_DIR, 'node_modules', '@electron', 'packager', 'bin', 'electron-packager.js');
+const ELECTRON_CACHE_DIR = (process.env.ELECTRON_CACHE || '').trim()
+  || (process.platform === 'win32'
+    ? path.join(process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || ROOT_DIR, 'AppData', 'Local'), 'electron', 'Cache')
+    : path.join(process.env.HOME || ROOT_DIR, '.cache', 'electron'));
 const EXTRA_MODULES_ENV = 'SQLCOPILOT_JLINK_EXTRA_MODULES';
 const RETRY_DELETE_COUNT = 6;
 const RETRY_DELETE_DELAY_MS = 1000;
@@ -51,6 +58,55 @@ const INCLUDE_DESKTOP = resolveSwitch('SQLCOPILOT_INCLUDE_DESKTOP', '1');
 const EXPORT_BACKEND = resolveSwitch('SQLCOPILOT_EXPORT_BACKEND', '0');
 const ELECTRON_DIST = (process.env.SQLCOPILOT_ELECTRON_DIST || '').trim();
 const SHOULD_DISABLE_MAC_SIGN = (process.env.SQLCOPILOT_MAC_SIGN || '0').trim() !== '1';
+const QDRANT_VERSION = (process.env.QDRANT_VERSION || 'v1.13.4').trim();
+const DESKTOP_MANIFEST = JSON.parse(fs.readFileSync(path.join(DESKTOP_DIR, 'package.json'), 'utf8'));
+const PRODUCT_NAME = DESKTOP_MANIFEST.build?.productName || 'SQL Copliot';
+const PRODUCT_NAME_SLUG = PRODUCT_NAME.replace(/\s+/g, '-');
+const APP_ID = DESKTOP_MANIFEST.build?.appId || 'com.sqlcopilot.desktop';
+const ELECTRON_VERSION = String(DESKTOP_MANIFEST.devDependencies?.electron || '36.2.1').replace(/^[^\d]*/, '');
+
+const TARGETS = Object.freeze({
+  'win-x64': {
+    id: 'win-x64',
+    electronPlatform: 'win',
+    electronArch: 'x64',
+    qdrantPlatformKey: 'win32-x64',
+    runtimeOs: 'windows',
+    runtimeArch: 'x64',
+    hostAliases: ['win32-x64', 'windows-x64', 'win-x86', 'windows-x86'],
+    builderArgs: ['--win', 'nsis', '--x64'],
+  },
+  'mac-arm64': {
+    id: 'mac-arm64',
+    electronPlatform: 'mac',
+    electronArch: 'arm64',
+    qdrantPlatformKey: 'darwin-arm64',
+    runtimeOs: 'mac',
+    runtimeArch: 'aarch64',
+    hostAliases: ['mac-arm', 'darwin-arm64', 'darwin-arm', 'mac-aarch64'],
+    builderArgs: ['--mac', 'zip', '--arm64', '--config.mac.target=zip'],
+  },
+  'mac-x64': {
+    id: 'mac-x64',
+    electronPlatform: 'mac',
+    electronArch: 'x64',
+    qdrantPlatformKey: 'darwin-x64',
+    runtimeOs: 'mac',
+    runtimeArch: 'x64',
+    hostAliases: ['mac-x86', 'macos-x64', 'macos-x86', 'darwin-x64', 'darwin-x86'],
+    builderArgs: ['--mac', 'zip', '--x64', '--config.mac.target=zip'],
+  },
+  'linux-x64': {
+    id: 'linux-x64',
+    electronPlatform: 'linux',
+    electronArch: 'x64',
+    qdrantPlatformKey: 'linux-x64',
+    runtimeOs: 'linux',
+    runtimeArch: 'x64',
+    hostAliases: ['linux-x86', 'linux-amd64'],
+    builderArgs: ['--linux', 'AppImage', '--x64'],
+  },
+});
 
 function resolveSwitch(name, fallback) {
   const raw = (process.env[name] || fallback).trim();
@@ -63,6 +119,9 @@ function resolveShellCommand(command) {
   }
   if (['npm', 'npx', 'mvn'].includes(command)) {
     return `${command}.cmd`;
+  }
+  if (['curl', 'tar'].includes(command)) {
+    return `${command}.exe`;
   }
   return `${command}.exe`;
 }
@@ -86,14 +145,13 @@ function executeCommand(command, args, options = {}) {
     captureOutput = false,
   } = options;
   const useShell = process.platform === 'win32' && command.toLowerCase().endsWith('.cmd');
-  const result = spawnSync(command, args, {
+  return spawnSync(command, args, {
     cwd,
     env: env ? { ...process.env, ...env } : process.env,
     encoding: 'utf8',
     stdio: captureOutput ? 'pipe' : 'inherit',
     shell: useShell,
   });
-  return result;
 }
 
 function formatCommandFailure(command, args, result, captured) {
@@ -269,10 +327,6 @@ function removePathWithRetry(targetPath) {
   }
 }
 
-function isWindowsBusyError(error) {
-  return process.platform === 'win32' && ['EBUSY', 'EPERM', 'ENOTEMPTY'].includes(error?.code);
-}
-
 function cleanupStageDir() {
   ensureEmptyDir(DESKTOP_BACKEND_STAGE_DIR);
   fs.writeFileSync(path.join(DESKTOP_BACKEND_STAGE_DIR, '.gitkeep'), '', 'utf8');
@@ -284,10 +338,9 @@ function copyIfExists(sourcePath, targetPath) {
   }
 }
 
-function copyDirIfExists(sourceDir, targetDir) {
-  if (fs.existsSync(sourceDir)) {
-    fs.cpSync(sourceDir, targetDir, { recursive: true });
-  }
+function copyRuntimeHome(sourceDir, targetDir) {
+  fs.mkdirSync(targetDir, { recursive: true });
+  fs.cpSync(sourceDir, targetDir, { recursive: true });
 }
 
 let cachedJavaHome = '';
@@ -469,7 +522,7 @@ set "PROFILE=%~1"
 if "%PROFILE%"=="" if defined SQLCOPILOT_BACKEND_PROFILE set "PROFILE=%SQLCOPILOT_BACKEND_PROFILE%"
 set "JAVA_BIN=%BASE_DIR%jre\\bin\\java.exe"
 if defined SQLCOPILOT_JAVA_BIN set "JAVA_BIN=%SQLCOPILOT_JAVA_BIN%"
-if not defined SQLCOPILOT_DATA_DIR set "SQLCOPILOT_DATA_DIR=%LOCALAPPDATA%\\SQL Copilot"
+if not defined SQLCOPILOT_DATA_DIR set "SQLCOPILOT_DATA_DIR=%LOCALAPPDATA%\\SQL Copliot"
 
 if not exist "%JAVA_BIN%" (
   echo Bundled Java runtime not found: %JAVA_BIN%
@@ -493,15 +546,12 @@ exit /b 1
 
   fs.writeFileSync(path.join(targetDir, 'run.sh'), runSh, 'utf8');
   fs.writeFileSync(path.join(targetDir, 'run.cmd'), runCmd, 'utf8');
-  if (process.platform !== 'win32') {
-    fs.chmodSync(path.join(targetDir, 'run.sh'), 0o755);
-  }
 }
 
-function prepareBackendRuntime(targetDir, jarPath, runtimeDir) {
+function prepareBackendRuntime(targetDir, jarPath, runtimeHome) {
   ensureEmptyDir(targetDir);
   fs.copyFileSync(jarPath, path.join(targetDir, path.basename(jarPath)));
-  fs.cpSync(runtimeDir, path.join(targetDir, 'jre'), { recursive: true });
+  copyRuntimeHome(runtimeHome, path.join(targetDir, 'jre'));
   copyIfExists(path.join(SERVER_DIR, 'src', 'main', 'resources', 'application.yml'), path.join(targetDir, 'application.yml'));
   writeBackendLaunchScripts(targetDir);
 }
@@ -515,9 +565,7 @@ function buildBackend() {
     'package',
     '-DskipTests',
   ]);
-  const jarPath = locatePackagedJar();
-  const runtimeDir = createJlinkRuntime(jarPath);
-  return { jarPath, runtimeDir };
+  return locatePackagedJar();
 }
 
 function buildDesktopTypeCheckOnce() {
@@ -528,41 +576,430 @@ function buildDesktopTypeCheckOnce() {
   runCommand(resolveShellCommand('npm'), ['run', '-w', '@sqlcopilot/desktop', 'type-check']);
 }
 
-function prepareDesktopOutputDir() {
-  const desktopReleaseDir = DESKTOP_RELEASE_DIR;
-  try {
-    ensureCleanDir(desktopReleaseDir);
-    return desktopReleaseDir;
-  } catch (error) {
-    if (!isWindowsBusyError(error)) {
-      throw error;
-    }
+function buildDesktopAssetsOnce() {
+  if (!INCLUDE_DESKTOP) {
+    return;
+  }
+  console.log('==> [desktop] build');
+  runCommand(resolveShellCommand('npm'), ['run', '-w', '@sqlcopilot/desktop', 'build']);
+}
 
-    const fallbackDir = path.join(
-      RELEASE_DIR,
-      `desktop-${new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14)}`,
-    );
-    console.warn(`[windows-lock] ${desktopReleaseDir} is still locked, fallback to ${fallbackDir}`);
-    ensureCleanDir(fallbackDir);
-    return fallbackDir;
+function currentHostTarget() {
+  if (process.platform === 'win32') {
+    return process.arch === 'arm64' ? 'win-arm64' : 'win-x64';
+  }
+  if (process.platform === 'darwin') {
+    return process.arch === 'arm64' ? 'mac-arm64' : 'mac-x64';
+  }
+  return process.arch === 'arm64' ? 'linux-arm64' : 'linux-x64';
+}
+
+function normalizeTargetToken(value) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/_/g, '-');
+}
+
+function resolveTargetId(token) {
+  const normalized = normalizeTargetToken(token);
+  if (TARGETS[normalized]) {
+    return normalized;
+  }
+  for (const target of Object.values(TARGETS)) {
+    if (target.hostAliases.includes(normalized)) {
+      return target.id;
+    }
+  }
+  throw new Error(`Unsupported target: ${token}. Supported targets: ${Object.keys(TARGETS).join(', ')}`);
+}
+
+function parseTargets(argv) {
+  const tokens = [];
+  for (const arg of argv) {
+    if (arg.startsWith('--targets=')) {
+      tokens.push(...arg.slice('--targets='.length).split(','));
+      continue;
+    }
+    if (arg === '--all') {
+      tokens.push('win-x64', 'mac-arm64', 'mac-x64', 'linux-x64');
+      continue;
+    }
+    if (arg.startsWith('--')) {
+      throw new Error(`Unsupported option: ${arg}`);
+    }
+    tokens.push(...arg.split(','));
+  }
+
+  if (tokens.length === 0) {
+    const hostTarget = currentHostTarget();
+    if (!TARGETS[hostTarget]) {
+      throw new Error(`Current host target is not supported by this script: ${hostTarget}`);
+    }
+    return [TARGETS[hostTarget]];
+  }
+
+  const seen = new Set();
+  const result = [];
+  for (const token of tokens.map((item) => item.trim()).filter(Boolean)) {
+    const targetId = resolveTargetId(token);
+    if (!seen.has(targetId)) {
+      seen.add(targetId);
+      result.push(TARGETS[targetId]);
+    }
+  }
+  return result;
+}
+
+function escapePowerShellDoubleQuoted(value) {
+  return value.replace(/`/g, '``').replace(/"/g, '`"');
+}
+
+function extractArchive(archivePath, destinationDir) {
+  ensureCleanDir(destinationDir);
+  if (archivePath.endsWith('.zip')) {
+    const archive = escapePowerShellDoubleQuoted(path.resolve(archivePath));
+    const destination = escapePowerShellDoubleQuoted(path.resolve(destinationDir));
+    runCommand('powershell.exe', [
+      '-NoLogo',
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `Expand-Archive -LiteralPath "${archive}" -DestinationPath "${destination}" -Force`,
+    ]);
+    return;
+  }
+
+  runCommand(resolveShellCommand('tar'), ['-xzf', archivePath, '-C', destinationDir]);
+}
+
+function findJavaHome(rootDir) {
+  const candidates = [];
+
+  function walk(dir, depth) {
+    if (depth > 4 || !fs.existsSync(dir)) {
+      return;
+    }
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    const javaExecutableNames = ['java', 'java.exe'];
+    if (javaExecutableNames.some((fileName) => fs.existsSync(path.join(dir, 'bin', fileName)))) {
+      candidates.push(dir);
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        walk(path.join(dir, entry.name), depth + 1);
+      }
+    }
+  }
+
+  walk(rootDir, 0);
+  if (candidates.length === 0) {
+    throw new Error(`Unable to locate Java home in ${rootDir}`);
+  }
+  return candidates.sort((left, right) => left.length - right.length)[0];
+}
+
+function fetchJson(url) {
+  const result = runCommand(resolveShellCommand('curl'), ['-fsSL', url], { captureOutput: true });
+  return JSON.parse(result.stdout);
+}
+
+function downloadFile(url, targetFile) {
+  fs.mkdirSync(path.dirname(targetFile), { recursive: true });
+  const tempFile = `${targetFile}.downloading`;
+  fs.rmSync(tempFile, { force: true });
+  runCommand(resolveShellCommand('curl'), ['-fL', '--retry', '5', '--retry-delay', '2', url, '-o', tempFile]);
+  fs.rmSync(targetFile, { force: true });
+  fs.renameSync(tempFile, targetFile);
+}
+
+function resolveRuntimeArchive(target) {
+  const cacheDir = path.join(TOOLCHAIN_CACHE_DIR, 'archives');
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const apiUrl = `https://api.adoptium.net/v3/assets/latest/17/hotspot?architecture=${target.runtimeArch}&image_type=jdk&os=${target.runtimeOs}&vendor=eclipse`;
+  const payload = fetchJson(apiUrl);
+  const binary = Array.isArray(payload) ? payload[0]?.binary : null;
+  const pkg = binary?.package;
+  if (!pkg?.link || !pkg?.name) {
+    throw new Error(`Unable to resolve JDK package for target ${target.id}`);
+  }
+  const archivePath = path.join(cacheDir, pkg.name);
+  if (!fs.existsSync(archivePath)) {
+    console.log(`==> [runtime:${target.id}] download ${pkg.name}`);
+    downloadFile(pkg.link, archivePath);
+  } else {
+    console.log(`==> [runtime:${target.id}] reuse ${pkg.name}`);
+  }
+  return archivePath;
+}
+
+function resolveBundledRuntimeHome(target, jarPath) {
+  if (target.id === currentHostTarget()) {
+    return createJlinkRuntime(jarPath);
+  }
+
+  const extractDir = path.join(TOOLCHAIN_CACHE_DIR, 'expanded', target.id);
+  if (fs.existsSync(extractDir) && fs.readdirSync(extractDir).length > 0) {
+    console.log(`==> [runtime:${target.id}] reuse extracted home`);
+    return findJavaHome(extractDir);
+  }
+
+  let archivePath = resolveRuntimeArchive(target);
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      console.log(`==> [runtime:${target.id}] extract`);
+      extractArchive(archivePath, extractDir);
+      return findJavaHome(extractDir);
+    } catch (error) {
+      if (attempt === 2) {
+        throw error;
+      }
+      console.warn(`[runtime:${target.id}] extract failed, redownloading toolchain archive and retrying once`);
+      fs.rmSync(archivePath, { force: true });
+      fs.rmSync(extractDir, { recursive: true, force: true });
+      archivePath = resolveRuntimeArchive(target);
+    }
+  }
+
+  throw new Error(`Unable to prepare runtime for target ${target.id}`);
+}
+
+function findBinary(rootDir, fileName) {
+  const entries = fs.readdirSync(rootDir, { withFileTypes: true });
+  for (const entry of entries) {
+    const absolutePath = path.join(rootDir, entry.name);
+    if (entry.isFile() && entry.name === fileName) {
+      return absolutePath;
+    }
+    if (entry.isDirectory()) {
+      const nested = findBinary(absolutePath, fileName);
+      if (nested) {
+        return nested;
+      }
+    }
+  }
+  return null;
+}
+
+function ensureQdrantBinary(target) {
+  const platformKey = target.qdrantPlatformKey;
+  const binaryName = platformKey.startsWith('win32-') ? 'qdrant.exe' : 'qdrant';
+  const targetDir = path.join(DESKTOP_DIR, 'resources', 'qdrant', platformKey);
+  const targetBinary = path.join(targetDir, binaryName);
+  if (fs.existsSync(targetBinary)) {
+    return targetBinary;
+  }
+
+  console.log(`==> [qdrant:${target.id}] download ${QDRANT_VERSION}`);
+  const tempDir = path.join(RELEASE_DIR, '.qdrant-download', platformKey);
+  ensureCleanDir(tempDir);
+  const releaseApi = `https://api.github.com/repos/qdrant/qdrant/releases/tags/${QDRANT_VERSION}`;
+  const release = fetchJson(releaseApi);
+  const assets = release.assets || [];
+  const assetKeywords = {
+    'darwin-arm64': ['aarch64', 'apple', 'darwin'],
+    'darwin-x64': ['x86_64', 'apple', 'darwin'],
+    'linux-arm64': ['aarch64', 'linux'],
+    'linux-x64': ['x86_64', 'linux'],
+    'win32-arm64': ['aarch64', 'windows'],
+    'win32-x64': ['x86_64', 'windows'],
+  };
+  const keywords = assetKeywords[platformKey] || [];
+  const asset = assets.find((item) => {
+    const lower = String(item.name || '').toLowerCase();
+    return keywords.every((keyword) => lower.includes(keyword))
+      && (lower.endsWith('.tar.gz') || lower.endsWith('.zip'));
+  });
+  if (!asset?.browser_download_url || !asset?.name) {
+    throw new Error(`No matching qdrant asset found for ${platformKey} in release ${QDRANT_VERSION}`);
+  }
+
+  const archivePath = path.join(tempDir, asset.name);
+  const extractDir = path.join(tempDir, 'extracted');
+  downloadFile(asset.browser_download_url, archivePath);
+  extractArchive(archivePath, extractDir);
+
+  const downloadedBinary = findBinary(extractDir, binaryName);
+  if (!downloadedBinary) {
+    throw new Error(`Unable to find ${binaryName} in downloaded archive for ${platformKey}`);
+  }
+
+  fs.mkdirSync(targetDir, { recursive: true });
+  fs.copyFileSync(downloadedBinary, targetBinary);
+  if (!platformKey.startsWith('win32-')) {
+    fs.chmodSync(targetBinary, 0o755);
+  }
+
+  removePathWithRetry(tempDir);
+  return targetBinary;
+}
+
+function prepareDesktopOutputDir(target) {
+  const outputDir = path.join(DESKTOP_RELEASE_ROOT, target.id);
+  ensureCleanDir(outputDir);
+  return outputDir;
+}
+
+function ensureArtifactsExist(target, outputDir) {
+  const entries = fs.readdirSync(outputDir, { withFileTypes: true });
+  if (entries.length === 0) {
+    throw new Error(`No artifacts were produced for ${target.id} in ${outputDir}`);
   }
 }
 
-function buildDesktop() {
+function writePackagerManifest(targetDir) {
+  const manifest = {
+    name: DESKTOP_MANIFEST.name,
+    version: DESKTOP_MANIFEST.version,
+    description: DESKTOP_MANIFEST.description,
+    author: DESKTOP_MANIFEST.author,
+    main: DESKTOP_MANIFEST.main,
+    type: DESKTOP_MANIFEST.type,
+  };
+  fs.writeFileSync(path.join(targetDir, 'package.json'), JSON.stringify(manifest, null, 2), 'utf8');
+}
+
+function stagePackagerApp(target) {
+  const stageDir = path.join(DESKTOP_PACKAGER_STAGE_ROOT, target.id);
+  ensureCleanDir(stageDir);
+  fs.cpSync(path.join(DESKTOP_DIR, 'dist'), path.join(stageDir, 'dist'), { recursive: true });
+  fs.cpSync(path.join(DESKTOP_DIR, 'electron'), path.join(stageDir, 'electron'), { recursive: true });
+  writePackagerManifest(stageDir);
+  return stageDir;
+}
+
+function ensureElectronZip(targetPlatform, targetArch) {
+  fs.mkdirSync(ELECTRON_CACHE_DIR, { recursive: true });
+  const fileName = `electron-v${ELECTRON_VERSION}-${targetPlatform}-${targetArch}.zip`;
+  const targetFile = path.join(ELECTRON_CACHE_DIR, fileName);
+  if (fs.existsSync(targetFile)) {
+    return targetFile;
+  }
+  const url = `https://github.com/electron/electron/releases/download/v${ELECTRON_VERSION}/${fileName}`;
+  console.log(`==> [electron:${targetPlatform}-${targetArch}] download ${fileName}`);
+  downloadFile(url, targetFile);
+  return targetFile;
+}
+
+function runElectronPackager(args) {
+  runCommand(resolveShellCommand('node'), [ELECTRON_PACKAGER_CLI, ...args], {
+    cwd: ROOT_DIR,
+  });
+}
+
+function findPackagedEntry(outputDir, suffix) {
+  return fs.readdirSync(outputDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .find((entry) => entry.endsWith(suffix));
+}
+
+function createZipArtifact(outputDir, target) {
+  const packagedEntry = findPackagedEntry(outputDir, `darwin-${target.electronArch}`);
+  if (!packagedEntry) {
+    throw new Error(`Unable to locate packaged mac app directory in ${outputDir}`);
+  }
+  const zipPath = path.join(outputDir, `${PRODUCT_NAME_SLUG}-${DESKTOP_MANIFEST.version}-mac-${target.electronArch}.zip`);
+  if (fs.existsSync(zipPath)) {
+    fs.rmSync(zipPath, { force: true });
+  }
+  runCommand(resolveShellCommand('tar'), ['-a', '-cf', zipPath, `./${packagedEntry}`], { cwd: outputDir });
+}
+
+function createTarGzArtifact(outputDir, target) {
+  const packagedEntry = findPackagedEntry(outputDir, `linux-${target.electronArch}`);
+  if (!packagedEntry) {
+    throw new Error(`Unable to locate packaged linux app directory in ${outputDir}`);
+  }
+  const archivePath = path.join(outputDir, `${PRODUCT_NAME_SLUG}-${DESKTOP_MANIFEST.version}-linux-${target.electronArch}.tar.gz`);
+  if (fs.existsSync(archivePath)) {
+    fs.rmSync(archivePath, { force: true });
+  }
+  runCommand(resolveShellCommand('tar'), ['-czf', archivePath, `./${packagedEntry}`], { cwd: outputDir });
+}
+
+function buildMacWithPackager(target, outputDir) {
+  const stageDir = stagePackagerApp(target);
+  ensureElectronZip('darwin', target.electronArch);
+  const args = [
+    stageDir,
+    PRODUCT_NAME,
+    `--platform=darwin`,
+    `--arch=${target.electronArch}`,
+    `--out=${outputDir}`,
+    '--overwrite',
+    '--asar',
+    `--app-version=${DESKTOP_MANIFEST.version}`,
+    `--electron-version=${ELECTRON_VERSION}`,
+    `--electron-zip-dir=${ELECTRON_CACHE_DIR}`,
+    `--app-bundle-id=${APP_ID}`,
+    `--icon=${path.resolve(ROOT_DIR, 'icon.icns')}`,
+    `--extra-resource=${DESKTOP_BACKEND_STAGE_DIR}`,
+    `--extra-resource=${path.join(DESKTOP_DIR, 'resources', 'qdrant')}`,
+  ];
+  runElectronPackager(args);
+  createZipArtifact(outputDir, target);
+}
+
+function buildLinuxWithPackager(target, outputDir) {
+  const stageDir = stagePackagerApp(target);
+  ensureElectronZip('linux', target.electronArch);
+  const args = [
+    stageDir,
+    PRODUCT_NAME,
+    '--platform=linux',
+    `--arch=${target.electronArch}`,
+    `--out=${outputDir}`,
+    '--overwrite',
+    '--asar',
+    `--app-version=${DESKTOP_MANIFEST.version}`,
+    `--electron-version=${ELECTRON_VERSION}`,
+    `--electron-zip-dir=${ELECTRON_CACHE_DIR}`,
+    `--icon=${path.resolve(ROOT_DIR, 'icon.png')}`,
+    `--extra-resource=${DESKTOP_BACKEND_STAGE_DIR}`,
+    `--extra-resource=${path.join(DESKTOP_DIR, 'resources', 'qdrant')}`,
+  ];
+  runElectronPackager(args);
+  createTarGzArtifact(outputDir, target);
+}
+
+function exportBackendIfRequested(target, jarPath, runtimeHome) {
+  if (!EXPORT_BACKEND) {
+    return;
+  }
+  const backendOutputDir = path.join(BACKEND_RELEASE_ROOT, target.id);
+  console.log(`==> [backend:${target.id}] export`);
+  prepareBackendRuntime(backendOutputDir, jarPath, runtimeHome);
+}
+
+function buildDesktopForTarget(target) {
   if (!INCLUDE_DESKTOP) {
     return;
   }
 
-  console.log('==> [desktop] build');
-  runCommand(resolveShellCommand('npm'), ['run', '-w', '@sqlcopilot/desktop', 'build']);
+  console.log(`==> [desktop:${target.id}] output cleanup`);
+  const outputDir = prepareDesktopOutputDir(target);
 
-  console.log('==> [desktop] output cleanup');
-  const desktopOutputDir = prepareDesktopOutputDir();
+  if (target.electronPlatform === 'mac' && process.platform !== 'darwin') {
+    console.log(`==> [desktop:${target.id}] electron-packager`);
+    buildMacWithPackager(target, outputDir);
+    ensureArtifactsExist(target, outputDir);
+    return;
+  }
 
-  console.log('==> [desktop] electron-builder');
+  if (target.electronPlatform === 'linux' && process.platform !== 'linux') {
+    console.log(`==> [desktop:${target.id}] electron-packager`);
+    buildLinuxWithPackager(target, outputDir);
+    ensureArtifactsExist(target, outputDir);
+    return;
+  }
+
+  console.log(`==> [desktop:${target.id}] electron-builder`);
   const args = [
     'electron-builder',
-    `--config.directories.output=${desktopOutputDir}`,
+    `--config.directories.output=${outputDir}`,
+    ...target.builderArgs,
   ];
   if (ELECTRON_DIST) {
     args.push(`--config.electronDist=${ELECTRON_DIST}`);
@@ -571,62 +1008,46 @@ function buildDesktop() {
   if (SHOULD_DISABLE_MAC_SIGN) {
     env.CSC_IDENTITY_AUTO_DISCOVERY = 'false';
   }
-  runElectronBuilderCommand('desktop', args, {
+  runElectronBuilderCommand(target.id, args, {
     cwd: DESKTOP_DIR,
     env,
-  }, desktopOutputDir);
+  }, outputDir);
+  ensureArtifactsExist(target, outputDir);
 }
 
-function removeReleaseDirIfDisabled() {
-  if (!EXPORT_BACKEND) {
-    removePathWithRetry(BACKEND_RELEASE_DIR);
+function printSummary(targets) {
+  for (const target of targets) {
+    if (INCLUDE_DESKTOP) {
+      console.log(`Desktop artifact exported under ${path.join('release', 'desktop', target.id)}`);
+    }
+    if (EXPORT_BACKEND) {
+      console.log(`Backend runtime exported under ${path.join('release', 'backend', target.id)}`);
+    }
   }
-  if (!INCLUDE_DESKTOP) {
-    removePathWithRetry(DESKTOP_RELEASE_DIR);
-  }
-}
-
-function printSummary() {
-  if (INCLUDE_DESKTOP && EXPORT_BACKEND) {
-    console.log('Package exported under release/{backend,desktop}');
-    return;
-  }
-  if (INCLUDE_DESKTOP) {
-    console.log('Desktop package exported under release/desktop (backend bundled with jlink runtime)');
-    return;
-  }
-  if (EXPORT_BACKEND) {
-    console.log('Backend runtime exported under release/backend');
-    return;
-  }
-  console.log('No release artifacts exported (backend build executed as intermediate only)');
 }
 
 function main() {
-  const args = process.argv.slice(2);
-  if (args.length > 0) {
-    throw new Error(`This script no longer accepts variant arguments: ${args.join(' ')}`);
-  }
+  const targets = parseTargets(process.argv.slice(2));
   fs.mkdirSync(RELEASE_DIR, { recursive: true });
+  fs.mkdirSync(TOOLCHAIN_CACHE_DIR, { recursive: true });
   removePathWithRetry(TEMP_DIR);
   cleanupStageDir();
 
   try {
     buildDesktopTypeCheckOnce();
-    removeReleaseDirIfDisabled();
+    buildDesktopAssetsOnce();
 
-    const { jarPath, runtimeDir } = buildBackend();
-    if (INCLUDE_DESKTOP) {
-      prepareBackendRuntime(DESKTOP_BACKEND_STAGE_DIR, jarPath, runtimeDir);
-    } else {
-      cleanupStageDir();
+    const jarPath = buildBackend();
+    for (const target of targets) {
+      console.log(`==> [target] ${target.id}`);
+      ensureQdrantBinary(target);
+      const runtimeHome = resolveBundledRuntimeHome(target, jarPath);
+      exportBackendIfRequested(target, jarPath, runtimeHome);
+      prepareBackendRuntime(DESKTOP_BACKEND_STAGE_DIR, jarPath, runtimeHome);
+      buildDesktopForTarget(target);
     }
-    if (EXPORT_BACKEND) {
-      prepareBackendRuntime(BACKEND_RELEASE_DIR, jarPath, runtimeDir);
-    }
-    buildDesktop();
 
-    printSummary();
+    printSummary(targets);
   } finally {
     cleanupStageDir();
   }

@@ -9,7 +9,8 @@
   "scripts": {
     "build": "npm run -w @sqlcopilot/desktop build",
     "type-check": "npm run -w @sqlcopilot/desktop type-check",
-    "package:app": "node scripts/package-variants.mjs",
+    "package:app": "node scripts/package-variants.mjs --targets=win-x64,mac-arm64,mac-x64,linux-x64",
+    "package:app:host": "node scripts/package-variants.mjs",
     "qa:acceptance": "node scripts/acceptance/run-acceptance.cjs"
   }
 }

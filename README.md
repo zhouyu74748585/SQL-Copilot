@@ -221,11 +221,18 @@ npm run -w @sqlcopilot/desktop dist
 npm run package:app
 ```
 
+如仅需当前宿主平台制品，可使用：
+
+```bash
+npm run package:app:host
+```
+
 ## 打包说明
 
-当前仅保留一种桌面打包形态，统一输出到 `release/desktop`。
+当前默认会输出四个平台桌面制品，分别位于 `release/desktop/win-x64`、`release/desktop/mac-arm64`、`release/desktop/mac-x64`、`release/desktop/linux-x64`。
 
 - 打包命令统一使用 `npm run package:app`。
+- 如只需当前宿主平台，可执行 `npm run package:app:host`。
 - 打包流程会自动为 backend 执行 Maven 构建，并通过 `jdeps + jlink` 生成随桌面端一起分发的运行时。
 - 前端仍保留本地 ONNX / 在线两种 RAG 运行方式，但安装包默认不内置模型文件，需要用户自行下载并配置本地模型目录。
 
