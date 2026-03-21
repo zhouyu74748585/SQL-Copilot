@@ -13,7 +13,10 @@ const DESKTOP_DIR = path.join(ROOT_DIR, 'apps', 'desktop');
 const DESKTOP_BACKEND_STAGE_DIR = path.join(DESKTOP_DIR, 'resources', 'backend');
 const RELEASE_DIR = path.join(ROOT_DIR, 'release');
 const TEMP_DIR = path.join(RELEASE_DIR, '.jlink-temp');
-const DESKTOP_RELEASE_ROOT = path.join(RELEASE_DIR, 'desktop');
+const DESKTOP_RELEASE_ROOT = (() => {
+  const customOutputDir = (process.env.SQLCOPILOT_DESKTOP_RELEASE_DIR || '').trim();
+  return customOutputDir ? path.resolve(ROOT_DIR, customOutputDir) : path.join(RELEASE_DIR, 'desktop');
+})();
 const BACKEND_RELEASE_ROOT = path.join(RELEASE_DIR, 'backend');
 const TOOLCHAIN_CACHE_DIR = path.join(RELEASE_DIR, '.toolchains');
 const DESKTOP_PACKAGER_STAGE_ROOT = path.join(RELEASE_DIR, '.desktop-package-stage');
@@ -981,14 +984,16 @@ function buildDesktopForTarget(target) {
   console.log(`==> [desktop:${target.id}] output cleanup`);
   const outputDir = prepareDesktopOutputDir(target);
 
-  if (target.electronPlatform === 'mac' && process.platform !== 'darwin') {
+  // Keep macOS/Linux packaging on electron-packager to avoid host-specific
+  // electron-builder failures on GitHub runners.
+  if (target.electronPlatform === 'mac') {
     console.log(`==> [desktop:${target.id}] electron-packager`);
     buildMacWithPackager(target, outputDir);
     ensureArtifactsExist(target, outputDir);
     return;
   }
 
-  if (target.electronPlatform === 'linux' && process.platform !== 'linux') {
+  if (target.electronPlatform === 'linux') {
     console.log(`==> [desktop:${target.id}] electron-packager`);
     buildLinuxWithPackager(target, outputDir);
     ensureArtifactsExist(target, outputDir);
