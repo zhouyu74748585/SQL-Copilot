@@ -19,12 +19,21 @@ jobs:
         include:
           - os: windows-latest
             target: win-x64
+            artifact_paths: |
+              release/desktop/win-x64/*.exe
+              release/desktop/win-x64/*.blockmap
           - os: macos-14
             target: mac-arm64
+            artifact_paths: |
+              release/desktop/mac-arm64/*.zip
           - os: macos-15-intel
             target: mac-x64
+            artifact_paths: |
+              release/desktop/mac-x64/*.zip
           - os: ubuntu-latest
             target: linux-x64
+            artifact_paths: |
+              release/desktop/linux-x64/*.tar.gz
 
     env:
       CI: "true"
@@ -63,5 +72,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sql-copilot-${{ matrix.target }}
-          path: release/desktop/${{ matrix.target }}/**
+          path: ${{ matrix.artifact_paths }}
           if-no-files-found: error
