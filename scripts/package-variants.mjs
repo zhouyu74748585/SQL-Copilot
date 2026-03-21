@@ -62,6 +62,7 @@ const EXPORT_BACKEND = resolveSwitch('SQLCOPILOT_EXPORT_BACKEND', '0');
 const ELECTRON_DIST = (process.env.SQLCOPILOT_ELECTRON_DIST || '').trim();
 const SHOULD_DISABLE_MAC_SIGN = (process.env.SQLCOPILOT_MAC_SIGN || '0').trim() !== '1';
 const QDRANT_VERSION = (process.env.QDRANT_VERSION || 'v1.13.4').trim();
+const DESKTOP_BUILD_HEAP_SIZE_MB = '8192';
 const DESKTOP_MANIFEST = JSON.parse(fs.readFileSync(path.join(DESKTOP_DIR, 'package.json'), 'utf8'));
 const PRODUCT_NAME = DESKTOP_MANIFEST.build?.productName || 'SQL Copliot';
 const PRODUCT_NAME_SLUG = PRODUCT_NAME.replace(/\s+/g, '-');
@@ -159,13 +160,16 @@ function executeCommand(command, args, options = {}) {
 
 function formatCommandFailure(command, args, result, captured) {
   const commandLine = [command, ...args].join(' ');
+  const exitDetail = result.signal
+    ? `Signal ${result.signal}`
+    : `Exit code ${result.status ?? 'unknown'}`;
   if (!captured) {
-    return `${commandLine}\nExit code ${result.status ?? 'unknown'}`;
+    return `${commandLine}\n${exitDetail}`;
   }
   const stderr = (result.stderr || '').trim();
   const stdout = (result.stdout || '').trim();
   const detail = [stdout, stderr].filter(Boolean).join('\n');
-  return detail ? `${commandLine}\n${detail}` : `${commandLine}\nExit code ${result.status ?? 'unknown'}`;
+  return detail ? `${commandLine}\n${detail}` : `${commandLine}\n${exitDetail}`;
 }
 
 function relayCapturedOutput(result) {
@@ -339,6 +343,27 @@ function copyIfExists(sourcePath, targetPath) {
   if (fs.existsSync(sourcePath)) {
     fs.copyFileSync(sourcePath, targetPath);
   }
+}
+
+function withNodeHeapSize(env = {}) {
+  const heapOption = `--max-old-space-size=${DESKTOP_BUILD_HEAP_SIZE_MB}`;
+  const merged = (env.NODE_OPTIONS || process.env.NODE_OPTIONS || '').trim();
+  if (!merged) {
+    return {
+      ...env,
+      NODE_OPTIONS: heapOption,
+    };
+  }
+  if (merged.includes(heapOption)) {
+    return {
+      ...env,
+      NODE_OPTIONS: merged,
+    };
+  }
+  return {
+    ...env,
+    NODE_OPTIONS: `${merged} ${heapOption}`.trim(),
+  };
 }
 
 function copyRuntimeHome(sourceDir, targetDir) {
@@ -584,7 +609,21 @@ function buildDesktopAssetsOnce() {
     return;
   }
   console.log('==> [desktop] build');
-  runCommand(resolveShellCommand('npm'), ['run', '-w', '@sqlcopilot/desktop', 'build']);
+  const buildArgs = ['run', '-w', '@sqlcopilot/desktop', 'build'];
+  const baseEnv = withNodeHeapSize();
+  try {
+    runCommand(resolveShellCommand('npm'), buildArgs, { env: baseEnv });
+  } catch (error) {
+    if (process.platform !== 'darwin') {
+      throw error;
+    }
+    console.warn('==> [desktop] macOS build retry with safe build profile');
+    runCommand(resolveShellCommand('npm'), buildArgs, {
+      env: withNodeHeapSize({
+        SQLCOPILOT_VITE_SAFE_BUILD: '1',
+      }),
+    });
+  }
 }
 
 function currentHostTarget() {

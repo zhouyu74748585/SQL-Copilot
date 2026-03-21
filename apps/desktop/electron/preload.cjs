@@ -1,6 +1,19 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+function resolveBackendBaseUrl() {
+  const raw = process.env.SQLCOPILOT_RENDERER_BACKEND_URL
+    || process.env.SQLCOPILOT_BACKEND_URL
+    || 'http://localhost:18080';
+  return String(raw).trim().replace(/\/+$/, '') || 'http://localhost:18080';
+}
+
+const backendBaseUrl = resolveBackendBaseUrl();
+
 contextBridge.exposeInMainWorld('sqlCopilotDesktop', {
+  backendBaseUrl,
+  getBackendBaseUrl() {
+    return backendBaseUrl;
+  },
   pickFile(options = {}) {
     return ipcRenderer.invoke('dialog:pick-file', options);
   },

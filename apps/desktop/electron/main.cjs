@@ -2,13 +2,37 @@ const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const http = require('http');
+const net = require('net');
 const path = require('path');
 
 let qdrantProcess = null;
 let backendProcess = null;
 const MAX_CHART_CACHE_BYTES = 20 * 1024 * 1024;
+const DEFAULT_BACKEND_URL = 'http://127.0.0.1:18080';
+let resolvedBackendBaseUrl = normalizeBackendBaseUrl(process.env.SQLCOPILOT_BACKEND_URL || DEFAULT_BACKEND_URL);
+
+function normalizeBackendBaseUrl(value) {
+  const raw = typeof value === 'string' && value.trim() ? value.trim() : DEFAULT_BACKEND_URL;
+  const parsed = new URL(raw);
+  const protocol = parsed.protocol || 'http:';
+  const host = parsed.hostname || '127.0.0.1';
+  const port = Number(parsed.port || 18080);
+  return `${protocol}//${host}:${port}`;
+}
+
+function hasExplicitBackendUrl() {
+  return typeof process.env.SQLCOPILOT_BACKEND_URL === 'string'
+    && process.env.SQLCOPILOT_BACKEND_URL.trim().length > 0;
+}
+
+function syncRendererBackendBaseUrl() {
+  process.env.SQLCOPILOT_RENDERER_BACKEND_URL = resolvedBackendBaseUrl;
+}
+
+syncRendererBackendBaseUrl();
 
 function createWindow() {
+  syncRendererBackendBaseUrl();
   const rendererUrl = process.env.ELECTRON_RENDERER_URL;
   const isDebug = process.env.ELECTRON_DEBUG === '1';
   const isMac = process.platform === 'darwin';
@@ -357,12 +381,14 @@ function waitForQdrantReady(baseUrl, timeoutMs = 20_000) {
 }
 
 function parseBackendUrl() {
-  const raw = process.env.SQLCOPILOT_BACKEND_URL || 'http://127.0.0.1:18080';
-  const parsed = new URL(raw);
+  const parsed = new URL(resolvedBackendBaseUrl);
   const protocol = parsed.protocol || 'http:';
   const host = parsed.hostname || '127.0.0.1';
   const port = Number(parsed.port || 18080);
   return {
+    protocol,
+    host,
+    port,
     baseUrl: `${protocol}//${host}:${port}`,
   };
 }
@@ -400,6 +426,46 @@ async function isBackendReady(baseUrl, timeoutMs = 1200) {
   } catch {
     return false;
   }
+}
+
+function canListenOnPort(host, port) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.unref();
+    server.once('error', () => {
+      resolve(false);
+    });
+    server.listen({ host, port }, () => {
+      server.close(() => resolve(true));
+    });
+  });
+}
+
+async function resolveManagedBackendBaseUrl() {
+  const { protocol, host, port } = parseBackendUrl();
+  for (let offset = 0; offset < 20; offset += 1) {
+    const candidatePort = port + offset;
+    if (await canListenOnPort(host, candidatePort)) {
+      return `${protocol}//${host}:${candidatePort}`;
+    }
+  }
+
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.once('error', reject);
+    server.listen({ host, port: 0 }, () => {
+      const address = server.address();
+      const candidatePort = typeof address === 'object' && address ? address.port : port;
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(`${protocol}//${host}:${candidatePort}`);
+      });
+    });
+  });
 }
 
 function resolveBackendRuntimeDir() {
@@ -521,12 +587,31 @@ function stopQdrant() {
 }
 
 async function startBackend() {
-  const { baseUrl } = parseBackendUrl();
-  if (await isBackendReady(baseUrl)) {
-    console.log(`[backend] detected existing service at ${baseUrl}`);
-    return;
+  if (hasExplicitBackendUrl()) {
+    resolvedBackendBaseUrl = normalizeBackendBaseUrl(process.env.SQLCOPILOT_BACKEND_URL);
+    syncRendererBackendBaseUrl();
+    const { baseUrl } = parseBackendUrl();
+    if (await isBackendReady(baseUrl)) {
+      console.log(`[backend] detected configured external service at ${baseUrl}`);
+      return;
+    }
+    throw new Error(`Configured backend is unavailable at ${baseUrl}`);
   }
 
+  if (app.isPackaged) {
+    resolvedBackendBaseUrl = await resolveManagedBackendBaseUrl();
+    syncRendererBackendBaseUrl();
+  } else {
+    const { baseUrl } = parseBackendUrl();
+    resolvedBackendBaseUrl = normalizeBackendBaseUrl(baseUrl);
+    syncRendererBackendBaseUrl();
+    if (await isBackendReady(baseUrl)) {
+      console.log(`[backend] detected existing service at ${baseUrl}`);
+      return;
+    }
+  }
+
+  const { baseUrl, port } = parseBackendUrl();
   const runtimeDir = resolveBackendRuntimeDir();
   const profile = resolveDefaultBackendProfile(runtimeDir);
   const launchSpec = resolveBackendLaunchSpec(runtimeDir, profile);
@@ -538,6 +623,7 @@ async function startBackend() {
     env: {
       ...process.env,
       SQLCOPILOT_DATA_DIR: backendDataDir,
+      SERVER_PORT: String(port),
     },
     stdio: 'pipe',
   });

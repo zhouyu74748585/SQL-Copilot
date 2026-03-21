@@ -1,9 +1,29 @@
 import type {ApiResponse} from '@sqlcopilot/shared-contracts';
 
-const BASE_URL = 'http://localhost:18080';
+const DEFAULT_BASE_URL = 'http://localhost:18080';
+
+interface DesktopRuntimeBridge {
+  backendBaseUrl?: string;
+  getBackendBaseUrl?: () => string;
+}
+
+function resolveBaseUrl() {
+  if (typeof window !== 'undefined') {
+    const bridge = (window as Window & { sqlCopilotDesktop?: DesktopRuntimeBridge }).sqlCopilotDesktop;
+    const runtimeBaseUrl = bridge?.getBackendBaseUrl?.() || bridge?.backendBaseUrl;
+    if (runtimeBaseUrl && runtimeBaseUrl.trim()) {
+      return runtimeBaseUrl.replace(/\/+$/, '');
+    }
+  }
+  return DEFAULT_BASE_URL;
+}
+
+function buildApiUrl(path: string) {
+  return `${resolveBaseUrl()}${path}`;
+}
 
 export async function getApi<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`);
+  const res = await fetch(buildApiUrl(path));
   if (!res.ok) {
     throw new Error(`HTTP ${res.status}`);
   }
@@ -23,7 +43,7 @@ interface PostSseApiOptions<T> extends PostApiOptions {
 }
 
 export async function postApi<T>(path: string, payload: unknown, options?: PostApiOptions): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
+  const res = await fetch(buildApiUrl(path), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -42,7 +62,7 @@ export async function postApi<T>(path: string, payload: unknown, options?: PostA
 }
 
 export async function postSseApi<T>(path: string, payload: unknown, options: PostSseApiOptions<T>): Promise<void> {
-  const res = await fetch(`${BASE_URL}${path}`, {
+  const res = await fetch(buildApiUrl(path), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
