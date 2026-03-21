@@ -11,18 +11,20 @@ permissions:
 
 jobs:
   package:
-    name: Package ${{ matrix.label }}
+    name: Package ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: windows-latest
-            label: windows
-          - os: macos-latest
-            label: macos
+            target: win-x64
+          - os: macos-14
+            target: mac-arm64
+          - os: macos-15-intel
+            target: mac-x64
           - os: ubuntu-latest
-            label: linux
+            target: linux-x64
 
     env:
       CI: "true"
@@ -54,12 +56,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Package current platform artifact
-        run: npm run package:app
+      - name: Package target artifact
+        run: node scripts/package-variants.mjs --targets=${{ matrix.target }}
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: sql-copilot-${{ matrix.label }}
-          path: release/**
+          name: sql-copilot-${{ matrix.target }}
+          path: release/desktop/${{ matrix.target }}/**
           if-no-files-found: error
