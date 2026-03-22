@@ -116,3 +116,22 @@
 - 前端 clean 构建：`npm run build -- --emptyOutDir` 通过。
 - 后端 clean 启动：`mvn -f apps/server/pom.xml clean spring-boot:run "-Dspring-boot.run.arguments=--server.port=18090"` 成功，`http://127.0.0.1:18090/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
 - 前端预览：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6065 --strictPort` 成功，`http://127.0.0.1:6065/` 返回 `HTTP 200`。
+
+
+### 2026-03-22 19:11:42
+
+## 2026-03-22 定义编辑页 tooltip 遮挡修复
+
+### 本次目标
+- 修复新建视图/函数定义编辑页顶部图标按钮 hover 提示被上方 tab 行遮挡的问题。
+
+### 关键改动
+- 调整 `apps/desktop/src/modules/studio/components/StudioShell.vue`：
+  - 将对象定义编辑页顶部“刷新、保存、美化 SQL”三个 tooltip 的弹出方向固定为 `placement="bottom"`。
+  - 让 hover 提示在按钮下方展示，避开上方 tab 行的覆盖区域。
+
+### 验证结果
+- 前端类型检查：`npm run type-check` 通过。
+- 前端 clean 构建：`npm run build -- --emptyOutDir` 通过。
+- 后端 clean 启动：`mvn -f apps/server/pom.xml clean spring-boot:run "-Dspring-boot.run.arguments=--server.port=18091"` 成功，`http://127.0.0.1:18091/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+- 前端预览：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6066 --strictPort` 成功，`http://127.0.0.1:6066/` 返回 `HTTP 200`。

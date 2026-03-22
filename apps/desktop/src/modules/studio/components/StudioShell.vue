@@ -1555,7 +1555,7 @@
             </div>
             <div class="pane-title-actions">
               <a-space size="small">
-                <a-tooltip :title="tt('刷新')">
+                <a-tooltip placement="bottom" :title="tt('刷新')">
                   <a-button
                     size="small"
                     class="sql-action-icon-btn object-definition-action-btn"
@@ -1566,7 +1566,7 @@
                     <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="refreshIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
-                <a-tooltip :title="tt('保存')">
+                <a-tooltip placement="bottom" :title="tt('保存')">
                   <a-button
                     size="small"
                     :class="['sql-action-icon-btn', 'object-definition-action-btn', { 'is-dirty': activeObjectDefinitionEditorTab.dirty }]"
@@ -1578,7 +1578,7 @@
                     <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="saveQueryIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
-                <a-tooltip :title="tt('美化 SQL')">
+                <a-tooltip placement="bottom" :title="tt('美化 SQL')">
                   <a-button
                     size="small"
                     class="sql-action-icon-btn object-definition-action-btn"
