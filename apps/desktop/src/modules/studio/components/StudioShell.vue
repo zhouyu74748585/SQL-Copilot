@@ -427,55 +427,37 @@
                 </a-tooltip>
               </div>
               <div v-else-if="currentObjectType === 'views'" class="center-toolbar-left">
-                <a-tooltip :title="tt('新建视图')">
+                <a-tooltip title="新建视图">
                   <a-button
                     size="small"
-                    type="text"
+                    type="default"
                     :disabled="!canCreateView"
-                    class="toolbar-icon-btn browser-toolbar-action-btn"
-                    :aria-label="tt('新建视图')"
-                    data-testid="studio-browser-toolbar-new-view"
+                    class="toolbar-icon-btn"
                     @click="openNewObjectDefinitionEditor(workflow.connectionId, getActiveDatabaseName(workflow.connectionId), 'views')"
                   >
                     <template #icon><img class="toolbar-action-icon" :src="createViewIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
-                <a-tooltip :title="tt('新建查询')">
-                  <a-button
-                    size="small"
-                    type="text"
-                    :disabled="!workflow.connectionId"
-                    class="toolbar-icon-btn browser-toolbar-action-btn"
-                    :aria-label="tt('新建查询')"
-                    @click="openAiQueryTab()"
-                  >
+                <a-tooltip title="新建查询">
+                  <a-button size="small" :disabled="!workflow.connectionId" class="toolbar-icon-btn" @click="openAiQueryTab()">
                     <template #icon><img class="toolbar-action-icon" :src="addQueryIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
               </div>
               <div v-else-if="currentObjectType === 'functions'" class="center-toolbar-left">
-                <a-tooltip :title="tt('新建函数')">
+                <a-tooltip title="新建函数">
                   <a-button
                     size="small"
-                    type="text"
+                    type="default"
                     :disabled="!canCreateFunction"
-                    class="toolbar-icon-btn browser-toolbar-action-btn"
-                    :aria-label="tt('新建函数')"
-                    data-testid="studio-browser-toolbar-new-function"
+                    class="toolbar-icon-btn"
                     @click="openNewObjectDefinitionEditor(workflow.connectionId, getActiveDatabaseName(workflow.connectionId), 'functions')"
                   >
                     <template #icon><img class="toolbar-action-icon" :src="createFunctionIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
-                <a-tooltip :title="tt('新建查询')">
-                  <a-button
-                    size="small"
-                    type="text"
-                    :disabled="!workflow.connectionId"
-                    class="toolbar-icon-btn browser-toolbar-action-btn"
-                    :aria-label="tt('新建查询')"
-                    @click="openAiQueryTab()"
-                  >
+                <a-tooltip title="新建查询">
+                  <a-button size="small" :disabled="!workflow.connectionId" class="toolbar-icon-btn" @click="openAiQueryTab()">
                     <template #icon><img class="toolbar-action-icon" :src="addQueryIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
@@ -1573,41 +1555,40 @@
             </div>
             <div class="pane-title-actions">
               <a-space size="small">
-                <a-button
-                  size="small"
-                  type="text"
-                  class="btn-mini"
-                  :disabled="activeObjectDefinitionEditorTab.loading || activeObjectDefinitionEditorTab.saving"
-                  @click="reloadObjectDefinition(activeObjectDefinitionEditorTab)"
-                >
-                  <template #icon><sync-outlined /></template>
-                  刷新
-                </a-button>
-                <a-button
-                  size="small"
-                  type="primary"
-                  class="btn-execute"
-                  :loading="activeObjectDefinitionEditorTab.saving"
-                  :disabled="activeObjectDefinitionEditorTab.loading || !activeObjectDefinitionEditorTab.dirty"
-                  @click="saveObjectDefinition(activeObjectDefinitionEditorTab)"
-                >
-                  <template #icon><play-circle-outlined /></template>
-                  保存
-                </a-button>
-                <a-button
-                  size="small"
-                  type="text"
-                  class="btn-mini"
-                  :disabled="activeObjectDefinitionEditorTab.loading || activeObjectDefinitionEditorTab.saving"
-                  @click="formatObjectDefinitionSql(activeObjectDefinitionEditorTab)"
-                >
-                  <template #icon><highlight-outlined /></template>
-                  美化 SQL
-                </a-button>
-                <a-button size="small" type="text" class="btn-mini" @click="copyObjectDefinitionSql(activeObjectDefinitionEditorTab)">
-                  <template #icon><copy-outlined /></template>
-                  复制
-                </a-button>
+                <a-tooltip :title="tt('刷新')">
+                  <a-button
+                    size="small"
+                    class="sql-action-icon-btn object-definition-action-btn"
+                    :aria-label="tt('刷新')"
+                    :disabled="activeObjectDefinitionEditorTab.loading || activeObjectDefinitionEditorTab.saving"
+                    @click="reloadObjectDefinition(activeObjectDefinitionEditorTab)"
+                  >
+                    <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="refreshIcon" alt="" /></template>
+                  </a-button>
+                </a-tooltip>
+                <a-tooltip :title="tt('保存')">
+                  <a-button
+                    size="small"
+                    :class="['sql-action-icon-btn', 'object-definition-action-btn', { 'is-dirty': activeObjectDefinitionEditorTab.dirty }]"
+                    :aria-label="tt('保存')"
+                    :loading="activeObjectDefinitionEditorTab.saving"
+                    :disabled="activeObjectDefinitionEditorTab.loading || !activeObjectDefinitionEditorTab.dirty"
+                    @click="saveObjectDefinition(activeObjectDefinitionEditorTab)"
+                  >
+                    <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="saveQueryIcon" alt="" /></template>
+                  </a-button>
+                </a-tooltip>
+                <a-tooltip :title="tt('美化 SQL')">
+                  <a-button
+                    size="small"
+                    class="sql-action-icon-btn object-definition-action-btn"
+                    :aria-label="tt('美化 SQL')"
+                    :disabled="activeObjectDefinitionEditorTab.loading || activeObjectDefinitionEditorTab.saving"
+                    @click="formatObjectDefinitionSql(activeObjectDefinitionEditorTab)"
+                  >
+                    <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="prettyIcon" alt="" /></template>
+                  </a-button>
+                </a-tooltip>
               </a-space>
             </div>
           </div>

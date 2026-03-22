@@ -90,3 +90,29 @@
 - 前端 clean 构建：`npm run build -- --emptyOutDir` 通过。
 - 后端 clean 启动：`mvn -f apps/server/pom.xml clean spring-boot:run "-Dspring-boot.run.arguments=--server.port=18089"` 成功，`http://127.0.0.1:18089/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
 - 前端预览：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6064 --strictPort` 成功，`http://127.0.0.1:6064/` 返回 `HTTP 200`。
+
+
+### 2026-03-22 19:06:18
+
+## 2026-03-22 定义编辑页按钮图标纠偏
+
+### 本次目标
+- 撤销上一轮误改到对象浏览页工具栏的按钮调整。
+- 将新建视图/函数定义编辑页顶部的“刷新、保存、格式化 SQL、复制”改为图标按钮展示。
+- 删除“复制 SQL”按钮，并移除替换后按钮上的 `type` 属性，避免颜色显示异常。
+
+### 关键改动
+- 调整 `apps/desktop/src/modules/studio/components/StudioShell.vue`：
+  - 恢复对象浏览页 `views/functions` 工具栏为原始实现，不再修改该区域。
+  - 将对象定义编辑页顶部的刷新、保存、格式化 SQL 按钮改为 icon-only 按钮，并通过 tooltip 展示名称。
+  - 刷新改用 `refresh.svg`，保存改用 `save.svg`，格式化 SQL 改用 `pretty.svg`。
+  - 删除对象定义编辑页顶部“复制 SQL”按钮。
+  - 新按钮不再设置 `type` 属性，避免 Ant Design 按钮主题色干扰图标显示。
+- 调整 `apps/desktop/src/modules/studio/styles/shell.css`：
+  - 新增 `object-definition-action-btn` 样式，用于定义编辑页按钮的圆角与保存态视觉强化。
+
+### 验证结果
+- 前端类型检查：`npm run type-check` 通过。
+- 前端 clean 构建：`npm run build -- --emptyOutDir` 通过。
+- 后端 clean 启动：`mvn -f apps/server/pom.xml clean spring-boot:run "-Dspring-boot.run.arguments=--server.port=18090"` 成功，`http://127.0.0.1:18090/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+- 前端预览：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6065 --strictPort` 成功，`http://127.0.0.1:6065/` 返回 `HTTP 200`。
