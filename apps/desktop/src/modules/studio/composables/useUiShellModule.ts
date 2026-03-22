@@ -33,6 +33,8 @@ interface DesktopThemeBridge {
 }
 
 export function useUiShellModule(runtime: StudioRuntime, deps: UiShellDeps): UiShellModule {
+  const BODY_THEME_CLASS_LIGHT = 'sqlcopilot-theme-light';
+  const BODY_THEME_CLASS_DARK = 'sqlcopilot-theme-dark';
   const QUERY_EDITOR_SECTION_MIN_HEIGHT = 180;
   const QUERY_RESULT_SECTION_MIN_HEIGHT = 240;
   const QUERY_EDITOR_SECTION_SPLITTER_HEIGHT = 8;
@@ -75,6 +77,15 @@ export function useUiShellModule(runtime: StudioRuntime, deps: UiShellDeps): UiS
     }
   }
 
+  function syncDocumentThemeScope() {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    document.body?.classList.remove(BODY_THEME_CLASS_LIGHT, BODY_THEME_CLASS_DARK);
+    document.body?.classList.add(runtime.uiTheme.value === 'dark' ? BODY_THEME_CLASS_DARK : BODY_THEME_CLASS_LIGHT);
+    document.documentElement.style.colorScheme = runtime.uiTheme.value;
+  }
+
   function toggleTheme() {
     runtime.uiTheme.value = runtime.uiTheme.value === 'dark' ? 'light' : 'dark';
   }
@@ -87,12 +98,13 @@ export function useUiShellModule(runtime: StudioRuntime, deps: UiShellDeps): UiS
       const raw = window.localStorage.getItem(runtime.uiThemeStorageKey);
       if (raw === 'light' || raw === 'dark') {
         runtime.uiTheme.value = raw;
-        return;
+      } else {
+        runtime.uiTheme.value = 'light';
       }
-      runtime.uiTheme.value = 'light';
     } catch {
       runtime.uiTheme.value = 'light';
     }
+    syncDocumentThemeScope();
     void syncDesktopWindowTheme();
   }
 
@@ -301,12 +313,15 @@ export function useUiShellModule(runtime: StudioRuntime, deps: UiShellDeps): UiS
     window.removeEventListener('mouseup', stopResizeQueryPane);
     window.removeEventListener('mousemove', handleResizeQueryEditorSections);
     window.removeEventListener('mouseup', stopResizeQueryEditorSections);
+    document.body?.classList.remove(BODY_THEME_CLASS_LIGHT, BODY_THEME_CLASS_DARK);
+    document.documentElement.style.colorScheme = '';
   });
 
   watch(
     () => runtime.uiTheme.value,
     () => {
       persistUiThemePreference();
+      syncDocumentThemeScope();
       void syncDesktopWindowTheme();
     },
   );

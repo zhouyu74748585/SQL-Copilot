@@ -108,6 +108,9 @@ public class SqlServiceImpl implements SqlService {
             if ("SQLSERVER".equals(dbType)) {
                 return explainSqlServer(sql, connection, vo);
             }
+            if ("ORACLE".equals(dbType)) {
+                return explainOracle(sql, connection, vo);
+            }
             try (Statement statement = connection.createStatement();
                  ResultSet resultSet = statement.executeQuery(explainSql)) {
                 vo.setRows(ResultSetConverter.readRows(resultSet, 200));
@@ -130,6 +133,31 @@ public class SqlServiceImpl implements SqlService {
                 statement.execute("SET SHOWPLAN_ALL OFF");
             }
         }
+    }
+
+    private ExplainVO explainOracle(String sql, Connection connection, ExplainVO vo) throws SQLException {
+        String statementId = buildOracleExplainStatementId();
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("EXPLAIN PLAN SET STATEMENT_ID = '" + statementId + "' FOR " + sql);
+            try (ResultSet resultSet = statement.executeQuery(
+                "SELECT PLAN_TABLE_OUTPUT FROM TABLE(DBMS_XPLAN.DISPLAY(NULL, '" + statementId + "', 'TYPICAL'))")) {
+                vo.setRows(ResultSetConverter.readRows(resultSet, 400));
+                vo.setSummary("Oracle 执行计划分析完成");
+                return vo;
+            } finally {
+                try {
+                    statement.executeUpdate("DELETE FROM PLAN_TABLE WHERE STATEMENT_ID = '" + statementId + "'");
+                } catch (SQLException cleanupEx) {
+                    log.warn("[SQL-EXPLAIN] cleanup oracle plan table failed. statementId={}, reason={}",
+                        statementId, cleanupEx.getMessage());
+                }
+            }
+        }
+    }
+
+    private String buildOracleExplainStatementId() {
+        String token = UUID.randomUUID().toString().replace("-", "").toUpperCase(Locale.ROOT);
+        return "SQLCOPILOT_" + token.substring(0, 18);
     }
 
     @Override

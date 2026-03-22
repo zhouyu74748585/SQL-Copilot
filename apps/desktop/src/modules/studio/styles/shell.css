@@ -21,6 +21,81 @@ body {
   background: var(--shell-bg-app-light);
 }
 
+body.sqlcopilot-theme-light,
+body.sqlcopilot-theme-dark {
+  --bg-app: #ececec;
+  --surface-0: #f5f5f5;
+  --surface-1: #ebebeb;
+  --surface-2: #dedede;
+  --text-1: #1e1e1e;
+  --text-2: #5a5a5a;
+  --text-3: #8a8a8a;
+  --text-inverse: #f5f5f5;
+  --accent: #4078c0;
+  --accent-soft: rgba(64, 120, 192, 0.14);
+  --hover: rgba(64, 120, 192, 0.08);
+  --line-soft: rgba(0, 0, 0, 0.09);
+  --line-strong: rgba(0, 0, 0, 0.16);
+  --tab-active-border: var(--line-strong);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-2: 0 2px 8px rgba(0, 0, 0, 0.08);
+  --success: #2d8f6b;
+  --success-soft: rgba(45, 143, 107, 0.14);
+  --warning: #b8860b;
+  --warning-soft: rgba(184, 134, 11, 0.14);
+  --error: #c44c6a;
+  --error-soft: rgba(196, 76, 106, 0.14);
+  --info: #4078c0;
+  --info-soft: rgba(64, 120, 192, 0.14);
+  --bubble-generate: #3d6eae;
+  --bubble-explain: #2a7d6e;
+  --bubble-analyze: #a67c1a;
+  --bubble-repair: #945f7e;
+  --panel: var(--surface-0);
+  --panel-soft: var(--surface-1);
+  --line: var(--line-soft);
+  --text: var(--text-1);
+  --text-sub: var(--text-2);
+  color: var(--text-1);
+  background: var(--bg-app);
+}
+
+body.sqlcopilot-theme-light {
+  color-scheme: light;
+}
+
+body.sqlcopilot-theme-dark {
+  color-scheme: dark;
+  --bg-app: #1e1e1e;
+  --surface-0: #252526;
+  --surface-1: #2d2d30;
+  --surface-2: #3e3e42;
+  --text-1: #e8e8e8;
+  --text-2: #b0b0b0;
+  --text-3: #858585;
+  --text-inverse: #1e1e1e;
+  --accent: #569cd6;
+  --accent-soft: rgba(86, 156, 214, 0.18);
+  --hover: rgba(86, 156, 214, 0.1);
+  --line-soft: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.14);
+  --tab-active-border: var(--line-strong);
+  --shadow-1: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --shadow-2: 0 4px 12px rgba(0, 0, 0, 0.45);
+  --success: #3cbf9a;
+  --success-soft: rgba(60, 191, 154, 0.18);
+  --warning: #d4a520;
+  --warning-soft: rgba(212, 165, 32, 0.18);
+  --error: #e0788f;
+  --error-soft: rgba(224, 120, 143, 0.18);
+  --info: #569cd6;
+  --info-soft: rgba(86, 156, 214, 0.18);
+  --bubble-generate: #4a8ec8;
+  --bubble-explain: #3aa894;
+  --bubble-analyze: #c9a227;
+  --bubble-repair: #b07a9a;
+}
+
 #app {
   min-height: 100%;
   padding: 0;
@@ -4206,6 +4281,106 @@ body {
 
 .studio-root .ant-tree {
   color: var(--text-1);
+}
+
+/* Teleported overlays and modals live under body, so they need the same theme token scope. */
+body.sqlcopilot-theme-light :is(.history-menu-panel, .context-menu, .query-chat-assistant-card, .vectorize-overview-kpi-card, .vectorize-overview-item, .vectorize-overview-note, .model-option-card, .rag-config-card, .ant-select-dropdown, .ant-dropdown-menu, .ant-modal-content),
+body.sqlcopilot-theme-dark :is(.history-menu-panel, .context-menu, .query-chat-assistant-card, .vectorize-overview-kpi-card, .vectorize-overview-item, .vectorize-overview-note, .model-option-card, .rag-config-card, .ant-select-dropdown, .ant-dropdown-menu, .ant-modal-content) {
+  border: 1px solid var(--line-soft);
+  background: var(--surface-0) !important;
+  color: var(--text-1);
+  box-shadow: var(--shadow-2);
+}
+
+body.sqlcopilot-theme-light :is(.history-menu-title, .history-menu-item-head, .model-option-head strong, .rag-config-card-title, .vectorize-overview-db, .vectorize-overview-kpi-card > strong, .vectorize-overview-item > strong, .ant-modal-title, .ant-tabs-tab-btn),
+body.sqlcopilot-theme-dark :is(.history-menu-title, .history-menu-item-head, .model-option-head strong, .rag-config-card-title, .vectorize-overview-db, .vectorize-overview-kpi-card > strong, .vectorize-overview-item > strong, .ant-modal-title, .ant-tabs-tab-btn) {
+  color: var(--text-1) !important;
+}
+
+body.sqlcopilot-theme-light :is(.history-menu-loading, .history-menu-item-meta, .history-menu-item-desc, .history-menu-empty, .history-menu-load-tip, .vectorize-overview-kpi-card > span, .vectorize-overview-item, .vectorize-overview-note, .empty-pane, .ant-form-item-label > label, .ant-modal-close, .ant-modal-close-x, .ant-tabs-tab),
+body.sqlcopilot-theme-dark :is(.history-menu-loading, .history-menu-item-meta, .history-menu-item-desc, .history-menu-empty, .history-menu-load-tip, .vectorize-overview-kpi-card > span, .vectorize-overview-item, .vectorize-overview-note, .empty-pane, .ant-form-item-label > label, .ant-modal-close, .ant-modal-close-x, .ant-tabs-tab) {
+  color: var(--text-2) !important;
+}
+
+body.sqlcopilot-theme-light :is(.history-menu-item, .query-chat-sql, .query-chat-text, .query-chat-thinking-panel, .query-chat-chart-summary, .query-chat-chart-image-wrap, .query-chat-execution-summary, .query-chat-execution-table, .query-chat-prompt-assist, .query-chat-prompt-assist-item, .risk-confirm-pre, .detail-code-block, .knowledge-card, .knowledge-editor-group),
+body.sqlcopilot-theme-dark :is(.history-menu-item, .query-chat-sql, .query-chat-text, .query-chat-thinking-panel, .query-chat-chart-summary, .query-chat-chart-image-wrap, .query-chat-execution-summary, .query-chat-execution-table, .query-chat-prompt-assist, .query-chat-prompt-assist-item, .risk-confirm-pre, .detail-code-block, .knowledge-card, .knowledge-editor-group) {
+  border-color: var(--line-soft);
+  background: color-mix(in srgb, var(--surface-1) 92%, transparent);
+}
+
+body.sqlcopilot-theme-light .history-menu-item:hover,
+body.sqlcopilot-theme-dark .history-menu-item:hover {
+  background: color-mix(in srgb, var(--surface-1) 72%, var(--accent) 28%);
+}
+
+body.sqlcopilot-theme-light .history-menu-item.is-active,
+body.sqlcopilot-theme-dark .history-menu-item.is-active {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent);
+}
+
+body.sqlcopilot-theme-light :is(.ant-input, .ant-input-affix-wrapper, .ant-input-number, .ant-input-number-input, .ant-select-selector, .ant-picker),
+body.sqlcopilot-theme-dark :is(.ant-input, .ant-input-affix-wrapper, .ant-input-number, .ant-input-number-input, .ant-select-selector, .ant-picker) {
+  color: var(--text-1) !important;
+}
+
+body.sqlcopilot-theme-light :is(.ant-input, .ant-input-affix-wrapper, .ant-input-number, .ant-select-selector, .ant-picker),
+body.sqlcopilot-theme-dark :is(.ant-input, .ant-input-affix-wrapper, .ant-input-number, .ant-select-selector, .ant-picker) {
+  background: color-mix(in srgb, var(--surface-1) 92%, transparent) !important;
+  border-color: var(--line-soft) !important;
+  box-shadow: none !important;
+}
+
+body.sqlcopilot-theme-light .ant-input::placeholder,
+body.sqlcopilot-theme-light .ant-input-affix-wrapper input::placeholder,
+body.sqlcopilot-theme-light .ant-select-selection-placeholder,
+body.sqlcopilot-theme-light .ant-input-number-input::placeholder,
+body.sqlcopilot-theme-dark .ant-input::placeholder,
+body.sqlcopilot-theme-dark .ant-input-affix-wrapper input::placeholder,
+body.sqlcopilot-theme-dark .ant-select-selection-placeholder,
+body.sqlcopilot-theme-dark .ant-input-number-input::placeholder {
+  color: var(--text-3) !important;
+}
+
+body.sqlcopilot-theme-light :is(.ant-modal-header, .ant-modal-footer),
+body.sqlcopilot-theme-dark :is(.ant-modal-header, .ant-modal-footer) {
+  background: transparent;
+  border-color: var(--line-soft);
+}
+
+body.sqlcopilot-theme-light .ant-modal-header,
+body.sqlcopilot-theme-dark .ant-modal-header {
+  border-bottom: none;
+}
+
+body.sqlcopilot-theme-light .ant-tabs-nav::before,
+body.sqlcopilot-theme-dark .ant-tabs-nav::before {
+  border-bottom-color: var(--line-soft) !important;
+}
+
+body.sqlcopilot-theme-light .ant-tabs-ink-bar,
+body.sqlcopilot-theme-dark .ant-tabs-ink-bar {
+  background: var(--accent) !important;
+}
+
+body.sqlcopilot-theme-light :is(.ant-select-item-option-content, .ant-select-item-empty, .ant-dropdown-menu-item, .ant-dropdown-menu-submenu-title),
+body.sqlcopilot-theme-dark :is(.ant-select-item-option-content, .ant-select-item-empty, .ant-dropdown-menu-item, .ant-dropdown-menu-submenu-title) {
+  color: var(--text-1);
+}
+
+body.sqlcopilot-theme-light :is(.ant-select-item-option-active:not(.ant-select-item-option-disabled), .ant-dropdown-menu-item:hover, .ant-dropdown-menu-submenu-title:hover),
+body.sqlcopilot-theme-dark :is(.ant-select-item-option-active:not(.ant-select-item-option-disabled), .ant-dropdown-menu-item:hover, .ant-dropdown-menu-submenu-title:hover) {
+  background: var(--hover) !important;
+}
+
+body.sqlcopilot-theme-light .ant-select-item-option-selected:not(.ant-select-item-option-disabled),
+body.sqlcopilot-theme-dark .ant-select-item-option-selected:not(.ant-select-item-option-disabled) {
+  background: var(--accent-soft) !important;
+}
+
+body.sqlcopilot-theme-light .rag-local-tip-body a,
+body.sqlcopilot-theme-dark .rag-local-tip-body a {
+  color: var(--accent);
 }
 
 @media (max-width: 1200px) {
