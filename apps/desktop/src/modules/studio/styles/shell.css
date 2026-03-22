@@ -2979,6 +2979,11 @@ body.sqlcopilot-theme-dark {
   font-size: 12px;
 }
 
+.query-result-tab-text {
+  display: inline-flex;
+  align-items: center;
+}
+
 .query-result-tab-label::before {
   content: '';
   width: 6px;
@@ -2997,6 +3002,36 @@ body.sqlcopilot-theme-dark {
 
 .query-result-tab-label.is-running::before {
   background: #1677ff;
+}
+
+.query-result-tab-export-btn {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #5f7391;
+  background: transparent;
+  cursor: pointer;
+  transition: background-color 0.16s ease, color 0.16s ease;
+}
+
+.query-result-tab-export-btn:hover:not(:disabled) {
+  color: #2f5fd0;
+  background: rgba(47, 95, 208, 0.12);
+}
+
+.query-result-tab-export-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.query-result-tab-export-icon {
+  width: 12px;
+  height: 12px;
 }
 
 .query-chart-manual-panel {

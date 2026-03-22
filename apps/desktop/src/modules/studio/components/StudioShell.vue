@@ -2107,11 +2107,6 @@
                   <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="prettyIcon" alt="" /></template>
                 </a-button>
               </a-tooltip>
-              <a-tooltip title="导出结果（CSV）">
-                <a-button size="small" class="sql-action-icon-btn" @click="exportCsvForTab(activeQueryTab)">
-                  <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="exportIcon" alt="" /></template>
-                </a-button>
-              </a-tooltip>
               <a-tooltip title="保存查询">
                 <a-button size="small" class="sql-action-icon-btn" @click="openSaveQueryModal(activeQueryTab)">
                   <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="saveQueryIcon" alt="" /></template>
@@ -2212,7 +2207,7 @@
                     :class="['sql-action-icon-btn', { 'is-selection-active': activeQueryTab.resultViewMode === 'table' }]"
                     @click="setQueryResultViewMode(activeQueryTab, 'table')"
                   >
-                    <template #icon><table-outlined /></template>
+                    <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="tableIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
                 <a-tooltip v-if="canGenerateChartForTab(activeQueryTab)" title="图表结果">
@@ -2241,7 +2236,18 @@
               <a-tab-pane v-for="item in activeQueryTab.statementResults" :key="item.key">
                 <template #tab>
                   <span class="query-result-tab-label" :class="[`is-${item.status}`]">
-                    {{ resultTabTitle(item) }}
+                    <span class="query-result-tab-text">{{ resultTabTitle(item) }}</span>
+                    <a-tooltip title="导出结果（CSV）">
+                      <button
+                        type="button"
+                        class="query-result-tab-export-btn"
+                        :disabled="!canExportStatementResult(item)"
+                        @mousedown.stop.prevent
+                        @click.stop.prevent="exportCsvForTab(activeQueryTab, item)"
+                      >
+                        <img class="toolbar-action-icon query-result-tab-export-icon" :src="exportIcon" alt="" />
+                      </button>
+                    </a-tooltip>
                   </span>
                 </template>
               </a-tab-pane>
@@ -3411,7 +3417,6 @@ import {
   CopyOutlined,
   DatabaseOutlined,
   DeleteOutlined,
-  DownloadOutlined,
   EditOutlined,
   ExperimentOutlined,
   EyeOutlined,
@@ -3438,7 +3443,6 @@ import {
   SendOutlined,
   SettingOutlined,
   SyncOutlined,
-  TableOutlined,
   ToolOutlined,
   UnorderedListOutlined
 } from '@ant-design/icons-vue';
@@ -3474,6 +3478,7 @@ import saveQueryIcon from '../../../assets/icons/save.svg';
 import sendQueryIcon from '../../../assets/icons/send.svg';
 import sqlActionIcon from '../../../assets/icons/sql.svg';
 import stopActionIcon from '../../../assets/icons/stop.png';
+import tableIcon from '../../../assets/icons/table.svg';
 import interpretIcon from '../../../assets/icons/interpret.svg';
 import type {StudioController} from '../composables/useStudioController';
 
@@ -3746,6 +3751,7 @@ const {
     setupManualChartConfigByResult,
     setActiveStatementResult,
     setQueryResultViewMode,
+    canExportStatementResult,
     resultTabTitle,
     buildConnectionNode,
     buildCategoryChildren,
