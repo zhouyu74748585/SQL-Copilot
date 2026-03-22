@@ -2110,6 +2110,13 @@ function resultTabTitle(result: QueryStatementResult) {
   return firstKeyword ? `结果 ${result.index} · ${firstKeyword}` : `结果 ${result.index}`;
 }
 
+function canExportStatementResult(result: QueryStatementResult | null | undefined) {
+  if (!result) {
+    return false;
+  }
+  return result.status === 'success' && !!result.sqlText.trim();
+}
+
 function latestSuccessfulStatementResult(tab: QueryWorkspaceTab) {
   return [...tab.statementResults].reverse().find((item) => item.executeResult?.success) ?? null;
 }
@@ -9304,9 +9311,9 @@ async function repairSqlForTab(tab: QueryWorkspaceTab) {
   }
 }
 
-async function exportCsvForTab(tab: QueryWorkspaceTab) {
+async function exportCsvForTab(tab: QueryWorkspaceTab, statementResult?: QueryStatementResult | null) {
   await runSafely(async () => {
-    const exportSql = getActiveStatementResultForTab(tab)?.sqlText || resolveSqlForAction(tab);
+    const exportSql = statementResult?.sqlText || getActiveStatementResultForTab(tab)?.sqlText || resolveSqlForAction(tab);
     if (!exportSql) {
       throw new Error('当前没有可导出的 SQL');
     }
@@ -10644,6 +10651,7 @@ function resetConnectionModalState() {
     setupManualChartConfigByResult,
     setActiveStatementResult,
     setQueryResultViewMode,
+    canExportStatementResult,
     resultTabTitle,
     buildConnectionNode,
     buildCategoryChildren,
