@@ -17,6 +17,7 @@
           <button
             class="workspace-tab workspace-tab-browser"
             :class="{ 'is-active': activeWorkbenchTab === browserTabKey }"
+            data-testid="studio-browser-tab"
             @click="activateBrowserTab"
           >
             <span>对象浏览</span>
@@ -90,7 +91,7 @@
       </div>
       <div class="top-chrome-actions">
         <a-dropdown placement="bottomLeft" :trigger="['click']">
-          <button class="tool-item top-action-btn" :disabled="!canOpenHistory" title="会话历史" @click="handleHistoryMenuClick">
+          <button class="tool-item top-action-btn" :disabled="!canOpenHistory" title="会话历史" data-testid="studio-top-history-button" @click="handleHistoryMenuClick">
             <history-outlined />
             <span>历史</span>
           </button>
@@ -162,7 +163,7 @@
           </template>
         </a-dropdown>
         <a-dropdown placement="bottomLeft" :trigger="['click']">
-          <button class="tool-item top-action-btn" :disabled="!canOpenErSnapshot" title="ER图快照" @click="handleErSnapshotMenuClick">
+          <button class="tool-item top-action-btn" :disabled="!canOpenErSnapshot" title="ER图快照" data-testid="studio-top-er-snapshot-button" @click="handleErSnapshotMenuClick">
             <apartment-outlined />
             <span>ER图</span>
           </button>
@@ -233,12 +234,12 @@
             </div>
           </template>
         </a-dropdown>
-        <button class="tool-item top-action-btn" @click="openAiConfigModal" title="设置">
+        <button class="tool-item top-action-btn" data-testid="studio-top-settings-button" @click="openAiConfigModal" title="设置">
           <setting-outlined />
           <span>设置</span>
         </button>
         <a-tooltip :title="isDarkTheme ? '切换到浅色' : '切换到深色'">
-          <button class="tool-item tool-theme-toggle top-action-btn top-action-icon-btn" @click="toggleTheme">
+          <button class="tool-item tool-theme-toggle top-action-btn top-action-icon-btn" data-testid="studio-top-theme-toggle" @click="toggleTheme">
             <bulb-filled v-if="isDarkTheme" />
             <bulb-outlined v-else />
           </button>
@@ -299,6 +300,7 @@
 
             <a-tree
               class="connection-tree"
+              data-testid="studio-connection-tree"
               :tree-data="connectionTreeData"
               :selected-keys="selectedTreeKeys"
               :expanded-keys="expandedTreeKeys"
@@ -315,6 +317,7 @@
                   :class="{
                     'is-connection-expanded': dataRef.nodeType === 'connection' && expandedTreeKeys.includes(`conn-${dataRef.connectionId}`),
                   }"
+                  :data-testid="treeNodeTestId(dataRef, title)"
                   @dblclick.stop="handleTreeNodeDblclick(dataRef)"
                 >
                   <img
@@ -364,6 +367,7 @@
             <button
               class="knowledge-nav-item"
               :class="{ 'is-active': activeKnowledgeTab?.node === 'example-sql' }"
+              data-testid="studio-knowledge-example-sql"
               @click="openKnowledgeNode('example-sql')"
             >
               <span>样例SQL</span>
@@ -372,6 +376,7 @@
             <button
               class="knowledge-nav-item"
               :class="{ 'is-active': activeKnowledgeTab?.node === 'terms' }"
+              data-testid="studio-knowledge-terms"
               @click="openKnowledgeNode('terms')"
             >
               <span>术语管理</span>
@@ -399,12 +404,12 @@
                   </a-button>
                 </a-tooltip>
                 <a-tooltip title="新建查询">
-                  <a-button size="small" :disabled="!workflow.connectionId" class="toolbar-icon-btn" @click="openAiQueryTab()">
+                  <a-button size="small" :disabled="!workflow.connectionId" class="toolbar-icon-btn" data-testid="studio-browser-toolbar-new-query" @click="openAiQueryTab()">
                     <template #icon><img class="toolbar-action-icon" :src="addQueryIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
                 <a-tooltip :title="browserErEntryTooltip">
-                  <a-button size="small" :disabled="!canOpenBrowserErFeature" class="toolbar-icon-btn" @click="openErTableSelectModal()">
+                  <a-button size="small" :disabled="!canOpenBrowserErFeature" class="toolbar-icon-btn" data-testid="studio-browser-toolbar-open-er" @click="openErTableSelectModal()">
                     <template #icon><img class="toolbar-action-icon" :src="erEntryIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
@@ -550,7 +555,7 @@
                 >
                   <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'objectName'">
-                      <div class="table-name-cell" :class="{ 'is-active': selectedObjectName === record.objectName, 'is-queryable': record.objectType === 'tables' || record.objectType === 'queries' }" @dblclick.stop="onObjectRow(record).onDblclick()">
+                      <div class="table-name-cell" :class="{ 'is-active': selectedObjectName === record.objectName, 'is-queryable': record.objectType === 'tables' || record.objectType === 'queries' }" :data-testid="objectRowTestId(record)" @dblclick.stop="onObjectRow(record).onDblclick()">
                         <img class="object-row-icon" :src="objectRowIconSrc(record)" alt="" />
                         <span>{{ record.objectName }}</span>
                       </div>
@@ -575,6 +580,7 @@
                     :key="item.objectName"
                     class="object-card"
                     :class="{ 'is-active': selectedObjectName === item.objectName }"
+                    :data-testid="objectRowTestId(item)"
                     @click="onObjectRow(item).onClick()"
                     @dblclick="onObjectRow(item).onDblclick()"
                     @contextmenu.prevent.stop="onObjectRow(item).onContextmenu($event)"
@@ -1831,12 +1837,13 @@
             </div>
           </div>
 
-          <div class="query-chat-composer">
+      <div class="query-chat-composer">
             <div class="query-chat-composer-input-wrap">
               <a-textarea
                 v-model:value="activeQueryTab.prompt"
                 :rows="4"
                 :placeholder="tt('例如：查询近 7 天订单量，并按天聚合')"
+                data-testid="studio-query-chat-prompt"
                 @input="handleChatComposerInput($event, activeQueryTab)"
                 @click="handleChatComposerCursorChange($event, activeQueryTab)"
                 @keyup="handleChatComposerCursorChange($event, activeQueryTab)"
@@ -2023,6 +2030,7 @@
                   <a-button
                     size="small"
                     class="sql-action-icon-btn"
+                    data-testid="studio-query-chat-generate"
                     @click="generateSqlForTab(activeQueryTab, 'generate')"
                   >
                     <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="sqlActionIcon" alt="" /></template>
@@ -2032,6 +2040,7 @@
                   <a-button
                     size="small"
                     class="sql-action-icon-btn"
+                    data-testid="studio-query-chat-explain"
                     @click="generateSqlForTab(activeQueryTab, 'explain')"
                   >
                     <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="interpretIcon" alt="" /></template>
@@ -2041,6 +2050,7 @@
                   <a-button
                     size="small"
                     class="sql-action-icon-btn"
+                    data-testid="studio-query-chat-analyze"
                     @click="generateSqlForTab(activeQueryTab, 'analyze')"
                   >
                     <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="analyzeIcon" alt="" /></template>
@@ -2072,6 +2082,7 @@
                 <a-button
                   size="small"
                   :class="['sql-action-icon-btn', { 'is-selection-active': !!activeQueryTab.selectedSqlText }]"
+                  data-testid="studio-query-editor-explain"
                   @click="explainSqlForTab(activeQueryTab)"
                 >
                   <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="explainIcon" alt="" /></template>
@@ -2082,6 +2093,7 @@
                   size="small"
                   :danger="activeQueryTab.sqlExecuting"
                   :class="['sql-action-icon-btn', { 'is-selection-active': !!activeQueryTab.selectedSqlText }]"
+                  data-testid="studio-query-editor-execute"
                   @click="activeQueryTab.sqlExecuting ? terminateSqlExecutionForTab(activeQueryTab) : executeSqlForTab(activeQueryTab)"
                 >
                   <template #icon>
@@ -2108,17 +2120,17 @@
                 </a-button>
               </a-tooltip>
               <a-tooltip title="导出结果（CSV）">
-                <a-button size="small" class="sql-action-icon-btn" @click="exportCsvForTab(activeQueryTab)">
+                <a-button size="small" class="sql-action-icon-btn" data-testid="studio-query-export-csv" @click="exportCsvForTab(activeQueryTab)">
                   <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="exportIcon" alt="" /></template>
                 </a-button>
               </a-tooltip>
               <a-tooltip title="保存查询">
-                <a-button size="small" class="sql-action-icon-btn" @click="openSaveQueryModal(activeQueryTab)">
+                <a-button size="small" class="sql-action-icon-btn" data-testid="studio-query-save" @click="openSaveQueryModal(activeQueryTab)">
                   <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="saveQueryIcon" alt="" /></template>
                 </a-button>
               </a-tooltip>
               <a-tooltip v-if="!isKvConnectionId(activeQueryTab.connectionId)" title="保存为样例 SQL">
-                <a-button size="small" class="sql-action-icon-btn" @click="openSaveQueryAsExampleModal(activeQueryTab)">
+                <a-button size="small" class="sql-action-icon-btn" data-testid="studio-query-save-example" @click="openSaveQueryAsExampleModal(activeQueryTab)">
                   <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="exampleIcon" alt="" /></template>
                 </a-button>
               </a-tooltip>
@@ -2210,6 +2222,7 @@
                   <a-button
                     size="small"
                     :class="['sql-action-icon-btn', { 'is-selection-active': activeQueryTab.resultViewMode === 'table' }]"
+                    data-testid="studio-query-result-table"
                     @click="setQueryResultViewMode(activeQueryTab, 'table')"
                   >
                     <template #icon><table-outlined /></template>
@@ -2219,6 +2232,7 @@
                   <a-button
                     size="small"
                     :class="['sql-action-icon-btn', { 'is-selection-active': activeQueryTab.resultViewMode === 'chart' }]"
+                    data-testid="studio-query-result-chart"
                     @click="setQueryResultViewMode(activeQueryTab, 'chart')"
                   >
                     <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="chartIcon" alt="" /></template>
@@ -2467,7 +2481,7 @@
       @ok="saveConnection"
       @cancel="resetConnectionModalState"
     >
-      <a-form layout="vertical">
+      <a-form layout="vertical" data-testid="studio-settings-modal">
         <a-row :gutter="12">
           <a-col :span="12">
             <a-form-item label="连接名称">
@@ -2658,13 +2672,14 @@
                   <a-select
                     :value="currentLocale"
                     :options="localeSelectOptions"
+                    data-testid="studio-settings-locale-select"
                     @update:value="handleLocaleChange"
                   />
                 </a-form-item>
               </a-col>
               <a-col :span="12">
                 <a-form-item :label="tt('深色模式')">
-                  <a-switch :checked="isDarkTheme" @change="toggleTheme" />
+                  <a-switch :checked="isDarkTheme" data-testid="studio-settings-theme-switch" @change="toggleTheme" />
                 </a-form-item>
               </a-col>
             </a-row>
@@ -2931,7 +2946,7 @@
       :confirm-loading="erTableSelectSubmitting"
       @ok="confirmErTableSelection"
     >
-      <div class="er-select-modal">
+      <div class="er-select-modal" data-testid="studio-er-select-modal">
         <div class="er-select-meta">
           <span>连接：{{ queryTabConnectionNameById(erSelectConnectionId) || '-' }}</span>
           <span>数据库：{{ erSelectDatabaseName || '-' }}</span>
@@ -2953,6 +2968,7 @@
           size="small"
           allow-clear
           :placeholder="tt('搜索表名')"
+          data-testid="studio-er-select-search"
         >
           <template #prefix><search-outlined /></template>
         </a-input>
@@ -2964,6 +2980,7 @@
                 :key="tableName"
                 :value="tableName"
                 :disabled="erSelectTableValues.length >= 30 && !erSelectTableValues.includes(tableName)"
+                :data-testid="buildAutomationId('studio-er-select-option', tableName)"
               >
                 {{ tableName }}
               </a-checkbox>
@@ -3005,6 +3022,7 @@
     <div
       v-if="contextMenu.visible"
       class="context-menu"
+      data-testid="studio-context-menu"
       :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
     >
       <template v-for="action in contextMenuActions" :key="action.id">
@@ -3014,6 +3032,7 @@
             :class="{ danger: action.danger }"
             :disabled="action.disabled"
             type="button"
+            :data-testid="contextMenuActionTestId(action.id)"
           >
             {{ action.label }}
             <span class="context-menu-submenu-arrow">›</span>
@@ -3025,6 +3044,7 @@
               class="context-menu-item"
               :class="{ danger: child.danger }"
               :disabled="child.disabled"
+              :data-testid="contextMenuActionTestId(child.id)"
               @click="triggerContextAction(child.id)"
             >
               {{ child.label }}
@@ -3036,6 +3056,7 @@
           class="context-menu-item"
           :class="{ danger: action.danger }"
           :disabled="action.disabled"
+          :data-testid="contextMenuActionTestId(action.id)"
           @click="triggerContextAction(action.id)"
         >
           {{ action.label }}
@@ -3200,9 +3221,9 @@
       @ok="activeQueryTab && saveCurrentQuery(activeQueryTab)"
       @cancel="saveQueryModalOpen = false"
     >
-      <a-form layout="vertical">
+      <a-form layout="vertical" data-testid="studio-save-query-modal">
         <a-form-item :label="tt('名称')" required>
-          <a-input v-model:value="saveQueryTitle" maxlength="80" show-count :placeholder="tt('请输入保存查询名称')" />
+          <a-input v-model:value="saveQueryTitle" maxlength="80" show-count :placeholder="tt('请输入保存查询名称')" data-testid="studio-save-query-title" />
         </a-form-item>
         <a-form-item :label="tt('保存位置')">
           <div class="save-query-context">{{ activeQueryTab ? queryTabConnectionName(activeQueryTab) : '-' }} / {{ activeQueryTab?.databaseName || '未指定库' }}</div>
@@ -3220,7 +3241,7 @@
       @ok="confirmSaveQueryAsExample"
       @cancel="saveQueryAsExampleModalOpen = false"
     >
-      <a-form layout="vertical">
+      <a-form layout="vertical" data-testid="studio-save-example-modal">
         <a-form-item :label="tt('保存位置')">
           <div class="save-query-context">{{ saveQueryAsExampleContextText }}</div>
         </a-form-item>
@@ -3229,6 +3250,7 @@
             v-model:value="saveQueryAsExampleDescription"
             :rows="4"
             :placeholder="tt('补充这段样例 SQL 的用途、适用场景或注意事项')"
+            data-testid="studio-save-example-description"
           />
         </a-form-item>
       </a-form>
@@ -3483,6 +3505,38 @@ useDomI18n();
 function tt(text: string) {
   void currentLocale.value;
   return translateText(text);
+}
+
+function buildAutomationId(...segments: Array<string | number | null | undefined>) {
+  const normalized = segments
+    .map((segment) => String(segment ?? '').trim())
+    .filter(Boolean)
+    .map((segment) => segment.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, ''))
+    .filter(Boolean);
+  return normalized.join('-') || 'studio-empty';
+}
+
+function treeNodeTestId(dataRef: {
+  nodeType?: string;
+  connectionId?: number;
+  databaseName?: string;
+  objectName?: string;
+}, title: string) {
+  if (dataRef.nodeType === 'connection') {
+    return buildAutomationId('studio-tree-node-connection', dataRef.connectionId);
+  }
+  if (dataRef.nodeType === 'database') {
+    return buildAutomationId('studio-tree-node-database', dataRef.databaseName || title);
+  }
+  return buildAutomationId('studio-tree-node', dataRef.nodeType || 'unknown', title);
+}
+
+function objectRowTestId(record: { objectType: string; objectName: string }) {
+  return buildAutomationId('studio-object-row', record.objectType, record.objectName);
+}
+
+function contextMenuActionTestId(actionId: string | number) {
+  return buildAutomationId('studio-context-menu-item', actionId);
 }
 
 const embeddingModelRepoUrl = 'https://huggingface.co/hooman650/bge-m3-onnx-o4/tree/main';

@@ -1,5 +1,5 @@
 <template>
-  <div class="query-shared-meta">
+  <div class="query-shared-meta" data-testid="studio-query-context-bar">
     <div class="query-meta-item">
       <span>{{ resolvedConnectionLabel }}</span>
       <a-select
@@ -8,6 +8,7 @@
         style="min-width: 156px"
         :options="connectionOptions"
         :disabled="connectionDisabled"
+        data-testid="studio-query-context-connection-select"
         @change="handleConnectionChange"
       />
     </div>
@@ -19,6 +20,7 @@
         style="min-width: 166px"
         :options="databaseOptions"
         :disabled="databaseDisabled"
+        data-testid="studio-query-context-database-select"
         @change="handleDatabaseChange"
       />
     </div>

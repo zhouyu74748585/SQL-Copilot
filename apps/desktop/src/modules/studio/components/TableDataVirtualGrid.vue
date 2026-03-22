@@ -1,5 +1,5 @@
 <template>
-  <div class="table-data-virtual-grid">
+  <div class="table-data-virtual-grid" data-testid="studio-table-data-grid">
     <div class="table-data-virtual-grid-header">
       <div
         class="table-data-virtual-grid-header-row"
@@ -42,6 +42,7 @@
             class="table-data-virtual-grid-row"
             :class="{ 'is-selected': row.__rowKey === selectedRowKey }"
             :style="{ gridTemplateColumns }"
+            :data-testid="rowTestId(row.__rowKey)"
             @click="emit('select-row', row.__rowKey)"
           >
             <div
@@ -49,6 +50,7 @@
               :key="`${row.__rowKey}::${column.key}`"
               class="table-data-virtual-grid-cell"
               :class="{ 'is-readonly': isReadonlyColumn(String(column.dataIndex || '')) }"
+              :data-testid="cellTestId(row.__rowKey, String(column.dataIndex || ''))"
               @dblclick.stop="emit('start-edit', row.__rowKey, String(column.dataIndex || ''))"
             >
               <template v-if="isCellEditing(row.__rowKey, String(column.dataIndex || ''))">
@@ -206,6 +208,22 @@ const emptyText = computed(() => {
   void currentLocale.value;
   return translateText('暂无数据');
 });
+
+function normalizeTestIdSegment(value: string | null | undefined) {
+  return String(value || '')
+    .trim()
+    .replace(/[^A-Za-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    || 'empty';
+}
+
+function rowTestId(rowKey: string) {
+  return `studio-table-data-row-${normalizeTestIdSegment(rowKey)}`;
+}
+
+function cellTestId(rowKey: string, columnName: string) {
+  return `studio-table-data-cell-${normalizeTestIdSegment(rowKey)}-${normalizeTestIdSegment(columnName)}`;
+}
 
 watch(
   () => props.resetKey,
