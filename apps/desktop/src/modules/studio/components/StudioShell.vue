@@ -2234,7 +2234,7 @@
                   </a-button>
                 </a-tooltip>
                 <a-tooltip v-if="activeQueryTab.resultViewMode === 'chart'" title="下载图表 PNG">
-                  <a-button size="small" class="sql-action-icon-btn" @click="downloadActiveChart(activeQueryTab)">
+                  <a-button v-if="false" size="small" class="sql-action-icon-btn" @click="downloadActiveChart(activeQueryTab)">
                     <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="exportIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
@@ -2253,11 +2253,13 @@
                     <span class="query-result-tab-text">{{ resultTabTitle(item) }}</span>
                     <a-tooltip title="导出结果（CSV）">
                       <button
+                        v-if="shouldShowResultTabExport(activeQueryTab, item)"
                         type="button"
                         class="query-result-tab-export-btn"
-                        :disabled="!canExportStatementResult(item)"
+                        :title="queryResultTabExportTooltip(activeQueryTab)"
+                        :disabled="!canExportResultTab(activeQueryTab, item)"
                         @mousedown.stop.prevent
-                        @click.stop.prevent="exportCsvForTab(activeQueryTab, item)"
+                        @click.stop.prevent="exportResultTab(activeQueryTab, item)"
                       >
                         <img class="toolbar-action-icon query-result-tab-export-icon" :src="exportIcon" alt="" />
                       </button>
@@ -3806,6 +3808,9 @@ const {
     setActiveStatementResult,
     setQueryResultViewMode,
     canExportStatementResult,
+    shouldShowResultTabExport,
+    canExportResultTab,
+    queryResultTabExportTooltip,
     resultTabTitle,
     buildConnectionNode,
     buildCategoryChildren,
@@ -4181,6 +4186,7 @@ const {
     generateChartFromMessage,
     generateManualChartForTab,
     downloadActiveChart,
+    exportResultTab,
     downloadMessageChart,
     downloadActiveErDiagram,
     hydrateHistoryChartImages,

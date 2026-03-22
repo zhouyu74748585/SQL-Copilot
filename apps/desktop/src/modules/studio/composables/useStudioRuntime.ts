@@ -2117,8 +2117,33 @@ function canExportStatementResult(result: QueryStatementResult | null | undefine
   return result.status === 'success' && !!result.sqlText.trim();
 }
 
+function shouldShowResultTabExport(tab: QueryWorkspaceTab, result: QueryStatementResult | null | undefined) {
+  if (!result) {
+    return false;
+  }
+  const activeResult = getActiveStatementResultForTab(tab);
+  if (activeResult) {
+    return activeResult.key === result.key;
+  }
+  return tab.statementResults[0]?.key === result.key;
+}
+
+function canExportResultTab(tab: QueryWorkspaceTab, result: QueryStatementResult | null | undefined) {
+  if (!shouldShowResultTabExport(tab, result)) {
+    return false;
+  }
+  if (tab.resultViewMode === 'chart') {
+    return !!tab.activeChartConfig || !!tab.chartImageDataUrl || !!tab.chartImageCacheKey;
+  }
+  return canExportStatementResult(result);
+}
+
 function latestSuccessfulStatementResult(tab: QueryWorkspaceTab) {
   return [...tab.statementResults].reverse().find((item) => item.executeResult?.success) ?? null;
+}
+
+function queryResultTabExportTooltip(tab: QueryWorkspaceTab) {
+  return tab.resultViewMode === 'chart' ? 'Download chart PNG' : 'Export result (CSV)';
 }
 
 function setQueryResultViewMode(tab: QueryWorkspaceTab, mode: QueryResultViewMode) {
@@ -8863,6 +8888,14 @@ async function downloadActiveChart(tab: QueryWorkspaceTab) {
   downloadImage(dataUrl, `chart-${Date.now()}.png`);
 }
 
+async function exportResultTab(tab: QueryWorkspaceTab, statementResult?: QueryStatementResult | null) {
+  if (tab.resultViewMode === 'chart') {
+    await downloadActiveChart(tab);
+    return;
+  }
+  await exportCsvForTab(tab, statementResult);
+}
+
 async function downloadMessageChart(item: QueryChatMessage) {
   let dataUrl = item.chartImageDataUrl || '';
   if (!dataUrl && item.chartImageCacheKey) {
@@ -10652,6 +10685,9 @@ function resetConnectionModalState() {
     setActiveStatementResult,
     setQueryResultViewMode,
     canExportStatementResult,
+    shouldShowResultTabExport,
+    canExportResultTab,
+    queryResultTabExportTooltip,
     resultTabTitle,
     buildConnectionNode,
     buildCategoryChildren,
@@ -10876,6 +10912,7 @@ function resetConnectionModalState() {
     generateChartFromMessage,
     generateManualChartForTab,
     downloadActiveChart,
+    exportResultTab,
     downloadMessageChart,
     downloadActiveErDiagram,
     hydrateHistoryChartImages,
