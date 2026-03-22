@@ -2117,32 +2117,18 @@ function canExportStatementResult(result: QueryStatementResult | null | undefine
   return result.status === 'success' && !!result.sqlText.trim();
 }
 
-function shouldShowResultTabExport(tab: QueryWorkspaceTab, result: QueryStatementResult | null | undefined) {
-  if (!result) {
-    return false;
-  }
-  const activeResult = getActiveStatementResultForTab(tab);
-  if (activeResult) {
-    return activeResult.key === result.key;
-  }
-  return tab.statementResults[0]?.key === result.key;
-}
-
-function canExportResultTab(tab: QueryWorkspaceTab, result: QueryStatementResult | null | undefined) {
-  if (!shouldShowResultTabExport(tab, result)) {
-    return false;
-  }
+function canExportActiveQueryResult(tab: QueryWorkspaceTab) {
   if (tab.resultViewMode === 'chart') {
     return !!tab.activeChartConfig || !!tab.chartImageDataUrl || !!tab.chartImageCacheKey;
   }
-  return canExportStatementResult(result);
+  return canExportStatementResult(getActiveStatementResultForTab(tab));
 }
 
 function latestSuccessfulStatementResult(tab: QueryWorkspaceTab) {
   return [...tab.statementResults].reverse().find((item) => item.executeResult?.success) ?? null;
 }
 
-function queryResultTabExportTooltip(tab: QueryWorkspaceTab) {
+function queryResultExportTooltip(tab: QueryWorkspaceTab) {
   return tab.resultViewMode === 'chart' ? 'Download chart PNG' : 'Export result (CSV)';
 }
 
@@ -8896,6 +8882,10 @@ async function exportResultTab(tab: QueryWorkspaceTab, statementResult?: QuerySt
   await exportCsvForTab(tab, statementResult);
 }
 
+async function exportActiveQueryResult(tab: QueryWorkspaceTab) {
+  await exportResultTab(tab, getActiveStatementResultForTab(tab));
+}
+
 async function downloadMessageChart(item: QueryChatMessage) {
   let dataUrl = item.chartImageDataUrl || '';
   if (!dataUrl && item.chartImageCacheKey) {
@@ -10684,10 +10674,8 @@ function resetConnectionModalState() {
     setupManualChartConfigByResult,
     setActiveStatementResult,
     setQueryResultViewMode,
-    canExportStatementResult,
-    shouldShowResultTabExport,
-    canExportResultTab,
-    queryResultTabExportTooltip,
+    canExportActiveQueryResult,
+    queryResultExportTooltip,
     resultTabTitle,
     buildConnectionNode,
     buildCategoryChildren,
@@ -10924,7 +10912,7 @@ function resetConnectionModalState() {
     ensureRiskConfirmedBeforeExecute,
     executeSqlForTab,
     repairSqlForTab,
-    exportCsvForTab,
+    exportActiveQueryResult,
     riskColor,
     normalizeRiskLevel,
     ensureConnection,

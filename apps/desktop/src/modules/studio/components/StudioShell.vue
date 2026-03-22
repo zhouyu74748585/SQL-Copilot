@@ -2233,8 +2233,8 @@
                     <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="chartIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
-                <a-tooltip v-if="activeQueryTab.resultViewMode === 'chart'" title="下载图表 PNG">
-                  <a-button v-if="false" size="small" class="sql-action-icon-btn" @click="downloadActiveChart(activeQueryTab)">
+                <a-tooltip v-if="canExportActiveQueryResult(activeQueryTab)" :title="queryResultExportTooltip(activeQueryTab)">
+                  <a-button size="small" class="sql-action-icon-btn" @click="exportActiveQueryResult(activeQueryTab)">
                     <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="exportIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
@@ -2251,19 +2251,6 @@
                 <template #tab>
                   <span class="query-result-tab-label" :class="[`is-${item.status}`]">
                     <span class="query-result-tab-text">{{ resultTabTitle(item) }}</span>
-                    <a-tooltip title="导出结果（CSV）">
-                      <button
-                        v-if="shouldShowResultTabExport(activeQueryTab, item)"
-                        type="button"
-                        class="query-result-tab-export-btn"
-                        :title="queryResultTabExportTooltip(activeQueryTab)"
-                        :disabled="!canExportResultTab(activeQueryTab, item)"
-                        @mousedown.stop.prevent
-                        @click.stop.prevent="exportResultTab(activeQueryTab, item)"
-                      >
-                        <img class="toolbar-action-icon query-result-tab-export-icon" :src="exportIcon" alt="" />
-                      </button>
-                    </a-tooltip>
                   </span>
                 </template>
               </a-tab-pane>
@@ -3807,10 +3794,8 @@ const {
     setupManualChartConfigByResult,
     setActiveStatementResult,
     setQueryResultViewMode,
-    canExportStatementResult,
-    shouldShowResultTabExport,
-    canExportResultTab,
-    queryResultTabExportTooltip,
+    canExportActiveQueryResult,
+    queryResultExportTooltip,
     resultTabTitle,
     buildConnectionNode,
     buildCategoryChildren,
@@ -4199,7 +4184,7 @@ const {
     ensureRiskConfirmedBeforeExecute,
     executeSqlForTab,
     repairSqlForTab,
-    exportCsvForTab,
+    exportActiveQueryResult,
     riskColor,
     normalizeRiskLevel,
     ensureConnection,
