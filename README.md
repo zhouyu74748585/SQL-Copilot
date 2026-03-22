@@ -1,89 +1,96 @@
 # SQL Copilot
 
-SQL Copilot 不是一个只会“吐一段 SQL”的问答工具，而是一个已经打通了连接管理、Schema 感知、AI 对话、风险控制、结果执行、图表展示、ER 分析和知识记忆的桌面化数据库工作台。
+SQL Copilot 是一个 AI 原生数据库工作台。
 
-它当前的实际实现形态是：
+它不是把一个聊天框贴到数据库工具里，而是把连接管理、Schema 感知、SQL 生成、执行验证、Explain 分析、图表洞察、ER 理解、样例 SQL 和记忆沉淀，串成一条真正可落地的数据库工作流。
 
-- Electron 桌面端，提供多标签工作台、Monaco SQL 编辑器、ER 图和数据浏览界面
-- Spring Boot 本地服务，承接连接管理、Schema 缓存、SQL 执行、AI 对话与 RAG 检索
-- SQLite 本地元数据存储，保存连接、历史、快照、知识库和配置
-- Qdrant + ONNX / OpenAI Compatible，支撑向量检索、知识召回和会话记忆
+![SQL Copilot 演示](pages/img/demo.gif)
 
-## 为什么它更像“数据库副驾”
+## 为什么它比“普通 AI 助手写 SQL”更省心
 
-- 不只是生成 SQL，而是从自然语言到 SQL、解释、分析、图表、修复的一整条 AI 工作流。
-- 不只是会话框，而是带连接树、对象浏览、表结构编辑、表数据编辑、ER 图、历史会话和知识库的完整工作台。
-- 不只是检索当前问题，而是会结合 Schema、样例 SQL、术语、历史 SQL 和会话长期记忆去构建上下文。
-- 不只是返回文本，而是支持风险评估、执行结果表格、图表缓存、CSV 导出和历史恢复。
+- 精准拿到元数据：连接数据库后，AI 可以结合真实的表、字段、视图、函数和对象说明组织上下文，不用你反复复制 DDL。
+- 不用来回复制报错：SQL 执行结果、Explain、分析结论和图表结果都在同一工作台里，修复时可以直接基于现场反馈继续追问。
+- 不是只吐一段 SQL：从自然语言到 SQL，再到执行、分析、图表、导出，整个闭环都能在一个界面里完成。
+- 越用越懂业务：样例 SQL、术语、历史会话和 Schema 可以沉淀为长期上下文，减少每次重新解释业务背景的成本。
 
-## 应用截图
+## 界面预览
 
-### 对话式查询工作台
+### 1. 启动后就是完整的数据库工作台
 
-![对话查询](docs/img/query-workbench.png)
+![启动与对象浏览](pages/img/01-startup-home.png)
 
-- 在同一工作台内查看 SQL 编辑、执行结果和对话侧栏，适合“生成/执行/追问”串联操作。
+左侧是连接与知识中心，中间是对象列表，右侧是详情面板。SQL Copilot 从一开始就是“数据库工作台”，不是只有一个问答窗口。
 
-### 对象浏览与连接树
+### 2. 选中对象后，元数据和建表语句直接可见
 
-![对象浏览](docs/img/object-browser.png)
+![对象与建表详情](pages/img/03-mysql-select-table.png)
 
-- 左侧连接树、中央对象清单、右侧对象详情三栏联动，适合浏览表、视图、保存查询与对象 DDL。
+表行数、数据大小、说明和建表语句都能直接查看。AI 生成 SQL 时拿到的是当前连接里的真实上下文，而不是你临时粘贴的一段表结构。
 
-### 表数据浏览与编辑
+### 3. 自然语言生成 SQL，可以立即落到可执行结果
 
-![数据浏览](docs/img/data-browser.png)
+![AI 自动生成 SQL](pages/img/06-ai-auto-nl2sql.png)
 
-- 表格支持行选择、明细侧栏和分页，适合排查记录与做轻量数据修正。
+输入业务问题后，SQL 会直接回填到编辑器，结果表格也在同屏展示，方便立刻验证是不是你真正想要的查询。
 
-### 表结构编辑
+### 4. 查询结果可以继续生成图表
 
-![表结构编辑](docs/img/table-editor.png)
+![AI 自动生成趋势图](pages/img/07-ai-auto-trend-chart.png)
 
-- 字段与索引可视化编辑，右侧实时展示 SQL 预览与执行入口。
+SQL 生成不是终点，同一份结果集可以继续转成趋势图、柱状图等分析视图，适合做日报、周报和临时洞察。
 
-### 对象定义编辑
+### 5. SQL 还能继续解释和分析
 
-![对象定义编辑](docs/img/object-definition-editor.png)
+![AI 自动分析 SQL](pages/img/09-ai-auto-analyze-sql.png)
 
-- 视图/函数定义支持直接编辑 SQL、格式化和保存，适合 DDL 微调场景。
+当你关心筛选条件是否合理、索引是否可能命中、有没有更稳妥的改写方式时，可以继续让 AI 基于当前 SQL 和上下文给出分析意见。
 
-### 智能 ER 图
+### 6. 有价值的查询可以沉淀成样例 SQL
 
-![智能ER图](docs/img/er-diagram.png)
+![保存查询为样例 SQL](pages/img/10-save-query-and-example.png)
 
-- 选表后生成关系图并展示 FK / AI 关系概览，便于结构分析与快照沉淀。
+临时完成的一次查询，可以顺手保存成样例 SQL。后续再问类似问题时，AI 能更快贴近你的业务语境。
 
-### 历史与快照
+### 7. 表数据筛选、排序和详情查看都在一个界面里
 
-![历史与快照](docs/img/history-snapshots.png)
+![表数据浏览](pages/img/13-table-data-filter-sort.png)
 
-- 顶栏下拉可回看 AI 会话历史与 ER 快照入口，方便延续上次分析上下文。
+定位数据问题时，不需要在多个工具之间来回切换，筛选、排序、查看详情可以连续完成。
 
-### 知识中心
+### 8. 表结构和对象定义支持可视化查看与编辑
 
-![知识中心](docs/img/knowledge-center.png)
+![表结构预览](pages/img/14-table-structure-preview.png)
 
-- 术语与样例 SQL 双列联动，支持筛选、详情查看与知识沉淀。
+![对象定义编辑](pages/img/16-object-definition-view.png)
 
-### Redis 浏览
+除了查数据，也能处理表结构、索引、视图定义等对象级工作。
 
-![Redis浏览](docs/img/redis-browser.png)
+### 9. ER 图和关系快照帮助快速理解复杂库
 
-- 键层级、TTL 与详情面板并排展示，适合做本地 Redis 巡检。
+![智能 ER 图](pages/img/15-er-generate-snapshot-export.png)
 
-### 设置与界面
+从真实对象生成 ER 图，保留快照，后续可以继续围绕同一批表做结构分析和沟通。
 
-![设置界面](docs/img/settings-appearance.png)
+### 10. 设置页支持语言、主题和模型配置
 
-- 语言、主题与模型配置入口集中在设置弹窗，方便统一调整工作台行为。
+![设置与国际化](pages/img/17-settings-i18n-theme.png)
 
-## 核心功能特点
+支持中英文界面切换，也能灵活接入自己的模型配置，适合在本地环境里长期使用。
+
+## 一条更顺手的 SQL 工作流
+
+1. 连接数据库，让工作台先拿到真实的 Schema 和对象上下文。
+2. 用自然语言描述需求，AI 生成 SQL 并回填到编辑器。
+3. 直接执行结果，继续做 Explain、分析、图表或导出。
+4. 如果字段、条件或方言不对，就在同一上下文里继续修复。
+5. 将高价值结果保存为样例 SQL、历史会话或 ER 快照，方便复用。
+
+## 核心能力
 
 ### 1. 面向数据库工作的 AI 对话
 
-- 对话式 SQL 生成、SQL 解释、SQL 分析、SQL 修复、图表方案生成都已落地。
-- SSE 流式输出支持 `thinking` 与最终结果分段展示，便于观察 AI 处理过程。
+- 对话式 SQL 生成、SQL 解释、SQL 分析、图表方案生成、SQL 修复都已落地。
+- SSE 流式输出支持 `thinking` 与最终结果分段展示，便于观察 AI 的处理过程。
 - 查询结果可直接回填到 SQL 编辑器，再进入执行、Explain 或风险评估。
 
 ### 2. 真正带上下文的 SQL Copilot
@@ -180,8 +187,9 @@ SQL Copilot 不是一个只会“吐一段 SQL”的问答工具，而是一个�
 │   ├── mapper/entity               SQLite 持久化
 │   └── resources                   application.yml / schema.sql / drivers
 ├── packages/shared-contracts       前后端共享契约
+├── pages                           对外说明页与发布素材
 ├── scripts/package-variants.mjs    单包打包脚本
-└── docs                            文档、截图与阶段总结
+└── docs                            文档、阶段总结与产品资料
 ```
 
 ## 开发命令
@@ -243,6 +251,10 @@ npm run package:app:host
 - Rerank 模型：
   - https://huggingface.co/swulling/bge-reranker-base-onnx-o4/tree/main
 - 在桌面应用设置中点击下载链接时，会直接调用系统默认浏览器打开，不会在应用内弹窗下载。
+
+## 开源协议
+
+本项目采用 MIT License，详见仓库根目录的 `LICENSE` 文件。
 
 ## 启动检查
 
