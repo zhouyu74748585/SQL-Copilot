@@ -5,8 +5,7 @@ import com.sqlcopilot.studio.dto.ai.AiTraceVO;
 import com.sqlcopilot.studio.dto.ai.ChartConfigVO;
 import com.sqlcopilot.studio.dto.editor.*;
 import com.sqlcopilot.studio.dto.schema.ErGraphVO;
-import com.sqlcopilot.studio.dto.sql.QueryCellVO;
-import com.sqlcopilot.studio.dto.sql.QueryRowVO;
+import com.sqlcopilot.studio.entity.ConnectionEntity;
 import com.sqlcopilot.studio.entity.ErGraphSnapshotEntity;
 import com.sqlcopilot.studio.entity.QueryHistoryEntity;
 import com.sqlcopilot.studio.entity.SavedQueryEntity;
@@ -16,8 +15,8 @@ import com.sqlcopilot.studio.mapper.SavedQueryMapper;
 import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.EditorService;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
+import com.sqlcopilot.studio.support.SchemaContextSupport;
 import com.sqlcopilot.studio.util.BusinessException;
-import com.sqlcopilot.studio.util.ResultSetConverter;
 import com.sqlcopilot.studio.util.SqlClassifier;
 import org.springframework.stereotype.Service;
 
@@ -27,6 +26,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -434,16 +435,9 @@ public class EditorServiceImpl implements EditorService {
             throw new BusinessException(400, "仅支持导出查询 SQL 结果");
         }
 
-        List<QueryRowVO> rows = new ArrayList<>();
-        List<String> headers = new ArrayList<>();
-        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId());
-             Statement statement = connection.createStatement();
-             ResultSet resultSet = statement.executeQuery(req.getSqlText())) {
-            ResultSetConverter.readColumns(resultSet.getMetaData()).forEach(column -> headers.add(column.getColumnName()));
-            rows = ResultSetConverter.readRows(resultSet, 5000);
-        } catch (Exception ex) {
-            throw new BusinessException(500, "导出失败: " + ex.getMessage());
-        }
+        ConnectionEntity connectionEntity = connectionService.getConnectionEntity(req.getConnectionId());
+        String targetDatabaseName = resolveTargetDatabaseName(connectionEntity.getDatabaseName(), req.getDatabaseName());
+        // Export writes rows directly from the JDBC result set to the target file.
 
         String format = req.getFormat().toUpperCase();
         String fileName = req.getFileName();
@@ -457,10 +451,10 @@ public class EditorServiceImpl implements EditorService {
             Path path;
             if ("CSV".equals(format)) {
                 path = exportDir.resolve(fileName + ".csv");
-                writeCsv(path, headers, rows);
+                streamCsvExport(path, req, connectionEntity, targetDatabaseName);
             } else if ("JSON".equals(format)) {
                 path = exportDir.resolve(fileName + ".json");
-                writeJson(path, rows);
+                streamJsonExport(path, req, connectionEntity, targetDatabaseName);
             } else {
                 throw new BusinessException(400, "不支持的导出格式: " + req.getFormat());
             }
@@ -477,43 +471,150 @@ public class EditorServiceImpl implements EditorService {
         }
     }
 
-    private void writeCsv(Path path, List<String> headers, List<QueryRowVO> rows) throws Exception {
-        try (BufferedWriter writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8)) {
-            writer.write(String.join(",", headers));
-            writer.newLine();
-            for (QueryRowVO row : rows) {
-                List<String> values = new ArrayList<>();
-                for (QueryCellVO cell : row.getCells()) {
-                    String value = cell.getCellValue() == null ? "" : cell.getCellValue().replace("\"", "\"\"");
-                    values.add("\"" + value + "\"");
+    private void streamCsvExport(Path path,
+                                 ExportReq req,
+                                 ConnectionEntity connectionEntity,
+                                 String targetDatabaseName) throws Exception {
+        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId());
+             Statement statement = connection.createStatement();
+             BufferedWriter writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8)) {
+            applyDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
+            configureStreamingStatement(statement, connectionEntity.getDbType());
+            try (ResultSet resultSet = statement.executeQuery(req.getSqlText())) {
+                ResultSetMetaData metaData = resultSet.getMetaData();
+                int columnCount = metaData.getColumnCount();
+                writeCsvHeader(writer, metaData, columnCount);
+                while (resultSet.next()) {
+                    writeCsvRow(writer, resultSet, columnCount);
                 }
-                writer.write(String.join(",", values));
-                writer.newLine();
             }
         }
     }
 
-    private void writeJson(Path path, List<QueryRowVO> rows) throws Exception {
-        try (BufferedWriter writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8)) {
-            writer.write("[");
-            for (int i = 0; i < rows.size(); i++) {
-                QueryRowVO row = rows.get(i);
-                writer.write("{");
-                for (int j = 0; j < row.getCells().size(); j++) {
-                    QueryCellVO cell = row.getCells().get(j);
-                    String value = cell.getCellValue() == null ? "" : cell.getCellValue().replace("\"", "\\\"");
-                    writer.write("\"" + cell.getColumnName() + "\":\"" + value + "\"");
-                    if (j < row.getCells().size() - 1) {
+    private void streamJsonExport(Path path,
+                                  ExportReq req,
+                                  ConnectionEntity connectionEntity,
+                                  String targetDatabaseName) throws Exception {
+        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId());
+             Statement statement = connection.createStatement();
+             BufferedWriter writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8)) {
+            applyDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
+            configureStreamingStatement(statement, connectionEntity.getDbType());
+            try (ResultSet resultSet = statement.executeQuery(req.getSqlText())) {
+                ResultSetMetaData metaData = resultSet.getMetaData();
+                int columnCount = metaData.getColumnCount();
+                writer.write("[");
+                boolean firstRow = true;
+                while (resultSet.next()) {
+                    if (!firstRow) {
                         writer.write(",");
                     }
+                    writeJsonRow(writer, resultSet, metaData, columnCount);
+                    firstRow = false;
                 }
-                writer.write("}");
-                if (i < rows.size() - 1) {
-                    writer.write(",");
-                }
+                writer.write("]");
             }
-            writer.write("]");
         }
+    }
+
+    private void configureStreamingStatement(Statement statement, String dbType) {
+        String type = safe(dbType).toUpperCase(Locale.ROOT);
+        try {
+            if ("MYSQL".equals(type)) {
+                statement.setFetchSize(Integer.MIN_VALUE);
+                return;
+            }
+            if ("POSTGRESQL".equals(type) || "SQLSERVER".equals(type) || "ORACLE".equals(type)) {
+                statement.setFetchSize(500);
+            }
+        } catch (SQLException ignore) {
+            // Some JDBC drivers do not support fetch-size hints.
+        }
+    }
+
+    private void writeCsvHeader(BufferedWriter writer, ResultSetMetaData metaData, int columnCount) throws Exception {
+        for (int i = 1; i <= columnCount; i++) {
+            if (i > 1) {
+                writer.write(",");
+            }
+            writer.write(escapeCsv(metaData.getColumnLabel(i)));
+        }
+        writer.newLine();
+    }
+
+    private void writeCsvRow(BufferedWriter writer, ResultSet resultSet, int columnCount) throws Exception {
+        for (int i = 1; i <= columnCount; i++) {
+            if (i > 1) {
+                writer.write(",");
+            }
+            writer.write(escapeCsv(resultSet.getString(i)));
+        }
+        writer.newLine();
+    }
+
+    private void writeJsonRow(BufferedWriter writer, ResultSet resultSet, ResultSetMetaData metaData, int columnCount) throws Exception {
+        writer.write("{");
+        for (int i = 1; i <= columnCount; i++) {
+            if (i > 1) {
+                writer.write(",");
+            }
+            writer.write("\"");
+            writer.write(escapeJson(metaData.getColumnLabel(i)));
+            writer.write("\":");
+            String value = resultSet.getString(i);
+            if (value == null) {
+                writer.write("null");
+            } else {
+                writer.write("\"");
+                writer.write(escapeJson(value));
+                writer.write("\"");
+            }
+        }
+        writer.write("}");
+    }
+
+    private void applyDatabaseContext(Connection connection, String dbType, String targetDatabaseName) throws SQLException {
+        String type = safe(dbType).toUpperCase(Locale.ROOT);
+        SchemaContextSupport.SchemaContext context = SchemaContextSupport.parse(type, targetDatabaseName);
+        if (context.rawContext().isBlank()) {
+            return;
+        }
+        if ("MYSQL".equals(type)) {
+            connection.setCatalog(context.databaseName());
+        }
+        if ("POSTGRESQL".equals(type) || "SQLSERVER".equals(type)) {
+            if (!context.databaseName().isBlank()) {
+                connection.setCatalog(context.databaseName());
+            }
+            if (context.hasNamespace()) {
+                connection.setSchema(context.namespaceName());
+            }
+        }
+        if ("ORACLE".equals(type) && context.hasNamespace()) {
+            connection.setSchema(context.namespaceName());
+        }
+    }
+
+    private String resolveTargetDatabaseName(String configuredDatabaseName, String requestedDatabaseName) {
+        String requested = safe(requestedDatabaseName);
+        if (!requested.isBlank()) {
+            return requested;
+        }
+        return safe(configuredDatabaseName);
+    }
+
+    private String escapeCsv(String value) {
+        return "\"" + Objects.toString(value, "").replace("\"", "\"\"") + "\"";
+    }
+
+    private String escapeJson(String value) {
+        String normalized = Objects.toString(value, "");
+        return normalized
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("\r", "\\r")
+            .replace("\n", "\\n")
+            .replace("\t", "\\t");
     }
 
     private QueryHistoryVO toHistoryVO(QueryHistoryEntity entity) {

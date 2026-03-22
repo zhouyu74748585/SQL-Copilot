@@ -9342,6 +9342,7 @@ async function exportCsvForTab(tab: QueryWorkspaceTab, statementResult?: QuerySt
     }
     const result = await postApi<{ filePath: string }>('/api/editor/result/export', {
       connectionId: tab.connectionId,
+      databaseName: resolveQueryDatabaseName(tab) || undefined,
       sqlText: exportSql,
       format: 'CSV',
       fileName: `aidb_${Date.now()}`,

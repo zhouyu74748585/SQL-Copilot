@@ -16,6 +16,8 @@ public class ExportReq {
     @NotBlank
     private String sqlText;
 
+    private String databaseName;
+
     /** 导出格式：CSV/JSON。 */
     @NotBlank
     private String format;
