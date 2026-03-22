@@ -1550,9 +1550,6 @@
 
         <section class="pane pane-center object-definition-pane">
           <div class="pane-title pane-title-with-action">
-            <div class="table-data-title-main">
-              <span>定义编辑 · {{ activeObjectDefinitionEditorTab.title }}</span>
-            </div>
             <div class="pane-title-actions">
               <a-space size="small">
                 <a-tooltip placement="bottom" :title="tt('刷新')">

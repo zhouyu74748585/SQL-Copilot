@@ -550,6 +550,8 @@ const browserTabKey = 'browser';
 
 const uiThemeStorageKey = 'sqlcopilot.ui-theme.v1';
 
+const resultExportDirectoryStorageKey = 'sqlcopilot.result-export-directory.v1';
+
 const {defaultAlgorithm, darkAlgorithm} = antdTheme;
 
 const isMacOS = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform);
@@ -7132,6 +7134,32 @@ function getDesktopBridge(): DesktopBridge | null {
   return bridge;
 }
 
+function loadLastResultExportDirectory() {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+  try {
+    return window.localStorage.getItem(resultExportDirectoryStorageKey) || '';
+  } catch {
+    return '';
+  }
+}
+
+function saveLastResultExportDirectory(directory: string) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  try {
+    if (!directory) {
+      window.localStorage.removeItem(resultExportDirectoryStorageKey);
+      return;
+    }
+    window.localStorage.setItem(resultExportDirectoryStorageKey, directory);
+  } catch {
+    // 忽略存储失败，避免影响导出主流程。
+  }
+}
+
 async function pickRagEmbeddingModelDir() {
   if (!ragLocalOnnxEnabled) {
     message.warning('当前包型不支持本地 ONNX 目录配置。');
@@ -9340,12 +9368,25 @@ async function exportCsvForTab(tab: QueryWorkspaceTab, statementResult?: QuerySt
     if (!exportSql) {
       throw new Error('当前没有可导出的 SQL');
     }
+    const bridge = getDesktopBridge();
+    if (!bridge || typeof bridge.pickDirectory !== 'function') {
+      throw new Error('当前环境不支持选择导出目录，请在桌面端中使用导出功能');
+    }
+    const exportDirectory = await bridge.pickDirectory({
+      title: '选择导出目录',
+      defaultPath: loadLastResultExportDirectory() || undefined,
+    });
+    if (!exportDirectory) {
+      return;
+    }
+    saveLastResultExportDirectory(exportDirectory);
     const result = await postApi<{ filePath: string }>('/api/editor/result/export', {
       connectionId: tab.connectionId,
       databaseName: resolveQueryDatabaseName(tab) || undefined,
       sqlText: exportSql,
       format: 'CSV',
       fileName: `aidb_${Date.now()}`,
+      exportDirectory,
     });
     message.success(`已导出 ${result.filePath}`);
   });

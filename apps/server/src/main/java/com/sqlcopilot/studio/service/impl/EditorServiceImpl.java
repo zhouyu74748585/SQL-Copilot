@@ -440,12 +440,12 @@ public class EditorServiceImpl implements EditorService {
         // Export writes rows directly from the JDBC result set to the target file.
 
         String format = req.getFormat().toUpperCase();
-        String fileName = req.getFileName();
-        if (fileName == null || fileName.isBlank()) {
+        String fileName = sanitizeExportFileName(req.getFileName());
+        if (fileName.isBlank()) {
             fileName = "sql_copilot_export_" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
         }
 
-        Path exportDir = Path.of("exports");
+        Path exportDir = resolveExportDirectory(req.getExportDirectory());
         try {
             Files.createDirectories(exportDir);
             Path path;
@@ -476,16 +476,17 @@ public class EditorServiceImpl implements EditorService {
                                  ConnectionEntity connectionEntity,
                                  String targetDatabaseName) throws Exception {
         try (Connection connection = connectionService.openTargetConnection(req.getConnectionId());
-             Statement statement = connection.createStatement();
              BufferedWriter writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8)) {
             applyExportDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
-            configureStreamingStatement(statement, connectionEntity.getDbType());
-            try (ResultSet resultSet = statement.executeQuery(req.getSqlText())) {
-                ResultSetMetaData metaData = resultSet.getMetaData();
-                int columnCount = metaData.getColumnCount();
-                writeCsvHeader(writer, metaData, columnCount);
-                while (resultSet.next()) {
-                    writeCsvRow(writer, resultSet, columnCount);
+            try (Statement statement = connection.createStatement()) {
+                configureStreamingStatement(statement, connectionEntity.getDbType());
+                try (ResultSet resultSet = statement.executeQuery(req.getSqlText())) {
+                    ResultSetMetaData metaData = resultSet.getMetaData();
+                    int columnCount = metaData.getColumnCount();
+                    writeCsvHeader(writer, metaData, columnCount);
+                    while (resultSet.next()) {
+                        writeCsvRow(writer, resultSet, columnCount);
+                    }
                 }
             }
         }
@@ -496,23 +497,24 @@ public class EditorServiceImpl implements EditorService {
                                   ConnectionEntity connectionEntity,
                                   String targetDatabaseName) throws Exception {
         try (Connection connection = connectionService.openTargetConnection(req.getConnectionId());
-             Statement statement = connection.createStatement();
              BufferedWriter writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8)) {
             applyExportDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
-            configureStreamingStatement(statement, connectionEntity.getDbType());
-            try (ResultSet resultSet = statement.executeQuery(req.getSqlText())) {
-                ResultSetMetaData metaData = resultSet.getMetaData();
-                int columnCount = metaData.getColumnCount();
-                writer.write("[");
-                boolean firstRow = true;
-                while (resultSet.next()) {
-                    if (!firstRow) {
-                        writer.write(",");
+            try (Statement statement = connection.createStatement()) {
+                configureStreamingStatement(statement, connectionEntity.getDbType());
+                try (ResultSet resultSet = statement.executeQuery(req.getSqlText())) {
+                    ResultSetMetaData metaData = resultSet.getMetaData();
+                    int columnCount = metaData.getColumnCount();
+                    writer.write("[");
+                    boolean firstRow = true;
+                    while (resultSet.next()) {
+                        if (!firstRow) {
+                            writer.write(",");
+                        }
+                        writeJsonRow(writer, resultSet, metaData, columnCount);
+                        firstRow = false;
                     }
-                    writeJsonRow(writer, resultSet, metaData, columnCount);
-                    firstRow = false;
+                    writer.write("]");
                 }
-                writer.write("]");
             }
         }
     }
@@ -616,6 +618,23 @@ public class EditorServiceImpl implements EditorService {
             return requested;
         }
         return safe(configuredDatabaseName);
+    }
+
+    private Path resolveExportDirectory(String requestedExportDirectory) {
+        String normalizedDirectory = safe(requestedExportDirectory);
+        if (normalizedDirectory.isBlank()) {
+            return Path.of("exports").toAbsolutePath().normalize();
+        }
+        return Path.of(normalizedDirectory).toAbsolutePath().normalize();
+    }
+
+    private String sanitizeExportFileName(String value) {
+        String normalized = sanitizeFileName(value);
+        String lower = normalized.toLowerCase(Locale.ROOT);
+        if (lower.endsWith(".csv") || lower.endsWith(".json")) {
+            return normalized.substring(0, normalized.lastIndexOf('.'));
+        }
+        return normalized;
     }
 
     private String escapeCsv(String value) {

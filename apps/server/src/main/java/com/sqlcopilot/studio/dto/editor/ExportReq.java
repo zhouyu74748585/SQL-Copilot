@@ -24,4 +24,7 @@ public class ExportReq {
 
     /** 目标文件名（不含路径）。 */
     private String fileName;
+
+    /** 目标导出目录绝对路径。为空时写入默认 exports 目录。 */
+    private String exportDirectory;
 }
