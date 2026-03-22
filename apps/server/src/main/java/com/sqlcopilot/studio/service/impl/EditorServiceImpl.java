@@ -478,7 +478,7 @@ public class EditorServiceImpl implements EditorService {
         try (Connection connection = connectionService.openTargetConnection(req.getConnectionId());
              Statement statement = connection.createStatement();
              BufferedWriter writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8)) {
-            applyDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
+            applyExportDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
             configureStreamingStatement(statement, connectionEntity.getDbType());
             try (ResultSet resultSet = statement.executeQuery(req.getSqlText())) {
                 ResultSetMetaData metaData = resultSet.getMetaData();
@@ -498,7 +498,7 @@ public class EditorServiceImpl implements EditorService {
         try (Connection connection = connectionService.openTargetConnection(req.getConnectionId());
              Statement statement = connection.createStatement();
              BufferedWriter writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8)) {
-            applyDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
+            applyExportDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
             configureStreamingStatement(statement, connectionEntity.getDbType());
             try (ResultSet resultSet = statement.executeQuery(req.getSqlText())) {
                 ResultSetMetaData metaData = resultSet.getMetaData();
@@ -595,6 +595,21 @@ public class EditorServiceImpl implements EditorService {
         }
     }
 
+    private void applyExportDatabaseContext(Connection connection, String dbType, String targetDatabaseName) throws SQLException {
+        applyDatabaseContext(connection, dbType, targetDatabaseName);
+        String type = safe(dbType).toUpperCase(Locale.ROOT);
+        if (!"MYSQL".equals(type)) {
+            return;
+        }
+        SchemaContextSupport.SchemaContext context = SchemaContextSupport.parse(type, targetDatabaseName);
+        if (context.databaseName().isBlank()) {
+            return;
+        }
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("USE " + quoteMysqlIdentifier(context.databaseName()));
+        }
+    }
+
     private String resolveTargetDatabaseName(String configuredDatabaseName, String requestedDatabaseName) {
         String requested = safe(requestedDatabaseName);
         if (!requested.isBlank()) {
@@ -615,6 +630,10 @@ public class EditorServiceImpl implements EditorService {
             .replace("\r", "\\r")
             .replace("\n", "\\n")
             .replace("\t", "\\t");
+    }
+
+    private String quoteMysqlIdentifier(String identifier) {
+        return "`" + safe(identifier).replace("`", "``") + "`";
     }
 
     private QueryHistoryVO toHistoryVO(QueryHistoryEntity entity) {
