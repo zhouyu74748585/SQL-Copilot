@@ -4,7 +4,7 @@ SQL Copilot 是一个 AI 原生数据库工作台。
 
 它不是把一个聊天框贴到数据库工具里，而是把连接管理、Schema 感知、SQL 生成、执行验证、Explain 分析、图表洞察、ER 理解、样例 SQL 和记忆沉淀，串成一条真正可落地的数据库工作流。
 
-![SQL Copilot 演示](pages/img/demo.gif)
+![SQL Copilot 演示](img/demo.gif)
 
 ## 为什么它比“普通 AI 助手写 SQL”更省心
 
@@ -17,63 +17,63 @@ SQL Copilot 是一个 AI 原生数据库工作台。
 
 ### 1. 启动后就是完整的数据库工作台
 
-![启动与对象浏览](pages/img/01-startup-home.png)
+![启动与对象浏览](img/01-startup-home.png)
 
 左侧是连接与知识中心，中间是对象列表，右侧是详情面板。SQL Copilot 从一开始就是“数据库工作台”，不是只有一个问答窗口。
 
 ### 2. 选中对象后，元数据和建表语句直接可见
 
-![对象与建表详情](pages/img/03-mysql-select-table.png)
+![对象与建表详情](img/03-mysql-select-table.png)
 
 表行数、数据大小、说明和建表语句都能直接查看。AI 生成 SQL 时拿到的是当前连接里的真实上下文，而不是你临时粘贴的一段表结构。
 
 ### 3. 自然语言生成 SQL，可以立即落到可执行结果
 
-![AI 自动生成 SQL](pages/img/06-ai-auto-nl2sql.png)
+![AI 自动生成 SQL](img/06-ai-auto-nl2sql.png)
 
 输入业务问题后，SQL 会直接回填到编辑器，结果表格也在同屏展示，方便立刻验证是不是你真正想要的查询。
 
 ### 4. 查询结果可以继续生成图表
 
-![AI 自动生成趋势图](pages/img/07-ai-auto-trend-chart.png)
+![AI 自动生成趋势图](img/07-ai-auto-trend-chart.png)
 
 SQL 生成不是终点，同一份结果集可以继续转成趋势图、柱状图等分析视图，适合做日报、周报和临时洞察。
 
 ### 5. SQL 还能继续解释和分析
 
-![AI 自动分析 SQL](pages/img/09-ai-auto-analyze-sql.png)
+![AI 自动分析 SQL](img/09-ai-auto-analyze-sql.png)
 
 当你关心筛选条件是否合理、索引是否可能命中、有没有更稳妥的改写方式时，可以继续让 AI 基于当前 SQL 和上下文给出分析意见。
 
 ### 6. 有价值的查询可以沉淀成样例 SQL
 
-![保存查询为样例 SQL](pages/img/10-save-query-and-example.png)
+![保存查询为样例 SQL](img/10-save-query-and-example.png)
 
 临时完成的一次查询，可以顺手保存成样例 SQL。后续再问类似问题时，AI 能更快贴近你的业务语境。
 
 ### 7. 表数据筛选、排序和详情查看都在一个界面里
 
-![表数据浏览](pages/img/13-table-data-filter-sort.png)
+![表数据浏览](img/13-table-data-filter-sort.png)
 
 定位数据问题时，不需要在多个工具之间来回切换，筛选、排序、查看详情可以连续完成。
 
 ### 8. 表结构和对象定义支持可视化查看与编辑
 
-![表结构预览](pages/img/14-table-structure-preview.png)
+![表结构预览](img/14-table-structure-preview.png)
 
-![对象定义编辑](pages/img/16-object-definition-view.png)
+![对象定义编辑](img/16-object-definition-view.png)
 
 除了查数据，也能处理表结构、索引、视图定义等对象级工作。
 
 ### 9. ER 图和关系快照帮助快速理解复杂库
 
-![智能 ER 图](pages/img/15-er-generate-snapshot-export.png)
+![智能 ER 图](img/15-er-generate-snapshot-export.png)
 
 从真实对象生成 ER 图，保留快照，后续可以继续围绕同一批表做结构分析和沟通。
 
 ### 10. 设置页支持语言、主题和模型配置
 
-![设置与国际化](pages/img/17-settings-i18n-theme.png)
+![设置与国际化](img/17-settings-i18n-theme.png)
 
 支持中英文界面切换，也能灵活接入自己的模型配置，适合在本地环境里长期使用。
 
