@@ -941,27 +941,31 @@
         <section class="pane pane-center er-diagram-pane">
           <div class="er-toolbar">
             <a-space size="small">
-              <a-button size="small" @click="openErTableSelectModal(activeErTab)">
-                <template #icon><appstore-outlined /></template>
-                {{ tt('重选') }}
-              </a-button>
-              <a-button
-                size="small"
-                type="primary"
-                :loading="activeErTab.loading"
-                @click="refreshErGraphForTab(activeErTab, true)"
-              >
-                <template #icon><reload-outlined /></template>
-                刷新
-              </a-button>
-              <a-button size="small" @click="openErSnapshotSaveModal(activeErTab)">
-                <template #icon><hdd-outlined /></template>
-                保存
-              </a-button>
-              <a-button size="small" @click="downloadActiveErDiagram(activeErTab)">
-                <template #icon><download-outlined /></template>
-                {{ tt('导出') }}
-              </a-button>
+              <a-tooltip :title="tt('重选')">
+                <a-button size="small" class="sql-action-icon-btn" @click="openErTableSelectModal(activeErTab)">
+                  <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="repickIcon" alt="" /></template>
+                </a-button>
+              </a-tooltip>
+              <a-tooltip :title="tt('刷新')">
+                <a-button
+                  size="small"
+                  class="sql-action-icon-btn"
+                  :loading="activeErTab.loading"
+                  @click="refreshErGraphForTab(activeErTab, true)"
+                >
+                  <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="refreshIcon" alt="" /></template>
+                </a-button>
+              </a-tooltip>
+              <a-tooltip :title="tt('保存')">
+                <a-button size="small" class="sql-action-icon-btn" @click="openErSnapshotSaveModal(activeErTab)">
+                  <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="saveQueryIcon" alt="" /></template>
+                </a-button>
+              </a-tooltip>
+              <a-tooltip :title="tt('导出')">
+                <a-button size="small" class="sql-action-icon-btn" @click="downloadActiveErDiagram(activeErTab)">
+                  <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="exportIcon" alt="" /></template>
+                </a-button>
+              </a-tooltip>
             </a-space>
             <a-space size="small">
               <span class="er-toolbar-label">模型</span>
@@ -1780,41 +1784,44 @@
                     <a-space size="small" wrap>
                       <a-tooltip title="追加到左侧编辑器">
                         <a-button size="small" class="sql-action-icon-btn" @click="appendSqlToEditor(activeQueryTab, item.sqlText || '')">
-                          <template #icon><arrow-left-outlined /></template>
+                          <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="sqlActionIcon" alt="" /></template>
                         </a-button>
                       </a-tooltip>
                       <a-tooltip title="EXPLAIN">
                         <a-button size="small" class="sql-action-icon-btn" @click="explainSqlForTab(activeQueryTab, item.sqlText || '')">
-                          <template #icon><eye-outlined /></template>
+                          <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="explainIcon" alt="" /></template>
                         </a-button>
                       </a-tooltip>
                       <a-tooltip :title="activeQueryTab.sqlExecuting ? '终止执行' : '执行 SQL'">
                         <a-button
                           size="small"
-                          :type="activeQueryTab.sqlExecuting ? 'default' : 'primary'"
+                          type="default"
                           :danger="activeQueryTab.sqlExecuting"
                           class="sql-action-icon-btn"
                           @click="activeQueryTab.sqlExecuting ? terminateSqlExecutionForTab(activeQueryTab) : executeSqlForTab(activeQueryTab, item.sqlText || '')"
                         >
                           <template #icon>
-                            <span v-if="activeQueryTab.sqlExecuting" class="stop-square-icon" aria-hidden="true" />
-                            <play-circle-outlined v-else />
+                            <img
+                              class="toolbar-action-icon sql-action-icon-img"
+                              :src="activeQueryTab.sqlExecuting ? stopActionIcon : executeIcon"
+                              alt=""
+                            />
                           </template>
                         </a-button>
                       </a-tooltip>
                       <a-tooltip title="解释 SQL">
                         <a-button size="small" class="sql-action-icon-btn" @click="explainMessageSqlInChat(activeQueryTab, item.sqlText || '')">
-                          <template #icon><read-outlined /></template>
+                          <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="interpretIcon" alt="" /></template>
                         </a-button>
                       </a-tooltip>
                       <a-tooltip title="分析 SQL">
                         <a-button size="small" class="sql-action-icon-btn" @click="analyzeMessageSqlInChat(activeQueryTab, item.sqlText || '')">
-                          <template #icon><experiment-outlined /></template>
+                          <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="analyzeIcon" alt="" /></template>
                         </a-button>
                       </a-tooltip>
                       <a-tooltip v-if="item.chartImageDataUrl || item.chartImageCacheKey" title="下载图表 PNG">
                         <a-button size="small" class="sql-action-icon-btn" @click="downloadMessageChart(item)">
-                          <template #icon><download-outlined /></template>
+                          <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="exportIcon" alt="" /></template>
                         </a-button>
                       </a-tooltip>
                     </a-space>
@@ -1924,7 +1931,7 @@
                       <div class="query-chat-settings-item">
                         <div class="query-chat-settings-copy">
                           <span class="query-chat-settings-title">Auto 模式</span>
-                          <span class="query-chat-settings-desc">自动判断生成、解释、分析等动作</span>
+                          <span class="query-chat-settings-desc">自动判断生成、解释解读、分析等动作</span>
                         </div>
                         <a-switch v-model:checked="activeQueryTab.autoMode" size="small" />
                       </div>
@@ -1995,8 +2002,8 @@
                     danger
                     class="sql-action-icon-btn"
                     @click="terminateAiExecutionForTab(activeQueryTab)"
-                  >
-                    <template #icon><span class="stop-square-icon" aria-hidden="true" /></template>
+                >
+                    <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="stopActionIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
               </div>
@@ -2004,11 +2011,10 @@
                 <a-tooltip title="Auto 发送">
                   <a-button
                     size="small"
-                    type="primary"
                     class="sql-action-icon-btn"
                     @click="sendAutoForTab(activeQueryTab)"
                   >
-                    <template #icon><send-outlined /></template>
+                    <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="sendQueryIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
               </div>
@@ -2016,11 +2022,10 @@
                 <a-tooltip :title="generateActionLabelByDbType(queryTabDbType(activeQueryTab))">
                   <a-button
                     size="small"
-                    type="primary"
                     class="sql-action-icon-btn"
                     @click="generateSqlForTab(activeQueryTab, 'generate')"
                   >
-                    <template #icon><code-outlined /></template>
+                    <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="sqlActionIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
                 <a-tooltip :title="explainActionLabelByDbType(queryTabDbType(activeQueryTab))">
@@ -2029,7 +2034,7 @@
                     class="sql-action-icon-btn"
                     @click="generateSqlForTab(activeQueryTab, 'explain')"
                   >
-                    <template #icon><read-outlined /></template>
+                    <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="interpretIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
                 <a-tooltip :title="analyzeActionLabelByDbType(queryTabDbType(activeQueryTab))">
@@ -2038,7 +2043,7 @@
                     class="sql-action-icon-btn"
                     @click="generateSqlForTab(activeQueryTab, 'analyze')"
                   >
-                    <template #icon><experiment-outlined /></template>
+                    <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="analyzeIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
                 <a-tooltip v-if="canGenerateChartForTab(activeQueryTab)" title="生成图表">
@@ -2047,7 +2052,7 @@
                     class="sql-action-icon-btn"
                     @click="generateChartPlanForTab(activeQueryTab)"
                   >
-                    <template #icon><area-chart-outlined /></template>
+                    <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="chartIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
               </div>
@@ -2069,20 +2074,22 @@
                   :class="['sql-action-icon-btn', { 'is-selection-active': !!activeQueryTab.selectedSqlText }]"
                   @click="explainSqlForTab(activeQueryTab)"
                 >
-                  <template #icon><eye-outlined /></template>
+                  <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="explainIcon" alt="" /></template>
                 </a-button>
               </a-tooltip>
               <a-tooltip :title="activeQueryTab.sqlExecuting ? '终止执行' : (activeQueryTab.selectedSqlText ? `执行选中的${queryUnitLabelByDbType(queryTabDbType(activeQueryTab))}` : `执行 ${queryUnitLabelByDbType(queryTabDbType(activeQueryTab))}`)">
                 <a-button
                   size="small"
-                  :type="activeQueryTab.sqlExecuting ? 'default' : 'primary'"
                   :danger="activeQueryTab.sqlExecuting"
                   :class="['sql-action-icon-btn', { 'is-selection-active': !!activeQueryTab.selectedSqlText }]"
                   @click="activeQueryTab.sqlExecuting ? terminateSqlExecutionForTab(activeQueryTab) : executeSqlForTab(activeQueryTab)"
                 >
                   <template #icon>
-                    <span v-if="activeQueryTab.sqlExecuting" class="stop-square-icon" aria-hidden="true" />
-                    <play-circle-outlined v-else />
+                    <img
+                      class="toolbar-action-icon sql-action-icon-img"
+                      :src="activeQueryTab.sqlExecuting ? stopActionIcon : executeIcon"
+                      alt=""
+                    />
                   </template>
                 </a-button>
               </a-tooltip>
@@ -2097,22 +2104,22 @@
                   :class="['sql-action-icon-btn', { 'is-selection-active': !!activeQueryTab.selectedSqlText }]"
                   @click="formatSqlForTab(activeQueryTab)"
                 >
-                  <template #icon><highlight-outlined /></template>
+                  <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="prettyIcon" alt="" /></template>
                 </a-button>
               </a-tooltip>
               <a-tooltip title="导出结果（CSV）">
                 <a-button size="small" class="sql-action-icon-btn" @click="exportCsvForTab(activeQueryTab)">
-                  <template #icon><download-outlined /></template>
+                  <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="exportIcon" alt="" /></template>
                 </a-button>
               </a-tooltip>
               <a-tooltip title="保存查询">
                 <a-button size="small" class="sql-action-icon-btn" @click="openSaveQueryModal(activeQueryTab)">
-                  <template #icon><save-outlined /></template>
+                  <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="saveQueryIcon" alt="" /></template>
                 </a-button>
               </a-tooltip>
               <a-tooltip v-if="!isKvConnectionId(activeQueryTab.connectionId)" title="保存为样例 SQL">
                 <a-button size="small" class="sql-action-icon-btn" @click="openSaveQueryAsExampleModal(activeQueryTab)">
-                  <template #icon><hdd-outlined /></template>
+                  <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="exampleIcon" alt="" /></template>
                 </a-button>
               </a-tooltip>
               <a-tooltip v-if="activeQueryTab.selectedSqlText" title="所选 SQL 加入对话">
@@ -2121,7 +2128,7 @@
                   class="sql-action-icon-btn"
                   @click="appendSelectedSqlToPrompt(activeQueryTab)"
                 >
-                  <template #icon><message-outlined /></template>
+                  <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="dialogIcon" alt="" /></template>
                 </a-button>
               </a-tooltip>
             </div>
@@ -2160,7 +2167,7 @@
               <a-space size="small">
                 <a-tooltip title="所选 SQL 加入对话">
                   <a-button size="small" class="sql-action-icon-btn sql-selection-popover-btn" @click="appendSelectedSqlToPrompt(activeQueryTab)">
-                    <template #icon><message-outlined /></template>
+                    <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="dialogIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
                 <a-tooltip :title="explainActionLabelByDbType(queryTabDbType(activeQueryTab))">
@@ -2171,7 +2178,7 @@
                     :disabled="activeQueryTab.aiGenerating"
                     @click="explainSelectedSqlInChat(activeQueryTab)"
                   >
-                    <template #icon><read-outlined /></template>
+                    <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="interpretIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
                 <a-tooltip :title="analyzeActionLabelByDbType(queryTabDbType(activeQueryTab))">
@@ -2182,7 +2189,7 @@
                     :disabled="activeQueryTab.aiGenerating"
                     @click="analyzeSelectedSqlInChat(activeQueryTab)"
                   >
-                    <template #icon><experiment-outlined /></template>
+                    <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="analyzeIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
               </a-space>
@@ -2214,12 +2221,12 @@
                     :class="['sql-action-icon-btn', { 'is-selection-active': activeQueryTab.resultViewMode === 'chart' }]"
                     @click="setQueryResultViewMode(activeQueryTab, 'chart')"
                   >
-                    <template #icon><area-chart-outlined /></template>
+                    <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="chartIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
                 <a-tooltip v-if="activeQueryTab.resultViewMode === 'chart'" title="下载图表 PNG">
                   <a-button size="small" class="sql-action-icon-btn" @click="downloadActiveChart(activeQueryTab)">
-                    <template #icon><download-outlined /></template>
+                    <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="exportIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
               </a-space>
@@ -2421,7 +2428,7 @@
                       <span class="query-chart-control-label">生成图表</span>
                     </a-tooltip>
                     <a-button size="small" type="primary" class="sql-action-icon-btn query-chart-generate-btn" @click="generateManualChartForTab(activeQueryTab)">
-                      <template #icon><area-chart-outlined /></template>
+                      <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="chartIcon" alt="" /></template>
                     </a-button>
                   </div>
                 </div>
@@ -3453,7 +3460,21 @@ import createRedisKeyIcon from '../../../assets/icons/key.svg';
 import createViewIcon from '../../../assets/icons/tree-view.png';
 import createFunctionIcon from '../../../assets/icons/tree-function.png';
 import refreshIcon from '../../../assets/icons/refresh.svg';
+import repickIcon from '../../../assets/icons/repick.svg';
 import vectorIcon from '../../../assets/icons/vector.svg';
+import analyzeIcon from '../../../assets/icons/analyze.svg';
+import chartIcon from '../../../assets/icons/chart.svg';
+import exampleIcon from '../../../assets/icons/example.svg';
+import executeIcon from '../../../assets/icons/execute.svg';
+import explainIcon from '../../../assets/icons/explain.svg';
+import exportIcon from '../../../assets/icons/export.svg';
+import dialogIcon from '../../../assets/icons/dialog.svg';
+import prettyIcon from '../../../assets/icons/pretty.svg';
+import saveQueryIcon from '../../../assets/icons/save.svg';
+import sendQueryIcon from '../../../assets/icons/send.svg';
+import sqlActionIcon from '../../../assets/icons/sql.svg';
+import stopActionIcon from '../../../assets/icons/stop.png';
+import interpretIcon from '../../../assets/icons/interpret.svg';
 import type {StudioController} from '../composables/useStudioController';
 
 const {currentLocale, antLocale, localeSelectOptions, setLocale, useDomI18n} = useAppI18n();

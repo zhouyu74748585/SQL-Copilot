@@ -559,7 +559,7 @@ Object.assign(zhToEnExact, {
   '终止对话执行': 'Stop Conversation',
   'Auto 发送': 'Send with Auto',
   '生成 SQL': 'Generate SQL',
-  '解释 SQL': 'Explain SQL',
+  '解释 SQL': 'Interpret  SQL',
   '分析 SQL': 'Analyze SQL',
   '生成图表': 'Generate Chart',
   '计划选择的SQL': 'Explain Selected SQL Plan',

@@ -26,6 +26,9 @@ contextBridge.exposeInMainWorld('sqlCopilotDesktop', {
   openPrivacyPolicy() {
     return ipcRenderer.invoke('shell:open-privacy-policy');
   },
+  setUiTheme(theme = 'light') {
+    return ipcRenderer.invoke('window:set-ui-theme', theme);
+  },
   saveChartCache(payload = {}) {
     return ipcRenderer.invoke('chart-cache:save', payload);
   },

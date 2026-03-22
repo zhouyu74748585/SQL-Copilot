@@ -95,6 +95,7 @@ public class SqlServiceImpl implements SqlService {
 
         ConnectionEntity connectionEntity = connectionService.getConnectionEntity(req.getConnectionId());
         String targetDatabaseName = resolveTargetDatabaseName(connectionEntity.getDatabaseName(), req.getDatabaseName());
+        String dbType = normalize(connectionEntity.getDbType()).toUpperCase(Locale.ROOT);
         String explainSql = buildExplainSql(connectionEntity.getDbType(), sql);
         log.info("[SQL-EXPLAIN] connectionId={}, databaseName={}, sql={}",
             req.getConnectionId(), targetDatabaseName, sql);
@@ -104,6 +105,9 @@ public class SqlServiceImpl implements SqlService {
         ExplainVO vo = new ExplainVO();
         try (Connection connection = connectionService.openTargetConnection(req.getConnectionId())) {
             applyDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
+            if ("SQLSERVER".equals(dbType)) {
+                return explainSqlServer(sql, connection, vo);
+            }
             try (Statement statement = connection.createStatement();
                  ResultSet resultSet = statement.executeQuery(explainSql)) {
                 vo.setRows(ResultSetConverter.readRows(resultSet, 200));
@@ -112,6 +116,19 @@ public class SqlServiceImpl implements SqlService {
             }
         } catch (Exception ex) {
             throw new BusinessException(500, "Explain 执行失败: " + ex.getMessage());
+        }
+    }
+
+    private ExplainVO explainSqlServer(String sql, Connection connection, ExplainVO vo) throws SQLException {
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("SET SHOWPLAN_ALL ON");
+            try (ResultSet resultSet = statement.executeQuery(sql)) {
+                vo.setRows(ResultSetConverter.readRows(resultSet, 200));
+                vo.setSummary("SQL Server 执行计划分析完成");
+                return vo;
+            } finally {
+                statement.execute("SET SHOWPLAN_ALL OFF");
+            }
         }
     }
 

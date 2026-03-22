@@ -48,7 +48,6 @@ import {getApi, postApi, postSseApi} from '../../../api/client';
 import QueryChartPanel from '../../../components/QueryChartPanel.vue';
 import ErDiagramPanel from '../../../components/ErDiagramPanel.vue';
 import TableEditor from '../../../components/TableEditor.vue';
-import mongoIcon from '../../../assets/icons/mongo.png';
 import mysqlIcon from '../../../assets/icons/mysql.png';
 import oracleIcon from '../../../assets/icons/oracle.png';
 import postgresqlIcon from '../../../assets/icons/postgresql.svg';
@@ -166,6 +165,7 @@ interface DesktopBridge {
   pickDirectory: (options?: Omit<DesktopPickFileOptions, 'filters'>) => Promise<string>;
   openExternal?: (url?: string) => Promise<boolean>;
   openPrivacyPolicy?: () => Promise<boolean>;
+  setUiTheme?: (theme?: 'light' | 'dark' | string) => Promise<boolean>;
   saveChartCache?: (payload: ChartCacheSaveReq) => Promise<{ filePath: string; width: number; height: number }>;
   readChartCache?: (filePath: string) => Promise<string>;
 }
@@ -565,6 +565,8 @@ const vectorizeStatusPollIntervalMs = 30000;
 const tableStatsMinRequestIntervalMs = 30000;
 
 const tableStatsPollIntervalMs = 1500;
+
+const FRONTEND_HIDDEN_DB_TYPES = new Set(['MONGODB']);
 
 const connections = ref<ConnectionVO[]>([]);
 
@@ -2484,6 +2486,10 @@ function supportsSchemaLayer(dbType: string) {
 
 function findSupportedDbType(dbType: string) {
   return supportedDbTypes.value.find((item) => item.dbType === dbType) ?? null;
+}
+
+function isFrontendVisibleDbType(dbType: string) {
+  return !FRONTEND_HIDDEN_DB_TYPES.has((dbType || '').trim().toUpperCase());
 }
 
 function storageKindByDbType(dbType: string) {
@@ -4571,7 +4577,7 @@ function ensureConnectionFormDbType() {
 
 async function loadSupportedDbTypes() {
   const list = await getApi<ConnectionDbTypeVO[]>('/api/connection/db-types');
-  supportedDbTypes.value = list;
+  supportedDbTypes.value = list.filter((item) => isFrontendVisibleDbType(item.dbType));
   ensureConnectionFormDbType();
 }
 
@@ -4587,13 +4593,20 @@ async function loadConnections() {
   connectionRefreshing.value = true;
   try {
     await loadConnectionGroups();
-    const list = await getApi<ConnectionVO[]>('/api/connection/list');
+    const list = (await getApi<ConnectionVO[]>('/api/connection/list'))
+      .filter((item) => isFrontendVisibleDbType(item.dbType));
     connections.value = list;
     const nextRuntimeStatus: Record<number, 'idle' | 'connected' | 'failed'> = {};
     list.forEach((item) => {
       nextRuntimeStatus[item.id] = connectionRuntimeStatusMap.value[item.id] || 'idle';
     });
     connectionRuntimeStatusMap.value = nextRuntimeStatus;
+    const visibleConnectionIds = new Set(list.map((item) => item.id));
+    queryTabs.value = queryTabs.value.filter((item) => visibleConnectionIds.has(item.connectionId));
+    erTabs.value = erTabs.value.filter((item) => visibleConnectionIds.has(item.connectionId));
+    tableEditorTabs.value = tableEditorTabs.value.filter((item) => visibleConnectionIds.has(item.connectionId));
+    tableDataTabs.value = tableDataTabs.value.filter((item) => visibleConnectionIds.has(item.connectionId));
+    objectDefinitionEditorTabs.value = objectDefinitionEditorTabs.value.filter((item) => visibleConnectionIds.has(item.connectionId));
     queryTabs.value.forEach((tab) => {
       const connection = list.find((item) => item.id === tab.connectionId);
       if (!connection || !isMultiDatabaseType(connection.dbType)) {
@@ -10039,9 +10052,6 @@ async function copyTableEditorSql() {
 function dbIconUrl(dbType: string) {
   if (dbType === 'MYSQL') {
     return mysqlIcon;
-  }
-  if (dbType === 'MONGODB') {
-    return mongoIcon;
   }
   if (dbType === 'POSTGRESQL') {
     return postgresqlIcon;

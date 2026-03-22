@@ -28,6 +28,10 @@ interface UiShellDeps {
   handleErRelationDeleteKeydown: (event: KeyboardEvent) => void;
 }
 
+interface DesktopThemeBridge {
+  setUiTheme?: (theme?: 'light' | 'dark' | string) => Promise<boolean>;
+}
+
 export function useUiShellModule(runtime: StudioRuntime, deps: UiShellDeps): UiShellModule {
   const QUERY_EDITOR_SECTION_MIN_HEIGHT = 180;
   const QUERY_RESULT_SECTION_MIN_HEIGHT = 240;
@@ -56,6 +60,21 @@ export function useUiShellModule(runtime: StudioRuntime, deps: UiShellDeps): UiS
     );
   }
 
+  async function syncDesktopWindowTheme() {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const bridge = (window as Window & { sqlCopilotDesktop?: DesktopThemeBridge }).sqlCopilotDesktop;
+    if (!bridge?.setUiTheme) {
+      return;
+    }
+    try {
+      await bridge.setUiTheme(runtime.uiTheme.value);
+    } catch {
+      // ignore desktop theme sync failures
+    }
+  }
+
   function toggleTheme() {
     runtime.uiTheme.value = runtime.uiTheme.value === 'dark' ? 'light' : 'dark';
   }
@@ -74,6 +93,7 @@ export function useUiShellModule(runtime: StudioRuntime, deps: UiShellDeps): UiS
     } catch {
       runtime.uiTheme.value = 'light';
     }
+    void syncDesktopWindowTheme();
   }
 
   function persistUiThemePreference() {
@@ -287,6 +307,7 @@ export function useUiShellModule(runtime: StudioRuntime, deps: UiShellDeps): UiS
     () => runtime.uiTheme.value,
     () => {
       persistUiThemePreference();
+      void syncDesktopWindowTheme();
     },
   );
 

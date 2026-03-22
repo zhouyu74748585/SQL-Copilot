@@ -1960,12 +1960,11 @@ body {
   box-shadow: 0 4px 12px rgba(34, 130, 84, 0.26);
 }
 
-.stop-square-icon {
-  width: 10px;
-  height: 10px;
-  border-radius: 2px;
-  background: currentColor;
-  display: inline-block;
+.sql-action-icon-img {
+  width: 15px;
+  height: 15px;
+  object-fit: contain;
+  flex-shrink: 0;
 }
 
 .query-chat-pane {
@@ -3915,6 +3914,11 @@ body {
   background: color-mix(in srgb, var(--surface-1) 92%, transparent);
 }
 
+.studio-root .query-chat-trace-section {
+  border-color: var(--line-soft);
+  background: color-mix(in srgb, var(--surface-0) 88%, transparent);
+}
+
 .studio-root .query-chat-trace-toggle,
 .studio-root .query-chat-trace-stage-head,
 .studio-root .query-chat-trace-field,
@@ -3924,8 +3928,43 @@ body {
   color: var(--text-2);
 }
 
+.studio-root .query-chat-trace-toggle,
+.studio-root .query-chat-trace-stage-head strong,
+.studio-root .query-chat-trace-section-title,
+.studio-root .query-chat-trace-field pre {
+  color: var(--text-1);
+}
+
 .studio-root .query-chat-trace-stage + .query-chat-trace-stage {
   border-top: 1px dashed var(--line-soft);
+}
+
+.studio-root.theme-dark .query-chat-trace-block {
+  border-color: color-mix(in srgb, var(--line-strong) 88%, var(--accent) 12%);
+  background: color-mix(in srgb, var(--surface-2) 68%, var(--surface-1) 32%);
+}
+
+.studio-root.theme-dark .query-chat-trace-section {
+  border-color: color-mix(in srgb, var(--line-strong) 80%, var(--accent) 20%);
+  background: color-mix(in srgb, var(--surface-0) 82%, var(--accent) 18%);
+}
+
+.studio-root.theme-dark .query-chat-trace-toggle,
+.studio-root.theme-dark .query-chat-trace-stage-head strong,
+.studio-root.theme-dark .query-chat-trace-section-title {
+  color: color-mix(in srgb, var(--text-1) 96%, #ffffff 4%);
+}
+
+.studio-root.theme-dark .query-chat-trace-stage-head,
+.studio-root.theme-dark .query-chat-trace-field,
+.studio-root.theme-dark .query-chat-trace-llm-meta {
+  color: color-mix(in srgb, var(--text-1) 74%, var(--text-2) 26%);
+}
+
+.studio-root.theme-dark .query-chat-trace-field pre {
+  border-color: color-mix(in srgb, var(--line-strong) 84%, var(--accent) 16%);
+  background: color-mix(in srgb, #11161c 72%, var(--surface-1) 28%);
+  color: color-mix(in srgb, var(--text-1) 98%, #ffffff 2%);
 }
 
 .studio-root .query-chat-text.is-thinking {

@@ -7,9 +7,22 @@ const path = require('path');
 
 let qdrantProcess = null;
 let backendProcess = null;
+let mainWindow = null;
 const MAX_CHART_CACHE_BYTES = 20 * 1024 * 1024;
 const DEFAULT_BACKEND_URL = 'http://127.0.0.1:18080';
 let resolvedBackendBaseUrl = normalizeBackendBaseUrl(process.env.SQLCOPILOT_BACKEND_URL || DEFAULT_BACKEND_URL);
+const WINDOW_THEME = Object.freeze({
+  light: {
+    backgroundColor: '#ececec',
+    overlayColor: '#ececec',
+    symbolColor: '#1e1e1e',
+  },
+  dark: {
+    backgroundColor: '#1e1e1e',
+    overlayColor: '#2d2d30',
+    symbolColor: '#e8e8e8',
+  },
+});
 
 function normalizeBackendBaseUrl(value) {
   const raw = typeof value === 'string' && value.trim() ? value.trim() : DEFAULT_BACKEND_URL;
@@ -31,12 +44,38 @@ function syncRendererBackendBaseUrl() {
 
 syncRendererBackendBaseUrl();
 
+function normalizeUiTheme(theme) {
+  return theme === 'dark' ? 'dark' : 'light';
+}
+
+function resolveWindowTheme(theme) {
+  return WINDOW_THEME[normalizeUiTheme(theme)];
+}
+
+function applyWindowTheme(win, theme) {
+  if (!win || win.isDestroyed()) {
+    return;
+  }
+  const palette = resolveWindowTheme(theme);
+  if (typeof win.setBackgroundColor === 'function') {
+    win.setBackgroundColor(palette.backgroundColor);
+  }
+  if (typeof win.setTitleBarOverlay === 'function' && (process.platform === 'win32' || process.platform === 'linux')) {
+    win.setTitleBarOverlay({
+      color: palette.overlayColor,
+      symbolColor: palette.symbolColor,
+      height: 38,
+    });
+  }
+}
+
 function createWindow() {
   syncRendererBackendBaseUrl();
   const rendererUrl = process.env.ELECTRON_RENDERER_URL;
   const isDebug = process.env.ELECTRON_DEBUG === '1';
   const isMac = process.platform === 'darwin';
   const useTitleBarOverlay = process.platform === 'win32' || process.platform === 'linux';
+  const initialTheme = resolveWindowTheme(process.env.SQLCOPILOT_UI_THEME || 'light');
   const win = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -48,13 +87,13 @@ function createWindow() {
     ...(useTitleBarOverlay
       ? {
           titleBarOverlay: {
-            color: '#ececec',
-            symbolColor: '#1e1e1e',
+            color: initialTheme.overlayColor,
+            symbolColor: initialTheme.symbolColor,
             height: 38,
           },
         }
       : {}),
-    backgroundColor: '#ececec',
+    backgroundColor: initialTheme.backgroundColor,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -91,6 +130,13 @@ function createWindow() {
   if (isDebug) {
     win.webContents.openDevTools({ mode: 'detach' });
   }
+
+  mainWindow = win;
+  win.on('closed', () => {
+    if (mainWindow === win) {
+      mainWindow = null;
+    }
+  });
 }
 
 function normalizeDialogFilters(filters) {
@@ -211,6 +257,13 @@ function registerIpcHandlers() {
       ? path.join(__dirname, '../../../docs/privacy-policy.html')
       : path.join(__dirname, '../dist/privacy-policy.html');
     await shell.openPath(privacyPolicyPath);
+    return true;
+  });
+
+  ipcMain.handle('window:set-ui-theme', async (_event, rawTheme) => {
+    const nextTheme = normalizeUiTheme(typeof rawTheme === 'string' ? rawTheme.trim() : '');
+    process.env.SQLCOPILOT_UI_THEME = nextTheme;
+    applyWindowTheme(mainWindow, nextTheme);
     return true;
   });
 
