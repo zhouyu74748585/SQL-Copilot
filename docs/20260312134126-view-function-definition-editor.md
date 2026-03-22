@@ -65,3 +65,28 @@
 - 前端 clean 构建：`npm run build -- --emptyOutDir` 通过。
 - 后端 clean 启动：`mvn -f apps/server/pom.xml clean spring-boot:run "-Dspring-boot.run.arguments=--server.port=18088"` 成功，`http://127.0.0.1:18088/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
 - 前端预览：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6062 --strictPort` 成功，`http://127.0.0.1:6062/` 返回 `HTTP/1.1 200 OK`。
+
+
+### 2026-03-22 18:59:24
+
+## 2026-03-22 视图/函数新建按钮 icon hover 调整
+
+### 本次目标
+- 将对象浏览中“新建视图”“新建函数”入口统一为 icons 图标按钮。
+- 去掉按钮上直接展示的操作文字，改为仅在 hover 时通过 tooltip 展示名称。
+
+### 关键改动
+- 调整 `apps/desktop/src/modules/studio/components/StudioShell.vue` 中视图、函数对象页工具栏：
+  - 新建视图 / 新建函数按钮改为 `type="text"` 的纯 icon 按钮。
+  - 相邻的新建查询按钮同步改为同一组 icon-only 交互样式，避免视觉上出现按钮名称混排。
+  - hover 文案改为走 `tt()`，补齐中英双语能力，并增加 `aria-label` 与测试标识。
+- 调整 `apps/desktop/src/modules/studio/styles/shell.css`：
+  - 新增 `browser-toolbar-action-btn` 样式，为视图/函数工具栏按钮补充 hover/active 动效。
+  - hover 时强化图标高亮与描边反馈，保持与现有 icon 工具按钮风格一致。
+
+### 验证结果
+- 前端依赖安装：`npm install` 成功。
+- 前端类型检查：`npm run type-check` 通过。
+- 前端 clean 构建：`npm run build -- --emptyOutDir` 通过。
+- 后端 clean 启动：`mvn -f apps/server/pom.xml clean spring-boot:run "-Dspring-boot.run.arguments=--server.port=18089"` 成功，`http://127.0.0.1:18089/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`。
+- 前端预览：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6064 --strictPort` 成功，`http://127.0.0.1:6064/` 返回 `HTTP 200`。

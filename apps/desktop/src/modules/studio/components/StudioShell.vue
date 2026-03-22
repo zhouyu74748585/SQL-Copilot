@@ -427,37 +427,55 @@
                 </a-tooltip>
               </div>
               <div v-else-if="currentObjectType === 'views'" class="center-toolbar-left">
-                <a-tooltip title="新建视图">
+                <a-tooltip :title="tt('新建视图')">
                   <a-button
                     size="small"
-                    type="default"
+                    type="text"
                     :disabled="!canCreateView"
-                    class="toolbar-icon-btn"
+                    class="toolbar-icon-btn browser-toolbar-action-btn"
+                    :aria-label="tt('新建视图')"
+                    data-testid="studio-browser-toolbar-new-view"
                     @click="openNewObjectDefinitionEditor(workflow.connectionId, getActiveDatabaseName(workflow.connectionId), 'views')"
                   >
                     <template #icon><img class="toolbar-action-icon" :src="createViewIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
-                <a-tooltip title="新建查询">
-                  <a-button size="small" :disabled="!workflow.connectionId" class="toolbar-icon-btn" @click="openAiQueryTab()">
+                <a-tooltip :title="tt('新建查询')">
+                  <a-button
+                    size="small"
+                    type="text"
+                    :disabled="!workflow.connectionId"
+                    class="toolbar-icon-btn browser-toolbar-action-btn"
+                    :aria-label="tt('新建查询')"
+                    @click="openAiQueryTab()"
+                  >
                     <template #icon><img class="toolbar-action-icon" :src="addQueryIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
               </div>
               <div v-else-if="currentObjectType === 'functions'" class="center-toolbar-left">
-                <a-tooltip title="新建函数">
+                <a-tooltip :title="tt('新建函数')">
                   <a-button
                     size="small"
-                    type="default"
+                    type="text"
                     :disabled="!canCreateFunction"
-                    class="toolbar-icon-btn"
+                    class="toolbar-icon-btn browser-toolbar-action-btn"
+                    :aria-label="tt('新建函数')"
+                    data-testid="studio-browser-toolbar-new-function"
                     @click="openNewObjectDefinitionEditor(workflow.connectionId, getActiveDatabaseName(workflow.connectionId), 'functions')"
                   >
                     <template #icon><img class="toolbar-action-icon" :src="createFunctionIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
-                <a-tooltip title="新建查询">
-                  <a-button size="small" :disabled="!workflow.connectionId" class="toolbar-icon-btn" @click="openAiQueryTab()">
+                <a-tooltip :title="tt('新建查询')">
+                  <a-button
+                    size="small"
+                    type="text"
+                    :disabled="!workflow.connectionId"
+                    class="toolbar-icon-btn browser-toolbar-action-btn"
+                    :aria-label="tt('新建查询')"
+                    @click="openAiQueryTab()"
+                  >
                     <template #icon><img class="toolbar-action-icon" :src="addQueryIcon" alt="" /></template>
                   </a-button>
                 </a-tooltip>
