@@ -2,16 +2,120 @@ name: Package App
 
 on:
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag; leave empty to auto-generate from app version and run number"
+        required: false
+        type: string
+      release_name:
+        description: "Release title; leave empty to default to SQL Copilot <tag>"
+        required: false
+        type: string
+      draft:
+        description: "Create the release as a draft"
+        required: false
+        default: false
+        type: boolean
+      prerelease:
+        description: "Mark the release as a prerelease"
+        required: false
+        default: false
+        type: boolean
   push:
     tags:
       - "v*"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  prepare-release:
+    name: Prepare Release Metadata
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.meta.outputs.tag_name }}
+      release_name: ${{ steps.meta.outputs.release_name }}
+      target_commitish: ${{ steps.meta.outputs.target_commitish }}
+      draft: ${{ steps.meta.outputs.draft }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+      previous_tag: ${{ steps.previous-release.outputs.previous_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        env:
+          INPUT_TAG_NAME: ${{ inputs.tag_name }}
+          INPUT_RELEASE_NAME: ${{ inputs.release_name }}
+          INPUT_DRAFT: ${{ inputs.draft }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          GITHUB_SHA_VALUE: ${{ github.sha }}
+          GITHUB_RUN_NUMBER_VALUE: ${{ github.run_number }}
+        run: |
+          app_version="$(node -p "require('./apps/desktop/package.json').version")"
+
+          if [[ "${EVENT_NAME}" == "push" ]]; then
+            tag_name="${REF_NAME}"
+            draft="false"
+            if [[ "${tag_name}" == *-* ]]; then
+              prerelease="true"
+            else
+              prerelease="false"
+            fi
+          else
+            if [[ -n "${INPUT_TAG_NAME}" ]]; then
+              tag_name="${INPUT_TAG_NAME}"
+            else
+              tag_name="v${app_version}-build.${GITHUB_RUN_NUMBER_VALUE}"
+            fi
+            draft="${INPUT_DRAFT:-false}"
+            prerelease="${INPUT_PRERELEASE:-false}"
+          fi
+
+          if [[ -n "${INPUT_RELEASE_NAME}" ]]; then
+            release_name="${INPUT_RELEASE_NAME}"
+          else
+            release_name="SQL Copilot ${tag_name}"
+          fi
+
+          {
+            echo "tag_name=${tag_name}"
+            echo "release_name=${release_name}"
+            echo "target_commitish=${GITHUB_SHA_VALUE}"
+            echo "draft=${draft}"
+            echo "prerelease=${prerelease}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Resolve previous published release
+        id: previous-release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const currentTag = `${{ steps.meta.outputs.tag_name }}`;
+            const { owner, repo } = context.repo;
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner,
+              repo,
+              per_page: 100,
+            });
+
+            const previous = releases.find((release) => !release.draft && release.tag_name !== currentTag) || null;
+            core.setOutput('previous_tag', previous?.tag_name || '');
+
   package:
     name: Package ${{ matrix.target }}
+    needs: prepare-release
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -74,3 +178,66 @@ jobs:
           name: sql-copilot-${{ matrix.target }}
           path: ${{ matrix.artifact_paths }}
           if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    needs:
+      - prepare-release
+      - package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sql-copilot-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate release notes
+        shell: bash
+        env:
+          PREVIOUS_TAG: ${{ needs.prepare-release.outputs.previous_tag }}
+          CURRENT_TAG: ${{ needs.prepare-release.outputs.tag_name }}
+          CURRENT_SHA: ${{ needs.prepare-release.outputs.target_commitish }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          node scripts/generate-release-notes.mjs \
+            --output release-notes.md \
+            --previous-tag "${PREVIOUS_TAG}" \
+            --current-tag "${CURRENT_TAG}" \
+            --current-sha "${CURRENT_SHA}"
+
+      - name: Verify release assets
+        shell: bash
+        run: |
+          shopt -s globstar nullglob
+          files=(release-assets/**/*)
+          if [[ "${#files[@]}" -eq 0 ]]; then
+            echo "No release assets found under release-assets/"
+            exit 1
+          fi
+          printf 'Assets to publish:\n%s\n' "${files[*]}"
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare-release.outputs.tag_name }}
+          name: ${{ needs.prepare-release.outputs.release_name }}
+          target_commitish: ${{ needs.prepare-release.outputs.target_commitish }}
+          body_path: release-notes.md
+          draft: ${{ needs.prepare-release.outputs.draft }}
+          prerelease: ${{ needs.prepare-release.outputs.prerelease }}
+          files: |
+            release-assets/**/*
+          overwrite_files: true
