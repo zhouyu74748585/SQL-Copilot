@@ -76,8 +76,7 @@ public class RagIngestionServiceImpl implements RagIngestionService {
     private final ObjectMapper objectMapper;
 
     private final boolean ragEnabled;
-    private final boolean sqlFragmentEnabled;
-    private final int sqlFragmentMaxCount;
+    private final int sqlFragmentMaxCount = 0;
     private final int embeddingBatchSize;
     private final int embeddingParallelism;
     private final int qdrantUpsertBatchSize;
@@ -96,9 +95,7 @@ public class RagIngestionServiceImpl implements RagIngestionService {
                                    @Value("${rag.collection.sql-history:sql_history}") String sqlHistoryCollection,
                                    @Value("${rag.collection.metric-term:metric_term}") String metricTermCollection,
                                    @Value("${rag.collection.example-sql:example_sql}") String exampleSqlCollection,
-                                   @Value("${rag.collection.sql-fragment:sql_fragment}") String sqlFragmentCollection,
-                                   @Value("${rag.sql-fragment.enabled:true}") boolean sqlFragmentEnabled,
-                                   @Value("${rag.sql-fragment.max-count:8}") int sqlFragmentMaxCount,
+                                   @Value("${rag.collection.managed-memory:managed_memory}") String managedMemoryCollection,
                                    @Value("${rag.embedding.batch-size:16}") int embeddingBatchSize,
                                    @Value("${rag.embedding.parallelism:2}") int embeddingParallelism,
                                    @Value("${rag.qdrant.upsert-batch-size:300}") int qdrantUpsertBatchSize) {
@@ -108,8 +105,6 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         this.llmGatewayService = llmGatewayService;
         this.objectMapper = objectMapper;
         this.ragEnabled = ragEnabled;
-        this.sqlFragmentEnabled = sqlFragmentEnabled;
-        this.sqlFragmentMaxCount = Math.max(1, sqlFragmentMaxCount);
         this.embeddingBatchSize = Math.max(1, embeddingBatchSize);
         this.embeddingParallelism = Math.max(1, embeddingParallelism);
         this.qdrantUpsertBatchSize = Math.max(1, qdrantUpsertBatchSize);
@@ -127,7 +122,7 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             sqlHistoryCollection,
             metricTermCollection,
             exampleSqlCollection,
-            sqlFragmentCollection
+            managedMemoryCollection
         );
     }
 
@@ -330,7 +325,6 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         }
         historyFilters.add(new QdrantPayloadFilter("tables", normalizedTableName));
         qdrantClientService.deletePointsByFilters(collectionNames.getSqlHistory(), historyFilters);
-        qdrantClientService.deletePointsByFilters(collectionNames.getSqlFragment(), historyFilters);
     }
 
     @Override
@@ -372,7 +366,6 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         qdrantClientService.deletePointsByFilters(collectionNames.getSchemaTable(), filters);
         qdrantClientService.deletePointsByFilters(collectionNames.getSchemaColumn(), filters);
         qdrantClientService.deletePointsByFilters(collectionNames.getSqlHistory(), filters);
-        qdrantClientService.deletePointsByFilters(collectionNames.getSqlFragment(), filters);
     }
 
     private void ingestSqlHistoryInternal(QueryHistoryEntity historyEntity) {
@@ -396,6 +389,7 @@ public class RagIngestionServiceImpl implements RagIngestionService {
             );
 
             SqlHistoryPayload payload = new SqlHistoryPayload(
+                historyEntity.getId(),
                 historyEntity.getConnectionId(),
                 databaseName,
                 safeText(historyEntity.getSessionId()),
@@ -428,26 +422,6 @@ public class RagIngestionServiceImpl implements RagIngestionService {
                 historyMetadata
             )));
             writePoints(collectionNames.getSqlHistory(), historyPoints);
-
-            if (sqlFragmentEnabled) {
-                List<SqlFragmentPayload> fragments = buildSqlFragments(payload);
-                if (!fragments.isEmpty()) {
-                    List<PointEmbeddingTask> fragmentTasks = new ArrayList<>();
-                    for (SqlFragmentPayload fragment : fragments) {
-                        Map<String, Object> fragmentMetadata = sanitizeMetadata(fragment.toMetadataMap());
-                        fragmentTasks.add(new PointEmbeddingTask(
-                            stablePointId("sql_fragment", historyEntity.getConnectionId(), databaseName,
-                                String.valueOf(historyEntity.getId() == null ? payload.getCreatedAt() : historyEntity.getId()),
-                                fragment.getFragmentType(),
-                                String.valueOf(fragment.getFragmentIndex())),
-                            buildSqlFragmentDocumentText(fragment),
-                            fragmentMetadata
-                        ));
-                    }
-                    List<QdrantPoint> fragmentPoints = buildQdrantPoints(fragmentTasks);
-                    writePoints(collectionNames.getSqlFragment(), fragmentPoints);
-                }
-            }
         } catch (Exception ex) {
             log.warn("SQL 历史 RAG 写入失败, historyId={}, reason={}", historyEntity.getId(), ex.getMessage());
         }
@@ -1567,6 +1541,7 @@ public class RagIngestionServiceImpl implements RagIngestionService {
     }
 
     private static class SqlHistoryPayload {
+        private final Long historyId;
         private final Long connectionId;
         private final String databaseName;
         private final String sessionId;
@@ -1589,7 +1564,8 @@ public class RagIngestionServiceImpl implements RagIngestionService {
         private final Integer reuseCount;
         private final String operationType;
 
-        SqlHistoryPayload(Long connectionId,
+        SqlHistoryPayload(Long historyId,
+                          Long connectionId,
                           String databaseName,
                           String sessionId,
                           String questionText,
@@ -1610,6 +1586,7 @@ public class RagIngestionServiceImpl implements RagIngestionService {
                           Double trustLevel,
                           Integer reuseCount,
                           String operationType) {
+            this.historyId = historyId;
             this.connectionId = connectionId;
             this.databaseName = databaseName;
             this.sessionId = sessionId;
@@ -1635,6 +1612,7 @@ public class RagIngestionServiceImpl implements RagIngestionService {
 
         Map<String, Object> toMetadataMap() {
             Map<String, Object> metadata = new HashMap<>();
+            metadata.put("history_id", historyId);
             metadata.put("connection_id", connectionId);
             metadata.put("database_name", databaseName);
             metadata.put("session_id", sessionId);

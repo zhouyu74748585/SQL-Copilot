@@ -30,8 +30,8 @@ public class RagVectorizeOverviewVO {
     /** SQL 历史向量条数。 */
     private Long sqlHistoryVectorCount;
 
-    /** SQL 片段向量条数。 */
-    private Long sqlFragmentVectorCount;
+    /** 长期记忆向量条数。 */
+    private Long managedMemoryVectorCount;
 
     /** 当前库适用的术语向量条数。 */
     private Long metricTermVectorCount;

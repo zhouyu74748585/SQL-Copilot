@@ -138,6 +138,74 @@ public interface QueryHistoryMapper {
                                            @Param("sessionId") String sessionId,
                                            @Param("limit") Integer limit);
 
+    @Select("""
+        <script>
+        SELECT COUNT(1)
+        FROM query_history
+        WHERE COALESCE(TRIM(history_type), 'CHAT') = 'EXECUTE'
+          AND COALESCE(success_flag, 0) = 1
+          AND COALESCE(memory_enabled, 0) = 1
+        <if test='connectionId != null and connectionId &gt; 0'>
+          AND connection_id = #{connectionId}
+        </if>
+        <if test='databaseName != null and databaseName != ""'>
+          AND database_name = #{databaseName}
+        </if>
+        <if test='keyword != null and keyword != ""'>
+          AND (
+            COALESCE(prompt_text, '') LIKE '%' || #{keyword} || '%'
+            OR COALESCE(sql_text, '') LIKE '%' || #{keyword} || '%'
+            OR COALESCE(assistant_content, '') LIKE '%' || #{keyword} || '%'
+          )
+        </if>
+        </script>
+        """)
+    Long countSuccessfulExecuteHistory(@Param("connectionId") Long connectionId,
+                                       @Param("databaseName") String databaseName,
+                                       @Param("keyword") String keyword);
+
+    @Select("""
+        <script>
+        SELECT *
+        FROM query_history
+        WHERE COALESCE(TRIM(history_type), 'CHAT') = 'EXECUTE'
+          AND COALESCE(success_flag, 0) = 1
+          AND COALESCE(memory_enabled, 0) = 1
+        <if test='connectionId != null and connectionId &gt; 0'>
+          AND connection_id = #{connectionId}
+        </if>
+        <if test='databaseName != null and databaseName != ""'>
+          AND database_name = #{databaseName}
+        </if>
+        <if test='keyword != null and keyword != ""'>
+          AND (
+            COALESCE(prompt_text, '') LIKE '%' || #{keyword} || '%'
+            OR COALESCE(sql_text, '') LIKE '%' || #{keyword} || '%'
+            OR COALESCE(assistant_content, '') LIKE '%' || #{keyword} || '%'
+          )
+        </if>
+        ORDER BY created_at DESC, id DESC
+        LIMIT #{limit} OFFSET #{offset}
+        </script>
+        """)
+    List<QueryHistoryEntity> pageSuccessfulExecuteHistory(@Param("connectionId") Long connectionId,
+                                                          @Param("databaseName") String databaseName,
+                                                          @Param("keyword") String keyword,
+                                                          @Param("limit") Integer limit,
+                                                          @Param("offset") Integer offset);
+
+    @Select("""
+        <script>
+        SELECT *
+        FROM query_history
+        WHERE id IN
+        <foreach collection='ids' item='id' open='(' separator=',' close=')'>
+          #{id}
+        </foreach>
+        </script>
+        """)
+    List<QueryHistoryEntity> listByIds(@Param("ids") List<Long> ids);
+
     @Delete("""
         DELETE FROM query_history
         WHERE connection_id = #{connectionId}

@@ -24,6 +24,16 @@ public interface QdrantClientService {
                                                   int limit,
                                                   List<QdrantPayloadFilter> filters);
 
+    List<QdrantScoredPoint> scrollPointsByFilters(String collectionName,
+                                                  List<QdrantPayloadFilter> filters,
+                                                  Integer limit);
+
+    List<QdrantScoredPoint> scrollPointsByFieldValues(String collectionName,
+                                                      String fieldName,
+                                                      List<?> values,
+                                                      List<QdrantPayloadFilter> baseFilters,
+                                                      Integer limit);
+
     QdrantCollectionMetric queryCollectionMetric(String collectionName, Long connectionId, String databaseName);
 
     QdrantCollectionMetric queryCollectionMetricByFilters(String collectionName, List<QdrantPayloadFilter> filters);
@@ -33,4 +43,6 @@ public interface QdrantClientService {
     void deletePointsByFilters(String collectionName, List<QdrantPayloadFilter> filters);
 
     void recreateCollection(String collectionName, int vectorSize);
+
+    void dropCollection(String collectionName);
 }

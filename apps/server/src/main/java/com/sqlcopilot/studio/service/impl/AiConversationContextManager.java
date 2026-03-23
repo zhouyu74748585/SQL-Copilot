@@ -10,13 +10,13 @@ import com.sqlcopilot.studio.dto.schema.ContextBuildVO;
 import com.sqlcopilot.studio.entity.QueryHistoryEntity;
 import com.sqlcopilot.studio.mapper.QueryHistoryMapper;
 import com.sqlcopilot.studio.service.AiConfigService;
+import com.sqlcopilot.studio.service.MemoryService;
 import com.sqlcopilot.studio.service.SchemaService;
 import com.sqlcopilot.studio.service.llm.LlmGatewayRequest;
 import com.sqlcopilot.studio.service.llm.LlmGatewayResult;
 import com.sqlcopilot.studio.service.llm.LlmGatewayService;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
 import com.sqlcopilot.studio.service.rag.RagEmbeddingService;
-import com.sqlcopilot.studio.service.rag.model.QdrantPoint;
 import com.sqlcopilot.studio.service.rag.model.QdrantScoredPoint;
 import com.sqlcopilot.studio.service.rag.model.RagPromptContext;
 import org.slf4j.Logger;
@@ -44,9 +44,6 @@ public class AiConversationContextManager {
     private static final double MIN_AUTO_COMPRESS_RATIO = 0.30D;
     private static final double MAX_AUTO_COMPRESS_RATIO = 0.95D;
     private static final int MIN_RAW_RECENT_TOKENS = 512;
-    private static final int DEFAULT_SESSION_MEMORY_TTL_DAYS = 30;
-    private static final long DEFAULT_SESSION_MEMORY_TTL_MS = Duration.ofDays(DEFAULT_SESSION_MEMORY_TTL_DAYS).toMillis();
-    private static final int SESSION_MEMORY_SEARCH_LIMIT = 10;
     private static final ThreadLocal<Map<String, Object>> REQUEST_CONTEXT_CACHE = ThreadLocal.withInitial(ConcurrentHashMap::new);
     private static final ThreadLocal<Integer> REQUEST_CONTEXT_CACHE_DEPTH = ThreadLocal.withInitial(() -> 0);
     private static final String CONTEXT_COMPRESS_SYSTEM_PROMPT = """
@@ -60,6 +57,7 @@ public class AiConversationContextManager {
 
     private final SchemaService schemaService;
     private final AiConfigService aiConfigService;
+    private final MemoryService memoryService;
     private final QueryHistoryMapper queryHistoryMapper;
     private final RagEmbeddingService ragEmbeddingService;
     private final QdrantClientService qdrantClientService;
@@ -69,6 +67,7 @@ public class AiConversationContextManager {
 
     public AiConversationContextManager(SchemaService schemaService,
                                         AiConfigService aiConfigService,
+                                        MemoryService memoryService,
                                         QueryHistoryMapper queryHistoryMapper,
                                         RagEmbeddingService ragEmbeddingService,
                                         QdrantClientService qdrantClientService,
@@ -77,6 +76,7 @@ public class AiConversationContextManager {
                                         @Value("${rag.collection.sql-history:sql_history}") String sqlHistoryCollectionName) {
         this.schemaService = schemaService;
         this.aiConfigService = aiConfigService;
+        this.memoryService = memoryService;
         this.queryHistoryMapper = queryHistoryMapper;
         this.ragEmbeddingService = ragEmbeddingService;
         this.qdrantClientService = qdrantClientService;
@@ -160,10 +160,7 @@ public class AiConversationContextManager {
         ConversationMemorySnapshot snapshot = loadConversationMemorySnapshot(req, memoryPolicy);
 
         List<String> segments = new ArrayList<>();
-        // 关键步骤：先放向量召回记忆，再放滑窗摘要和结构化窗口，保证模型优先看到提炼后的长期信息。
-        if (!snapshot.vectorMemoryContext().isBlank()) {
-            segments.add("Conversation Memory Recall:\n" + snapshot.vectorMemoryContext());
-        }
+        // 关键步骤：先放最近窗口与滑动摘要，再拼接 RAG 长期记忆与知识上下文。
         if (!snapshot.windowSummary().isBlank()) {
             segments.add("Conversation Recent Summary:\n" + snapshot.windowSummary());
         }
@@ -186,7 +183,7 @@ public class AiConversationContextManager {
     }
 
     /**
-     * 关键步骤：构建给 RAG 检索使用的输入，并按需拼入窗口摘要与向量记忆，避免检索只看当前一句话。
+     * 关键步骤：构建给 RAG 检索使用的输入，并按需拼入窗口摘要或最近原文，避免检索只看当前一句话。
      */
     public String buildRetrievalInputForRag(AiGenerateSqlReq req) {
         return buildRetrievalInputForRag(req, "");
@@ -209,9 +206,6 @@ public class AiConversationContextManager {
         } else if (!snapshot.windowDialogContext().isBlank()) {
             // 关键步骤：未达到自动压缩阈值时，优先保留最近原文，让检索继续看到真实追问细节。
             memorySegments.add("最近会话原文:\n" + snapshot.windowDialogContext());
-        }
-        if (!snapshot.vectorMemoryContext().isBlank()) {
-            memorySegments.add("会话向量记忆召回:\n" + snapshot.vectorMemoryContext());
         }
         if (memorySegments.isEmpty()) {
             return baseInput;
@@ -318,7 +312,7 @@ public class AiConversationContextManager {
             500
         );
         if (chatHistory == null || chatHistory.isEmpty()) {
-            return new ConversationMemorySnapshot("", "", "[]", "", "");
+            return new ConversationMemorySnapshot("", "", "[]", "");
         }
         List<QueryHistoryEntity> windowRecords = pickWindowRecordsByTokenBudget(chatHistory, memoryPolicy.windowSize(), memoryPolicy.windowTokens());
         int windowStartIndex = Math.max(0, chatHistory.size() - windowRecords.size());
@@ -335,10 +329,20 @@ public class AiConversationContextManager {
         if (!olderRecords.isEmpty()) {
             // 关键步骤：超出最近原文窗口的更早历史统一折叠成滑动摘要，既保留语义又避免无限堆积 token。
             slidingSummary = buildCompressedSummary(req, olderRecords);
-            upsertSessionSummaryVector(req, slidingSummary, memoryPolicy.windowSize(), chatHistory.size());
+            try {
+                memoryService.autoUpsertSessionMemory(
+                    req.getConnectionId(),
+                    req.getDatabaseName(),
+                    req.getSessionId(),
+                    slidingSummary,
+                    olderRecords
+                );
+            } catch (Exception ex) {
+                log.warn("[AI-LONG-MEMORY-UPSERT-FAILED] sessionId={}, reason={}",
+                    safe(req.getSessionId()), safe(ex.getMessage()));
+            }
         }
-        String vectorMemoryContext = querySessionMemoryFromVectorStore(req);
-        return new ConversationMemorySnapshot(windowSummary, slidingSummary, windowStructuredContext, vectorMemoryContext, windowDialogContext);
+        return new ConversationMemorySnapshot(windowSummary, slidingSummary, windowStructuredContext, windowDialogContext);
     }
 
     private int resolveMemoryWindowSize(AiConfigVO config) {
@@ -482,91 +486,6 @@ public class AiConversationContextManager {
         return builder.toString().trim();
     }
 
-    /**
-     * 关键步骤：把旧历史压缩摘要写回向量库，作为当前会话的长期记忆锚点。
-     */
-    private void upsertSessionSummaryVector(AiGenerateSqlReq req, String compressedContext, int windowSize, int totalMessages) {
-        String summary = safe(compressedContext);
-        if (summary.isBlank()) {
-            return;
-        }
-        try {
-            List<Float> vector = ragEmbeddingService.embedText(summary);
-            if (vector == null || vector.isEmpty()) {
-                return;
-            }
-            qdrantClientService.ensureCollection(sqlHistoryCollectionName, vector.size());
-            Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("connection_id", req.getConnectionId());
-            payload.put("database_name", safe(req.getDatabaseName()));
-            payload.put("session_id", safe(req.getSessionId()));
-            payload.put("entry_type", "session_summary");
-            payload.put("summary", summary);
-            payload.put("window_size", windowSize);
-            payload.put("total_messages", totalMessages);
-            long now = System.currentTimeMillis();
-            payload.put("updated_at", now);
-            // 关键步骤：会话记忆默认保留 30 天，超过 TTL 后不再参与召回。
-            payload.put("memory_ttl_days", DEFAULT_SESSION_MEMORY_TTL_DAYS);
-            payload.put("expires_at", now + DEFAULT_SESSION_MEMORY_TTL_MS);
-            qdrantClientService.upsertPoints(
-                sqlHistoryCollectionName,
-                List.of(new QdrantPoint(
-                    "session-memory-" + req.getConnectionId() + "-" + safe(req.getSessionId()),
-                    vector,
-                    payload
-                ))
-            );
-        } catch (Exception ex) {
-            log.warn("[AI-MEMORY-UPSERT-FAILED] sessionId={}, reason={}", safe(req.getSessionId()), safe(ex.getMessage()));
-        }
-    }
-
-    /**
-     * 关键步骤：从向量库召回当前会话的长期记忆，再做一次归并压缩，避免召回内容过散。
-     */
-    private String querySessionMemoryFromVectorStore(AiGenerateSqlReq req) {
-        try {
-            List<Float> queryVector = ragEmbeddingService.embedText(buildRetrievalInput(req.getPrompt()));
-            if (queryVector == null || queryVector.isEmpty()) {
-                return "";
-            }
-            long now = System.currentTimeMillis();
-            List<QdrantScoredPoint> points = qdrantClientService.searchPoints(
-                sqlHistoryCollectionName,
-                queryVector,
-                SESSION_MEMORY_SEARCH_LIMIT,
-                req.getConnectionId(),
-                req.getDatabaseName()
-            );
-            StringBuilder builder = new StringBuilder();
-            for (QdrantScoredPoint point : points) {
-                Map<String, Object> payload = point.getPayload();
-                String sessionId = Objects.toString(payload.get("session_id"), "").trim();
-                String entryType = Objects.toString(payload.get("entry_type"), "").trim();
-                if (!safe(req.getSessionId()).equals(sessionId) || !"session_summary".equals(entryType)) {
-                    continue;
-                }
-                if (isExpiredSessionMemory(payload, now)) {
-                    continue;
-                }
-                String summary = Objects.toString(payload.get("summary"), "").trim();
-                if (!summary.isBlank()) {
-                    builder.append("- ").append(summary).append("\n");
-                }
-            }
-            String merged = builder.toString().trim();
-            if (merged.isBlank()) {
-                return "";
-            }
-            String cacheKey = "compress:vector_memory:" + merged.hashCode();
-            return getOrComputeRequestCache(cacheKey, () -> compactTextByLlm(req, "会话向量记忆归并", merged));
-        } catch (Exception ex) {
-            log.warn("[AI-MEMORY-QUERY-FAILED] sessionId={}, reason={}", safe(req.getSessionId()), safe(ex.getMessage()));
-            return "";
-        }
-    }
-
     private String retrieveSessionHistoryContext(AiGenerateSqlReq req, int topK) {
         List<QueryHistoryEntity> rows = queryHistoryMapper.listBySession(
             req.getConnectionId(),
@@ -687,18 +606,6 @@ public class AiConversationContextManager {
             log.warn("[AI-CONTEXT-COMPRESS-FAILED] sessionId={}, reason={}", safe(req.getSessionId()), safe(ex.getMessage()));
         }
         return safe(sourceText);
-    }
-
-    private boolean isExpiredSessionMemory(Map<String, Object> payload, long now) {
-        long expiresAt = asLong(payload == null ? null : payload.get("expires_at"));
-        if (expiresAt > 0L) {
-            return expiresAt <= now;
-        }
-        long updatedAt = asLong(payload == null ? null : payload.get("updated_at"));
-        if (updatedAt <= 0L) {
-            updatedAt = asLong(payload == null ? null : payload.get("created_at"));
-        }
-        return updatedAt > 0L && updatedAt + DEFAULT_SESSION_MEMORY_TTL_MS <= now;
     }
 
     @SuppressWarnings("unchecked")
@@ -822,7 +729,6 @@ public class AiConversationContextManager {
     private record ConversationMemorySnapshot(String windowSummary,
                                               String slidingSummary,
                                               String windowStructuredContext,
-                                              String vectorMemoryContext,
                                               String windowDialogContext) {
     }
 

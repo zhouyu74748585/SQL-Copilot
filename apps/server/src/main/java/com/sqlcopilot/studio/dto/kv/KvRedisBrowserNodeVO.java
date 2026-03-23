@@ -2,7 +2,7 @@ package com.sqlcopilot.studio.dto.kv;
 
 import lombok.Data;
 
-/** Redis 树表格节点对象。 */
+/** Redis 浏览节点。 */
 @Data
 public class KvRedisBrowserNodeVO {
 

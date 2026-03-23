@@ -3,6 +3,7 @@ package com.sqlcopilot.studio.service.rag.impl;
 import com.sqlcopilot.studio.dto.rag.RagConfigVO;
 import com.sqlcopilot.studio.dto.schema.SchemaOverviewVO;
 import com.sqlcopilot.studio.dto.schema.TableDetailVO;
+import com.sqlcopilot.studio.service.MemoryService;
 import com.sqlcopilot.studio.service.RagConfigService;
 import com.sqlcopilot.studio.service.SchemaService;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
@@ -32,6 +33,7 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
     private static final int SUPPLEMENT_COLUMN_PER_TABLE_LIMIT = 12;
     private static final double SUPPLEMENT_SCORE_STEP = 0.001D;
     private static final int PROMPT_TABLE_LIMIT = 4;
+    private static final int PROMPT_MEMORY_LIMIT = 3;
     private static final int PROMPT_TERM_LIMIT = 3;
     private static final int PROMPT_EXAMPLE_LIMIT = 2;
     private static final int PROMPT_HISTORY_LIMIT = 1;
@@ -46,6 +48,7 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
     private final boolean defaultRerankEnabled;
     private final RagConfigService ragConfigService;
     private final SchemaService schemaService;
+    private final MemoryService memoryService;
     private final RagEmbeddingService ragEmbeddingService;
     private final QdrantClientService qdrantClientService;
     private final RagRerankService ragRerankService;
@@ -66,9 +69,9 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
                                    @Value("${rag.collection.schema-table:schema_table}") String schemaTableCollection,
                                    @Value("${rag.collection.schema-column:schema_column}") String schemaColumnCollection,
                                    @Value("${rag.collection.sql-history:sql_history}") String sqlHistoryCollection,
+                                   @Value("${rag.collection.managed-memory:managed_memory}") String managedMemoryCollection,
                                    @Value("${rag.collection.metric-term:metric_term}") String metricTermCollection,
                                    @Value("${rag.collection.example-sql:example_sql}") String exampleSqlCollection,
-                                   @Value("${rag.collection.sql-fragment:sql_fragment}") String sqlFragmentCollection,
                                    @Value("${rag.retrieval.schema-table-limit:6}") int schemaTableLimit,
                                    @Value("${rag.retrieval.schema-column-limit:8}") int schemaColumnLimit,
                                    @Value("${rag.retrieval.sql-history-limit:6}") int sqlHistoryLimit,
@@ -80,6 +83,7 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
                                    @Value("${rag.rerank.gamma:0.05}") double gammaRuleBonus,
                                    RagConfigService ragConfigService,
                                    SchemaService schemaService,
+                                   MemoryService memoryService,
                                    RagEmbeddingService ragEmbeddingService,
                                    QdrantClientService qdrantClientService,
                                    RagRerankService ragRerankService) {
@@ -90,7 +94,7 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             sqlHistoryCollection,
             metricTermCollection,
             exampleSqlCollection,
-            sqlFragmentCollection
+            managedMemoryCollection
         );
         this.schemaTableLimit = Math.max(1, schemaTableLimit);
         this.schemaColumnLimit = Math.max(1, schemaColumnLimit);
@@ -103,6 +107,7 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         this.gammaRuleBonus = gammaRuleBonus;
         this.ragConfigService = ragConfigService;
         this.schemaService = schemaService;
+        this.memoryService = memoryService;
         this.ragEmbeddingService = ragEmbeddingService;
         this.qdrantClientService = qdrantClientService;
         this.ragRerankService = ragRerankService;
@@ -182,6 +187,14 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             connectionId,
             normalizedDatabaseName
         );
+        historyHits = filterHistoryEntryType(historyHits);
+        List<QdrantScoredPoint> managedMemoryHits = searchManagedMemoryAcrossScopes(
+            collectionNames.getManagedMemory(),
+            inputVector,
+            PROMPT_MEMORY_LIMIT * 2,
+            connectionId,
+            normalizedDatabaseName
+        );
         List<QdrantScoredPoint> metricTermHits = searchKnowledgeAcrossScopes(
             collectionNames.getMetricTerm(),
             inputVector,
@@ -236,6 +249,9 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         RerankResult historyRerank = rerankHits(retrievalQuery, "query_history", historyHits, rerankEnabled);
         historyHits = historyRerank.hits();
         rerankDetails.add(historyRerank.traceDetail());
+        RerankResult memoryRerank = rerankHits(retrievalQuery, "managed_memory", managedMemoryHits, rerankEnabled);
+        managedMemoryHits = memoryRerank.hits();
+        rerankDetails.add(memoryRerank.traceDetail());
         RerankResult metricRerank = rerankHits(retrievalQuery, "metric_term", metricTermHits, rerankEnabled);
         metricTermHits = metricRerank.hits();
         rerankDetails.add(metricRerank.traceDetail());
@@ -248,20 +264,24 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         if (!anchorTables.isEmpty()) {
             int columnBefore = columnHits.size();
             int historyBefore = historyHits.size();
+            int memoryBefore = managedMemoryHits.size();
             int metricBefore = metricTermHits.size();
             columnHits = filterColumnHitsByTables(columnHits, anchorTables);
             historyHits = filterHistoryHitsByTables(historyHits, anchorTables);
+            managedMemoryHits = filterMemoryHitsByTables(managedMemoryHits, anchorTables);
             metricTermHits = filterHitsByTables(metricTermHits, anchorTables);
             selectionDetails.add(buildSelectionDetail(
                 "anchor_filter",
                 "accepted",
-                "按表锚点约束字段/历史/术语",
+                "按表锚点约束字段/历史/长期记忆/术语",
                 Map.of(
                     "anchorTables", new ArrayList<>(anchorTables),
                     "columnBefore", columnBefore,
                     "columnAfter", columnHits.size(),
                     "historyBefore", historyBefore,
                     "historyAfter", historyHits.size(),
+                    "memoryBefore", memoryBefore,
+                    "memoryAfter", managedMemoryHits.size(),
                     "metricBefore", metricBefore,
                     "metricAfter", metricTermHits.size()
                 )
@@ -273,6 +293,7 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         selectionDetails.addAll(exampleGateResult.traceDetails());
 
         List<QdrantScoredPoint> selectedTableHits = selectAnchorTableHits(tableHits, anchorTables);
+        List<QdrantScoredPoint> selectedMemoryHits = managedMemoryHits.stream().limit(PROMPT_MEMORY_LIMIT).toList();
         List<QdrantScoredPoint> selectedTermHits = metricTermHits.stream().limit(PROMPT_TERM_LIMIT).toList();
         List<QdrantScoredPoint> selectedColumnHits = selectPromptColumnHits(columnHits, selectedTableHits);
         List<QdrantScoredPoint> selectedExampleHits = exampleSqlHits.stream().limit(PROMPT_EXAMPLE_LIMIT).toList();
@@ -281,6 +302,7 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             retrievalQuery,
             selectedTableHits,
             selectedColumnHits,
+            selectedMemoryHits,
             selectedTermHits,
             selectedExampleHits,
             selectedHistoryHits,
@@ -293,6 +315,7 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             Map.of(
                 "tableCount", selectedTableHits.size(),
                 "columnCount", selectedColumnHits.size(),
+                "memoryCount", selectedMemoryHits.size(),
                 "termCount", selectedTermHits.size(),
                 "exampleCount", selectedExampleHits.size(),
                 "historyCount", selectedHistoryHits.size(),
@@ -306,21 +329,23 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         context.setRelatedColumns(promptBuildResult.relatedColumns());
         context.setHistorySqlSamples(promptBuildResult.historySqlSamples());
         context.setHit(!tableHits.isEmpty() || !columnHits.isEmpty() || !historyHits.isEmpty()
-            || !metricTermHits.isEmpty() || !exampleSqlHits.isEmpty());
+            || !managedMemoryHits.isEmpty() || !metricTermHits.isEmpty() || !exampleSqlHits.isEmpty());
         context.setRerankEnabled(rerankEnabled);
         context.setRerankProvider(rerankProvider);
         context.setRerankDetails(rerankDetails);
         context.setSelectionDetails(selectionDetails);
         context.setPromptBudgetUsed(promptBuildResult.promptBudgetUsed());
+        markRetrievedManagedMemories(selectedMemoryHits);
 
         log.info(
-            "[RAG-RETRIEVE-RESP] connectionId={}, databaseName={}, hit={}, tableHitCount={}, columnHitCount={}, historyHitCount={}, metricHitCount={}, exampleHitCount={}, anchorTableCount={}, relatedTableCount={}, relatedColumnCount={}, historyCount={}, contextLength={}, promptBudgetUsed={}",
+            "[RAG-RETRIEVE-RESP] connectionId={}, databaseName={}, hit={}, tableHitCount={}, columnHitCount={}, historyHitCount={}, memoryHitCount={}, metricHitCount={}, exampleHitCount={}, anchorTableCount={}, relatedTableCount={}, relatedColumnCount={}, historyCount={}, contextLength={}, promptBudgetUsed={}",
             connectionId,
             normalizedDatabaseName,
             context.getHit(),
             tableHits.size(),
             columnHits.size(),
             historyHits.size(),
+            managedMemoryHits.size(),
             metricTermHits.size(),
             exampleSqlHits.size(),
             anchorTables.size(),
@@ -376,6 +401,89 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             .sorted(Comparator.comparingDouble(QdrantScoredPoint::getScore).reversed())
             .limit(Math.max(limit * 2L, limit))
             .toList();
+    }
+
+    private List<QdrantScoredPoint> searchManagedMemoryAcrossScopes(String collectionName,
+                                                                    List<Float> vector,
+                                                                    int limit,
+                                                                    Long connectionId,
+                                                                    String databaseName) {
+        Map<String, QdrantScoredPoint> merged = new LinkedHashMap<>();
+        if (connectionId != null) {
+            mergeHits(merged, safeSearchByFilters(collectionName, vector, limit, List.of(
+                new QdrantPayloadFilter("connection_id", connectionId),
+                new QdrantPayloadFilter("database_name", normalizeDatabaseName(databaseName))
+            )));
+            mergeHits(merged, safeSearchByFilters(collectionName, vector, limit, List.of(
+                new QdrantPayloadFilter("connection_id", connectionId),
+                new QdrantPayloadFilter("database_name", "")
+            )));
+        }
+        return merged.values().stream()
+            .sorted(Comparator.comparingDouble(QdrantScoredPoint::getScore).reversed())
+            .limit(Math.max(limit * 2L, limit))
+            .toList();
+    }
+
+    private List<QdrantScoredPoint> filterHistoryEntryType(List<QdrantScoredPoint> historyHits) {
+        if (historyHits == null || historyHits.isEmpty()) {
+            return List.of();
+        }
+        return historyHits.stream()
+            .filter(hit -> "history_query".equals(payloadString(hit.getPayload(), "entry_type")))
+            .toList();
+    }
+
+    private List<QdrantScoredPoint> filterMemoryHitsByTables(List<QdrantScoredPoint> hits, Set<String> anchorTables) {
+        if (hits == null || hits.isEmpty() || anchorTables == null || anchorTables.isEmpty()) {
+            return hits == null ? List.of() : hits;
+        }
+        List<QdrantScoredPoint> filtered = new ArrayList<>();
+        for (QdrantScoredPoint hit : hits) {
+            List<String> relatedTables = payloadStringList(hit.getPayload(), "related_tables");
+            if (relatedTables.isEmpty()) {
+                filtered.add(hit);
+                continue;
+            }
+            boolean matched = relatedTables.stream().map(this::normalizeTableName).anyMatch(anchorTables::contains);
+            if (matched) {
+                filtered.add(hit);
+            }
+        }
+        return filtered;
+    }
+
+    private void markRetrievedManagedMemories(List<QdrantScoredPoint> memoryHits) {
+        if (memoryHits == null || memoryHits.isEmpty()) {
+            return;
+        }
+        LinkedHashSet<Long> memoryIds = new LinkedHashSet<>();
+        for (QdrantScoredPoint hit : memoryHits) {
+            if (hit == null || hit.getPayload() == null) {
+                continue;
+            }
+            Object memoryId = hit.getPayload().get("memory_id");
+            if (memoryId instanceof Number number && number.longValue() > 0) {
+                memoryIds.add(number.longValue());
+            } else {
+                String text = Objects.toString(memoryId, "").trim();
+                if (!text.isBlank()) {
+                    try {
+                        memoryIds.add(Long.parseLong(text));
+                    } catch (Exception ignore) {
+                        // ignore malformed memory id payload
+                    }
+                }
+            }
+        }
+        if (memoryIds.isEmpty()) {
+            return;
+        }
+        try {
+            memoryService.markRetrieved(new ArrayList<>(memoryIds));
+        } catch (Exception ex) {
+            log.warn("长期记忆命中计数更新失败, reason={}", ex.getMessage());
+        }
     }
 
     private void mergeHits(Map<String, QdrantScoredPoint> target, List<QdrantScoredPoint> hits) {
@@ -668,6 +776,7 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
     private PromptBuildResult buildPromptContext(RetrievalQuery query,
                                                  List<QdrantScoredPoint> tableHits,
                                                  List<QdrantScoredPoint> columnHits,
+                                                 List<QdrantScoredPoint> memoryHits,
                                                  List<QdrantScoredPoint> termHits,
                                                  List<QdrantScoredPoint> exampleHits,
                                                  List<QdrantScoredPoint> historyHits,
@@ -753,6 +862,23 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             columnSection.append(String.join("; ", roleSegments)).append("\n");
         }
         appendSection(builder, "相关字段", columnSection.toString().trim());
+
+        StringBuilder memorySection = new StringBuilder();
+        for (QdrantScoredPoint hit : memoryHits) {
+            Map<String, Object> payload = hit.getPayload();
+            relatedTables.addAll(payloadStringList(payload, "related_tables"));
+            memorySection.append("- ").append(payloadString(payload, "title"));
+            String scope = payloadString(payload, "scope");
+            if (!scope.isBlank()) {
+                memorySection.append(" [scope=").append(scope).append("]");
+            }
+            if (!payloadString(payload, "summary").isBlank()) {
+                memorySection.append(": ").append(payloadString(payload, "summary"));
+            }
+            appendListIfPresent(memorySection, "关联表", payloadStringList(payload, "related_tables"));
+            memorySection.append("\n");
+        }
+        appendSection(builder, "长期记忆", memorySection.toString().trim());
 
         StringBuilder termSection = new StringBuilder();
         for (QdrantScoredPoint hit : termHits) {
@@ -929,6 +1055,7 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             mergeHits(merged, safeSearchByFilters(collectionNames.getSqlHistory(), vector, Math.max(2, sqlHistoryLimit), List.of(
                 new QdrantPayloadFilter("connection_id", connectionId),
                 new QdrantPayloadFilter("database_name", databaseName),
+                new QdrantPayloadFilter("entry_type", "history_query"),
                 new QdrantPayloadFilter("tables", focusTable)
             )));
         }

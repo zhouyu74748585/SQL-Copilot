@@ -3,6 +3,7 @@ import {useErModule} from './useErModule';
 import {useErSnapshotModule} from './useErSnapshotModule';
 import {useHistoryModule} from './useHistoryModule';
 import {useKnowledgeModule} from './useKnowledgeModule';
+import {useMemoryModule} from './useMemoryModule';
 import {useObjectDefinitionEditorModule} from './useObjectDefinitionEditorModule';
 import {useQueryModule} from './useQueryModule';
 import {useStudioRuntime} from './useStudioRuntime';
@@ -33,6 +34,7 @@ export function useStudioController() {
   const erSnapshotModule = useErSnapshotModule(runtime);
   const historyModule = useHistoryModule(runtime);
   const knowledgeModule = useKnowledgeModule(runtime);
+  const memoryModule = useMemoryModule(runtime);
   const uiShellModule = useUiShellModule(runtime, {
     handleBrowserClipboardKeydown: tableCopyModule.handleBrowserClipboardKeydown,
     handleErRelationDeleteKeydown: erModule.handleErRelationDeleteKeydown,
@@ -47,6 +49,7 @@ export function useStudioController() {
     ...erSnapshotModule,
     ...historyModule,
     ...knowledgeModule,
+    ...memoryModule,
     ...tableEditorModule,
     ...tableDataModule,
     ...tableRenameModule,
@@ -58,6 +61,7 @@ export function useStudioController() {
     erSnapshotModule,
     historyModule,
     knowledgeModule,
+    memoryModule,
     tableCopyModule,
     tableEditorModule,
     tableDataModule,

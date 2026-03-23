@@ -66,7 +66,7 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
                                         @Value("${rag.collection.sql-history:sql_history}") String sqlHistoryCollection,
                                         @Value("${rag.collection.metric-term:metric_term}") String metricTermCollection,
                                         @Value("${rag.collection.example-sql:example_sql}") String exampleSqlCollection,
-                                        @Value("${rag.collection.sql-fragment:sql_fragment}") String sqlFragmentCollection) {
+                                        @Value("${rag.collection.managed-memory:managed_memory}") String managedMemoryCollection) {
         this.schemaService = schemaService;
         this.ragVectorizeStatusMapper = ragVectorizeStatusMapper;
         this.ragIngestionService = ragIngestionService;
@@ -78,7 +78,7 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
             sqlHistoryCollection,
             metricTermCollection,
             exampleSqlCollection,
-            sqlFragmentCollection
+            managedMemoryCollection
         );
     }
 
@@ -327,10 +327,19 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
             connectionId,
             normalizedDatabaseName
         );
-        QdrantCollectionMetric fragmentMetric = qdrantClientService.queryCollectionMetric(
-            collectionNames.getSqlFragment(),
-            connectionId,
-            normalizedDatabaseName
+        QdrantCollectionMetric managedMemoryDatabaseMetric = qdrantClientService.queryCollectionMetricByFilters(
+            collectionNames.getManagedMemory(),
+            List.of(
+                new QdrantPayloadFilter("connection_id", connectionId),
+                new QdrantPayloadFilter("database_name", normalizedDatabaseName)
+            )
+        );
+        QdrantCollectionMetric managedMemoryConnectionMetric = qdrantClientService.queryCollectionMetricByFilters(
+            collectionNames.getManagedMemory(),
+            List.of(
+                new QdrantPayloadFilter("connection_id", connectionId),
+                new QdrantPayloadFilter("database_name", "")
+            )
         );
         QdrantCollectionMetric metricTermDatabaseMetric = qdrantClientService.queryCollectionMetricByFilters(
             collectionNames.getMetricTerm(),
@@ -385,11 +394,13 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
             exampleSqlConnectionMetric,
             exampleSqlGlobalMetric
         );
+        long managedMemoryApplicableCount = safeCount(managedMemoryDatabaseMetric.getPointCount())
+            + safeCount(managedMemoryConnectionMetric.getPointCount());
 
         long totalCount = safeCount(tableMetric.getPointCount())
             + safeCount(columnMetric.getPointCount())
             + safeCount(historyMetric.getPointCount())
-            + safeCount(fragmentMetric.getPointCount())
+            + managedMemoryApplicableCount
             + metricTermApplicableCount
             + exampleSqlApplicableCount;
 
@@ -418,7 +429,7 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
         vo.setSchemaTableVectorCount(safeCount(tableMetric.getPointCount()));
         vo.setSchemaColumnVectorCount(safeCount(columnMetric.getPointCount()));
         vo.setSqlHistoryVectorCount(safeCount(historyMetric.getPointCount()));
-        vo.setSqlFragmentVectorCount(safeCount(fragmentMetric.getPointCount()));
+        vo.setManagedMemoryVectorCount(managedMemoryApplicableCount);
         vo.setMetricTermVectorCount(metricTermApplicableCount);
         vo.setExampleSqlVectorCount(exampleSqlApplicableCount);
         vo.setGlobalMetricTermVectorCount(safeCount(metricTermGlobalMetric.getPointCount()));
@@ -430,7 +441,8 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
             tableMetric,
             columnMetric,
             historyMetric,
-            fragmentMetric,
+            managedMemoryDatabaseMetric,
+            managedMemoryConnectionMetric,
             metricTermConnectionMetric,
             exampleSqlConnectionMetric,
             metricTermGlobalMetric,

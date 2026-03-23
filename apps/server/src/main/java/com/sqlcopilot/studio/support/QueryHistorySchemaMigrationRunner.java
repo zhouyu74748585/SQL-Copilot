@@ -30,6 +30,10 @@ public class QueryHistorySchemaMigrationRunner implements ApplicationRunner {
             ensureHistoryColumn(connection, statement, "trace_json", "TEXT");
             ensureHistoryColumn(connection, statement, "token_estimate", "INTEGER");
             ensureHistoryColumn(connection, statement, "memory_enabled", "INTEGER");
+            statement.execute("""
+                CREATE INDEX IF NOT EXISTS idx_query_history_execute_memory
+                ON query_history(connection_id, database_name, history_type, success_flag, memory_enabled, created_at DESC)
+                """);
             backfillHistoryType(connection);
         } catch (SQLException ex) {
             throw new IllegalStateException("查询历史表迁移失败", ex);

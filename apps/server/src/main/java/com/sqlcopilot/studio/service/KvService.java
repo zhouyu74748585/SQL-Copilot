@@ -28,6 +28,13 @@ public interface KvService {
 
     KvObjectDetailVO getObjectDetail(Long connectionId, String databaseName, String objectName);
 
+    KvRedisBrowserPageVO browseRedis(Long connectionId,
+                                     String databaseName,
+                                     String parentPath,
+                                     String keyword,
+                                     String cursor,
+                                     Integer pageSize);
+
     SqlExecuteVO executeQuery(KvQueryExecuteReq req);
 
     KvRedisKeySaveVO createRedisKey(KvRedisKeySaveReq req);
