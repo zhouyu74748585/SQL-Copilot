@@ -244,7 +244,7 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
-  scrollbar-gutter: stable both-edges;
+  scrollbar-gutter: stable;
 }
 
 .table-data-virtual-grid-spacer {
