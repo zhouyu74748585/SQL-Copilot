@@ -2,13 +2,19 @@ package com.sqlcopilot.studio.service.impl;
 
 import com.sqlcopilot.studio.dto.schema.*;
 import com.sqlcopilot.studio.entity.ConnectionEntity;
+import com.sqlcopilot.studio.entity.RagVectorizeStatusEntity;
 import com.sqlcopilot.studio.entity.SchemaColumnCacheEntity;
 import com.sqlcopilot.studio.entity.SchemaTableCacheEntity;
+import com.sqlcopilot.studio.mapper.RagVectorizeStatusMapper;
 import com.sqlcopilot.studio.repository.SchemaNamespaceJdbcRepository;
 import com.sqlcopilot.studio.repository.SchemaObjectDefinitionJdbcRepository;
 import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.SchemaService;
+import com.sqlcopilot.studio.service.rag.QdrantClientService;
 import com.sqlcopilot.studio.service.rag.RagIngestionService;
+import com.sqlcopilot.studio.service.rag.model.QdrantPayloadFilter;
+import com.sqlcopilot.studio.service.rag.model.QdrantScoredPoint;
+import com.sqlcopilot.studio.service.rag.model.RagCollectionNames;
 import com.sqlcopilot.studio.support.JdbcDriverResolver;
 import com.sqlcopilot.studio.support.SchemaContextSupport;
 import com.sqlcopilot.studio.util.BusinessException;
@@ -31,14 +37,19 @@ public class SchemaServiceImpl implements SchemaService {
 
     private static final Logger log = LoggerFactory.getLogger(SchemaServiceImpl.class);
     private static final String DEFAULT_CACHE_DATABASE_NAME = "__default__";
+    private static final String EMPTY_DATABASE_VECTORIZE_MESSAGE = "当前库暂无可向量化对象";
+    private static final String TABLE_NOT_VECTORIZED_MESSAGE = "该表暂无向量化数据";
     private static final long MIN_CACHE_TTL_MS = 5_000L;
     private static final long MIN_TABLE_STATS_REFRESH_INTERVAL_MS = 10_000L;
 
     private final ConnectionService connectionService;
     private final RagIngestionService ragIngestionService;
+    private final RagVectorizeStatusMapper ragVectorizeStatusMapper;
+    private final QdrantClientService qdrantClientService;
     private final JdbcDriverResolver jdbcDriverResolver;
     private final SchemaNamespaceJdbcRepository schemaNamespaceJdbcRepository;
     private final SchemaObjectDefinitionJdbcRepository schemaObjectDefinitionJdbcRepository;
+    private final RagCollectionNames ragCollectionNames;
     private final long schemaCacheTtlMs;
     private final long tableStatsRefreshIntervalMs;
     private final Map<SchemaCacheKey, SchemaSnapshot> schemaSnapshotCache = new ConcurrentHashMap<>();
@@ -53,16 +64,30 @@ public class SchemaServiceImpl implements SchemaService {
 
     public SchemaServiceImpl(ConnectionService connectionService,
                              RagIngestionService ragIngestionService,
+                             RagVectorizeStatusMapper ragVectorizeStatusMapper,
+                             QdrantClientService qdrantClientService,
                              JdbcDriverResolver jdbcDriverResolver,
                              SchemaNamespaceJdbcRepository schemaNamespaceJdbcRepository,
                              SchemaObjectDefinitionJdbcRepository schemaObjectDefinitionJdbcRepository,
+                             @Value("${rag.collection.schema-table:schema_table}") String schemaTableCollection,
+                             @Value("${rag.collection.schema-column:schema_column}") String schemaColumnCollection,
                              @Value("${schema.cache.ttl-ms:300000}") long schemaCacheTtlMs,
                              @Value("${schema.table-stats.refresh-interval-ms:60000}") long tableStatsRefreshIntervalMs) {
         this.connectionService = connectionService;
         this.ragIngestionService = ragIngestionService;
+        this.ragVectorizeStatusMapper = ragVectorizeStatusMapper;
+        this.qdrantClientService = qdrantClientService;
         this.jdbcDriverResolver = jdbcDriverResolver;
         this.schemaNamespaceJdbcRepository = schemaNamespaceJdbcRepository;
         this.schemaObjectDefinitionJdbcRepository = schemaObjectDefinitionJdbcRepository;
+        this.ragCollectionNames = new RagCollectionNames(
+            schemaTableCollection,
+            schemaColumnCollection,
+            "",
+            "",
+            "",
+            ""
+        );
         this.schemaCacheTtlMs = Math.max(schemaCacheTtlMs, MIN_CACHE_TTL_MS);
         this.tableStatsRefreshIntervalMs = Math.max(tableStatsRefreshIntervalMs, MIN_TABLE_STATS_REFRESH_INTERVAL_MS);
     }
@@ -95,6 +120,8 @@ public class SchemaServiceImpl implements SchemaService {
         SchemaCacheKey cacheKey = new SchemaCacheKey(connectionId, cacheDatabaseName);
         triggerTableStatsRefresh(cacheKey, databaseName, false);
         Map<String, TableStat> statsByTable = resolveLatestTableStats(cacheKey);
+        DatabaseVectorizeStatus databaseVectorizeStatus = resolveDatabaseVectorizeStatus(connectionId, cacheDatabaseName);
+        Set<String> vectorizedTables = resolveVectorizedTables(connectionId, cacheDatabaseName, snapshot.tables());
 
         SchemaOverviewVO vo = new SchemaOverviewVO();
         vo.setConnectionId(connectionId);
@@ -108,10 +135,153 @@ public class SchemaServiceImpl implements SchemaService {
             TableStat latest = statsByTable.get(item.getTableName());
             summary.setRowEstimate(latest == null ? item.getRowEstimate() : latest.rowEstimate());
             summary.setTableSizeBytes(latest == null ? item.getTableSizeBytes() : latest.tableSizeBytes());
+            fillTableVectorizeStatus(summary, item.getTableName(), vectorizedTables, databaseVectorizeStatus);
             return summary;
         }).toList();
         vo.setTableSummaries(summaries);
         return vo;
+    }
+
+    /**
+     * 关键操作：逐表状态只基于该表是否存在真实向量判断，避免整库状态误投射到所有表。
+     */
+    private void fillTableVectorizeStatus(SchemaOverviewVO.TableSummaryVO summary,
+                                          String tableName,
+                                          Set<String> vectorizedTables,
+                                          DatabaseVectorizeStatus databaseVectorizeStatus) {
+        if (summary == null) {
+            return;
+        }
+        String normalizedTableName = normalize(tableName).toLowerCase(Locale.ROOT);
+        if (vectorizedTables.contains(normalizedTableName)) {
+            summary.setVectorizeStatus("SUCCESS");
+            summary.setVectorizeMessage("该表已完成向量化");
+            summary.setVectorizeUpdatedAt(databaseVectorizeStatus.updatedAt());
+            return;
+        }
+        if ("PENDING".equals(databaseVectorizeStatus.status()) || "RUNNING".equals(databaseVectorizeStatus.status())) {
+            summary.setVectorizeStatus(databaseVectorizeStatus.status());
+            summary.setVectorizeMessage(databaseVectorizeStatus.message());
+            summary.setVectorizeUpdatedAt(databaseVectorizeStatus.updatedAt());
+            return;
+        }
+        summary.setVectorizeStatus("NOT_VECTORIZED");
+        summary.setVectorizeMessage(TABLE_NOT_VECTORIZED_MESSAGE);
+        summary.setVectorizeUpdatedAt(databaseVectorizeStatus.updatedAt());
+    }
+
+    /**
+     * 关键操作：读取数据库向量状态时做零向量自愈，避免历史 SUCCESS 脏状态误导前端。
+     */
+    private DatabaseVectorizeStatus resolveDatabaseVectorizeStatus(Long connectionId, String databaseName) {
+        RagVectorizeStatusEntity persisted = ragVectorizeStatusMapper.findOne(connectionId, databaseName);
+        if (persisted == null) {
+            return new DatabaseVectorizeStatus("NOT_VECTORIZED", "暂无向量化数据", null);
+        }
+        String status = normalize(persisted.getStatus()).toUpperCase(Locale.ROOT);
+        if ("SUCCESS".equals(status) && countDatabaseVectorArtifacts(connectionId, databaseName) <= 0L) {
+            RagVectorizeStatusEntity healed = new RagVectorizeStatusEntity();
+            healed.setConnectionId(connectionId);
+            healed.setDatabaseName(databaseName);
+            healed.setStatus("NOT_VECTORIZED");
+            healed.setMessage(EMPTY_DATABASE_VECTORIZE_MESSAGE);
+            healed.setUpdatedAt(System.currentTimeMillis());
+            healed.setLastFullVectorizeDurationMs(persisted.getLastFullVectorizeDurationMs());
+            healed.setLastFullVectorizeProvider(persisted.getLastFullVectorizeProvider());
+            ragVectorizeStatusMapper.upsert(healed);
+            return new DatabaseVectorizeStatus("NOT_VECTORIZED", EMPTY_DATABASE_VECTORIZE_MESSAGE, healed.getUpdatedAt());
+        }
+        return new DatabaseVectorizeStatus(
+            status.isBlank() ? "NOT_VECTORIZED" : status,
+            normalize(persisted.getMessage()).isBlank() ? "暂无向量化数据" : persisted.getMessage(),
+            persisted.getUpdatedAt()
+        );
+    }
+
+    /**
+     * 关键操作：逐表向量状态采用批量点位查询，避免按表循环统计导致 N+1。
+     */
+    private Set<String> resolveVectorizedTables(Long connectionId,
+                                                String databaseName,
+                                                List<SchemaTableCacheEntity> tables) {
+        if (tables == null || tables.isEmpty()) {
+            return Set.of();
+        }
+        List<String> tableNames = tables.stream()
+            .map(SchemaTableCacheEntity::getTableName)
+            .filter(Objects::nonNull)
+            .map(String::trim)
+            .filter(item -> !item.isBlank())
+            .distinct()
+            .toList();
+        if (tableNames.isEmpty()) {
+            return Set.of();
+        }
+
+        LinkedHashSet<String> result = new LinkedHashSet<>();
+        List<String> tablePointIds = tableNames.stream()
+            .map(tableName -> stablePointId("schema_table", connectionId, databaseName, tableName))
+            .toList();
+        qdrantClientService.getPointsByIds(ragCollectionNames.getSchemaTable(), tablePointIds).stream()
+            .map(QdrantScoredPoint::getPayload)
+            .map(payload -> payloadString(payload, "table_name"))
+            .map(item -> normalize(item).toLowerCase(Locale.ROOT))
+            .filter(item -> !item.isBlank())
+            .forEach(result::add);
+
+        if (result.size() >= tableNames.size()) {
+            return result;
+        }
+
+        List<QdrantPayloadFilter> baseFilters = List.of(
+            new QdrantPayloadFilter("connection_id", connectionId),
+            new QdrantPayloadFilter("database_name", databaseName)
+        );
+        int limit = Math.max(512, tableNames.size() * 32);
+        qdrantClientService.scrollPointsByFieldValues(
+                ragCollectionNames.getSchemaColumn(),
+                "table_name",
+                tableNames,
+                baseFilters,
+                limit
+            ).stream()
+            .map(QdrantScoredPoint::getPayload)
+            .map(payload -> payloadString(payload, "table_name"))
+            .map(item -> normalize(item).toLowerCase(Locale.ROOT))
+            .filter(item -> !item.isBlank())
+            .forEach(result::add);
+        return result;
+    }
+
+    private long countDatabaseVectorArtifacts(Long connectionId, String databaseName) {
+        return safeCount(qdrantClientService.queryCollectionMetric(
+            ragCollectionNames.getSchemaTable(),
+            connectionId,
+            databaseName
+        ).getPointCount()) + safeCount(qdrantClientService.queryCollectionMetric(
+            ragCollectionNames.getSchemaColumn(),
+            connectionId,
+            databaseName
+        ).getPointCount());
+    }
+
+    private long safeCount(Long count) {
+        return count == null ? 0L : Math.max(0L, count);
+    }
+
+    private String payloadString(Map<String, Object> payload, String key) {
+        if (payload == null || key == null) {
+            return "";
+        }
+        return Objects.toString(payload.get(key), "").trim();
+    }
+
+    private String stablePointId(Object... values) {
+        String joined = Arrays.stream(values).map(String::valueOf).collect(Collectors.joining("|"));
+        return UUID.nameUUIDFromBytes(joined.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+    }
+
+    private record DatabaseVectorizeStatus(String status, String message, Long updatedAt) {
     }
 
     @Override
@@ -183,18 +353,19 @@ public class SchemaServiceImpl implements SchemaService {
     @Override
     public TableDetailVO getTableDetail(Long connectionId, String databaseName, String tableName) {
         SchemaSnapshot snapshot = ensureCacheReady(connectionId, databaseName, false);
+        String resolvedTableName = resolveMatchedTableName(snapshot, tableName);
         List<SchemaColumnCacheEntity> columnCache;
         if (snapshot.columns().isEmpty()) {
             // 关键操作：字段详情改为按表按需读取，不在 overview 阶段全量抓取。
-            columnCache = loadColumnsForTable(connectionId, databaseName, tableName);
+            columnCache = loadColumnsForTable(connectionId, databaseName, resolvedTableName);
         } else {
             columnCache = snapshot.columns().stream()
-                .filter(item -> tableName.equals(item.getTableName()))
+                .filter(item -> sameTableName(item.getTableName(), resolvedTableName))
                 .toList();
         }
 
         String tableComment = snapshot.tables().stream()
-            .filter(item -> tableName.equals(item.getTableName()))
+            .filter(item -> sameTableName(item.getTableName(), resolvedTableName))
             .map(SchemaTableCacheEntity::getTableComment)
             .filter(Objects::nonNull)
             .findFirst()
@@ -208,9 +379,9 @@ public class SchemaServiceImpl implements SchemaService {
             DatabaseMetaData metaData = connection.getMetaData();
             String catalog = resolveCatalog(connection, connectionEntity.getDbType(), targetDatabaseName);
             String schemaPattern = resolveSchemaPattern(connectionEntity.getDbType(), targetDatabaseName);
-            indexDetails = readTableIndexDetails(metaData, catalog, schemaPattern, tableName);
+            indexDetails = readTableIndexDetails(metaData, catalog, schemaPattern, resolvedTableName);
             if ("MYSQL".equalsIgnoreCase(normalize(connectionEntity.getDbType()))) {
-                mysqlColumnExtraMap = readMysqlColumnExtras(connection, targetDatabaseName, tableName);
+                mysqlColumnExtraMap = readMysqlColumnExtras(connection, targetDatabaseName, resolvedTableName);
             }
         } catch (SQLException ex) {
             log.warn("读取表索引/扩展信息失败, connectionId={}, databaseName={}, tableName={}, reason={}",
@@ -219,7 +390,7 @@ public class SchemaServiceImpl implements SchemaService {
 
         TableDetailVO vo = new TableDetailVO();
         vo.setConnectionId(connectionId);
-        vo.setTableName(tableName);
+        vo.setTableName(resolvedTableName);
         vo.setTableComment(tableComment);
         Map<String, String> finalMysqlColumnExtraMap = mysqlColumnExtraMap;
         List<TableDetailVO.ColumnDetailVO> columnDetails = columnCache.stream().map(item -> {
@@ -243,6 +414,28 @@ public class SchemaServiceImpl implements SchemaService {
         vo.setColumns(columnDetails);
         vo.setIndexes(indexDetails);
         return vo;
+    }
+
+    private String resolveMatchedTableName(SchemaSnapshot snapshot, String tableName) {
+        String normalizedTarget = normalize(tableName);
+        if (normalizedTarget.isBlank() || snapshot == null || snapshot.tables() == null || snapshot.tables().isEmpty()) {
+            return normalizedTarget;
+        }
+        return snapshot.tables().stream()
+            .map(SchemaTableCacheEntity::getTableName)
+            .filter(Objects::nonNull)
+            .filter(item -> item.equalsIgnoreCase(normalizedTarget))
+            .findFirst()
+            .orElse(normalizedTarget);
+    }
+
+    private boolean sameTableName(String left, String right) {
+        String normalizedLeft = normalize(left);
+        String normalizedRight = normalize(right);
+        if (normalizedLeft.isBlank() || normalizedRight.isBlank()) {
+            return false;
+        }
+        return normalizedLeft.equalsIgnoreCase(normalizedRight);
     }
 
     @Override

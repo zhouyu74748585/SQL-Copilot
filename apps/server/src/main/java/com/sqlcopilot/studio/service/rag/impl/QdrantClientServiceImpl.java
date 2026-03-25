@@ -253,6 +253,38 @@ public class QdrantClientServiceImpl implements QdrantClientService {
         return parseSearchResults(response.body());
     }
 
+    @Override
+    public List<QdrantScoredPoint> getPointsByIds(String collectionName, List<String> pointIds) {
+        if (collectionName == null || collectionName.isBlank() || pointIds == null || pointIds.isEmpty()) {
+            return List.of();
+        }
+        List<String> normalizedIds = pointIds.stream()
+            .filter(Objects::nonNull)
+            .map(String::trim)
+            .filter(id -> !id.isBlank())
+            .distinct()
+            .toList();
+        if (normalizedIds.isEmpty()) {
+            return List.of();
+        }
+
+        GetPointsReq req = new GetPointsReq(normalizedIds, Boolean.TRUE, Boolean.FALSE);
+        HttpResponse<String> response = send(buildRequest(
+            "POST",
+            "/collections/" + collectionName + "/points",
+            toJson(req)
+        ));
+        if (response.statusCode() == 404) {
+            return List.of();
+        }
+        if (response.statusCode() != 200) {
+            throw new BusinessException(500,
+                "按点位 ID 查询 Qdrant 点位失败: HTTP " + response.statusCode() + " - " + response.body());
+        }
+        validateQdrantResponse(response.body());
+        return parseSearchResults(response.body());
+    }
+
 
     @Override
     public void deletePointsByFilter(String collectionName, Long connectionId, String databaseName, String sessionId) {
@@ -575,6 +607,11 @@ public class QdrantClientServiceImpl implements QdrantClientService {
     }
 
     private record PointReq(String id, List<Float> vector, Object payload) {
+    }
+
+    private record GetPointsReq(List<String> ids,
+                                @JsonProperty("with_payload") Boolean withPayload,
+                                @JsonProperty("with_vector") Boolean withVector) {
     }
 
     private record CountReq(FilterReq filter, Boolean exact) {

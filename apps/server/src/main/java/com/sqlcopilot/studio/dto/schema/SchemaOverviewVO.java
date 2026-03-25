@@ -38,5 +38,14 @@ public class SchemaOverviewVO {
 
         /** 表大小（字节）。 */
         private Long tableSizeBytes;
+
+        /** 向量化状态。 */
+        private String vectorizeStatus;
+
+        /** 向量化状态说明。 */
+        private String vectorizeMessage;
+
+        /** 向量化状态更新时间（毫秒时间戳）。 */
+        private Long vectorizeUpdatedAt;
     }
 }

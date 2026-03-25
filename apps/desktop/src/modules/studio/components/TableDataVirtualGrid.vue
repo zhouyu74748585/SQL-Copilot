@@ -15,7 +15,31 @@
           class="table-data-virtual-grid-header-cell"
           :title="String(column.title || '')"
         >
-          {{ column.title }}
+          <div class="table-data-virtual-grid-header-cell-inner">
+            <span class="table-data-virtual-grid-header-title">{{ column.title }}</span>
+            <span v-if="quickSortEnabled && sortDirectionForColumnValue(String(column.dataIndex || ''))" class="table-data-virtual-grid-sort-indicator">
+              {{ sortDirectionForColumnValue(String(column.dataIndex || '')) === 'ASC' ? '↑' : '↓' }}
+            </span>
+            <a-dropdown v-if="quickSortEnabled" :trigger="['click']">
+              <button class="table-data-virtual-grid-sort-btn" type="button">
+                <down-outlined />
+              </button>
+              <template #overlay>
+                <div class="table-data-virtual-grid-sort-menu" @click.stop>
+                  <button type="button" class="table-data-virtual-grid-sort-menu-item" @click="emitQuickSort(String(column.dataIndex || ''), 'ASC')">
+                    {{ quickSortAscText }}
+                  </button>
+                  <button type="button" class="table-data-virtual-grid-sort-menu-item" @click="emitQuickSort(String(column.dataIndex || ''), 'DESC')">
+                    {{ quickSortDescText }}
+                  </button>
+                  <button type="button" class="table-data-virtual-grid-sort-menu-item" @click="emitQuickSort(String(column.dataIndex || ''), 'NONE')">
+                    {{ quickSortClearText }}
+                  </button>
+                </div>
+              </template>
+            </a-dropdown>
+          </div>
+          <div class="table-data-virtual-grid-resize-handle" @mousedown.stop.prevent="startColumnResize($event, column)" />
         </div>
       </div>
     </div>
@@ -109,11 +133,13 @@
 </template>
 
 <script setup lang="ts">
+import {DownOutlined} from '@ant-design/icons-vue';
 import {computed, nextTick, onBeforeUnmount, onMounted, ref, watch} from 'vue';
 import type {PropType} from 'vue';
 import {translateText, useAppI18n} from '../../../i18n';
 
 type TableDataEditorType = 'text' | 'date' | 'datetime' | 'time';
+type TableDataQuickSortDirection = 'ASC' | 'DESC' | 'NONE';
 
 interface TableDataDisplayColumn {
   title: string;
@@ -170,6 +196,14 @@ const props = defineProps({
     type: Function as PropType<(columnName: string) => TableDataEditorType>,
     required: true,
   },
+  quickSortEnabled: {
+    type: Boolean,
+    default: false,
+  },
+  sortDirectionForColumn: {
+    type: Function as PropType<(columnName: string) => 'ASC' | 'DESC' | ''>,
+    default: undefined,
+  },
 });
 
 const emit = defineEmits<{
@@ -177,6 +211,8 @@ const emit = defineEmits<{
   'start-edit': [rowKey: string, columnName: string];
   'stop-edit': [];
   'update-cell': [rowKey: string, columnName: string, value: string | null];
+  'resize-column': [columnName: string, width: number];
+  'quick-sort': [columnName: string, direction: TableDataQuickSortDirection];
 }>();
 
 const bodyRef = ref<HTMLDivElement | null>(null);
@@ -184,9 +220,14 @@ const scrollTop = ref(0);
 const scrollLeft = ref(0);
 const measuredBodyHeight = ref(0);
 const {currentLocale} = useAppI18n();
+const resizingColumnKey = ref('');
+const resizingStartX = ref(0);
+const resizingStartWidth = ref(0);
 
 const ROW_HEIGHT = 28;
 const OVERSCAN_COUNT = 8;
+const MIN_COLUMN_WIDTH = 80;
+const MAX_COLUMN_WIDTH = 640;
 
 let bodyResizeObserver: ResizeObserver | null = null;
 
@@ -207,6 +248,18 @@ const selectedRowKey = computed(() => props.tab.selectedRowKey);
 const emptyText = computed(() => {
   void currentLocale.value;
   return translateText('暂无数据');
+});
+const quickSortAscText = computed(() => {
+  void currentLocale.value;
+  return translateText('正序');
+});
+const quickSortDescText = computed(() => {
+  void currentLocale.value;
+  return translateText('倒序');
+});
+const quickSortClearText = computed(() => {
+  void currentLocale.value;
+  return translateText('移除排序');
 });
 
 function normalizeTestIdSegment(value: string | null | undefined) {
@@ -253,6 +306,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   bodyResizeObserver?.disconnect();
   bodyResizeObserver = null;
+  stopColumnResize();
 });
 
 function handleBodyScroll(event: Event) {
@@ -263,6 +317,18 @@ function handleBodyScroll(event: Event) {
 
 function syncBodyMetrics() {
   measuredBodyHeight.value = bodyRef.value?.clientHeight || 0;
+}
+
+function clampColumnWidth(width: number) {
+  const resolved = Number(width || 0);
+  if (!Number.isFinite(resolved)) {
+    return 132;
+  }
+  return Math.min(MAX_COLUMN_WIDTH, Math.max(MIN_COLUMN_WIDTH, Math.round(resolved)));
+}
+
+function sortDirectionForColumnValue(columnName: string) {
+  return props.sortDirectionForColumn?.(columnName) || '';
 }
 
 function isReadonlyColumn(columnName: string) {
@@ -276,6 +342,32 @@ function isCellEditing(rowKey: string, columnName: string) {
 function handleCellValueChange(rowKey: string, columnName: string, value: string | null) {
   emit('update-cell', rowKey, columnName, value ? String(value) : null);
   emit('stop-edit');
+}
+
+function emitQuickSort(columnName: string, direction: TableDataQuickSortDirection) {
+  emit('quick-sort', columnName, direction);
+}
+
+function startColumnResize(event: MouseEvent, column: TableDataDisplayColumn) {
+  resizingColumnKey.value = String(column.dataIndex || column.key || '');
+  resizingStartX.value = event.clientX;
+  resizingStartWidth.value = clampColumnWidth(column.width || 132);
+  window.addEventListener('mousemove', handleColumnResize);
+  window.addEventListener('mouseup', stopColumnResize);
+}
+
+function handleColumnResize(event: MouseEvent) {
+  if (!resizingColumnKey.value) {
+    return;
+  }
+  const delta = event.clientX - resizingStartX.value;
+  emit('resize-column', resizingColumnKey.value, clampColumnWidth(resizingStartWidth.value + delta));
+}
+
+function stopColumnResize() {
+  resizingColumnKey.value = '';
+  window.removeEventListener('mousemove', handleColumnResize);
+  window.removeEventListener('mouseup', stopColumnResize);
 }
 
 function normalizeInputValue(value: string | number) {

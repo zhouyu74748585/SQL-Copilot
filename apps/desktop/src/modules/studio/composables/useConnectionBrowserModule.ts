@@ -133,6 +133,12 @@ export function useConnectionBrowserModule(
   runtime: StudioRuntime,
   deps: ConnectionBrowserDeps,
 ): ConnectionBrowserModule {
+  function findObjectRowByIdentity(objectType: string, objectName: string) {
+    return runtime.objectRows.value.find((item) =>
+      item.objectType === objectType && item.objectName === objectName,
+    );
+  }
+
   function activateBrowserTab() {
     runtime.browserNavMode.value = 'connections';
     runtime.activeWorkbenchTab.value = runtime.browserTabKey;
@@ -748,16 +754,16 @@ export function useConnectionBrowserModule(
       if (targetType !== 'object' || !objectName || (objectType !== 'tables' && objectType !== 'views')) {
         return;
       }
-      const rowVectorizeRecord = runtime.getDatabaseVectorizeStatusRecord(id, databaseName || '');
+      const objectRow = findObjectRowByIdentity(objectType, objectName);
       runtime.openQueryTabByObject({
         objectName,
         objectType,
         rowEstimate: 0,
         tableSize: '-',
         description: '',
-        vectorizeStatus: rowVectorizeRecord?.status || 'NOT_VECTORIZED',
-        vectorizeMessage: rowVectorizeRecord?.message,
-        vectorizeUpdatedAt: rowVectorizeRecord?.updatedAt,
+        vectorizeStatus: objectRow?.vectorizeStatus || 'NOT_VECTORIZED',
+        vectorizeMessage: objectRow?.vectorizeMessage,
+        vectorizeUpdatedAt: objectRow?.vectorizeUpdatedAt,
       }, false);
       return;
     }
@@ -765,16 +771,16 @@ export function useConnectionBrowserModule(
       if (targetType !== 'object' || !objectName || (objectType !== 'tables' && objectType !== 'views')) {
         return;
       }
-      const rowVectorizeRecord = runtime.getDatabaseVectorizeStatusRecord(id, databaseName || '');
+      const objectRow = findObjectRowByIdentity(objectType, objectName);
       await deps.openTableDataTabByObject({
         objectName,
         objectType,
         rowEstimate: 0,
         tableSize: '-',
         description: '',
-        vectorizeStatus: rowVectorizeRecord?.status || 'NOT_VECTORIZED',
-        vectorizeMessage: rowVectorizeRecord?.message,
-        vectorizeUpdatedAt: rowVectorizeRecord?.updatedAt,
+        vectorizeStatus: objectRow?.vectorizeStatus || 'NOT_VECTORIZED',
+        vectorizeMessage: objectRow?.vectorizeMessage,
+        vectorizeUpdatedAt: objectRow?.vectorizeUpdatedAt,
       }, {
         connectionId: id,
         databaseName: databaseName || runtime.getActiveDatabaseName(id),

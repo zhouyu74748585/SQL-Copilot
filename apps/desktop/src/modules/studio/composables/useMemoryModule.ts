@@ -1,4 +1,4 @@
-import {computed, reactive, ref, type ComputedRef, type Ref} from 'vue';
+import {computed, reactive, ref, watch, type ComputedRef, type Ref} from 'vue';
 import {message} from 'ant-design-vue';
 import {getApi, postApi} from '../../../api/client';
 import type {
@@ -24,6 +24,7 @@ export interface MemoryModule {
   memoryFilterDatabaseName: Ref<string>;
   memoryConnectionOptions: ComputedRef<SelectOption<number>[]>;
   memoryDatabaseOptions: ComputedRef<SelectOption<string>[]>;
+  memoryEntryTargetDatabaseOptions: ComputedRef<SelectOption<string>[]>;
   memoryEntryTotal: Ref<number>;
   memoryHistoryTotal: Ref<number>;
   memoryEntryItems: Ref<MemoryEntryVO[]>;
@@ -102,6 +103,10 @@ export function useMemoryModule(runtime: StudioRuntime): MemoryModule {
     buildDatabaseOptions(memoryFilterConnectionId.value, memoryFilterDatabaseName.value)
   ));
 
+  const memoryEntryTargetDatabaseOptions = computed<SelectOption<string>[]>(() => (
+    buildDatabaseOptions(normalizeConnectionId(memoryEntryForm.connectionId), memoryEntryForm.databaseName)
+  ));
+
   const selectedMemoryHistory = computed(() => (
     memoryHistoryItems.value.find((item) => item.historyId === selectedMemoryHistoryId.value) ?? null
   ));
@@ -168,6 +173,15 @@ export function useMemoryModule(runtime: StudioRuntime): MemoryModule {
     return `?${params.toString()}`;
   }
 
+  async function loadMemoryGlobalTotals() {
+    const [entryPage, historyPage] = await Promise.all([
+      getApi<MemoryEntryPageVO>('/api/memory/entry/page?pageNo=1&pageSize=1'),
+      getApi<MemoryHistoryPageVO>('/api/memory/history/page?pageNo=1&pageSize=1'),
+    ]);
+    memoryEntryTotal.value = entryPage.total || 0;
+    memoryHistoryTotal.value = historyPage.total || 0;
+  }
+
   async function loadMemoryData() {
     memoryLoading.value = true;
     try {
@@ -175,7 +189,6 @@ export function useMemoryModule(runtime: StudioRuntime): MemoryModule {
       if (memoryActiveNode.value === 'entries') {
         const page = await getApi<MemoryEntryPageVO>(`/api/memory/entry/page${query}`);
         memoryEntryItems.value = page.items || [];
-        memoryEntryTotal.value = page.total || 0;
         if (memoryEntryForm.id) {
           const current = memoryEntryItems.value.find((item) => item.id === memoryEntryForm.id);
           if (!current) {
@@ -185,7 +198,6 @@ export function useMemoryModule(runtime: StudioRuntime): MemoryModule {
       } else {
         const page = await getApi<MemoryHistoryPageVO>(`/api/memory/history/page${query}`);
         memoryHistoryItems.value = page.items || [];
-        memoryHistoryTotal.value = page.total || 0;
         if (!memoryHistoryItems.value.some((item) => item.historyId === selectedMemoryHistoryId.value)) {
           selectedMemoryHistoryId.value = memoryHistoryItems.value[0]?.historyId || 0;
         }
@@ -198,7 +210,10 @@ export function useMemoryModule(runtime: StudioRuntime): MemoryModule {
   async function openMemoryNode(node: MemoryNode) {
     const tab = ensureMemoryTab(node);
     runtime.activeWorkbenchTab.value = tab.key;
-    await loadMemoryData();
+    await Promise.all([
+      loadMemoryData(),
+      loadMemoryGlobalTotals(),
+    ]);
     if (node === 'entries' && !memoryEntryForm.title) {
       resetMemoryEntryForm();
     }
@@ -254,7 +269,10 @@ export function useMemoryModule(runtime: StudioRuntime): MemoryModule {
       };
       const saved = await postApi<MemoryEntryVO>('/api/memory/entry/save', payload);
       message.success(memoryEntryForm.id ? '长期记忆已更新' : '长期记忆已创建');
-      await openMemoryNode('entries');
+      await Promise.all([
+        openMemoryNode('entries'),
+        loadMemoryGlobalTotals(),
+      ]);
       selectMemoryEntry(saved);
     } finally {
       memorySaving.value = false;
@@ -270,7 +288,10 @@ export function useMemoryModule(runtime: StudioRuntime): MemoryModule {
       await postApi<boolean>('/api/memory/entry/remove', {id: memoryEntryForm.id});
       message.success('长期记忆已删除');
       resetMemoryEntryForm();
-      await loadMemoryData();
+      await Promise.all([
+        loadMemoryData(),
+        loadMemoryGlobalTotals(),
+      ]);
     } finally {
       memoryActionLoading.value = false;
     }
@@ -284,7 +305,10 @@ export function useMemoryModule(runtime: StudioRuntime): MemoryModule {
     try {
       await postApi<boolean>('/api/memory/history/remove', {historyId: selectedMemoryHistory.value.historyId});
       message.success('历史 SQL 记忆已删除');
-      await loadMemoryData();
+      await Promise.all([
+        loadMemoryData(),
+        loadMemoryGlobalTotals(),
+      ]);
     } finally {
       memoryActionLoading.value = false;
     }
@@ -300,12 +324,28 @@ export function useMemoryModule(runtime: StudioRuntime): MemoryModule {
         historyIds: [selectedMemoryHistory.value.historyId],
       });
       message.success('已提升为长期记忆');
-      await openMemoryNode('entries');
+      await Promise.all([
+        openMemoryNode('entries'),
+        loadMemoryGlobalTotals(),
+      ]);
       selectMemoryEntry(saved);
     } finally {
       memoryActionLoading.value = false;
     }
   }
+
+  watch(
+    () => runtime.activeMemoryTab.value?.key || '',
+    (tabKey) => {
+      if (!tabKey) {
+        return;
+      }
+      void Promise.all([
+        loadMemoryData(),
+        loadMemoryGlobalTotals(),
+      ]);
+    },
+  );
 
   return {
     memoryActiveNode,
@@ -317,6 +357,7 @@ export function useMemoryModule(runtime: StudioRuntime): MemoryModule {
     memoryFilterDatabaseName,
     memoryConnectionOptions,
     memoryDatabaseOptions,
+    memoryEntryTargetDatabaseOptions,
     memoryEntryTotal,
     memoryHistoryTotal,
     memoryEntryItems,

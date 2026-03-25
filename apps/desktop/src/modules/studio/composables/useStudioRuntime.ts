@@ -257,6 +257,7 @@ interface QueryStatementResult {
   executeResult: SqlExecuteVO | null;
   resultTableRows: QueryResultTableRow[];
   resultTableColumns: QueryResultTableColumn[];
+  columnWidthMap: Record<string, number>;
   lastExecuteFailed: boolean;
   lastExecuteErrorMessage: string;
   lastFailedSqlText: string;
@@ -510,6 +511,7 @@ interface TableDataWorkspaceTab {
     columnType?: string;
     columnComment?: string;
   }>;
+  columnWidthMap: Record<string, number>;
   errorMessage: string;
   dirty: boolean;
   createdAt: number;
@@ -1407,8 +1409,6 @@ const objectRows = computed<ObjectRow[]>(() => {
   const activeDbType = connections.value.find((item) => item.id === workflow.connectionId)?.dbType || '';
   const kvContext = isKvDbType(activeDbType);
   const databaseName = getActiveDatabaseName(workflow.connectionId);
-  const dbVectorizeStatus = getDatabaseVectorizeStatus(workflow.connectionId, databaseName);
-  const dbVectorizeRecord = getDatabaseVectorizeStatusRecord(workflow.connectionId, databaseName);
   const unsupportedObjectVectorizeMessage = 'Object type is not vectorized';
 
   if (currentObjectType.value === 'tables') {
@@ -1427,16 +1427,16 @@ const objectRows = computed<ObjectRow[]>(() => {
         vectorizeUpdatedAt: undefined,
       }));
     }
-    const statsByTable = tableStatsCache.value[tableCacheKey(workflow.connectionId, databaseName)] ?? {};
-    return (schemaOverview.value?.tableSummaries ?? []).map((item) => ({
+  const statsByTable = tableStatsCache.value[tableCacheKey(workflow.connectionId, databaseName)] ?? {};
+  return (schemaOverview.value?.tableSummaries ?? []).map((item) => ({
       objectName: item.tableName,
       objectType: 'tables',
       rowEstimate: statsByTable[item.tableName]?.rowEstimate ?? item.rowEstimate ?? 0,
       tableSize: formatSize(statsByTable[item.tableName]?.tableSizeBytes ?? item.tableSizeBytes ?? 0),
       description: item.tableComment ?? '',
-      vectorizeStatus: dbVectorizeStatus,
-      vectorizeMessage: dbVectorizeRecord?.message,
-      vectorizeUpdatedAt: dbVectorizeRecord?.updatedAt,
+      vectorizeStatus: item.vectorizeStatus || 'NOT_VECTORIZED',
+      vectorizeMessage: item.vectorizeMessage || '该表暂无向量化数据',
+      vectorizeUpdatedAt: item.vectorizeUpdatedAt,
     }));
   }
 
@@ -1448,9 +1448,9 @@ const objectRows = computed<ObjectRow[]>(() => {
       rowEstimate: 0,
       tableSize: '-',
       description: objectTypeLabel(currentObjectType.value),
-      vectorizeStatus: dbVectorizeStatus,
-      vectorizeMessage: dbVectorizeRecord?.message,
-      vectorizeUpdatedAt: dbVectorizeRecord?.updatedAt,
+      vectorizeStatus: 'NOT_VECTORIZED',
+      vectorizeMessage: '视图不参与向量化',
+      vectorizeUpdatedAt: undefined,
     }));
   }
 
@@ -1994,7 +1994,23 @@ const workbenchStyle = computed(() => {
   };
 });
 
-function buildResultTableCache(rows: Array<{ cells: Array<{ columnName: string; cellValue: string | null }> }>) {
+function clampGridColumnWidth(width: number) {
+  const resolved = Number(width || 0);
+  if (!Number.isFinite(resolved)) {
+    return 180;
+  }
+  return Math.min(640, Math.max(80, Math.round(resolved)));
+}
+
+function buildColumnWidthMapFromColumns(columns: QueryResultTableColumn[]) {
+  return columns.reduce<Record<string, number>>((acc, column) => {
+    acc[column.key] = clampGridColumnWidth(column.width);
+    return acc;
+  }, {});
+}
+
+function buildResultTableCache(rows: Array<{ cells: Array<{ columnName: string; cellValue: string | null }> }>,
+                               columnWidthMap: Record<string, number> = {}) {
   if (!rows.length) {
     return {
       rows: [] as QueryResultTableRow[],
@@ -2005,7 +2021,7 @@ function buildResultTableCache(rows: Array<{ cells: Array<{ columnName: string; 
     title: cell.columnName,
     dataIndex: cell.columnName,
     key: cell.columnName,
-    width: 180,
+    width: clampGridColumnWidth(columnWidthMap[cell.columnName] ?? 180),
     ellipsis: true,
   }));
   const normalizedRows = rows.map((row, index) => {
@@ -2033,6 +2049,7 @@ function createStatementResult(index: number, sqlText: string): QueryStatementRe
     executeResult: null,
     resultTableRows: [],
     resultTableColumns: [],
+    columnWidthMap: {},
     lastExecuteFailed: false,
     lastExecuteErrorMessage: '',
     lastFailedSqlText: '',
@@ -2081,6 +2098,7 @@ function syncActiveStatementResultFromTab(tab: QueryWorkspaceTab) {
   result.executeResult = tab.executeResult;
   result.resultTableRows = tab.resultTableRows;
   result.resultTableColumns = tab.resultTableColumns;
+  result.columnWidthMap = buildColumnWidthMapFromColumns(tab.resultTableColumns);
   result.lastExecuteFailed = tab.lastExecuteFailed;
   result.lastExecuteErrorMessage = tab.lastExecuteErrorMessage;
   result.lastFailedSqlText = tab.lastFailedSqlText;
@@ -2167,14 +2185,41 @@ const activeResultColumns = computed(() => {
   return activeStatementResult.value?.resultTableColumns ?? activeQueryTab.value.resultTableColumns;
 });
 
-const queryResultScrollX = computed(() => Math.max(activeResultColumns.value.length * 180, 960));
+const queryResultScrollX = computed(() =>
+  Math.max(
+    activeResultColumns.value.reduce((total, column) => total + clampGridColumnWidth(column.width), 0),
+    960,
+  ),
+);
 
 function rebuildQueryResultTableCache(tab: QueryWorkspaceTab) {
   const rows = tab.executeResult?.rows ?? tab.explainResult?.rows ?? [];
-  const cache = buildResultTableCache(rows);
+  const cache = buildResultTableCache(rows, getActiveStatementResultForTab(tab)?.columnWidthMap ?? {});
   tab.resultTableRows = cache.rows;
   tab.resultTableColumns = cache.columns;
   syncActiveStatementResultFromTab(tab);
+}
+
+function resizeActiveQueryResultColumn(tab: QueryWorkspaceTab, columnName: string, width: number) {
+  const nextWidth = clampGridColumnWidth(width);
+  const activeResult = getActiveStatementResultForTab(tab);
+  const mapColumns = (columns: QueryResultTableColumn[]) => columns.map((column) =>
+    column.key === columnName ? {...column, width: nextWidth} : column,
+  );
+
+  if (activeResult) {
+    activeResult.resultTableColumns = mapColumns(activeResult.resultTableColumns);
+    activeResult.columnWidthMap = {
+      ...activeResult.columnWidthMap,
+      [columnName]: nextWidth,
+    };
+    if (tab.activeStatementResultKey === activeResult.key) {
+      tab.resultTableColumns = [...activeResult.resultTableColumns];
+    }
+  } else {
+    tab.resultTableColumns = mapColumns(tab.resultTableColumns);
+  }
+  touchQueryTab(tab);
 }
 
 const chartTypeOptions = computed(() => [
@@ -6838,16 +6883,9 @@ async function vectorizeSingleTable(connectionId: number, databaseName: string, 
       databaseName,
       tableName,
     });
-    const key = vectorizeStatusCacheKey(connectionId, databaseName);
-    databaseVectorizeStatusMap.value = {
-      ...databaseVectorizeStatusMap.value,
-      [key]: {
-        databaseName,
-        status: 'SUCCESS',
-        message: result.message || `表 ${tableName} 向量化完成`,
-        updatedAt: result.updatedAt ?? Date.now(),
-      },
-    };
+    if (workflow.connectionId === connectionId && getActiveDatabaseName(connectionId) === databaseName) {
+      await loadOverview({forceTableStats: false});
+    }
     await refreshVectorizeStatusForConnection(connectionId);
     message.success(result.message || `表 ${tableName} 向量化完成`);
   });
@@ -10734,6 +10772,7 @@ function resetConnectionModalState() {
     setupManualChartConfigByResult,
     setActiveStatementResult,
     setQueryResultViewMode,
+    resizeActiveQueryResultColumn,
     canExportActiveQueryResult,
     queryResultExportTooltip,
     resultTabTitle,

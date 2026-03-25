@@ -1674,6 +1674,16 @@ body.sqlcopilot-theme-dark {
   border-color: var(--accent);
 }
 
+.knowledge-card.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface-1));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.knowledge-card.is-active:hover {
+  border-color: var(--accent);
+}
+
 .knowledge-card-head {
   display: flex;
   justify-content: space-between;
@@ -1700,6 +1710,15 @@ body.sqlcopilot-theme-dark {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.memory-toolbar-action {
+  min-width: 32px;
+  padding-inline: 6px;
+}
+
+.memory-toolbar-icon {
+  display: block;
 }
 
 .detail-form-panel {

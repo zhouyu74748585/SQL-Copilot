@@ -18,6 +18,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -152,10 +153,7 @@ public class MemoryServiceImpl implements MemoryService {
         if (!payloadByHistoryId.containsKey(entity.getId())) {
             throw new BusinessException(404, "历史 SQL 记忆不存在");
         }
-        qdrantClientService.deletePointsByFilters(sqlHistoryCollectionName, List.of(
-            new QdrantPayloadFilter("entry_type", "history_query"),
-            new QdrantPayloadFilter("history_id", entity.getId())
-        ));
+        removeHistoryVector(entity);
     }
 
     @Override
@@ -199,6 +197,7 @@ public class MemoryServiceImpl implements MemoryService {
         entity.setCreatedAt(now);
         entity.setUpdatedAt(now);
         persistMemoryEntry(entity, extractRelatedTablesFromHistoryPayloads(payloadByHistoryId, rows));
+        rows.forEach(this::removeHistoryVector);
         return toMemoryEntryVO(entity);
     }
 
@@ -411,6 +410,17 @@ public class MemoryServiceImpl implements MemoryService {
         ));
     }
 
+    private void removeHistoryVector(QueryHistoryEntity entity) {
+        if (entity == null || entity.getId() == null || entity.getId() <= 0) {
+            return;
+        }
+        qdrantClientService.deletePointsByFilters(sqlHistoryCollectionName, List.of(
+            new QdrantPayloadFilter("entry_type", "history_query"),
+            new QdrantPayloadFilter("history_id", entity.getId())
+        ));
+        qdrantClientService.deletePointsByFilters(sqlHistoryCollectionName, buildLegacyHistoryDeleteFilters(entity));
+    }
+
     private Map<String, Object> buildManagedMemoryPayload(MemoryEntryEntity entity, List<String> relatedTables) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("memory_id", entity.getId());
@@ -451,11 +461,12 @@ public class MemoryServiceImpl implements MemoryService {
         if (historyIds.isEmpty()) {
             return Map.of();
         }
+        List<QdrantPayloadFilter> baseFilters = buildHistoryBaseFilters(connectionId, databaseName);
         List<QdrantScoredPoint> points = qdrantClientService.scrollPointsByFieldValues(
             sqlHistoryCollectionName,
             "history_id",
             historyIds,
-            buildHistoryBaseFilters(connectionId, databaseName),
+            baseFilters,
             Math.max(historyIds.size(), 32)
         );
         Map<Long, Map<String, Object>> payloadByHistoryId = new LinkedHashMap<>();
@@ -466,7 +477,106 @@ public class MemoryServiceImpl implements MemoryService {
                 payloadByHistoryId.put(historyId, payload);
             }
         }
+        if (payloadByHistoryId.size() >= historyIds.size()) {
+            return payloadByHistoryId;
+        }
+
+        Map<String, Long> pointIdToHistoryId = new LinkedHashMap<>();
+        for (QueryHistoryEntity row : rows) {
+            if (row == null || row.getId() == null || row.getId() <= 0) {
+                continue;
+            }
+            pointIdToHistoryId.put(buildSqlHistoryPointId(row.getConnectionId(), row.getDatabaseName(), row.getId()), row.getId());
+        }
+        if (pointIdToHistoryId.isEmpty()) {
+            return payloadByHistoryId;
+        }
+
+        List<QdrantScoredPoint> legacyPoints = qdrantClientService.getPointsByIds(
+            sqlHistoryCollectionName,
+            new ArrayList<>(pointIdToHistoryId.keySet())
+        );
+        for (QdrantScoredPoint point : legacyPoints) {
+            if (point == null) {
+                continue;
+            }
+            Map<String, Object> payload = point.getPayload() == null ? new LinkedHashMap<>() : new LinkedHashMap<>(point.getPayload());
+            Long historyId = asLong(payload.get("history_id"));
+            if (historyId == null || historyId <= 0) {
+                historyId = pointIdToHistoryId.get(point.getId());
+                if (historyId != null && historyId > 0) {
+                    payload.put("history_id", historyId);
+                }
+            }
+            if (historyId != null && historyId > 0 && matchesHistoryBasePayloadFilters(payload, baseFilters)) {
+                payloadByHistoryId.putIfAbsent(historyId, payload);
+            }
+        }
         return payloadByHistoryId;
+    }
+
+    private boolean matchesHistoryBasePayloadFilters(Map<String, Object> payload, List<QdrantPayloadFilter> filters) {
+        if (payload == null || payload.isEmpty() || filters == null || filters.isEmpty()) {
+            return true;
+        }
+        for (QdrantPayloadFilter filter : filters) {
+            if (filter == null) {
+                continue;
+            }
+            String key = normalizeText(filter.key());
+            Object expectedValue = filter.value();
+            if (key.isBlank() || expectedValue == null) {
+                continue;
+            }
+            Object actualValue = payload.get(key);
+            if ("connection_id".equals(key) || "created_at".equals(key) || "history_id".equals(key)) {
+                if (!Objects.equals(asLong(expectedValue), asLong(actualValue))) {
+                    return false;
+                }
+                continue;
+            }
+            if (!Objects.equals(normalizeText(Objects.toString(expectedValue, "")), normalizeText(Objects.toString(actualValue, "")))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private List<QdrantPayloadFilter> buildLegacyHistoryDeleteFilters(QueryHistoryEntity entity) {
+        List<QdrantPayloadFilter> filters = new ArrayList<>();
+        filters.add(new QdrantPayloadFilter("entry_type", "history_query"));
+        filters.add(new QdrantPayloadFilter("connection_id", normalizeConnectionId(entity == null ? null : entity.getConnectionId())));
+        String normalizedDatabaseName = normalizeDatabaseName(entity == null ? null : entity.getDatabaseName());
+        if (!normalizedDatabaseName.isBlank()) {
+            filters.add(new QdrantPayloadFilter("database_name", normalizedDatabaseName));
+        }
+        String sessionId = normalizeText(entity == null ? null : entity.getSessionId());
+        if (!sessionId.isBlank()) {
+            filters.add(new QdrantPayloadFilter("session_id", sessionId));
+        }
+        String sqlText = normalizeText(entity == null ? null : entity.getSqlText());
+        if (!sqlText.isBlank()) {
+            filters.add(new QdrantPayloadFilter("sql_text", sqlText));
+        }
+        if (entity != null && entity.getCreatedAt() != null && entity.getCreatedAt() > 0) {
+            filters.add(new QdrantPayloadFilter("created_at", entity.getCreatedAt()));
+        }
+        return filters;
+    }
+
+    private String buildSqlHistoryPointId(Long connectionId, String databaseName, Long historyId) {
+        String joined = String.join("|",
+            "sql_history",
+            String.valueOf(normalizeConnectionId(connectionId)),
+            normalizePointIdDatabaseName(databaseName),
+            String.valueOf(historyId == null ? 0L : historyId)
+        );
+        return UUID.nameUUIDFromBytes(joined.getBytes(StandardCharsets.UTF_8)).toString();
+    }
+
+    private String normalizePointIdDatabaseName(String databaseName) {
+        String normalized = normalizeDatabaseName(databaseName);
+        return normalized.isBlank() ? "__default__" : normalized;
     }
 
     private List<QdrantPayloadFilter> buildHistoryBaseFilters(Long connectionId, String databaseName) {

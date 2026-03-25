@@ -238,6 +238,9 @@ export interface SchemaOverviewVO {
     tableComment?: string;
     rowEstimate?: number;
     tableSizeBytes?: number;
+    vectorizeStatus?: 'NOT_VECTORIZED' | 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED';
+    vectorizeMessage?: string;
+    vectorizeUpdatedAt?: number;
   }>;
 }
 

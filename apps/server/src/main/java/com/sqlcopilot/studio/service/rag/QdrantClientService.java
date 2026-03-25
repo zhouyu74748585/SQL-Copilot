@@ -34,6 +34,8 @@ public interface QdrantClientService {
                                                       List<QdrantPayloadFilter> baseFilters,
                                                       Integer limit);
 
+    List<QdrantScoredPoint> getPointsByIds(String collectionName, List<String> pointIds);
+
     QdrantCollectionMetric queryCollectionMetric(String collectionName, Long connectionId, String databaseName);
 
     QdrantCollectionMetric queryCollectionMetricByFilters(String collectionName, List<QdrantPayloadFilter> filters);

@@ -24,8 +24,11 @@ const tableDataColumnsCache = new Map<string, {
 const tableDataPageRequestSeq = new Map<string, number>();
 const tableDataPageAbortController = new Map<string, AbortController>();
 const TABLE_DATA_PAGE_TIMEOUT_MS = 20000;
+const TABLE_DATA_MIN_COLUMN_WIDTH = 80;
+const TABLE_DATA_MAX_COLUMN_WIDTH = 640;
 
 type TableDataEditorType = 'text' | 'date' | 'datetime' | 'time';
+type TableDataQuickSortDirection = TableDataSortDirection | 'NONE';
 
 export interface TableDataModule {
   tableDataFilterOperatorOptions: Array<{ label: string; value: TableDataFilterOperator }>;
@@ -42,6 +45,8 @@ export interface TableDataModule {
   removeTableDataFilter: (tab: TableDataTab, filterKey: string) => void;
   addTableDataSort: (tab: TableDataTab) => void;
   removeTableDataSort: (tab: TableDataTab, sortKey: string) => void;
+  tableDataSortDirectionForColumn: (tab: TableDataTab, columnName: string) => TableDataSortDirection | '';
+  applyTableDataQuickSort: (tab: TableDataTab, columnName: string, direction: TableDataQuickSortDirection) => Promise<void>;
   applyTableDataFilters: (tab: TableDataTab) => Promise<void>;
   prevTableDataPage: (tab: TableDataTab) => Promise<void>;
   nextTableDataPage: (tab: TableDataTab) => Promise<void>;
@@ -61,6 +66,7 @@ export interface TableDataModule {
   tableDataDisplayColumns: (
     tab: TableDataTab,
   ) => Array<{ title: string; dataIndex: string; key: string; width: number; ellipsis: boolean; columnType?: string; columnComment?: string }>;
+  updateTableDataColumnWidth: (tab: TableDataTab, columnName: string, width: number) => void;
   tableDataScrollX: (tab: TableDataTab) => number;
   isTableDataPrimaryKeyColumn: (tab: TableDataTab, columnName: string) => boolean;
   handleTableDataConnectionSelectorChange: (tab: TableDataTab, connectionId: number) => Promise<void>;
@@ -154,6 +160,7 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
       filterPanelVisible: false,
       filters: [],
       sorts: [],
+      columnWidthMap: {},
       pageNo: 1,
       pageSize: 1000,
       hasNextPage: false,
@@ -232,6 +239,47 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
   function removeTableDataSort(tab: TableDataTab, sortKey: string) {
     tab.sorts = tab.sorts.filter((item) => item.key !== sortKey);
     touchTableDataTab(tab);
+  }
+
+  function tableDataSortDirectionForColumn(tab: TableDataTab, columnName: string) {
+    return tab.sorts.find((item) => item.columnName === columnName)?.direction || '';
+  }
+
+  async function applyTableDataQuickSort(tab: TableDataTab, columnName: string, direction: TableDataQuickSortDirection) {
+    if (!ensureCanSwitchPageOrFilter(tab)) {
+      return;
+    }
+    const normalizedColumnName = (columnName || '').trim();
+    if (!normalizedColumnName) {
+      return;
+    }
+    const nextSorts: typeof tab.sorts = [];
+    let updated = false;
+    tab.sorts.forEach((item) => {
+      if (item.columnName !== normalizedColumnName) {
+        nextSorts.push(item);
+        return;
+      }
+      if (direction === 'NONE' || updated) {
+        return;
+      }
+      nextSorts.push({
+        ...item,
+        direction,
+      });
+      updated = true;
+    });
+    if (direction !== 'NONE' && !updated) {
+      nextSorts.push({
+        key: `sort-${Date.now()}-${Math.round(Math.random() * 1000)}`,
+        columnName: normalizedColumnName,
+        direction,
+      });
+    }
+    tab.sorts = nextSorts;
+    tab.pageNo = 1;
+    touchTableDataTab(tab);
+    await loadTableDataPage(tab);
   }
 
   async function applyTableDataFilters(tab: TableDataTab) {
@@ -483,7 +531,7 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
       title: column.primaryKey ? `${column.columnName} (PK)` : column.columnName,
       dataIndex: column.columnName,
       key: column.columnName,
-      width: 132,
+      width: clampTableDataColumnWidth(tab.columnWidthMap[column.columnName] ?? 132),
       ellipsis: true,
       columnType: column.columnType,
       columnComment: column.columnComment,
@@ -492,8 +540,23 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
     return columns;
   }
 
+  function updateTableDataColumnWidth(tab: TableDataTab, columnName: string, width: number) {
+    const normalizedColumnName = (columnName || '').trim();
+    if (!normalizedColumnName) {
+      return;
+    }
+    tab.columnWidthMap = {
+      ...tab.columnWidthMap,
+      [normalizedColumnName]: clampTableDataColumnWidth(width),
+    };
+    tab.schemaVersion += 1;
+    tab.displayColumnsCacheVersion = -1;
+    touchTableDataTab(tab);
+  }
+
   function tableDataScrollX(tab: TableDataTab) {
-    return Math.max(tab.columns.length * 132, 960);
+    const totalWidth = tableDataDisplayColumns(tab).reduce((sum, column) => sum + clampTableDataColumnWidth(column.width), 0);
+    return Math.max(totalWidth, 960);
   }
 
   function isTableDataPrimaryKeyColumn(tab: TableDataTab, columnName: string) {
@@ -548,6 +611,7 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
       tab.selectedRowKey = '';
       tab.editingCellKey = '';
       tab.sorts = [];
+      tab.columnWidthMap = {};
       tab.dirty = false;
       tab.rowDataVersion += 1;
       tab.schemaVersion += 1;
@@ -595,6 +659,7 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
       }
       tab.columns = page.columns || [];
       tab.primaryKeyColumns = page.primaryKeyColumns || [];
+      pruneInvalidColumnWidthState(tab);
       tab.editable = page.editable;
       tab.readOnlyReason = page.readOnlyReason || '';
       tab.hasNextPage = page.hasNext === true;
@@ -698,6 +763,30 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
     tab.dirty = tab.rows.some((item) => item.rowState !== 'clean') || tab.deletedRows.length > 0;
   }
 
+  function clampTableDataColumnWidth(width: number) {
+    const resolved = Number(width || 0);
+    if (!Number.isFinite(resolved)) {
+      return 132;
+    }
+    return Math.min(TABLE_DATA_MAX_COLUMN_WIDTH, Math.max(TABLE_DATA_MIN_COLUMN_WIDTH, Math.round(resolved)));
+  }
+
+  function pruneInvalidColumnWidthState(tab: TableDataTab) {
+    const validColumnNames = new Set(tab.columns.map((item) => item.columnName));
+    const nextWidthMap = Object.entries(tab.columnWidthMap).reduce<Record<string, number>>((acc, [key, value]) => {
+      if (validColumnNames.has(key)) {
+        acc[key] = clampTableDataColumnWidth(value);
+      }
+      return acc;
+    }, {});
+    const currentKeys = Object.keys(tab.columnWidthMap);
+    const nextKeys = Object.keys(nextWidthMap);
+    if (currentKeys.length === nextKeys.length && currentKeys.every((key) => nextWidthMap[key] === tab.columnWidthMap[key])) {
+      return;
+    }
+    tab.columnWidthMap = nextWidthMap;
+  }
+
   function touchTableDataTab(tab: TableDataTab) {
     const now = Date.now();
     tab.updatedAt = now;
@@ -787,6 +876,8 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
     removeTableDataFilter,
     addTableDataSort,
     removeTableDataSort,
+    tableDataSortDirectionForColumn,
+    applyTableDataQuickSort,
     applyTableDataFilters,
     prevTableDataPage,
     nextTableDataPage,
@@ -804,6 +895,7 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
     discardTableDataChanges,
     tableDataDisplayRows,
     tableDataDisplayColumns,
+    updateTableDataColumnWidth,
     tableDataScrollX,
     isTableDataPrimaryKeyColumn,
     handleTableDataConnectionSelectorChange,

@@ -34,6 +34,7 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
 
     private static final Logger log = LoggerFactory.getLogger(RagVectorizeQueueServiceImpl.class);
     private static final long GLOBAL_SCOPE_CONNECTION_ID = 0L;
+    private static final String EMPTY_DATABASE_VECTORIZE_MESSAGE = "当前库暂无可向量化对象";
 
     private final SchemaService schemaService;
     private final RagVectorizeStatusMapper ragVectorizeStatusMapper;
@@ -157,13 +158,6 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
         }
 
         vectorizeSingleTable(connectionId, normalizedDatabaseName, normalizedTableName);
-        upsertStatus(
-            connectionId,
-            normalizedDatabaseName,
-            taskKey,
-            VectorizeStatus.SUCCESS,
-            "表 " + normalizedTableName + " 已完成手动向量化"
-        );
 
         RagVectorizeTableVO vo = new RagVectorizeTableVO();
         vo.setSuccess(Boolean.TRUE);
@@ -226,28 +220,30 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
             if (item.getDatabaseName() == null) {
                 continue;
             }
+            VectorizeStatusRecord persistedRecord = normalizeStatusRecord(new VectorizeStatusRecord(
+                connectionId,
+                item.getDatabaseName(),
+                item.getStatus(),
+                item.getMessage(),
+                item.getUpdatedAt(),
+                item.getLastFullVectorizeDurationMs(),
+                item.getLastFullVectorizeProvider()
+            ));
             RagDatabaseVectorizeStatusVO vo = new RagDatabaseVectorizeStatusVO();
-            vo.setDatabaseName(item.getDatabaseName());
-            vo.setStatus(item.getStatus());
-            vo.setMessage(item.getMessage());
-            vo.setUpdatedAt(item.getUpdatedAt());
+            vo.setDatabaseName(persistedRecord.databaseName());
+            vo.setStatus(persistedRecord.status());
+            vo.setMessage(persistedRecord.message());
+            vo.setUpdatedAt(persistedRecord.updatedAt());
             merged.put(buildTaskKey(connectionId, item.getDatabaseName()), vo);
             statusMap.putIfAbsent(
                 buildTaskKey(connectionId, item.getDatabaseName()),
-                new VectorizeStatusRecord(
-                    connectionId,
-                    item.getDatabaseName(),
-                    item.getStatus(),
-                    item.getMessage(),
-                    item.getUpdatedAt(),
-                    item.getLastFullVectorizeDurationMs(),
-                    item.getLastFullVectorizeProvider()
-                )
+                persistedRecord
             );
         }
 
         statusMap.values().stream()
             .filter(item -> Objects.equals(connectionId, item.connectionId()))
+            .map(this::normalizeStatusRecord)
             .map(item -> {
                 RagDatabaseVectorizeStatusVO vo = new RagDatabaseVectorizeStatusVO();
                 vo.setDatabaseName(item.databaseName());
@@ -274,14 +270,14 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
         }
 
         String taskKey = buildTaskKey(connectionId, normalizedDatabaseName);
-        VectorizeStatusRecord runtime = statusMap.get(taskKey);
+        VectorizeStatusRecord runtime = normalizeStatusRecord(statusMap.get(taskKey));
         if (runtime != null) {
             return toStatusVo(runtime.databaseName(), runtime.status(), runtime.message(), runtime.updatedAt());
         }
 
         RagVectorizeStatusEntity persisted = ragVectorizeStatusMapper.findOne(connectionId, normalizedDatabaseName);
         if (persisted != null) {
-            VectorizeStatusRecord persistedRecord = new VectorizeStatusRecord(
+            VectorizeStatusRecord persistedRecord = normalizeStatusRecord(new VectorizeStatusRecord(
                 connectionId,
                 normalizedDatabaseName,
                 persisted.getStatus(),
@@ -289,13 +285,13 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
                 persisted.getUpdatedAt(),
                 persisted.getLastFullVectorizeDurationMs(),
                 persisted.getLastFullVectorizeProvider()
-            );
+            ));
             statusMap.putIfAbsent(taskKey, persistedRecord);
             return toStatusVo(
                 normalizedDatabaseName,
-                persisted.getStatus(),
-                persisted.getMessage(),
-                persisted.getUpdatedAt()
+                persistedRecord.status(),
+                persistedRecord.message(),
+                persistedRecord.updatedAt()
             );
         }
         return toStatusVo(normalizedDatabaseName, "NOT_VECTORIZED", "暂无向量化数据", null);
@@ -408,7 +404,7 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
         VectorizeStatusRecord statusRecord = statusMap.get(taskKey);
         RagVectorizeStatusEntity persistedStatus = ragVectorizeStatusMapper.findOne(connectionId, normalizedDatabaseName);
         if (statusRecord == null && persistedStatus != null) {
-            statusRecord = new VectorizeStatusRecord(
+            statusRecord = normalizeStatusRecord(new VectorizeStatusRecord(
                 connectionId,
                 normalizedDatabaseName,
                 persistedStatus.getStatus(),
@@ -416,9 +412,10 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
                 persistedStatus.getUpdatedAt(),
                 persistedStatus.getLastFullVectorizeDurationMs(),
                 persistedStatus.getLastFullVectorizeProvider()
-            );
+            ));
             statusMap.putIfAbsent(taskKey, statusRecord);
         }
+        statusRecord = normalizeStatusRecord(statusRecord);
 
         RagVectorizeOverviewVO vo = new RagVectorizeOverviewVO();
         vo.setDatabaseName(normalizedDatabaseName);
@@ -489,10 +486,9 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
                 synchronized (taskControlLock) {
                     runningTask = task;
                 }
-                upsertStatus(task.connectionId(), task.databaseName(), task.statusKey(), VectorizeStatus.RUNNING,
-                    task.scope() == VectorizeTaskScope.TABLE
-                        ? "单表向量化执行中: " + Objects.toString(task.tableName(), "")
-                        : "向量化执行中");
+                if (task.scope() == VectorizeTaskScope.DATABASE) {
+                    upsertStatus(task.connectionId(), task.databaseName(), task.statusKey(), VectorizeStatus.RUNNING, "向量化执行中");
+                }
                 log.info("开始执行{}向量化任务, connectionId={}, databaseName={}, tableName={}",
                     task.scope() == VectorizeTaskScope.TABLE ? "单表" : "数据库",
                     task.connectionId(), task.databaseName(), Objects.toString(task.tableName(), ""));
@@ -510,19 +506,30 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
                         task.scope() == VectorizeTaskScope.TABLE ? "单表" : "数据库",
                         task.connectionId(), task.databaseName(), Objects.toString(task.tableName(), ""));
                 } else {
-                    upsertStatus(
-                        task.connectionId(),
-                        task.databaseName(),
-                        task.statusKey(),
-                        VectorizeStatus.SUCCESS,
-                        task.scope() == VectorizeTaskScope.TABLE
-                            ? "表 " + task.tableName() + " 向量化完成"
-                            : "向量化完成",
-                        task.scope() == VectorizeTaskScope.DATABASE
-                            ? Long.valueOf(Math.max(0L, System.currentTimeMillis() - startAt))
-                            : null,
-                        task.scope() == VectorizeTaskScope.DATABASE ? resolveRuntimeProviderSafely() : null
-                    );
+                    if (task.scope() == VectorizeTaskScope.DATABASE) {
+                        long totalVectors = countDatabaseVectorArtifacts(task.connectionId(), task.databaseName());
+                        if (totalVectors <= 0L) {
+                            upsertStatus(
+                                task.connectionId(),
+                                task.databaseName(),
+                                task.statusKey(),
+                                VectorizeStatus.NOT_VECTORIZED,
+                                EMPTY_DATABASE_VECTORIZE_MESSAGE,
+                                Long.valueOf(Math.max(0L, System.currentTimeMillis() - startAt)),
+                                resolveRuntimeProviderSafely()
+                            );
+                        } else {
+                            upsertStatus(
+                                task.connectionId(),
+                                task.databaseName(),
+                                task.statusKey(),
+                                VectorizeStatus.SUCCESS,
+                                "向量化完成",
+                                Long.valueOf(Math.max(0L, System.currentTimeMillis() - startAt)),
+                                resolveRuntimeProviderSafely()
+                            );
+                        }
+                    }
                     log.info("{}向量化任务完成, connectionId={}, databaseName={}, tableName={}, durationMs={}",
                         task.scope() == VectorizeTaskScope.TABLE ? "单表" : "数据库",
                         task.connectionId(), task.databaseName(), Objects.toString(task.tableName(), ""),
@@ -557,8 +564,10 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
                             task.scope() == VectorizeTaskScope.TABLE ? "单表" : "数据库",
                             task.connectionId(), task.databaseName(), Objects.toString(task.tableName(), ""));
                     } else {
-                        upsertStatus(task.connectionId(), task.databaseName(), task.statusKey(), VectorizeStatus.FAILED,
-                            truncateError(ex.getMessage()));
+                        if (task.scope() == VectorizeTaskScope.DATABASE) {
+                            upsertStatus(task.connectionId(), task.databaseName(), task.statusKey(), VectorizeStatus.FAILED,
+                                truncateError(ex.getMessage()));
+                        }
                         log.warn("{}向量化任务失败, connectionId={}, databaseName={}, tableName={}, reason={}",
                             task.scope() == VectorizeTaskScope.TABLE ? "单表" : "数据库",
                             task.connectionId(), task.databaseName(), Objects.toString(task.tableName(), ""), ex.getMessage());
@@ -646,7 +655,9 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
                 : duplicatePrefix + "（执行中），请勿重复提交");
             return vo;
         }
-        upsertStatus(task.connectionId(), task.databaseName(), task.statusKey(), VectorizeStatus.PENDING, pendingMessage);
+        if (task.scope() == VectorizeTaskScope.DATABASE) {
+            upsertStatus(task.connectionId(), task.databaseName(), task.statusKey(), VectorizeStatus.PENDING, pendingMessage);
+        }
         taskQueue.offer(task);
         vo.setEnqueued(Boolean.TRUE);
         vo.setQueueSize(dedupeKeys.size());
@@ -744,6 +755,18 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
         return count == null ? 0L : Math.max(0L, count);
     }
 
+    private long countDatabaseVectorArtifacts(Long connectionId, String databaseName) {
+        return safeCount(qdrantClientService.queryCollectionMetric(
+            collectionNames.getSchemaTable(),
+            connectionId,
+            databaseName
+        ).getPointCount()) + safeCount(qdrantClientService.queryCollectionMetric(
+            collectionNames.getSchemaColumn(),
+            connectionId,
+            databaseName
+        ).getPointCount());
+    }
+
     private long mergeKnowledgeApplicableCount(QdrantCollectionMetric databaseMetric,
                                                QdrantCollectionMetric connectionMetric,
                                                QdrantCollectionMetric globalMetric) {
@@ -768,6 +791,47 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
             return statusRecord.message();
         }
         return totalCount > 0 ? "已向量化（历史统计）" : "当前库暂无向量化数据";
+    }
+
+    /**
+     * 关键操作：读取 SUCCESS 状态时校验真实向量数量，发现零向量则自动回写为 NOT_VECTORIZED。
+     */
+    private VectorizeStatusRecord normalizeStatusRecord(VectorizeStatusRecord record) {
+        if (record == null) {
+            return null;
+        }
+        if (!VectorizeStatus.SUCCESS.name().equals(record.status())) {
+            return record;
+        }
+        try {
+            if (countDatabaseVectorArtifacts(record.connectionId(), record.databaseName()) > 0L) {
+                return record;
+            }
+            VectorizeStatusRecord healed = new VectorizeStatusRecord(
+                record.connectionId(),
+                record.databaseName(),
+                VectorizeStatus.NOT_VECTORIZED.name(),
+                EMPTY_DATABASE_VECTORIZE_MESSAGE,
+                System.currentTimeMillis(),
+                record.lastFullVectorizeDurationMs(),
+                record.lastFullVectorizeProvider()
+            );
+            statusMap.put(buildTaskKey(record.connectionId(), record.databaseName()), healed);
+            RagVectorizeStatusEntity entity = new RagVectorizeStatusEntity();
+            entity.setConnectionId(record.connectionId());
+            entity.setDatabaseName(record.databaseName());
+            entity.setStatus(healed.status());
+            entity.setMessage(healed.message());
+            entity.setUpdatedAt(healed.updatedAt());
+            entity.setLastFullVectorizeDurationMs(healed.lastFullVectorizeDurationMs());
+            entity.setLastFullVectorizeProvider(healed.lastFullVectorizeProvider());
+            ragVectorizeStatusMapper.upsert(entity);
+            return healed;
+        } catch (Exception ex) {
+            log.warn("向量状态自愈失败，保留原状态。connectionId={}, databaseName={}, reason={}",
+                record.connectionId(), record.databaseName(), ex.getMessage());
+            return record;
+        }
     }
 
     private Integer resolveVectorDimension(QdrantCollectionMetric... metrics) {
@@ -959,6 +1023,7 @@ public class RagVectorizeQueueServiceImpl implements RagVectorizeQueueService {
     }
 
     private enum VectorizeStatus {
+        NOT_VECTORIZED,
         PENDING,
         RUNNING,
         SUCCESS,

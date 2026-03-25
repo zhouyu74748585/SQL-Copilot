@@ -19,6 +19,7 @@
             :class="{ 'is-active': activeWorkbenchTab === browserTabKey }"
             data-testid="studio-browser-tab"
             @click="activateBrowserTab"
+            @contextmenu.prevent.stop="openWorkspaceTabContextMenu($event, browserTabKey)"
           >
             <span>对象浏览</span>
           </button>
@@ -28,6 +29,7 @@
             class="workspace-tab"
             :class="{ 'is-active': activeWorkbenchTab === tab.key }"
             @click="activeWorkbenchTab = tab.key"
+            @contextmenu.prevent.stop="openWorkspaceTabContextMenu($event, tab.key)"
           >
             <span>{{ tab.title }}</span>
             <close-outlined class="tab-close" @click.stop="closeKnowledgeTab(tab.key)" />
@@ -38,6 +40,7 @@
             class="workspace-tab"
             :class="{ 'is-active': activeWorkbenchTab === tab.key }"
             @click="activeWorkbenchTab = tab.key"
+            @contextmenu.prevent.stop="openWorkspaceTabContextMenu($event, tab.key)"
           >
             <span>{{ tab.title }}</span>
             <close-outlined class="tab-close" @click.stop="closeMemoryTab(tab.key)" />
@@ -48,6 +51,7 @@
             class="workspace-tab"
             :class="{ 'is-active': activeWorkbenchTab === tab.key }"
             @click="activeWorkbenchTab = tab.key"
+            @contextmenu.prevent.stop="openWorkspaceTabContextMenu($event, tab.key)"
           >
             <span>{{ tab.title }}</span>
             <close-outlined class="tab-close" @click.stop="closeQueryTab(tab.key)" />
@@ -58,6 +62,7 @@
             class="workspace-tab"
             :class="{ 'is-active': activeWorkbenchTab === tab.key }"
             @click="activeWorkbenchTab = tab.key"
+            @contextmenu.prevent.stop="openWorkspaceTabContextMenu($event, tab.key)"
           >
             <span>{{ tab.title }}</span>
             <close-outlined class="tab-close" @click.stop="closeErTab(tab.key)" />
@@ -68,6 +73,7 @@
             class="workspace-tab"
             :class="{ 'is-active': activeWorkbenchTab === tab.key }"
             @click="activeWorkbenchTab = tab.key"
+            @contextmenu.prevent.stop="openWorkspaceTabContextMenu($event, tab.key)"
           >
             <span>{{ tab.title }}</span>
             <close-outlined class="tab-close" @click.stop="closeTableEditorTab(tab.key)" />
@@ -78,6 +84,7 @@
             class="workspace-tab"
             :class="{ 'is-active': activeWorkbenchTab === tab.key }"
             @click="activeWorkbenchTab = tab.key"
+            @contextmenu.prevent.stop="openWorkspaceTabContextMenu($event, tab.key)"
           >
             <span>{{ tab.title }}</span>
             <close-outlined class="tab-close" @click.stop="closeTableDataTab(tab.key)" />
@@ -88,6 +95,7 @@
             class="workspace-tab"
             :class="{ 'is-active': activeWorkbenchTab === tab.key }"
             @click="activeWorkbenchTab = tab.key"
+            @contextmenu.prevent.stop="openWorkspaceTabContextMenu($event, tab.key)"
           >
             <span>{{ tab.title }}</span>
             <close-outlined class="tab-close" @click.stop="closeObjectDefinitionEditorTab(tab.key)" />
@@ -975,62 +983,69 @@
         <section class="pane pane-center">
           <div class="center-toolbar">
             <div class="center-toolbar-left">
-              <a-button
-                v-if="memoryActiveNode === 'entries'"
-                size="small"
-                type="default"
-                class="toolbar-icon-btn"
-                @click="resetMemoryEntryForm"
-              >
-                新建记忆
-              </a-button>
-              <a-button
-                v-if="memoryActiveNode === 'entries' && memoryEntryForm.id"
-                size="small"
-                danger
-                :loading="memoryActionLoading"
-                @click="removeMemoryEntry"
-              >
-                删除记忆
-              </a-button>
-              <a-button
-                v-if="memoryActiveNode === 'history-sql' && selectedMemoryHistory"
-                size="small"
-                type="primary"
-                :loading="memoryActionLoading"
-                @click="promoteMemoryHistory"
-              >
-                提升为长期记忆
-              </a-button>
-              <a-button
-                v-if="memoryActiveNode === 'history-sql' && selectedMemoryHistory"
-                size="small"
-                danger
-                :loading="memoryActionLoading"
-                @click="removeMemoryHistory"
-              >
-                删除记忆
-              </a-button>
+              <a-tooltip v-if="memoryActiveNode === 'entries'" title="新建记忆">
+                <a-button
+                  size="small"
+                  type="default"
+                  class="toolbar-icon-btn memory-toolbar-action"
+                  @click="resetMemoryEntryForm"
+                >
+                  <template #icon><img class="toolbar-action-icon memory-toolbar-icon" :src="memoryIcon" alt="" /></template>
+                </a-button>
+              </a-tooltip>
+              <a-tooltip v-if="memoryActiveNode === 'entries' && memoryEntryForm.id" title="删除长期记忆">
+                <a-button
+                  size="small"
+                  danger
+                  class="toolbar-icon-btn memory-toolbar-action"
+                  :loading="memoryActionLoading"
+                  @click="removeMemoryEntry"
+                >
+                  <template #icon><img class="toolbar-action-icon memory-toolbar-icon" :src="deleteIcon" alt="" /></template>
+                </a-button>
+              </a-tooltip>
+              <a-tooltip v-if="memoryActiveNode === 'history-sql' && selectedMemoryHistory" title="提升为长期记忆">
+                <a-button
+                  size="small"
+                  type="primary"
+                  class="toolbar-icon-btn memory-toolbar-action"
+                  :loading="memoryActionLoading"
+                  @click="promoteMemoryHistory"
+                >
+                  <template #icon><img class="toolbar-action-icon memory-toolbar-icon" :src="longTermMemoryIcon" alt="" /></template>
+                </a-button>
+              </a-tooltip>
+              <a-tooltip v-if="memoryActiveNode === 'history-sql' && selectedMemoryHistory" title="删除历史 SQL 记忆">
+                <a-button
+                  size="small"
+                  danger
+                  class="toolbar-icon-btn memory-toolbar-action"
+                  :loading="memoryActionLoading"
+                  @click="removeMemoryHistory"
+                >
+                  <template #icon><img class="toolbar-action-icon memory-toolbar-icon" :src="deleteIcon" alt="" /></template>
+                </a-button>
+              </a-tooltip>
             </div>
             <div class="center-toolbar-right knowledge-toolbar-right">
               <a-select
-                v-model:value="memoryFilterConnectionId"
+                :value="memoryFilterConnectionId || undefined"
                 size="small"
                 class="knowledge-toolbar-select"
                 allow-clear
                 placeholder="筛选连接"
                 :options="memoryConnectionOptions"
-                @change="handleMemoryFilterConnectionChange"
+                @change="handleMemoryFilterConnectionSelectorChange"
               />
               <a-select
-                v-model:value="memoryFilterDatabaseName"
+                :value="memoryFilterDatabaseName || undefined"
                 size="small"
                 class="knowledge-toolbar-select"
                 allow-clear
                 placeholder="筛选数据库"
                 :disabled="!memoryFilterConnectionId"
                 :options="memoryDatabaseOptions"
-                @change="handleMemoryFilterDatabaseChange"
+                @change="handleMemoryFilterDatabaseSelectorChange"
               />
               <a-input v-model:value="memoryKeyword" size="small" placeholder="搜索记忆内容" allow-clear>
                 <template #prefix><search-outlined /></template>
@@ -1043,7 +1058,13 @@
 
           <a-spin :spinning="memoryLoading">
             <div v-if="memoryActiveNode === 'entries'" class="knowledge-list">
-              <button v-for="item in memoryEntryItems" :key="item.id" class="knowledge-card" @click="selectMemoryEntry(item)">
+              <button
+                v-for="item in memoryEntryItems"
+                :key="item.id"
+                class="knowledge-card"
+                :class="{ 'is-active': memoryEntryForm.id === item.id }"
+                @click="selectMemoryEntry(item)"
+              >
                 <div class="knowledge-card-head">
                   <strong>{{ item.title }}</strong>
                   <a-tag :color="item.scope === 'DATABASE' ? 'blue' : 'cyan'">{{ memoryScopeLabel(item.scope) }}</a-tag>
@@ -1054,7 +1075,13 @@
               <div v-if="!memoryEntryItems.length" class="empty-pane">暂无长期记忆数据</div>
             </div>
             <div v-else class="knowledge-list">
-              <button v-for="item in memoryHistoryItems" :key="item.historyId" class="knowledge-card" @click="selectMemoryHistory(item)">
+              <button
+                v-for="item in memoryHistoryItems"
+                :key="item.historyId"
+                class="knowledge-card"
+                :class="{ 'is-active': selectedMemoryHistory?.historyId === item.historyId }"
+                @click="selectMemoryHistory(item)"
+              >
                 <div class="knowledge-card-head">
                   <strong>{{ item.promptText || item.semanticSummary || '未命名历史 SQL 记忆' }}</strong>
                   <a-tag color="geekblue">{{ item.databaseName || '连接级' }}</a-tag>
@@ -1101,7 +1128,7 @@
                       show-search
                       placeholder="目标数据库"
                       :disabled="!memoryEntryForm.connectionId"
-                      :options="memoryDatabaseOptions"
+                      :options="memoryEntryTargetDatabaseOptions"
                     />
                   </a-form-item>
                   <a-form-item label="标题">
@@ -1132,10 +1159,6 @@
                     <a-textarea :value="selectedMemoryHistory.sqlText" :rows="10" readonly />
                   </a-form-item>
                 </a-form>
-                <a-space class="detail-form-actions">
-                  <a-button type="primary" size="small" :loading="memoryActionLoading" @click="promoteMemoryHistory">提升为长期记忆</a-button>
-                  <a-button danger size="small" :loading="memoryActionLoading" @click="removeMemoryHistory">删除记忆</a-button>
-                </a-space>
               </div>
               <div v-else class="empty-pane">请先选择一条历史 SQL 记忆</div>
             </div>
@@ -1608,13 +1631,17 @@
                 :rows="tableDataDisplayRows(activeTableDataTab!)"
                 :scroll-x="tableDataScrollX(activeTableDataTab!)"
                 :scroll-y="queryResultScrollY"
+                :quick-sort-enabled="true"
                 :reset-key="`${activeTableDataTab!.key}:${activeTableDataTab!.connectionId}:${activeTableDataTab!.databaseName}:${activeTableDataTab!.tableName}:${activeTableDataTab!.pageNo}:${activeTableDataTab!.pageSize}`"
                 :is-primary-key-column="(columnName: string) => isTableDataPrimaryKeyColumn(activeTableDataTab!, columnName)"
                 :column-editor-type="(columnName: string) => tableDataColumnEditorType(activeTableDataTab!, columnName)"
+                :sort-direction-for-column="(columnName: string) => tableDataSortDirectionForColumn(activeTableDataTab!, columnName)"
                 @select-row="(rowKey: string) => selectTableDataRow(activeTableDataTab!, rowKey)"
                 @start-edit="(rowKey: string, columnName: string) => startTableDataCellEdit(activeTableDataTab!, rowKey, columnName)"
                 @stop-edit="() => stopTableDataCellEdit(activeTableDataTab!)"
                 @update-cell="(rowKey: string, columnName: string, value: string | null) => updateTableDataCell(activeTableDataTab!, rowKey, columnName, value)"
+                @resize-column="(columnName: string, width: number) => updateTableDataColumnWidth(activeTableDataTab!, columnName, width)"
+                @quick-sort="(columnName: string, direction: 'ASC' | 'DESC' | 'NONE') => applyTableDataQuickSort(activeTableDataTab!, columnName, direction)"
               />
             </a-spin>
           </div>
@@ -2477,6 +2504,7 @@
                 @start-edit="() => undefined"
                 @stop-edit="() => undefined"
                 @update-cell="() => undefined"
+                @resize-column="(columnName: string, width: number) => resizeActiveQueryResultColumn(activeQueryTab!, columnName, width)"
               />
             </template>
             <template v-else>
@@ -3255,6 +3283,29 @@
       </template>
     </div>
 
+    <div
+      v-if="workspaceTabContextMenuVisible"
+      class="context-menu-mask"
+      @click="closeWorkspaceTabContextMenu"
+      @contextmenu.prevent="closeWorkspaceTabContextMenu"
+    />
+    <div
+      v-if="workspaceTabContextMenuVisible"
+      class="context-menu"
+      :style="{ left: `${workspaceTabContextMenuX}px`, top: `${workspaceTabContextMenuY}px` }"
+    >
+      <button
+        v-for="action in workspaceTabContextMenuActions"
+        :key="action.id"
+        class="context-menu-item"
+        :disabled="action.disabled"
+        type="button"
+        @click="triggerWorkspaceTabContextAction(action.id)"
+      >
+        {{ action.label }}
+      </button>
+    </div>
+
     <a-modal
       v-model:open="groupModalOpen"
       :title="groupForm.mode === 'create' ? '新建分组' : '重命名分组'"
@@ -3680,6 +3731,7 @@ import executeIcon from '../../../assets/icons/execute.svg';
 import explainIcon from '../../../assets/icons/explain.svg';
 import exportIcon from '../../../assets/icons/export.svg';
 import dialogIcon from '../../../assets/icons/dialog.svg';
+import deleteIcon from '../../../assets/icons/delete.svg';
 import prettyIcon from '../../../assets/icons/pretty.svg';
 import saveQueryIcon from '../../../assets/icons/save.svg';
 import sendQueryIcon from '../../../assets/icons/send.svg';
@@ -3687,6 +3739,8 @@ import sqlActionIcon from '../../../assets/icons/sql.svg';
 import stopActionIcon from '../../../assets/icons/stop.png';
 import tableIcon from '../../../assets/icons/table.svg';
 import interpretIcon from '../../../assets/icons/interpret.svg';
+import longTermMemoryIcon from '../../../assets/icons/long-term-memory.svg';
+import memoryIcon from '../../../assets/icons/memory.svg';
 import type {StudioController} from '../composables/useStudioController';
 
 const {currentLocale, antLocale, localeSelectOptions, setLocale, useDomI18n} = useAppI18n();
@@ -3992,6 +4046,7 @@ const {
     setupManualChartConfigByResult,
     setActiveStatementResult,
     setQueryResultViewMode,
+    resizeActiveQueryResultColumn,
     canExportActiveQueryResult,
     queryResultExportTooltip,
     resultTabTitle,
@@ -4253,6 +4308,8 @@ const {
     removeTableDataFilter,
     addTableDataSort,
     removeTableDataSort,
+    tableDataSortDirectionForColumn,
+    applyTableDataQuickSort,
     applyTableDataFilters,
     prevTableDataPage,
     nextTableDataPage,
@@ -4269,6 +4326,7 @@ const {
     discardTableDataChanges,
     tableDataDisplayRows,
     tableDataDisplayColumns,
+    updateTableDataColumnWidth,
     tableDataScrollX,
     isTableDataPrimaryKeyColumn,
     resolveSqlForAction,
@@ -4375,6 +4433,7 @@ const {
     memoryFilterDatabaseName,
     memoryConnectionOptions,
     memoryDatabaseOptions,
+    memoryEntryTargetDatabaseOptions,
     memoryEntryTotal,
     memoryHistoryTotal,
     memoryEntryItems,
@@ -4467,6 +4526,129 @@ const {
     fillRagConfigForm,
     resetConnectionModalState
 } = props.controller;
+
+type WorkspaceTabContextActionId = 'closeLeft' | 'closeRight' | 'closeOthers';
+
+interface WorkspaceTabDescriptor {
+  key: string;
+  closable: boolean;
+  close: () => void;
+}
+
+const workspaceTabContextMenuVisible = ref(false);
+const workspaceTabContextMenuX = ref(0);
+const workspaceTabContextMenuY = ref(0);
+const workspaceTabContextTargetKey = ref('');
+
+const workspaceTabDescriptors = computed<WorkspaceTabDescriptor[]>(() => [
+  {
+    key: browserTabKey,
+    closable: false,
+    close: () => undefined,
+  },
+  ...knowledgeTabs.value.map((tab) => ({
+    key: tab.key,
+    closable: true,
+    close: () => closeKnowledgeTab(tab.key),
+  })),
+  ...memoryTabs.value.map((tab) => ({
+    key: tab.key,
+    closable: true,
+    close: () => closeMemoryTab(tab.key),
+  })),
+  ...queryTabs.value.map((tab) => ({
+    key: tab.key,
+    closable: true,
+    close: () => closeQueryTab(tab.key),
+  })),
+  ...erTabs.value.map((tab) => ({
+    key: tab.key,
+    closable: true,
+    close: () => closeErTab(tab.key),
+  })),
+  ...tableEditorTabs.value.map((tab) => ({
+    key: tab.key,
+    closable: true,
+    close: () => closeTableEditorTab(tab.key),
+  })),
+  ...tableDataTabs.value.map((tab) => ({
+    key: tab.key,
+    closable: true,
+    close: () => closeTableDataTab(tab.key),
+  })),
+  ...objectDefinitionEditorTabs.value.map((tab) => ({
+    key: tab.key,
+    closable: true,
+    close: () => closeObjectDefinitionEditorTab(tab.key),
+  })),
+]);
+
+const workspaceTabContextTargetIndex = computed(() =>
+  workspaceTabDescriptors.value.findIndex((item) => item.key === workspaceTabContextTargetKey.value),
+);
+
+const workspaceTabContextMenuActions = computed(() => {
+  const targetIndex = workspaceTabContextTargetIndex.value;
+  if (targetIndex < 0) {
+    return [] as Array<{ id: WorkspaceTabContextActionId; label: string; disabled: boolean }>;
+  }
+  const descriptors = workspaceTabDescriptors.value;
+  return [
+    {
+      id: 'closeLeft' as WorkspaceTabContextActionId,
+      label: tt('关闭左侧'),
+      disabled: !descriptors.slice(0, targetIndex).some((item) => item.closable),
+    },
+    {
+      id: 'closeRight' as WorkspaceTabContextActionId,
+      label: tt('关闭右侧'),
+      disabled: !descriptors.slice(targetIndex + 1).some((item) => item.closable),
+    },
+    {
+      id: 'closeOthers' as WorkspaceTabContextActionId,
+      label: tt('关闭其他'),
+      disabled: !descriptors.some((item, index) => index !== targetIndex && item.closable),
+    },
+  ];
+});
+
+function openWorkspaceTabContextMenu(event: MouseEvent, tabKey: string) {
+  closeContextMenu();
+  workspaceTabContextTargetKey.value = tabKey;
+  workspaceTabContextMenuVisible.value = true;
+  workspaceTabContextMenuX.value = Math.min(event.clientX, window.innerWidth - 220);
+  workspaceTabContextMenuY.value = Math.min(event.clientY, window.innerHeight - 180);
+}
+
+function closeWorkspaceTabContextMenu() {
+  workspaceTabContextMenuVisible.value = false;
+  workspaceTabContextTargetKey.value = '';
+}
+
+function triggerWorkspaceTabContextAction(actionId: WorkspaceTabContextActionId) {
+  const targetIndex = workspaceTabContextTargetIndex.value;
+  if (targetIndex < 0) {
+    closeWorkspaceTabContextMenu();
+    return;
+  }
+  const descriptors = workspaceTabDescriptors.value;
+  const targets = actionId === 'closeLeft'
+    ? descriptors.slice(0, targetIndex).filter((item) => item.closable)
+    : actionId === 'closeRight'
+      ? descriptors.slice(targetIndex + 1).filter((item) => item.closable)
+      : descriptors.filter((item, index) => index !== targetIndex && item.closable);
+  closeWorkspaceTabContextMenu();
+  targets.forEach((item) => item.close());
+}
+
+watch(workspaceTabDescriptors, () => {
+  if (!workspaceTabContextMenuVisible.value) {
+    return;
+  }
+  if (!workspaceTabDescriptors.value.some((item) => item.key === workspaceTabContextTargetKey.value)) {
+    closeWorkspaceTabContextMenu();
+  }
+});
 
 function isEnglishLocale() {
   return currentLocale.value === 'en-US';
@@ -4648,6 +4830,16 @@ function handleKnowledgeExampleTargetConnectionSelectorChange(value: string | nu
 function handleKnowledgeExampleTargetDatabaseSelectorChange(value: string | undefined) {
   knowledgeExampleForm.databaseName = value || '';
   handleKnowledgeExampleTargetDatabaseChange();
+}
+
+function handleMemoryFilterConnectionSelectorChange(value: string | number | undefined) {
+  memoryFilterConnectionId.value = value ? Number(value) : 0;
+  void handleMemoryFilterConnectionChange();
+}
+
+function handleMemoryFilterDatabaseSelectorChange(value: string | undefined) {
+  memoryFilterDatabaseName.value = value || '';
+  void handleMemoryFilterDatabaseChange();
 }
 
 function handleLocaleChange(value: string) {
