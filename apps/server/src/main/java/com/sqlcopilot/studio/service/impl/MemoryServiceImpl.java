@@ -397,7 +397,7 @@ public class MemoryServiceImpl implements MemoryService {
         qdrantClientService.upsertPoints(
             managedMemoryCollectionName,
             List.of(new QdrantPoint(
-                "managed-memory-" + entity.getId(),
+                buildManagedMemoryPointId(entity.getId()),
                 vector,
                 buildManagedMemoryPayload(entity, relatedTables)
             ))
@@ -405,6 +405,9 @@ public class MemoryServiceImpl implements MemoryService {
     }
 
     private void removeManagedMemoryVector(Long memoryId) {
+        qdrantClientService.deletePointsByIds(managedMemoryCollectionName, List.of(
+            buildManagedMemoryPointId(memoryId)
+        ));
         qdrantClientService.deletePointsByFilters(managedMemoryCollectionName, List.of(
             new QdrantPayloadFilter("memory_id", memoryId)
         ));
@@ -414,6 +417,9 @@ public class MemoryServiceImpl implements MemoryService {
         if (entity == null || entity.getId() == null || entity.getId() <= 0) {
             return;
         }
+        qdrantClientService.deletePointsByIds(sqlHistoryCollectionName, List.of(
+            buildSqlHistoryPointId(entity.getConnectionId(), entity.getDatabaseName(), entity.getId())
+        ));
         qdrantClientService.deletePointsByFilters(sqlHistoryCollectionName, List.of(
             new QdrantPayloadFilter("entry_type", "history_query"),
             new QdrantPayloadFilter("history_id", entity.getId())
@@ -570,6 +576,14 @@ public class MemoryServiceImpl implements MemoryService {
             String.valueOf(normalizeConnectionId(connectionId)),
             normalizePointIdDatabaseName(databaseName),
             String.valueOf(historyId == null ? 0L : historyId)
+        );
+        return UUID.nameUUIDFromBytes(joined.getBytes(StandardCharsets.UTF_8)).toString();
+    }
+
+    private String buildManagedMemoryPointId(Long memoryId) {
+        String joined = String.join("|",
+            "managed_memory",
+            String.valueOf(memoryId == null ? 0L : memoryId)
         );
         return UUID.nameUUIDFromBytes(joined.getBytes(StandardCharsets.UTF_8)).toString();
     }

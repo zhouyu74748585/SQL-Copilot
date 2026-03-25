@@ -29,6 +29,7 @@ export interface MemoryModule {
   memoryHistoryTotal: Ref<number>;
   memoryEntryItems: Ref<MemoryEntryVO[]>;
   memoryHistoryItems: Ref<MemoryHistoryVO[]>;
+  selectedMemoryEntry: ComputedRef<MemoryEntryVO | null>;
   selectedMemoryHistory: ComputedRef<MemoryHistoryVO | null>;
   memoryEntryForm: MemoryEntrySaveReq;
   memoryScopeOptions: Array<{ label: string; value: MemoryScope }>;
@@ -105,6 +106,10 @@ export function useMemoryModule(runtime: StudioRuntime): MemoryModule {
 
   const memoryEntryTargetDatabaseOptions = computed<SelectOption<string>[]>(() => (
     buildDatabaseOptions(normalizeConnectionId(memoryEntryForm.connectionId), memoryEntryForm.databaseName)
+  ));
+
+  const selectedMemoryEntry = computed(() => (
+    memoryEntryItems.value.find((item) => item.id === memoryEntryForm.id) ?? null
   ));
 
   const selectedMemoryHistory = computed(() => (
@@ -256,6 +261,25 @@ export function useMemoryModule(runtime: StudioRuntime): MemoryModule {
     selectedMemoryHistoryId.value = item.historyId;
   }
 
+  function removeHistoryItemLocally(historyId: number) {
+    const nextItems = memoryHistoryItems.value.filter((item) => item.historyId !== historyId);
+    memoryHistoryItems.value = nextItems;
+    if (selectedMemoryHistoryId.value === historyId) {
+      selectedMemoryHistoryId.value = nextItems[0]?.historyId || 0;
+    }
+  }
+
+  function upsertMemoryEntryLocally(saved: MemoryEntryVO) {
+    const nextItems = [...memoryEntryItems.value];
+    const index = nextItems.findIndex((item) => item.id === saved.id);
+    if (index >= 0) {
+      nextItems[index] = saved;
+    } else {
+      nextItems.unshift(saved);
+    }
+    memoryEntryItems.value = nextItems;
+  }
+
   async function saveMemoryEntry() {
     memorySaving.value = true;
     try {
@@ -283,10 +307,12 @@ export function useMemoryModule(runtime: StudioRuntime): MemoryModule {
     if (!memoryEntryForm.id) {
       return;
     }
+    const removingId = memoryEntryForm.id;
     memoryActionLoading.value = true;
     try {
-      await postApi<boolean>('/api/memory/entry/remove', {id: memoryEntryForm.id});
+      await postApi<boolean>('/api/memory/entry/remove', {id: removingId});
       message.success('长期记忆已删除');
+      memoryEntryItems.value = memoryEntryItems.value.filter((item) => item.id !== removingId);
       resetMemoryEntryForm();
       await Promise.all([
         loadMemoryData(),
@@ -301,10 +327,12 @@ export function useMemoryModule(runtime: StudioRuntime): MemoryModule {
     if (!selectedMemoryHistory.value) {
       return;
     }
+    const historyId = selectedMemoryHistory.value.historyId;
     memoryActionLoading.value = true;
     try {
-      await postApi<boolean>('/api/memory/history/remove', {historyId: selectedMemoryHistory.value.historyId});
+      await postApi<boolean>('/api/memory/history/remove', {historyId});
       message.success('历史 SQL 记忆已删除');
+      removeHistoryItemLocally(historyId);
       await Promise.all([
         loadMemoryData(),
         loadMemoryGlobalTotals(),
@@ -318,12 +346,21 @@ export function useMemoryModule(runtime: StudioRuntime): MemoryModule {
     if (!selectedMemoryHistory.value) {
       return;
     }
+    const sourceHistory = selectedMemoryHistory.value;
     memoryActionLoading.value = true;
     try {
       const saved = await postApi<MemoryEntryVO>('/api/memory/history/promote', {
-        historyIds: [selectedMemoryHistory.value.historyId],
+        historyIds: [sourceHistory.historyId],
       });
       message.success('已提升为长期记忆');
+      removeHistoryItemLocally(sourceHistory.historyId);
+      upsertMemoryEntryLocally(saved);
+      memoryKeyword.value = '';
+      memoryFilterConnectionId.value = normalizeConnectionId(saved.connectionId);
+      memoryFilterDatabaseName.value = saved.scope === 'DATABASE' ? normalizeDatabaseName(saved.databaseName) : '';
+      if (memoryFilterConnectionId.value) {
+        await runtime.prepareConnectionTreeData(memoryFilterConnectionId.value);
+      }
       await Promise.all([
         openMemoryNode('entries'),
         loadMemoryGlobalTotals(),
@@ -362,6 +399,7 @@ export function useMemoryModule(runtime: StudioRuntime): MemoryModule {
     memoryHistoryTotal,
     memoryEntryItems,
     memoryHistoryItems,
+    selectedMemoryEntry,
     selectedMemoryHistory,
     memoryEntryForm,
     memoryScopeOptions,

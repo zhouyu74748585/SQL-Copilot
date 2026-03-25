@@ -285,6 +285,37 @@ public class QdrantClientServiceImpl implements QdrantClientService {
         return parseSearchResults(response.body());
     }
 
+    @Override
+    public void deletePointsByIds(String collectionName, List<String> pointIds) {
+        if (collectionName == null || collectionName.isBlank() || pointIds == null || pointIds.isEmpty()) {
+            return;
+        }
+        List<String> normalizedIds = pointIds.stream()
+            .filter(Objects::nonNull)
+            .map(String::trim)
+            .filter(id -> !id.isBlank())
+            .distinct()
+            .toList();
+        if (normalizedIds.isEmpty()) {
+            return;
+        }
+
+        DeletePointsByIdsReq req = new DeletePointsByIdsReq(normalizedIds);
+        HttpResponse<String> response = send(buildRequest(
+            "POST",
+            "/collections/" + collectionName + "/points/delete?wait=true",
+            toJson(req)
+        ));
+        if (response.statusCode() == 404) {
+            return;
+        }
+        if (response.statusCode() != 200) {
+            throw new BusinessException(500,
+                "按点位 ID 删除 Qdrant 向量失败: HTTP " + response.statusCode() + " - " + response.body());
+        }
+        validateQdrantResponse(response.body());
+    }
+
 
     @Override
     public void deletePointsByFilter(String collectionName, Long connectionId, String databaseName, String sessionId) {
@@ -618,6 +649,9 @@ public class QdrantClientServiceImpl implements QdrantClientService {
     }
 
     private record DeleteReq(FilterReq filter) {
+    }
+
+    private record DeletePointsByIdsReq(List<String> points) {
     }
 
     private static class SearchReq {

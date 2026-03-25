@@ -1659,6 +1659,7 @@ body.sqlcopilot-theme-dark {
 }
 
 .knowledge-card {
+  position: relative;
   width: 100%;
   text-align: left;
   border: 1px solid var(--line);
@@ -1676,12 +1677,24 @@ body.sqlcopilot-theme-dark {
 
 .knowledge-card.is-active {
   border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 9%, var(--surface-1));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
+  background: color-mix(in srgb, var(--accent) 11%, var(--surface-1));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 26%, transparent);
+  transform: translateX(2px);
 }
 
 .knowledge-card.is-active:hover {
   border-color: var(--accent);
+}
+
+.knowledge-card.is-active::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  top: -1px;
+  bottom: -1px;
+  width: 4px;
+  border-radius: 10px 0 0 10px;
+  background: var(--accent);
 }
 
 .knowledge-card-head {
@@ -1702,6 +1715,10 @@ body.sqlcopilot-theme-dark {
 
 .knowledge-card-meta {
   margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
   color: #8ea0be;
   font-size: 12px;
 }

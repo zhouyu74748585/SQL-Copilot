@@ -36,6 +36,8 @@ public interface QdrantClientService {
 
     List<QdrantScoredPoint> getPointsByIds(String collectionName, List<String> pointIds);
 
+    void deletePointsByIds(String collectionName, List<String> pointIds);
+
     QdrantCollectionMetric queryCollectionMetric(String collectionName, Long connectionId, String databaseName);
 
     QdrantCollectionMetric queryCollectionMetricByFilters(String collectionName, List<QdrantPayloadFilter> filters);

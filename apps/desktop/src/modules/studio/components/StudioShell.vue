@@ -1007,7 +1007,6 @@
               <a-tooltip v-if="memoryActiveNode === 'history-sql' && selectedMemoryHistory" title="提升为长期记忆">
                 <a-button
                   size="small"
-                  type="primary"
                   class="toolbar-icon-btn memory-toolbar-action"
                   :loading="memoryActionLoading"
                   @click="promoteMemoryHistory"
@@ -1070,7 +1069,11 @@
                   <a-tag :color="item.scope === 'DATABASE' ? 'blue' : 'cyan'">{{ memoryScopeLabel(item.scope) }}</a-tag>
                 </div>
                 <div class="knowledge-card-desc">{{ item.summary }}</div>
-                <div class="knowledge-card-meta">命中 {{ item.hitCount || 0 }} · {{ formatTime(item.updatedAt) }}</div>
+                <div class="knowledge-card-meta">
+                  <span>{{ memoryEntryForm.id === item.id ? '已选择' : '未选择' }}</span>
+                  <span>命中 {{ item.hitCount || 0 }}</span>
+                  <span>{{ formatTime(item.updatedAt) }}</span>
+                </div>
               </button>
               <div v-if="!memoryEntryItems.length" class="empty-pane">暂无长期记忆数据</div>
             </div>
@@ -1087,7 +1090,10 @@
                   <a-tag color="geekblue">{{ item.databaseName || '连接级' }}</a-tag>
                 </div>
                 <div class="knowledge-card-desc">{{ item.semanticSummary || item.sqlText }}</div>
-                <div class="knowledge-card-meta">{{ formatTime(item.createdAt) }}</div>
+                <div class="knowledge-card-meta">
+                  <span>{{ selectedMemoryHistory?.historyId === item.historyId ? '已选择' : '未选择' }}</span>
+                  <span>{{ formatTime(item.createdAt) }}</span>
+                </div>
               </button>
               <div v-if="!memoryHistoryItems.length" class="empty-pane">暂无历史 SQL 记忆数据</div>
             </div>
@@ -1141,6 +1147,7 @@
                 <a-space class="detail-form-actions">
                   <a-button type="primary" size="small" :loading="memorySaving" @click="saveMemoryEntry">保存</a-button>
                   <a-button size="small" @click="resetMemoryEntryForm">重置</a-button>
+                  <a-button v-if="memoryEntryForm.id" danger size="small" :loading="memoryActionLoading" @click="removeMemoryEntry">删除</a-button>
                 </a-space>
               </div>
             </div>
@@ -1148,6 +1155,7 @@
             <div v-else>
               <div v-if="selectedMemoryHistory" class="detail-summary">
                 <div class="detail-row"><span>问题</span><strong>{{ selectedMemoryHistory.promptText || '-' }}</strong></div>
+                <div class="detail-row"><span>作用域</span><strong>{{ memoryScopeLabel(selectedMemoryHistory.databaseName ? 'DATABASE' : 'CONNECTION') }}</strong></div>
                 <div class="detail-row"><span>连接</span><strong>{{ queryTabConnectionNameById(selectedMemoryHistory.connectionId || 0) || '-' }}</strong></div>
                 <div class="detail-row"><span>数据库</span><strong>{{ selectedMemoryHistory.databaseName || '-' }}</strong></div>
                 <div class="detail-row"><span>语义摘要</span><strong>{{ selectedMemoryHistory.semanticSummary || '-' }}</strong></div>
@@ -1159,6 +1167,10 @@
                     <a-textarea :value="selectedMemoryHistory.sqlText" :rows="10" readonly />
                   </a-form-item>
                 </a-form>
+                <a-space class="detail-form-actions">
+                  <a-button type="primary" size="small" :loading="memoryActionLoading" @click="promoteMemoryHistory">提升为长期记忆</a-button>
+                  <a-button danger size="small" :loading="memoryActionLoading" @click="removeMemoryHistory">删除</a-button>
+                </a-space>
               </div>
               <div v-else class="empty-pane">请先选择一条历史 SQL 记忆</div>
             </div>
@@ -3739,7 +3751,7 @@ import sqlActionIcon from '../../../assets/icons/sql.svg';
 import stopActionIcon from '../../../assets/icons/stop.png';
 import tableIcon from '../../../assets/icons/table.svg';
 import interpretIcon from '../../../assets/icons/interpret.svg';
-import longTermMemoryIcon from '../../../assets/icons/long-term-memory.svg';
+import longTermMemoryIcon from '../../../assets/icons/memory.svg';
 import memoryIcon from '../../../assets/icons/memory.svg';
 import type {StudioController} from '../composables/useStudioController';
 
