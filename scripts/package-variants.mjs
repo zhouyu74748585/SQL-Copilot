@@ -419,16 +419,16 @@ function resolveExtraJlinkModules() {
     .filter(Boolean);
 }
 
-function locatePackagedJar() {
-  const jars = fs.existsSync(SERVER_TARGET_DIR)
-    ? fs.readdirSync(SERVER_TARGET_DIR)
+function locatePackagedJar(targetDir = SERVER_TARGET_DIR) {
+  const jars = fs.existsSync(targetDir)
+    ? fs.readdirSync(targetDir)
         .filter((name) => name.endsWith('.jar') && !name.startsWith('original-'))
         .sort()
     : [];
   if (!jars.length) {
-    throw new Error(`No packaged jar found in ${SERVER_TARGET_DIR}`);
+    throw new Error(`No packaged jar found in ${targetDir}`);
   }
-  return path.join(SERVER_TARGET_DIR, jars[0]);
+  return path.join(targetDir, jars[0]);
 }
 
 function detectJlinkModules(unpackedDir) {
@@ -585,11 +585,10 @@ function prepareBackendRuntime(targetDir, jarPath, runtimeHome) {
 }
 
 function buildBackend() {
-  console.log('==> [backend] clean package');
+  console.log('==> [backend] package');
   runCommand(resolveShellCommand('mvn'), [
     '-f',
     path.join('apps', 'server', 'pom.xml'),
-    'clean',
     'package',
     '-DskipTests',
   ]);
