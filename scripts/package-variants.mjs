@@ -64,7 +64,7 @@ const SHOULD_DISABLE_MAC_SIGN = (process.env.SQLCOPILOT_MAC_SIGN || '0').trim() 
 const QDRANT_VERSION = (process.env.QDRANT_VERSION || 'v1.13.4').trim();
 const DESKTOP_BUILD_HEAP_SIZE_MB = '8192';
 const DESKTOP_MANIFEST = JSON.parse(fs.readFileSync(path.join(DESKTOP_DIR, 'package.json'), 'utf8'));
-const PRODUCT_NAME = DESKTOP_MANIFEST.build?.productName || 'SQL Copliot';
+const PRODUCT_NAME = DESKTOP_MANIFEST.build?.productName || 'SQL Copilot';
 const PRODUCT_NAME_SLUG = PRODUCT_NAME.replace(/\s+/g, '-');
 const APP_ID = DESKTOP_MANIFEST.build?.appId || 'com.sqlcopilot.desktop';
 const ELECTRON_VERSION = String(DESKTOP_MANIFEST.devDependencies?.electron || '36.2.1').replace(/^[^\d]*/, '');
@@ -550,7 +550,7 @@ set "PROFILE=%~1"
 if "%PROFILE%"=="" if defined SQLCOPILOT_BACKEND_PROFILE set "PROFILE=%SQLCOPILOT_BACKEND_PROFILE%"
 set "JAVA_BIN=%BASE_DIR%jre\\bin\\java.exe"
 if defined SQLCOPILOT_JAVA_BIN set "JAVA_BIN=%SQLCOPILOT_JAVA_BIN%"
-if not defined SQLCOPILOT_DATA_DIR set "SQLCOPILOT_DATA_DIR=%LOCALAPPDATA%\\SQL Copliot"
+if not defined SQLCOPILOT_DATA_DIR set "SQLCOPILOT_DATA_DIR=%LOCALAPPDATA%\\SQL Copilot"
 
 if not exist "%JAVA_BIN%" (
   echo Bundled Java runtime not found: %JAVA_BIN%
