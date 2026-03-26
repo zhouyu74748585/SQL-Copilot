@@ -494,3 +494,23 @@
 - 前端预览验证通过：
   - `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4175 --strictPort`
   - `HEAD http://127.0.0.1:4175` 返回 `200 OK`
+
+
+### 2026-03-26 11:57:41
+
+## 本次目标
+- 为数据浏览页增加多选能力，支持批量删除当前页已勾选的数据行。
+
+## 关键改动
+- 数据浏览状态新增 `checkedRowKeys`，保留原有单行详情选择能力，同时支持复选框多选。
+- `TableDataVirtualGrid` 新增首列复选框与表头全选能力，并增加 `rowSelectionEnabled` 开关，避免影响查询结果表格。
+- 数据浏览底部删除按钮调整为“优先删除已勾选多行，否则回退删除当前选中行”，并展示已勾选数量。
+- 批量删除仍复用原有提交协议：已存在行进入 `deletedRows`，新建未提交行直接从草稿列表移除。
+
+## 验证结果
+- 前端类型检查通过：`npm run -w @sqlcopilot/desktop type-check`
+- 前端 clean 构建通过：`npm run -w @sqlcopilot/desktop build -- --emptyOutDir`
+- 后端 clean 启动成功：`mvn -f apps/server/pom.xml clean spring-boot:run '-Dspring-boot.run.arguments=--server.port=18131' '-Dfile.encoding=UTF-8'`
+- 后端健康检查通过：`curl -s http://127.0.0.1:18131/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`
+- 前端 preview 成功：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6076 --strictPort`
+- 前端连通性通过：`curl -I http://127.0.0.1:6076` 返回 `HTTP/1.1 200 OK`

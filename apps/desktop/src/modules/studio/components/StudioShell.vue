@@ -1644,11 +1644,14 @@
                 :scroll-x="tableDataScrollX(activeTableDataTab!)"
                 :scroll-y="queryResultScrollY"
                 :quick-sort-enabled="true"
+                :row-selection-enabled="true"
                 :reset-key="`${activeTableDataTab!.key}:${activeTableDataTab!.connectionId}:${activeTableDataTab!.databaseName}:${activeTableDataTab!.tableName}:${activeTableDataTab!.pageNo}:${activeTableDataTab!.pageSize}`"
                 :is-primary-key-column="(columnName: string) => isTableDataPrimaryKeyColumn(activeTableDataTab!, columnName)"
                 :column-editor-type="(columnName: string) => tableDataColumnEditorType(activeTableDataTab!, columnName)"
                 :sort-direction-for-column="(columnName: string) => tableDataSortDirectionForColumn(activeTableDataTab!, columnName)"
                 @select-row="(rowKey: string) => selectTableDataRow(activeTableDataTab!, rowKey)"
+                @toggle-row-check="(rowKey: string, checked: boolean) => toggleTableDataRowChecked(activeTableDataTab!, rowKey, checked)"
+                @toggle-all-row-checks="(checked: boolean) => toggleAllTableDataRowsChecked(activeTableDataTab!, checked)"
                 @start-edit="(rowKey: string, columnName: string) => startTableDataCellEdit(activeTableDataTab!, rowKey, columnName)"
                 @stop-edit="() => stopTableDataCellEdit(activeTableDataTab!)"
                 @update-cell="(rowKey: string, columnName: string, value: string | null) => updateTableDataCell(activeTableDataTab!, rowKey, columnName, value)"
@@ -1664,9 +1667,19 @@
                 <a-button size="small" type="text" class="table-data-icon-btn" :disabled="!activeTableDataTab.editable" @click="addTableDataRow(activeTableDataTab)">
                   <template #icon><plus-outlined /></template>
                 </a-button>
-                <a-button size="small" type="text" class="table-data-icon-btn" danger :disabled="!activeTableDataTab.editable || !activeTableDataTab.selectedRowKey" @click="deleteSelectedTableDataRow(activeTableDataTab)">
+                <a-button
+                  size="small"
+                  type="text"
+                  class="table-data-icon-btn"
+                  danger
+                  :disabled="!activeTableDataTab.editable || (!activeTableDataTab.selectedRowKey && !activeTableDataTab.checkedRowKeys.length)"
+                  @click="deleteSelectedTableDataRow(activeTableDataTab)"
+                >
                   <template #icon><minus-outlined /></template>
                 </a-button>
+                <span v-if="activeTableDataTab.checkedRowKeys.length" class="table-data-selection-count">
+                  {{ tt('已勾选') }} {{ activeTableDataTab.checkedRowKeys.length }} {{ tt('行') }}
+                </span>
                 <a-button
                   size="small"
                   type="text"
@@ -2501,6 +2514,7 @@
                   key: activeQueryTab.key,
                   editable: false,
                   selectedRowKey: '',
+                  checkedRowKeys: [],
                   editingCellKey: '',
                   pageNo: 1,
                   pageSize: activeResultRows.length,
@@ -2509,6 +2523,7 @@
                 :rows="activeResultRows"
                 :scroll-x="queryResultScrollX"
                 :scroll-y="queryResultScrollY"
+                :row-selection-enabled="false"
                 :reset-key="`${activeQueryTab.key}:${activeQueryTab.updatedAt}:${activeResultRows.length}:${activeResultColumns.length}`"
                 :is-primary-key-column="() => false"
                 :column-editor-type="() => 'text'"
@@ -4327,6 +4342,8 @@ const {
     nextTableDataPage,
     updateTableDataPageSize,
     selectTableDataRow,
+    toggleTableDataRowChecked,
+    toggleAllTableDataRowsChecked,
     startTableDataCellEdit,
     stopTableDataCellEdit,
     updateTableDataCell,

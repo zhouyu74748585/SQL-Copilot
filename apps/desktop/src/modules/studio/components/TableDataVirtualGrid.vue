@@ -10,6 +10,17 @@
         }"
       >
         <div
+          v-if="rowSelectionEnabled"
+          class="table-data-virtual-grid-header-cell table-data-virtual-grid-selection-cell"
+          :title="batchSelectTitle"
+        >
+          <a-checkbox
+            :checked="allRowsChecked"
+            :indeterminate="someRowsChecked"
+            @change="(event: any) => emit('toggle-all-row-checks', Boolean(event?.target?.checked))"
+          />
+        </div>
+        <div
           v-for="column in columns"
           :key="column.key"
           class="table-data-virtual-grid-header-cell"
@@ -69,6 +80,17 @@
             :data-testid="rowTestId(row.__rowKey)"
             @click="emit('select-row', row.__rowKey)"
           >
+            <div
+              v-if="rowSelectionEnabled"
+              class="table-data-virtual-grid-cell table-data-virtual-grid-selection-cell"
+              @click.stop="emit('select-row', row.__rowKey)"
+            >
+              <a-checkbox
+                :checked="checkedRowKeySet.has(row.__rowKey)"
+                @click.stop
+                @change="(event: any) => emit('toggle-row-check', row.__rowKey, Boolean(event?.target?.checked))"
+              />
+            </div>
             <div
               v-for="column in columns"
               :key="`${row.__rowKey}::${column.key}`"
@@ -162,6 +184,7 @@ const props = defineProps({
       key: string;
       editable: boolean;
       selectedRowKey: string;
+      checkedRowKeys: string[];
       editingCellKey: string;
       pageNo: number;
       pageSize: number;
@@ -200,6 +223,10 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  rowSelectionEnabled: {
+    type: Boolean,
+    default: true,
+  },
   sortDirectionForColumn: {
     type: Function as PropType<(columnName: string) => 'ASC' | 'DESC' | ''>,
     default: undefined,
@@ -208,6 +235,8 @@ const props = defineProps({
 
 const emit = defineEmits<{
   'select-row': [rowKey: string];
+  'toggle-row-check': [rowKey: string, checked: boolean];
+  'toggle-all-row-checks': [checked: boolean];
   'start-edit': [rowKey: string, columnName: string];
   'stop-edit': [];
   'update-cell': [rowKey: string, columnName: string, value: string | null];
@@ -228,12 +257,19 @@ const ROW_HEIGHT = 28;
 const OVERSCAN_COUNT = 8;
 const MIN_COLUMN_WIDTH = 80;
 const MAX_COLUMN_WIDTH = 640;
+const SELECTION_COLUMN_WIDTH = 42;
 
 let bodyResizeObserver: ResizeObserver | null = null;
 
 const bodyHeight = computed(() => Math.max(160, measuredBodyHeight.value || props.scrollY));
-const gridWidth = computed(() => Math.max(props.scrollX, 960));
-const gridTemplateColumns = computed(() => props.columns.map((column) => `${column.width || 132}px`).join(' '));
+const rowSelectionEnabled = computed(() => props.rowSelectionEnabled);
+const gridWidth = computed(() => Math.max(props.scrollX + (rowSelectionEnabled.value ? SELECTION_COLUMN_WIDTH : 0), 960 + (rowSelectionEnabled.value ? SELECTION_COLUMN_WIDTH : 0)));
+const gridTemplateColumns = computed(() => {
+  const widths = rowSelectionEnabled.value
+    ? [SELECTION_COLUMN_WIDTH, ...props.columns.map((column) => column.width || 132)]
+    : props.columns.map((column) => column.width || 132);
+  return widths.map((width) => `${width}px`).join(' ');
+});
 const totalHeight = computed(() => props.rows.length * ROW_HEIGHT);
 const visibleStart = computed(() => Math.max(0, Math.floor(scrollTop.value / ROW_HEIGHT) - OVERSCAN_COUNT));
 const visibleEnd = computed(() =>
@@ -245,9 +281,16 @@ const visibleEnd = computed(() =>
 const offsetTop = computed(() => visibleStart.value * ROW_HEIGHT);
 const visibleRows = computed(() => props.rows.slice(visibleStart.value, visibleEnd.value));
 const selectedRowKey = computed(() => props.tab.selectedRowKey);
+const checkedRowKeySet = computed(() => new Set(props.tab.checkedRowKeys || []));
+const allRowsChecked = computed(() => rowSelectionEnabled.value && props.rows.length > 0 && props.rows.every((row) => checkedRowKeySet.value.has(row.__rowKey)));
+const someRowsChecked = computed(() => rowSelectionEnabled.value && !allRowsChecked.value && props.rows.some((row) => checkedRowKeySet.value.has(row.__rowKey)));
 const emptyText = computed(() => {
   void currentLocale.value;
   return translateText('暂无数据');
+});
+const batchSelectTitle = computed(() => {
+  void currentLocale.value;
+  return translateText('批量选择');
 });
 const quickSortAscText = computed(() => {
   void currentLocale.value;

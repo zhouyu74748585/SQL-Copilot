@@ -1,5 +1,6 @@
 import {message} from 'ant-design-vue';
 import {postApi} from '../../../api/client';
+import {translateText, useAppI18n} from '../../../i18n';
 import type {
   TableDataCommitReq,
   TableDataCommitVO,
@@ -52,6 +53,8 @@ export interface TableDataModule {
   nextTableDataPage: (tab: TableDataTab) => Promise<void>;
   updateTableDataPageSize: (tab: TableDataTab, pageSize: number) => Promise<void>;
   selectTableDataRow: (tab: TableDataTab, rowKey: string) => void;
+  toggleTableDataRowChecked: (tab: TableDataTab, rowKey: string, checked: boolean) => void;
+  toggleAllTableDataRowsChecked: (tab: TableDataTab, checked: boolean) => void;
   startTableDataCellEdit: (tab: TableDataTab, rowKey: string, columnName: string) => void;
   stopTableDataCellEdit: (tab: TableDataTab) => void;
   isTableDataCellEditing: (tab: TableDataTab, rowKey: string, columnName: string) => boolean;
@@ -74,6 +77,11 @@ export interface TableDataModule {
 }
 
 export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
+  const {currentLocale} = useAppI18n();
+  const tt = (text: string) => {
+    void currentLocale.value;
+    return translateText(text);
+  };
   const tableDataFilterOperatorOptions: Array<{ label: string; value: TableDataFilterOperator }> = [
     {label: '等于', value: 'EQ'},
     {label: '不等于', value: 'NE'},
@@ -155,6 +163,7 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
       rows: [],
       deletedRows: [],
       selectedRowKey: '',
+      checkedRowKeys: [],
       editingCellKey: '',
       detailCollapsed: false,
       filterPanelVisible: false,
@@ -330,6 +339,31 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
     touchTableDataTab(tab);
   }
 
+  function toggleTableDataRowChecked(tab: TableDataTab, rowKey: string, checked: boolean) {
+    if (!tab.rows.some((item) => item.rowKey === rowKey)) {
+      return;
+    }
+    const checkedKeySet = new Set(tab.checkedRowKeys);
+    if (checked) {
+      checkedKeySet.add(rowKey);
+    } else {
+      checkedKeySet.delete(rowKey);
+    }
+    tab.checkedRowKeys = tab.rows
+      .map((item) => item.rowKey)
+      .filter((item) => checkedKeySet.has(item));
+    tab.selectedRowKey = rowKey;
+    if (tab.editingCellKey && !tab.editingCellKey.startsWith(`${rowKey}::`)) {
+      tab.editingCellKey = '';
+    }
+    touchTableDataTab(tab);
+  }
+
+  function toggleAllTableDataRowsChecked(tab: TableDataTab, checked: boolean) {
+    tab.checkedRowKeys = checked ? tab.rows.map((item) => item.rowKey) : [];
+    touchTableDataTab(tab);
+  }
+
   function startTableDataCellEdit(tab: TableDataTab, rowKey: string, columnName: string) {
     if (!tab.editable) {
       return;
@@ -411,7 +445,7 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
 
   function addTableDataRow(tab: TableDataTab) {
     if (!tab.editable) {
-      message.warning(tab.readOnlyReason || '当前表不可编辑');
+      message.warning(tab.readOnlyReason || tt('当前表不可编辑'));
       return;
     }
     const values: Record<string, string | null> = {};
@@ -435,30 +469,34 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
 
   function deleteSelectedTableDataRow(tab: TableDataTab) {
     if (!tab.editable) {
-      message.warning(tab.readOnlyReason || '当前表不可编辑');
+      message.warning(tab.readOnlyReason || tt('当前表不可编辑'));
       return;
     }
-    if (!tab.selectedRowKey) {
-      message.info('请先选择要删除的数据行');
+    const targetRowKeys = tab.checkedRowKeys.length ? [...tab.checkedRowKeys] : (tab.selectedRowKey ? [tab.selectedRowKey] : []);
+    if (!targetRowKeys.length) {
+      message.info(tt('请先选择要删除的数据行'));
       return;
     }
-    const index = tab.rows.findIndex((item) => item.rowKey === tab.selectedRowKey);
-    if (index < 0) {
-      message.info('未找到选中行');
+    const targetKeySet = new Set(targetRowKeys);
+    const targetRows = tab.rows.filter((item) => targetKeySet.has(item.rowKey));
+    if (!targetRows.length) {
+      message.info(tt('未找到选中行'));
       return;
     }
-    const target = tab.rows[index];
-    if (target.rowState !== 'new') {
-      tab.deletedRows = [
-        ...tab.deletedRows,
-        {
-          rowKey: target.rowKey,
-          values: {...target.values},
-        },
-      ];
-    }
-    tab.rows = tab.rows.filter((item) => item.rowKey !== target.rowKey);
-    tab.selectedRowKey = tab.rows[0]?.rowKey || '';
+    const deletedRows = [...tab.deletedRows];
+    targetRows.forEach((target) => {
+      if (target.rowState === 'new') {
+        return;
+      }
+      deletedRows.push({
+        rowKey: target.rowKey,
+        values: {...target.values},
+      });
+    });
+    tab.deletedRows = deletedRows;
+    tab.rows = tab.rows.filter((item) => !targetKeySet.has(item.rowKey));
+    tab.checkedRowKeys = tab.checkedRowKeys.filter((item) => !targetKeySet.has(item));
+    tab.selectedRowKey = tab.rows.find((item) => item.rowKey === tab.selectedRowKey)?.rowKey || tab.rows[0]?.rowKey || '';
     tab.editingCellKey = '';
     refreshDirtyState(tab);
     tab.rowDataVersion += 1;
@@ -468,11 +506,11 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
 
   async function submitTableDataChanges(tab: TableDataTab) {
     if (!tab.editable) {
-      message.warning(tab.readOnlyReason || '当前表不可编辑');
+      message.warning(tab.readOnlyReason || tt('当前表不可编辑'));
       return;
     }
     if (!tab.dirty) {
-      message.info('当前无待提交变更');
+      message.info(tt('当前无待提交变更'));
       return;
     }
 
@@ -480,7 +518,7 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
     if (!payload.inserts.length && !payload.updates.length && !payload.deletes.length) {
       tab.dirty = false;
       touchTableDataTab(tab);
-      message.info('未检测到有效变更');
+      message.info(tt('未检测到有效变更'));
       return;
     }
 
@@ -604,11 +642,12 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
       tab.columns = [];
       tab.primaryKeyColumns = [];
       tab.hasNextPage = false;
-      tab.errorMessage = '未选择数据库';
-      tab.readOnlyReason = '未选择数据库';
+      tab.errorMessage = tt('未选择数据库');
+      tab.readOnlyReason = tt('未选择数据库');
       tab.editable = false;
       tab.deletedRows = [];
       tab.selectedRowKey = '';
+      tab.checkedRowKeys = [];
       tab.editingCellKey = '';
       tab.sorts = [];
       tab.columnWidthMap = {};
@@ -631,6 +670,7 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
     tab.rows = [];
     tab.deletedRows = [];
     tab.selectedRowKey = '';
+    tab.checkedRowKeys = [];
     tab.editingCellKey = '';
     tab.dirty = false;
     tab.hasNextPage = false;
@@ -682,6 +722,7 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
       });
       tab.deletedRows = [];
       tab.selectedRowKey = tab.rows[0]?.rowKey || '';
+      tab.checkedRowKeys = [];
       tab.editingCellKey = '';
       tab.dirty = false;
       tab.rowDataVersion += 1;
@@ -700,6 +741,7 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
       tab.rows = [];
       tab.deletedRows = [];
       tab.selectedRowKey = '';
+      tab.checkedRowKeys = [];
       tab.editingCellKey = '';
       tab.hasNextPage = false;
       tab.dirty = false;
@@ -883,6 +925,8 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
     nextTableDataPage,
     updateTableDataPageSize,
     selectTableDataRow,
+    toggleTableDataRowChecked,
+    toggleAllTableDataRowsChecked,
     startTableDataCellEdit,
     stopTableDataCellEdit,
     isTableDataCellEditing,
