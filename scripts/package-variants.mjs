@@ -948,6 +948,19 @@ function createZipArtifact(outputDir, target) {
   runCommand(resolveShellCommand('tar'), ['-a', '-cf', zipPath, `./${packagedEntry}`], { cwd: outputDir });
 }
 
+function createMacTarGzArtifact(outputDir, target) {
+  const packagedEntry = findPackagedEntry(outputDir, `darwin-${target.electronArch}`);
+  if (!packagedEntry) {
+    throw new Error(`Unable to locate packaged mac app directory in ${outputDir}`);
+  }
+  const archivePath = path.join(outputDir, `${PRODUCT_NAME_SLUG}-${DESKTOP_MANIFEST.version}-mac-${target.electronArch}.tar.gz`);
+  runCommand(resolveShellCommand('python'), [
+    path.join('scripts', 'create-macos-archive.py'),
+    path.join(outputDir, packagedEntry),
+    archivePath,
+  ], { cwd: ROOT_DIR });
+}
+
 function createTarGzArtifact(outputDir, target) {
   const packagedEntry = findPackagedEntry(outputDir, `linux-${target.electronArch}`);
   if (!packagedEntry) {
@@ -980,7 +993,12 @@ function buildMacWithPackager(target, outputDir) {
     `--extra-resource=${path.join(DESKTOP_DIR, 'resources', 'qdrant')}`,
   ];
   runElectronPackager(args);
-  createZipArtifact(outputDir, target);
+  if (process.platform === 'darwin') {
+    createZipArtifact(outputDir, target);
+    return;
+  }
+  console.warn(`==> [desktop:${target.id}] non-mac host detected, exporting .tar.gz to preserve macOS executable permissions`);
+  createMacTarGzArtifact(outputDir, target);
 }
 
 function buildLinuxWithPackager(target, outputDir) {
