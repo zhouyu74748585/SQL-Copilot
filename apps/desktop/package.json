@@ -3,8 +3,8 @@
   "private": true,
   "version": "1.2.0",
   "license": "MIT",
-  "description": "SQL Copliot desktop application",
-  "author": "SQL Copliot",
+  "description": "SQL Copilot desktop application",
+  "author": "SQL Copilot",
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
@@ -44,9 +44,9 @@
   },
   "build": {
     "appId": "com.sqlcopilot.desktop",
-    "productName": "SQL Copliot",
-    "copyright": "Copyright (C) 2026 SQL Copliot",
-    "artifactName": "SQL-Copliot-${version}-${os}-${arch}.${ext}",
+    "productName": "SQL Copilot",
+    "copyright": "Copyright (C) 2026 SQL Copilot",
+    "artifactName": "SQL-Copilot-${version}-${os}-${arch}.${ext}",
     "directories": {
       "output": "../../release/desktop"
     },
