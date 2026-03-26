@@ -1,4 +1,4 @@
-import {message} from 'ant-design-vue';
+import {Modal, message} from 'ant-design-vue';
 import {postApi} from '../../../api/client';
 import {translateText, useAppI18n} from '../../../i18n';
 import type {
@@ -522,12 +522,21 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
       return;
     }
 
+    tab.errorMessage = '';
     tab.submitting = true;
     touchTableDataTab(tab);
     try {
       const result = await postApi<TableDataCommitVO>('/api/schema/table/data/commit', payload);
       message.success(`提交成功：新增 ${result.insertedCount}，更新 ${result.updatedCount}，删除 ${result.deletedCount}`);
       await loadTableDataPage(tab);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      tab.errorMessage = msg || tt('未知错误');
+      Modal.error({
+        title: tt('提交数据变更失败'),
+        content: `${tt('本次提交未成功，变更仍保留在当前页面，可修正后重试。')}\n${tab.errorMessage}`,
+        okText: tt('关闭'),
+      });
     } finally {
       tab.submitting = false;
       touchTableDataTab(tab);

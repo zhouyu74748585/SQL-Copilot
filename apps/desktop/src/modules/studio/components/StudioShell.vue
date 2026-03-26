@@ -2731,12 +2731,14 @@
         <a-row :gutter="12">
           <a-col :span="12">
             <a-form-item label="连接名称">
-              <a-input v-model:value="connectionForm.name" />
+              <a-input v-model:value="connectionForm.name" :status="connectionFieldStatus('name')" />
+              <div v-if="connectionFieldHelp('name')" class="connection-db-selector-error">{{ connectionFieldHelp('name') }}</div>
             </a-form-item>
           </a-col>
           <a-col :span="12">
             <a-form-item label="数据库类型">
-              <a-select v-model:value="connectionForm.dbType" :options="dbTypeOptions" />
+              <a-select v-model:value="connectionForm.dbType" :options="dbTypeOptions" :status="connectionFieldStatus('dbType')" />
+              <div v-if="connectionFieldHelp('dbType')" class="connection-db-selector-error">{{ connectionFieldHelp('dbType') }}</div>
             </a-form-item>
           </a-col>
         </a-row>
@@ -2744,12 +2746,14 @@
         <a-row :gutter="12">
           <a-col :span="12">
             <a-form-item label="连接分组">
-              <a-select v-model:value="connectionForm.groupId" :options="connectionGroupOptions" />
+              <a-select v-model:value="connectionForm.groupId" :options="connectionGroupOptions" :status="connectionFieldStatus('groupId')" />
+              <div v-if="connectionFieldHelp('groupId')" class="connection-db-selector-error">{{ connectionFieldHelp('groupId') }}</div>
             </a-form-item>
           </a-col>
           <a-col :span="12">
             <a-form-item label="环境">
-              <a-select v-model:value="connectionForm.env" :options="envOptions" />
+              <a-select v-model:value="connectionForm.env" :options="envOptions" :status="connectionFieldStatus('env')" />
+              <div v-if="connectionFieldHelp('env')" class="connection-db-selector-error">{{ connectionFieldHelp('env') }}</div>
             </a-form-item>
           </a-col>
         </a-row>
@@ -2760,12 +2764,14 @@
         >
           <a-col v-if="connectionFormDbTypeSpec?.requiresHost !== false" :span="12">
             <a-form-item label="主机">
-              <a-input v-model:value="connectionForm.host" />
+              <a-input v-model:value="connectionForm.host" :status="connectionFieldStatus('host')" />
+              <div v-if="connectionFieldHelp('host')" class="connection-db-selector-error">{{ connectionFieldHelp('host') }}</div>
             </a-form-item>
           </a-col>
           <a-col v-if="connectionFormDbTypeSpec?.requiresPort !== false" :span="12">
             <a-form-item label="端口">
-              <a-input-number v-model:value="connectionForm.port" style="width: 100%" />
+              <a-input-number v-model:value="connectionForm.port" style="width: 100%" :status="connectionFieldStatus('port')" />
+              <div v-if="connectionFieldHelp('port')" class="connection-db-selector-error">{{ connectionFieldHelp('port') }}</div>
             </a-form-item>
           </a-col>
         </a-row>
@@ -2776,7 +2782,8 @@
         >
           <a-col v-if="connectionFormDbTypeSpec?.supportsUsername !== false" :span="12">
             <a-form-item label="用户">
-              <a-input v-model:value="connectionForm.username" placeholder="请输入数据库用户" />
+              <a-input v-model:value="connectionForm.username" :placeholder="tt('请输入数据库用户')" :status="connectionFieldStatus('username')" />
+              <div v-if="connectionFieldHelp('username')" class="connection-db-selector-error">{{ connectionFieldHelp('username') }}</div>
             </a-form-item>
           </a-col>
           <a-col v-if="connectionFormDbTypeSpec?.supportsPassword !== false" :span="12">
@@ -2818,7 +2825,9 @@
                 v-else
                 v-model:value="connectionForm.databaseName"
                 :placeholder="getDatabaseNamePlaceholder(connectionForm.dbType)"
+                :status="connectionFieldStatus('databaseName')"
               />
+              <div v-if="connectionFieldHelp('databaseName')" class="connection-db-selector-error">{{ connectionFieldHelp('databaseName') }}</div>
             </a-form-item>
           </a-col>
         </a-row>
@@ -2846,19 +2855,22 @@
           <a-row :gutter="12">
             <a-col :span="12">
               <a-form-item label="SSH 主机">
-                <a-input v-model:value="connectionForm.sshHost" placeholder="例如 10.0.0.8" />
+                <a-input v-model:value="connectionForm.sshHost" placeholder="10.0.0.8" :status="connectionFieldStatus('sshHost')" />
+                <div v-if="connectionFieldHelp('sshHost')" class="connection-db-selector-error">{{ connectionFieldHelp('sshHost') }}</div>
               </a-form-item>
             </a-col>
             <a-col :span="12">
               <a-form-item label="SSH 端口">
-                <a-input-number v-model:value="connectionForm.sshPort" :min="1" :max="65535" style="width: 100%" />
+                <a-input-number v-model:value="connectionForm.sshPort" :min="1" :max="65535" style="width: 100%" :status="connectionFieldStatus('sshPort')" />
+                <div v-if="connectionFieldHelp('sshPort')" class="connection-db-selector-error">{{ connectionFieldHelp('sshPort') }}</div>
               </a-form-item>
             </a-col>
           </a-row>
           <a-row :gutter="12">
             <a-col :span="12">
               <a-form-item label="SSH 用户">
-                <a-input v-model:value="connectionForm.sshUser" placeholder="SSH 登录用户" />
+                <a-input v-model:value="connectionForm.sshUser" placeholder="SSH" :status="connectionFieldStatus('sshUser')" />
+                <div v-if="connectionFieldHelp('sshUser')" class="connection-db-selector-error">{{ connectionFieldHelp('sshUser') }}</div>
               </a-form-item>
             </a-col>
             <a-col :span="12">
@@ -2871,21 +2883,27 @@
           <a-form-item v-if="connectionForm.sshAuthType === 'SSH_PASSWORD'" label="SSH 密码">
             <a-input-password
               v-model:value="connectionForm.sshPassword"
-              :placeholder="isEditMode ? '留空表示不修改' : '请输入 SSH 密码'"
+              :placeholder="isEditMode ? tt('留空表示不修改') : tt('请输入 SSH 密码')"
+              :status="connectionFieldStatus('sshPassword')"
             />
+            <div v-if="connectionFieldHelp('sshPassword')" class="connection-db-selector-error">{{ connectionFieldHelp('sshPassword') }}</div>
           </a-form-item>
           <a-form-item v-else-if="connectionForm.sshAuthType === 'SSH_KEY_PATH'" label="SSH 私钥路径">
             <a-input
               v-model:value="connectionForm.sshPrivateKeyPath"
-              :placeholder="isEditMode ? '留空表示不修改' : '例如 /Users/me/.ssh/id_rsa'"
+              :placeholder="isEditMode ? tt('留空表示不修改') : '/Users/me/.ssh/id_rsa'"
+              :status="connectionFieldStatus('sshPrivateKeyPath')"
             />
+            <div v-if="connectionFieldHelp('sshPrivateKeyPath')" class="connection-db-selector-error">{{ connectionFieldHelp('sshPrivateKeyPath') }}</div>
           </a-form-item>
           <a-form-item v-else label="SSH 私钥文本">
             <a-textarea
               v-model:value="connectionForm.sshPrivateKeyText"
               :rows="4"
-              :placeholder="isEditMode ? '留空表示不修改' : '粘贴完整 PEM 私钥内容'"
+              :placeholder="isEditMode ? tt('留空表示不修改') : tt('请输入 SSH 私钥内容')"
+              :status="connectionFieldStatus('sshPrivateKeyText')"
             />
+            <div v-if="connectionFieldHelp('sshPrivateKeyText')" class="connection-db-selector-error">{{ connectionFieldHelp('sshPrivateKeyText') }}</div>
           </a-form-item>
 
           <a-form-item
@@ -3959,6 +3977,8 @@ const {
     contextMenu,
     contextMenuActions,
     connectionForm,
+    connectionFormSubmitted,
+    connectionFormErrors,
     connectionPreviewDbOptions,
     connectionPreviewLoading,
     connectionPreviewError,
@@ -4555,6 +4575,17 @@ const {
     fillRagConfigForm,
     resetConnectionModalState
 } = props.controller;
+
+function connectionFieldStatus(field: string) {
+  const errors = connectionFormErrors.value as Record<string, string | undefined>;
+  return connectionFormSubmitted.value && errors[field] ? 'error' : undefined;
+}
+
+function connectionFieldHelp(field: string) {
+  const errors = connectionFormErrors.value as Record<string, string | undefined>;
+  const error = connectionFormSubmitted.value ? errors[field] : '';
+  return error ? tt(error) : undefined;
+}
 
 type WorkspaceTabContextActionId = 'closeLeft' | 'closeRight' | 'closeOthers';
 

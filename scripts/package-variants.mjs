@@ -11,7 +11,9 @@ const SERVER_DIR = path.join(ROOT_DIR, 'apps', 'server');
 const SERVER_TARGET_DIR = path.join(SERVER_DIR, 'target');
 const DESKTOP_DIR = path.join(ROOT_DIR, 'apps', 'desktop');
 const DESKTOP_BACKEND_STAGE_DIR = path.join(DESKTOP_DIR, 'resources', 'backend');
+const DESKTOP_QDRANT_STAGE_DIR = path.join(DESKTOP_DIR, 'resources', 'qdrant-package', 'qdrant');
 const RELEASE_DIR = path.join(ROOT_DIR, 'release');
+const BACKEND_BUILD_STAGE_ROOT = path.join(RELEASE_DIR, '.backend-build-stage');
 const TEMP_DIR = path.join(RELEASE_DIR, '.jlink-temp');
 const DESKTOP_RELEASE_ROOT = (() => {
   const customOutputDir = (process.env.SQLCOPILOT_DESKTOP_RELEASE_DIR || '').trim();
@@ -337,6 +339,8 @@ function removePathWithRetry(targetPath) {
 function cleanupStageDir() {
   ensureEmptyDir(DESKTOP_BACKEND_STAGE_DIR);
   fs.writeFileSync(path.join(DESKTOP_BACKEND_STAGE_DIR, '.gitkeep'), '', 'utf8');
+  removePathWithRetry(path.dirname(DESKTOP_QDRANT_STAGE_DIR));
+  removePathWithRetry(BACKEND_BUILD_STAGE_ROOT);
 }
 
 function copyIfExists(sourcePath, targetPath) {
@@ -419,16 +423,16 @@ function resolveExtraJlinkModules() {
     .filter(Boolean);
 }
 
-function locatePackagedJar() {
-  const jars = fs.existsSync(SERVER_TARGET_DIR)
-    ? fs.readdirSync(SERVER_TARGET_DIR)
+function locatePackagedJar(targetDir = SERVER_TARGET_DIR) {
+  const jars = fs.existsSync(targetDir)
+    ? fs.readdirSync(targetDir)
         .filter((name) => name.endsWith('.jar') && !name.startsWith('original-'))
         .sort()
     : [];
   if (!jars.length) {
-    throw new Error(`No packaged jar found in ${SERVER_TARGET_DIR}`);
+    throw new Error(`No packaged jar found in ${targetDir}`);
   }
-  return path.join(SERVER_TARGET_DIR, jars[0]);
+  return path.join(targetDir, jars[0]);
 }
 
 function detectJlinkModules(unpackedDir) {
@@ -584,16 +588,39 @@ function prepareBackendRuntime(targetDir, jarPath, runtimeHome) {
   writeBackendLaunchScripts(targetDir);
 }
 
-function buildBackend() {
-  console.log('==> [backend] clean package');
+function resolveBackendOnnxRuntimeArtifactId(target) {
+  return target.runtimeOs === 'mac' ? 'onnxruntime' : 'onnxruntime_gpu';
+}
+
+function stageBackendProject(target) {
+  const stageDir = path.join(BACKEND_BUILD_STAGE_ROOT, target.id);
+  ensureCleanDir(stageDir);
+  fs.cpSync(SERVER_DIR, stageDir, {
+    recursive: true,
+    filter: (sourcePath) => {
+      const relativePath = path.relative(SERVER_DIR, sourcePath);
+      if (!relativePath) {
+        return true;
+      }
+      return !relativePath.split(path.sep).includes('target');
+    },
+  });
+  return stageDir;
+}
+
+function buildBackend(target) {
+  const onnxRuntimeArtifactId = resolveBackendOnnxRuntimeArtifactId(target);
+  const backendProjectDir = stageBackendProject(target);
+  console.log(`==> [backend:${target.id}] package (${onnxRuntimeArtifactId})`);
   runCommand(resolveShellCommand('mvn'), [
     '-f',
-    path.join('apps', 'server', 'pom.xml'),
+    path.join(backendProjectDir, 'pom.xml'),
     'clean',
     'package',
     '-DskipTests',
+    `-Donnxruntime.artifactId=${onnxRuntimeArtifactId}`,
   ]);
-  return locatePackagedJar();
+  return locatePackagedJar(path.join(backendProjectDir, 'target'));
 }
 
 function buildDesktopTypeCheckOnce() {
@@ -877,6 +904,13 @@ function ensureQdrantBinary(target) {
   return targetBinary;
 }
 
+function preparePackagedQdrant(target) {
+  runCommand(resolveShellCommand('node'), [
+    path.join('apps', 'desktop', 'scripts', 'prepare-qdrant-package.mjs'),
+    `--target=${target.qdrantPlatformKey}`,
+  ], { cwd: ROOT_DIR });
+}
+
 function prepareDesktopOutputDir(target) {
   const outputDir = path.join(DESKTOP_RELEASE_ROOT, target.id);
   ensureCleanDir(outputDir);
@@ -949,6 +983,19 @@ function createZipArtifact(outputDir, target) {
   runCommand(resolveShellCommand('tar'), ['-a', '-cf', zipPath, `./${packagedEntry}`], { cwd: outputDir });
 }
 
+function createMacTarGzArtifact(outputDir, target) {
+  const packagedEntry = findPackagedEntry(outputDir, `darwin-${target.electronArch}`);
+  if (!packagedEntry) {
+    throw new Error(`Unable to locate packaged mac app directory in ${outputDir}`);
+  }
+  const archivePath = path.join(outputDir, `${PRODUCT_NAME_SLUG}-${DESKTOP_MANIFEST.version}-mac-${target.electronArch}.tar.gz`);
+  runCommand(resolveShellCommand('python'), [
+    path.join('scripts', 'create-macos-archive.py'),
+    path.join(outputDir, packagedEntry),
+    archivePath,
+  ], { cwd: ROOT_DIR });
+}
+
 function createTarGzArtifact(outputDir, target) {
   const packagedEntry = findPackagedEntry(outputDir, `linux-${target.electronArch}`);
   if (!packagedEntry) {
@@ -978,10 +1025,15 @@ function buildMacWithPackager(target, outputDir) {
     `--app-bundle-id=${APP_ID}`,
     `--icon=${path.resolve(ROOT_DIR, 'icon.icns')}`,
     `--extra-resource=${DESKTOP_BACKEND_STAGE_DIR}`,
-    `--extra-resource=${path.join(DESKTOP_DIR, 'resources', 'qdrant')}`,
+    `--extra-resource=${DESKTOP_QDRANT_STAGE_DIR}`,
   ];
   runElectronPackager(args);
-  createZipArtifact(outputDir, target);
+  if (process.platform === 'darwin') {
+    createZipArtifact(outputDir, target);
+    return;
+  }
+  console.warn(`==> [desktop:${target.id}] non-mac host detected, exporting .tar.gz to preserve macOS executable permissions`);
+  createMacTarGzArtifact(outputDir, target);
 }
 
 function buildLinuxWithPackager(target, outputDir) {
@@ -1000,7 +1052,7 @@ function buildLinuxWithPackager(target, outputDir) {
     `--electron-zip-dir=${ELECTRON_CACHE_DIR}`,
     `--icon=${path.resolve(ROOT_DIR, 'icon.png')}`,
     `--extra-resource=${DESKTOP_BACKEND_STAGE_DIR}`,
-    `--extra-resource=${path.join(DESKTOP_DIR, 'resources', 'qdrant')}`,
+    `--extra-resource=${DESKTOP_QDRANT_STAGE_DIR}`,
   ];
   runElectronPackager(args);
   createTarGzArtifact(outputDir, target);
@@ -1020,6 +1072,8 @@ function buildDesktopForTarget(target) {
     return;
   }
 
+  console.log(`==> [qdrant:${target.id}] stage`);
+  preparePackagedQdrant(target);
   console.log(`==> [desktop:${target.id}] output cleanup`);
   const outputDir = prepareDesktopOutputDir(target);
 
@@ -1081,9 +1135,9 @@ function main() {
     buildDesktopTypeCheckOnce();
     buildDesktopAssetsOnce();
 
-    const jarPath = buildBackend();
     for (const target of targets) {
       console.log(`==> [target] ${target.id}`);
+      const jarPath = buildBackend(target);
       ensureQdrantBinary(target);
       const runtimeHome = resolveBundledRuntimeHome(target, jarPath);
       exportBackendIfRequested(target, jarPath, runtimeHome);
