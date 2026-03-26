@@ -3,6 +3,7 @@ node_modules
 .DS_Store
 apps/desktop/dist
 apps/desktop/resources/backend
+apps/desktop/resources/qdrant-package
 apps/server/target
 apps/server/data
 apps/server/exports

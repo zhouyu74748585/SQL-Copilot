@@ -191,6 +191,24 @@ interface ObjectRow {
   updatedAt?: number;
 }
 
+type ConnectionFormFieldKey =
+  | 'name'
+  | 'dbType'
+  | 'groupId'
+  | 'env'
+  | 'host'
+  | 'port'
+  | 'databaseName'
+  | 'username'
+  | 'sshHost'
+  | 'sshPort'
+  | 'sshUser'
+  | 'sshPassword'
+  | 'sshPrivateKeyPath'
+  | 'sshPrivateKeyText';
+
+type ConnectionFormErrorMap = Partial<Record<ConnectionFormFieldKey, string>>;
+
 interface TableCopyClipboard {
   sourceConnectionId: number;
   sourceDatabaseName: string;
@@ -962,6 +980,7 @@ const contextMenu = reactive({
 });
 
 const connectionForm = reactive<ConnectionCreateReq>(defaultConnectionForm());
+const connectionFormSubmitted = ref(false);
 
 const supportedDbTypes = ref<ConnectionDbTypeVO[]>([]);
 
@@ -1349,6 +1368,79 @@ const canPreviewDatabases = computed(() => {
   }
   return true;
 });
+
+function containsDatabaseInHostInput(rawHost?: string): boolean {
+  const host = (rawHost || '').trim();
+  if (!host) {
+    return false;
+  }
+  const queryIndex = host.indexOf('?');
+  const normalized = queryIndex >= 0 ? host.slice(0, queryIndex) : host;
+  const slashIndex = normalized.indexOf('/');
+  return slashIndex >= 0 && slashIndex < normalized.length - 1;
+}
+
+const connectionFormErrors = computed<ConnectionFormErrorMap>(() => {
+  const errors: ConnectionFormErrorMap = {};
+  const dbType = (connectionForm.dbType || '').trim().toUpperCase();
+  const requiresUsername = connectionFormDbTypeSpec.value?.supportsUsername !== false
+    && dbType !== 'MONGODB'
+    && dbType !== 'REDIS';
+
+  if (!connectionForm.name?.trim()) {
+    errors.name = '请输入连接名称';
+  }
+  if (!dbType) {
+    errors.dbType = '请选择数据库类型';
+  }
+  if (!connectionForm.groupId || connectionForm.groupId <= 0) {
+    errors.groupId = '请选择连接分组';
+  }
+  if (!connectionForm.env?.trim()) {
+    errors.env = '请选择环境';
+  }
+  if (connectionFormDbTypeSpec.value?.requiresHost !== false && !connectionForm.host?.trim()) {
+    errors.host = '请输入数据库主机';
+  }
+  if (connectionFormDbTypeSpec.value?.requiresPort !== false
+    && (!connectionForm.port || connectionForm.port <= 0 || connectionForm.port > 65535)
+  ) {
+    errors.port = '请输入有效端口';
+  }
+  if (dbType === 'SQLITE' && !connectionForm.databaseName?.trim()) {
+    errors.databaseName = '请输入 SQLite 数据库文件路径';
+  }
+  if (dbType === 'ORACLE' && !connectionForm.databaseName?.trim() && !containsDatabaseInHostInput(connectionForm.host)) {
+    errors.databaseName = '请输入 Oracle 服务名';
+  }
+  if (requiresUsername && !connectionForm.username?.trim()) {
+    errors.username = '请输入数据库用户';
+  }
+  if (connectionForm.sshEnabled) {
+    if (!connectionForm.sshHost?.trim()) {
+      errors.sshHost = '请输入 SSH 主机';
+    }
+    if (!connectionForm.sshPort || connectionForm.sshPort <= 0 || connectionForm.sshPort > 65535) {
+      errors.sshPort = '请输入有效 SSH 端口';
+    }
+    if (!connectionForm.sshUser?.trim()) {
+      errors.sshUser = '请输入 SSH 用户';
+    }
+    const authType = connectionForm.sshAuthType || 'SSH_PASSWORD';
+    if (authType === 'SSH_PASSWORD' && !connectionForm.sshPassword?.trim()) {
+      errors.sshPassword = '请输入 SSH 密码';
+    }
+    if (authType === 'SSH_KEY_PATH' && !connectionForm.sshPrivateKeyPath?.trim()) {
+      errors.sshPrivateKeyPath = '请输入 SSH 私钥路径';
+    }
+    if (authType === 'SSH_KEY_TEXT' && !connectionForm.sshPrivateKeyText?.trim()) {
+      errors.sshPrivateKeyText = '请输入 SSH 私钥内容';
+    }
+  }
+  return errors;
+});
+
+const hasConnectionFormErrors = computed(() => Object.keys(connectionFormErrors.value).length > 0);
 
 const connectionTreeData = computed(() => {
   const keyword = connectionKeyword.value.trim().toLowerCase();
@@ -4871,6 +4963,12 @@ async function moveConnectionGroup(connectionId: number, targetGroupId: number) 
 }
 
 async function saveConnection() {
+  connectionFormSubmitted.value = true;
+  if (hasConnectionFormErrors.value) {
+    const firstError = Object.values(connectionFormErrors.value).find((item) => !!item);
+    message.warning(firstError || '请完善必填项后再保存');
+    return;
+  }
   await runSafely(async () => {
     const editing = isEditMode.value;
     const normalizedSelectedDatabases = isMultiDatabaseType(connectionForm.dbType)
@@ -10360,6 +10458,7 @@ function defaultConnectionForm(): ConnectionCreateReq {
 
 function resetConnectionForm() {
   Object.assign(connectionForm, defaultConnectionForm());
+  connectionFormSubmitted.value = false;
   if (connectionGroups.value.length) {
     connectionForm.groupId = connectionGroups.value[0].id;
   }
@@ -10367,6 +10466,7 @@ function resetConnectionForm() {
 }
 
 function fillConnectionForm(connection: ConnectionVO) {
+  connectionFormSubmitted.value = false;
   Object.assign(connectionForm, {
     name: connection.name,
     dbType: connection.dbType,
@@ -10658,6 +10758,8 @@ function resetConnectionModalState() {
     queryEditorSectionResizeState,
     contextMenu,
     connectionForm,
+    connectionFormSubmitted,
+    connectionFormErrors,
     connectionPreviewDbOptions,
     connectionPreviewLoading,
     connectionPreviewError,

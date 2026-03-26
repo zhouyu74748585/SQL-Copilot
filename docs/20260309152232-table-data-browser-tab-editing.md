@@ -514,3 +514,28 @@
 - 后端健康检查通过：`curl -s http://127.0.0.1:18131/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`
 - 前端 preview 成功：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6076 --strictPort`
 - 前端连通性通过：`curl -I http://127.0.0.1:6076` 返回 `HTTP/1.1 200 OK`
+
+
+### 2026-03-26 16:15:10
+
+## 追加记录（数据浏览提交失败前端弹窗提示，2026-03-26 16:00）
+
+### 本次目标
+- 在数据浏览页提交数据变更失败时，提供明确的前端弹窗提示，避免失败仅停留在异常状态或页内文本。
+
+### 关键改动
+- 更新 `apps/desktop/src/modules/studio/composables/useTableDataModule.ts`
+  - 为 `submitTableDataChanges(tab)` 增加 `catch` 分支。
+  - 提交前先清空旧的 `errorMessage`，避免历史错误残留。
+  - 提交失败时保留当前未提交变更，并将错误写回 `tab.errorMessage`。
+  - 新增 `Modal.error` 弹窗，提示“提交数据变更失败”，并告知用户可修正后重试。
+- 更新 `apps/desktop/src/i18n/messages.ts`
+  - 为新增失败弹窗标题、说明文案和兜底错误文案补充中英双语映射。
+
+### 验证结果
+- 前端类型检查通过：`npm run -w @sqlcopilot/desktop type-check`
+- 前端 clean 构建通过：`npm run -w @sqlcopilot/desktop build -- --emptyOutDir`
+- 后端 clean 启动成功：`mvn -f apps/server/pom.xml clean spring-boot:run '-Dspring-boot.run.arguments=--server.port=18132' '-Dfile.encoding=UTF-8'`
+- 后端健康检查通过：`curl http://127.0.0.1:18132/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`
+- 前端 preview 成功：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6077 --strictPort`
+- 前端连通性通过：`curl -I http://127.0.0.1:6077` 返回 `HTTP/1.1 200 OK`

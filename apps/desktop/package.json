@@ -58,7 +58,7 @@
     ],
     "extraResources": [
       {
-        "from": "resources/qdrant",
+        "from": "resources/qdrant-package/qdrant",
         "to": "qdrant",
         "filter": [
           "**/*"
