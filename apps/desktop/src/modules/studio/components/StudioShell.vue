@@ -2687,7 +2687,7 @@
                     <a-tooltip title="按当前配置生成图表">
                       <span class="query-chart-control-label">生成图表</span>
                     </a-tooltip>
-                    <a-button size="small" type="primary" class="sql-action-icon-btn query-chart-generate-btn" @click="generateManualChartForTab(activeQueryTab)">
+                    <a-button size="small" class="sql-action-icon-btn query-chart-generate-btn" @click="generateManualChartForTab(activeQueryTab)">
                       <template #icon><img class="toolbar-action-icon sql-action-icon-img" :src="chartIcon" alt="" /></template>
                     </a-button>
                   </div>
