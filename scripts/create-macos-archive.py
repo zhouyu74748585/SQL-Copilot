@@ -35,6 +35,8 @@ def should_be_executable(arcname: str, source_path: str) -> bool:
         return True
     if normalized.endswith("/Contents/Resources/backend/run.sh"):
         return True
+    if "/Contents/Resources/backend/jre/" in normalized and is_macho_binary(source_path):
+        return True
     if "/Contents/Resources/backend/jre/bin/" in normalized:
         return True
     if "/Contents/Resources/qdrant/darwin-" in normalized and normalized.endswith("/qdrant"):
