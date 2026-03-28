@@ -118,9 +118,11 @@ public class AiServiceImpl implements AiService {
         约束：
         1) 当前 schema 真值优先级最高，术语/口径次之；样例 SQL 仅作参考，不能覆盖当前 schema 真值。
         2) 若样例 SQL 与当前 schema、字段、术语定义冲突，必须以当前 schema 和术语定义为准。
-        3) SQL必须可执行，不要使用 markdown 代码块。
-        4) 输出的SQL的语法需要匹配上下文中的数据库类型 
-        5) 一次仅输出一条最满足要求的SQL
+        3) 仅允许使用当前提示词中已经明确提供、确认的表；禁止臆造表、猜测表、改写表名或引用未提供的表。
+        4) 若当前提示词未提供足够的表/字段信息以满足需求，禁止猜测补齐；只能在已提供表范围内生成 SQL。
+        5) SQL必须可执行，不要使用 markdown 代码块。
+        6) 输出的SQL的语法需要匹配上下文中的数据库类型 
+        7) 一次仅输出一条最满足要求的SQL
         """;
     private static final String KV_GENERATE_QUERY_SYSTEM_PROMPT = """
         你是 KV/文档数据库查询助手。
@@ -172,13 +174,15 @@ public class AiServiceImpl implements AiService {
         约束：
         1) 当前 schema 真值优先级最高，术语/口径次之；样例 SQL 仅作参考，不能覆盖当前 schema 真值。
         2) 若样例 SQL 与当前 schema、字段、术语定义冲突，必须以当前 schema 和术语定义为准。
-        3) chartType=LINE/BAR/TREND 时必须提供 xField + yFields(至少1项)；
-        4) 若 chartType=LINE/BAR/TREND 且需要“按分类拆多系列”展示，必须额外提供 seriesField，且 yFields 仅允许 1 项；
-        5) chartType=PIE 时必须提供 categoryField + valueField；
-        6) chartType=SCATTER 时必须提供 xField + yFields(仅1项)
-        7) SQL 必须可执行，不要使用 markdown 代码块。
-        8) 输出的SQL的语法需要匹配上下文中的数据库类型 
-        9) 一次仅输出一条最满足要求的SQL
+        3) 仅允许使用当前提示词中已经明确提供、确认的表；禁止臆造表、猜测表、改写表名或引用未提供的表。
+        4) 若当前提示词未提供足够的表/字段信息以满足需求，禁止猜测补齐；只能在已提供表范围内生成 SQL。
+        5) chartType=LINE/BAR/TREND 时必须提供 xField + yFields(至少1项)；
+        6) 若 chartType=LINE/BAR/TREND 且需要“按分类拆多系列”展示，必须额外提供 seriesField，且 yFields 仅允许 1 项；
+        7) chartType=PIE 时必须提供 categoryField + valueField；
+        8) chartType=SCATTER 时必须提供 xField + yFields(仅1项)
+        9) SQL 必须可执行，不要使用 markdown 代码块。
+        10) 输出的SQL的语法需要匹配上下文中的数据库类型 
+        11) 一次仅输出一条最满足要求的SQL
         """;
     private static final String EXPLAIN_SQL_SYSTEM_PROMPT = """
         你是数据库讲解助手。请用中文解释 SQL 的业务含义。
@@ -203,8 +207,9 @@ public class AiServiceImpl implements AiService {
         2) 输出必须且只能是一个 JSON 对象，包含以下字段：
             - errorExplanation：使用中文简要说明 SQL 为什么失败，以及做了哪些修改
             - repairedSql：可执行的修复后 SQL
-        3) 不要输出 Markdown、代码块或任何额外文本。
-        4) 输出的SQL的语法需要匹配上下文中的数据库类型 
+        3) 若需要补充、替换或修复表名，只能使用当前提示词中已经明确提供、确认的表；禁止臆造表、猜测表或引用未提供的表。
+        4) 不要输出 Markdown、代码块或任何额外文本。
+        5) 输出的SQL的语法需要匹配上下文中的数据库类型 
         """;
     private static final String ER_RELATION_INFER_SYSTEM_PROMPT = """
         你是一个数据库关系推断助手。
@@ -2843,9 +2848,26 @@ public class AiServiceImpl implements AiService {
         }
         builder.append("\n\n");
         builder.append("用户需求:\n").append(req.getPrompt());
+        builder.append("\n\n表使用硬约束:\n").append(buildTableUsageGuardrails(context));
         builder.append("\n\n检索增强输入(含会话记忆):\n").append(context.retrievalInputForPrompt());
         builder.append("\n\nRAG Context:\n").append(context.promptContext());
         return builder.toString();
+    }
+
+    private String buildTableUsageGuardrails(AiConversationContextManager.ConversationGenerationContext context) {
+        List<String> allowedTables = context == null || context.relatedTables() == null
+            ? List.of()
+            : context.relatedTables().stream()
+            .map(this::normalizeRelatedTableName)
+            .filter(item -> !item.isBlank())
+            .distinct()
+            .toList();
+        String tableText = allowedTables.isEmpty() ? "无" : String.join(", ", allowedTables);
+        return """
+            - 仅可使用当前提示词中已明确提供和确认的表，禁止猜测、臆造、改写或替换表名
+            - 允许使用的表: %s
+            - 若“允许使用的表”为无或无法满足需求，禁止自行补充新表；仍需严格以当前提示词中的已知表信息为准
+            """.formatted(tableText).trim();
     }
 
     private DatabaseBasicInfo loadDatabaseBasicInfo(Long connectionId, String requestDatabaseName) {
