@@ -176,3 +176,70 @@
 
 ## 说明
 - 这次异常的直接原因是 Qdrant 当前环境只接受无符号整数或 UUID 作为 point ID，而原实现传入了 `managed-memory-1` 这类自定义字符串。
+
+
+### 2026-03-27 23:24:00
+
+## 本轮目标
+- 将“历史 SQL 记忆 + 长期记忆”双轨体系收敛为“单一长期记忆池”。
+- 停止成功 SQL 自动写入 `sql_history/history_query` 向量，仅保留 `query_history` 作为原始执行历史。
+- 将自动长期记忆升级为结构化摘要，并在上下文压缩与“更正/重点提示”两类高价值时机触发。
+- 下线前端“历史 SQL 记忆”管理入口，仅保留长期记忆管理与展示。
+
+## 关键改动
+- 后端 `apps/server/src/main/java/com/sqlcopilot/studio/dto/memory/MemoryStructuredSummaryVO.java`
+  - 新增长期记忆结构化摘要对象，统一承载 `memoryType`、`facts`、`constraints`、`corrections`、`priorityHints`、`relatedTables`、`sourceHistoryIds`、`confidence`、`summaryText` 等字段。
+- 后端 `apps/server/src/main/java/com/sqlcopilot/studio/entity/MemoryEntryEntity.java`
+  - 新增 `structuredSummaryJson` 字段。
+- 后端 `apps/server/src/main/java/com/sqlcopilot/studio/dto/memory/MemoryEntryVO.java`
+  - 返回长期记忆结构化摘要，供前端详情面板展示。
+- 后端 `apps/server/src/main/java/com/sqlcopilot/studio/mapper/MemoryEntryMapper.java`
+  - 插入、更新长期记忆时同步持久化 `structured_summary_json`。
+- 后端 `apps/server/src/main/java/com/sqlcopilot/studio/support/MemorySchemaMigrationRunner.java`
+  - 为 `memory_entry` 表补齐 `structured_summary_json` 建表与迁移逻辑。
+- 后端 `apps/server/src/main/java/com/sqlcopilot/studio/service/MemoryService.java`
+  - 移除历史 SQL 记忆分页、删除、提升接口定义。
+  - 将自动长期记忆 upsert 改为接收结构化摘要对象。
+- 后端 `apps/server/src/main/java/com/sqlcopilot/studio/controller/MemoryController.java`
+  - 下线 `/api/memory/history/page`、`/api/memory/history/remove`、`/api/memory/history/promote`。
+- 后端 `apps/server/src/main/java/com/sqlcopilot/studio/service/impl/MemoryServiceImpl.java`
+  - 手工长期记忆保存时自动生成最小结构化摘要。
+  - 自动长期记忆按 `scope + connectionId + databaseName + sourceSessionId` 单条 upsert，并按结构化字段做 merge。
+  - 长期记忆向量文本与 payload 改为基于结构化摘要展平。
+  - `cleanupLegacyVectors()` 新增清理旧 `sql_history` 集合。
+- 后端 `apps/server/src/main/java/com/sqlcopilot/studio/service/impl/AiConversationContextManager.java`
+  - 上下文压缩摘要升级为结构化长期记忆摘要。
+  - 意图历史检索改为召回长期记忆，不再依赖全局 SQL 历史向量。
+  - 新增“更正/重点提示”即时沉淀入口，复用现有意图识别结果。
+- 后端 `apps/server/src/main/java/com/sqlcopilot/studio/service/impl/AiServiceImpl.java`
+  - 轻量意图识别 JSON 新增 `memorySignalType`、`memoryConfidence`、`memoryDeltaSummary`。
+  - 命中高置信度“更正/重点提示”时，立即触发当前窗口结构化长期记忆总结。
+- 后端 `apps/server/src/main/java/com/sqlcopilot/studio/service/impl/SqlServiceImpl.java`
+  - 停止成功 SQL 写入 `history_query` 向量，仅保留 `query_history` 入库。
+- 前端 `apps/desktop/src/modules/studio/composables/useMemoryModule.ts`
+  - 记忆模块收敛为单一 `entries` 节点。
+  - 删除历史 SQL 记忆状态、接口调用与操作逻辑。
+- 前端 `apps/desktop/src/modules/studio/components/StudioShell.vue`
+  - 记忆管理仅保留“长期记忆”入口。
+  - 长期记忆详情新增结构化摘要展示：记忆类型、纠正信息、重点提示、约束、事实、关联表。
+- 前端 `apps/desktop/src/types/index.ts`
+  - 新增 `MemoryStructuredSummary` 类型。
+- 前端 `apps/desktop/src/i18n/messages.ts`
+  - 补充长期记忆结构化展示字段的中英映射。
+
+## 验证结果
+- 前端 clean 构建：
+  - `npm run -w @sqlcopilot/desktop build -- --emptyOutDir` 通过。
+- 后端 Maven clean 打包：
+  - `mvn -f apps/server/pom.xml clean package -DskipTests -Dfile.encoding=UTF-8` 通过。
+- 后端启动验证：
+  - 启动 `java -jar apps/server/target/sql-copilot-server-0.1.0.jar` 成功。
+  - `GET http://127.0.0.1:18080/api/health` 返回 `200`，响应为 `{"code":0,"message":"success","data":"ok"}`。
+- 前端 preview 验证：
+  - 启动 `npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 4173` 成功。
+  - `GET http://127.0.0.1:4173` 返回 `200`，页面标题为 `SQL Copilot`。
+
+## 说明
+- 本轮按需求不兼容旧“历史 SQL 记忆”运营方式，前端入口与接口已整体下线。
+- 未迁移旧 `sql_history` 存量数据到长期记忆，新版本依赖后续新的结构化自动记忆逐步沉淀。
+- `query_history` 仍保留，继续承担最近会话上下文、Explain/Analyze 最近 SQL 兜底与历史展示职责。

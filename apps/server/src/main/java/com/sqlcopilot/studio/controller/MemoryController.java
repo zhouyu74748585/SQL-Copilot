@@ -33,20 +33,4 @@ public class MemoryController {
         memoryService.removeEntry(req);
         return ApiResponse.success(Boolean.TRUE);
     }
-
-    @GetMapping("/history/page")
-    public ApiResponse<MemoryHistoryPageVO> historyPage(@Valid MemoryHistoryPageReq req) {
-        return ApiResponse.success(memoryService.pageHistories(req));
-    }
-
-    @PostMapping("/history/remove")
-    public ApiResponse<Boolean> removeHistory(@Valid @RequestBody MemoryHistoryRemoveReq req) {
-        memoryService.removeHistory(req);
-        return ApiResponse.success(Boolean.TRUE);
-    }
-
-    @PostMapping("/history/promote")
-    public ApiResponse<MemoryEntryVO> promoteHistory(@Valid @RequestBody MemoryHistoryPromoteReq req) {
-        return ApiResponse.success(memoryService.promoteHistory(req));
-    }
 }

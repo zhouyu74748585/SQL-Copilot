@@ -10,6 +10,7 @@ public class MemoryEntryEntity {
     private String databaseName;
     private String title;
     private String summary;
+    private String structuredSummaryJson;
     private String sourceType;
     private String sourceSessionId;
     private String sourceHistoryIdsJson;

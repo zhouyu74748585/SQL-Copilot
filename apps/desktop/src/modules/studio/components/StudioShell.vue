@@ -410,14 +410,6 @@
               <span>长期记忆</span>
               <span>{{ memoryEntryTotal }}</span>
             </button>
-            <button
-              class="knowledge-nav-item"
-              :class="{ 'is-active': activeMemoryTab?.node === 'history-sql' }"
-              @click="openMemoryNode('history-sql')"
-            >
-              <span>历史 SQL 记忆</span>
-              <span>{{ memoryHistoryTotal }}</span>
-            </button>
           </a-collapse-panel>
         </a-collapse>
       </aside>
@@ -1004,27 +996,6 @@
                   <template #icon><img class="toolbar-action-icon memory-toolbar-icon" :src="deleteIcon" alt="" /></template>
                 </a-button>
               </a-tooltip>
-              <a-tooltip v-if="memoryActiveNode === 'history-sql' && selectedMemoryHistory" title="提升为长期记忆">
-                <a-button
-                  size="small"
-                  class="toolbar-icon-btn memory-toolbar-action"
-                  :loading="memoryActionLoading"
-                  @click="promoteMemoryHistory"
-                >
-                  <template #icon><img class="toolbar-action-icon memory-toolbar-icon" :src="longTermMemoryIcon" alt="" /></template>
-                </a-button>
-              </a-tooltip>
-              <a-tooltip v-if="memoryActiveNode === 'history-sql' && selectedMemoryHistory" title="删除历史 SQL 记忆">
-                <a-button
-                  size="small"
-                  danger
-                  class="toolbar-icon-btn memory-toolbar-action"
-                  :loading="memoryActionLoading"
-                  @click="removeMemoryHistory"
-                >
-                  <template #icon><img class="toolbar-action-icon memory-toolbar-icon" :src="deleteIcon" alt="" /></template>
-                </a-button>
-              </a-tooltip>
             </div>
             <div class="center-toolbar-right knowledge-toolbar-right">
               <a-select
@@ -1056,7 +1027,7 @@
           </div>
 
           <a-spin :spinning="memoryLoading">
-            <div v-if="memoryActiveNode === 'entries'" class="knowledge-list">
+            <div class="knowledge-list">
               <button
                 v-for="item in memoryEntryItems"
                 :key="item.id"
@@ -1077,41 +1048,27 @@
               </button>
               <div v-if="!memoryEntryItems.length" class="empty-pane">暂无长期记忆数据</div>
             </div>
-            <div v-else class="knowledge-list">
-              <button
-                v-for="item in memoryHistoryItems"
-                :key="item.historyId"
-                class="knowledge-card"
-                :class="{ 'is-active': selectedMemoryHistory?.historyId === item.historyId }"
-                @click="selectMemoryHistory(item)"
-              >
-                <div class="knowledge-card-head">
-                  <strong>{{ item.promptText || item.semanticSummary || '未命名历史 SQL 记忆' }}</strong>
-                  <a-tag color="geekblue">{{ item.databaseName || '连接级' }}</a-tag>
-                </div>
-                <div class="knowledge-card-desc">{{ item.semanticSummary || item.sqlText }}</div>
-                <div class="knowledge-card-meta">
-                  <span>{{ selectedMemoryHistory?.historyId === item.historyId ? '已选择' : '未选择' }}</span>
-                  <span>{{ formatTime(item.createdAt) }}</span>
-                </div>
-              </button>
-              <div v-if="!memoryHistoryItems.length" class="empty-pane">暂无历史 SQL 记忆数据</div>
-            </div>
           </a-spin>
         </section>
 
         <div class="pane-splitter pane-splitter-right" @mousedown="startResizeBrowserPane" />
 
         <aside class="pane pane-right detail-pane">
-          <div class="pane-title">{{ memoryActiveNode === 'entries' ? '长期记忆详情' : '历史 SQL 记忆详情' }}</div>
+          <div class="pane-title">长期记忆详情</div>
           <div class="detail-wrapper">
-            <div v-if="memoryActiveNode === 'entries'">
+            <div>
               <div class="detail-summary">
                 <div class="detail-row"><span>标题</span><strong>{{ memoryEntryForm.title || '未命名记忆' }}</strong></div>
                 <div class="detail-row"><span>作用域</span><strong>{{ memoryScopeLabel(memoryEntryForm.scope) }}</strong></div>
                 <div class="detail-row"><span>连接</span><strong>{{ queryTabConnectionNameById(memoryEntryForm.connectionId || 0) || '-' }}</strong></div>
                 <div class="detail-row"><span>数据库</span><strong>{{ memoryEntryForm.databaseName || '-' }}</strong></div>
+                <div class="detail-row"><span>记忆类型</span><strong>{{ selectedMemoryEntry?.structuredSummary?.memoryType || '-' }}</strong></div>
                 <div class="detail-row detail-row-description"><span>摘要</span><strong>{{ memoryEntryForm.summary || '-' }}</strong></div>
+                <div class="detail-row detail-row-description"><span>纠正信息</span><strong>{{ selectedMemoryEntry?.structuredSummary?.corrections?.join('；') || '-' }}</strong></div>
+                <div class="detail-row detail-row-description"><span>重点提示</span><strong>{{ selectedMemoryEntry?.structuredSummary?.priorityHints?.join('；') || '-' }}</strong></div>
+                <div class="detail-row detail-row-description"><span>约束</span><strong>{{ selectedMemoryEntry?.structuredSummary?.constraints?.join('；') || '-' }}</strong></div>
+                <div class="detail-row detail-row-description"><span>事实</span><strong>{{ selectedMemoryEntry?.structuredSummary?.facts?.join('；') || '-' }}</strong></div>
+                <div class="detail-row detail-row-description"><span>关联表</span><strong>{{ selectedMemoryEntry?.structuredSummary?.relatedTables?.join(', ') || '-' }}</strong></div>
               </div>
               <div class="detail-form-panel knowledge-form">
                 <a-form layout="vertical" size="small">
@@ -1150,29 +1107,6 @@
                   <a-button v-if="memoryEntryForm.id" danger size="small" :loading="memoryActionLoading" @click="removeMemoryEntry">删除</a-button>
                 </a-space>
               </div>
-            </div>
-
-            <div v-else>
-              <div v-if="selectedMemoryHistory" class="detail-summary">
-                <div class="detail-row"><span>问题</span><strong>{{ selectedMemoryHistory.promptText || '-' }}</strong></div>
-                <div class="detail-row"><span>作用域</span><strong>{{ memoryScopeLabel(selectedMemoryHistory.databaseName ? 'DATABASE' : 'CONNECTION') }}</strong></div>
-                <div class="detail-row"><span>连接</span><strong>{{ queryTabConnectionNameById(selectedMemoryHistory.connectionId || 0) || '-' }}</strong></div>
-                <div class="detail-row"><span>数据库</span><strong>{{ selectedMemoryHistory.databaseName || '-' }}</strong></div>
-                <div class="detail-row"><span>语义摘要</span><strong>{{ selectedMemoryHistory.semanticSummary || '-' }}</strong></div>
-                <div class="detail-row"><span>关联表</span><strong>{{ selectedMemoryHistory.tables?.join(', ') || '-' }}</strong></div>
-              </div>
-              <div v-if="selectedMemoryHistory" class="detail-form-panel knowledge-form">
-                <a-form layout="vertical" size="small">
-                  <a-form-item label="SQL 正文">
-                    <a-textarea :value="selectedMemoryHistory.sqlText" :rows="10" readonly />
-                  </a-form-item>
-                </a-form>
-                <a-space class="detail-form-actions">
-                  <a-button type="primary" size="small" :loading="memoryActionLoading" @click="promoteMemoryHistory">提升为长期记忆</a-button>
-                  <a-button danger size="small" :loading="memoryActionLoading" @click="removeMemoryHistory">删除</a-button>
-                </a-space>
-              </div>
-              <div v-else class="empty-pane">请先选择一条历史 SQL 记忆</div>
             </div>
           </div>
         </aside>
@@ -4484,10 +4418,8 @@ const {
     memoryDatabaseOptions,
     memoryEntryTargetDatabaseOptions,
     memoryEntryTotal,
-    memoryHistoryTotal,
     memoryEntryItems,
-    memoryHistoryItems,
-    selectedMemoryHistory,
+    selectedMemoryEntry,
     memoryEntryForm,
     memoryScopeOptions,
     openMemoryNode,
@@ -4497,11 +4429,8 @@ const {
     loadMemoryData,
     resetMemoryEntryForm,
     selectMemoryEntry,
-    selectMemoryHistory,
     saveMemoryEntry,
     removeMemoryEntry,
-    removeMemoryHistory,
-    promoteMemoryHistory,
     memoryScopeLabel,
     generateChartFromMessage,
     generateManualChartForTab,

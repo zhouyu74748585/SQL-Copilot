@@ -74,6 +74,9 @@ public class AiServiceImpl implements AiService {
           "intentType": "GENERATE_SQL|EXPLAIN_SQL|ANALYZE_SQL|GENERATE_CHART",
           "confidence": 0.00,
           "reason": "中文简述",
+          "memorySignalType": "NONE|CORRECTION|PRIORITY_HINT",
+          "memoryConfidence": 0.00,
+          "memoryDeltaSummary": "若命中更正/重点提示，则用中文提炼该信息；否则留空",
           "retrieval": {
             "sessionTopK": 4,
             "globalTopK": 6,
@@ -84,7 +87,10 @@ public class AiServiceImpl implements AiService {
         规则：
         1) retrieval.sessionTopK 范围 1~8，globalTopK 范围 1~10；
         2) query 必须是简短中文语义检索词，不要写 SQL；
-        3) focusTables 仅在明显出现表名时填写。
+        3) focusTables 仅在明显出现表名时填写；
+        4) 只有明确出现“更正旧理解”时才输出 CORRECTION；
+        5) 只有明确出现“重点强调/后续默认遵守”时才输出 PRIORITY_HINT；
+        6) 普通强调语气、礼貌提醒或泛泛要求一律输出 NONE。
         """;
     private static final String INTENT_CLASSIFY_FINAL_SYSTEM_PROMPT = """
         你是数据库助手的最终意图识别器。输入包含用户输入、最近几轮对话、历史检索结果。
@@ -1592,6 +1598,13 @@ public class AiServiceImpl implements AiService {
             timer.mark("load_recent_dialog");
             ParsedIntentResponse light = identifyIntentLight(req, recentDialogContext);
             timer.mark("identify_intent_light");
+            conversationContextManager.captureImmediateMemorySignal(
+                req,
+                light == null ? "" : light.memorySignalType(),
+                light == null ? 0D : light.memoryConfidence(),
+                light == null ? "" : light.memoryDeltaSummary()
+            );
+            timer.mark("capture_memory_signal");
             IntentRetrievalParams retrievalParams = light == null ? IntentRetrievalParams.defaultValue() : light.retrievalParams();
             String historyContext = conversationContextManager.retrieveIntentHistoryContext(
                 req,
@@ -1684,7 +1697,11 @@ public class AiServiceImpl implements AiService {
                     reason = safe(root.path("message").asText(""));
                 }
                 IntentRetrievalParams retrievalParams = parseIntentRetrievalParams(root.path("retrieval"));
-                return new ParsedIntentResponse(intentType, confidence, reason, true, retrievalParams);
+                String memorySignalType = normalizeMemorySignalType(root.path("memorySignalType").asText(""));
+                double memoryConfidence = parseIntentConfidence(root.path("memoryConfidence"));
+                String memoryDeltaSummary = safe(root.path("memoryDeltaSummary").asText(""));
+                return new ParsedIntentResponse(intentType, confidence, reason, true, retrievalParams,
+                    memorySignalType, memoryConfidence, memoryDeltaSummary);
             } catch (Exception ignore) {
                 // ignore malformed JSON candidate
             }
@@ -1721,10 +1738,12 @@ public class AiServiceImpl implements AiService {
         );
         ParsedIntentResponse parsed = parseIntentResponse(providerResult.content());
         if (parsed == null) {
-            return new ParsedIntentResponse(IntentType.GENERATE_SQL, 0.75D, "轻量意图识别降级为默认生成SQL", false, IntentRetrievalParams.defaultValue());
+            return new ParsedIntentResponse(IntentType.GENERATE_SQL, 0.75D, "轻量意图识别降级为默认生成SQL", false,
+                IntentRetrievalParams.defaultValue(), "NONE", 0D, "");
         }
         IntentRetrievalParams retrievalParams = parsed.retrievalParams() == null ? IntentRetrievalParams.defaultValue() : parsed.retrievalParams();
-        return new ParsedIntentResponse(parsed.intentType(), parsed.confidence(), parsed.reason(), parsed.parsed(), retrievalParams);
+        return new ParsedIntentResponse(parsed.intentType(), parsed.confidence(), parsed.reason(), parsed.parsed(), retrievalParams,
+            normalizeMemorySignalType(parsed.memorySignalType()), parsed.memoryConfidence(), parsed.memoryDeltaSummary());
     }
 
     private ParsedIntentResponse identifyIntentFinal(AiGenerateSqlReq req, String recentDialogContext, String historyContext) {
@@ -1772,7 +1791,10 @@ public class AiServiceImpl implements AiService {
                 0D,
                 "检索意图识别失败，已降级为默认检索",
                 false,
-                IntentRetrievalParams.defaultValue()
+                IntentRetrievalParams.defaultValue(),
+                "NONE",
+                0D,
+                ""
             );
         }
     }
@@ -3363,7 +3385,8 @@ public class AiServiceImpl implements AiService {
 
     private String buildIntentAwareRetrievalHint(AiGenerateSqlReq req, ParsedIntentResponse parsedIntent) {
         ParsedIntentResponse resolvedIntent = parsedIntent == null
-            ? new ParsedIntentResponse(IntentType.GENERATE_SQL, 0D, "", false, IntentRetrievalParams.defaultValue())
+            ? new ParsedIntentResponse(IntentType.GENERATE_SQL, 0D, "", false, IntentRetrievalParams.defaultValue(),
+                "NONE", 0D, "")
             : parsedIntent;
         IntentRetrievalParams params = resolvedIntent.retrievalParams() == null
             ? IntentRetrievalParams.defaultValue()
@@ -3840,7 +3863,10 @@ public class AiServiceImpl implements AiService {
                                         double confidence,
                                         String reason,
                                         boolean parsed,
-                                        IntentRetrievalParams retrievalParams) {
+                                        IntentRetrievalParams retrievalParams,
+                                        String memorySignalType,
+                                        double memoryConfidence,
+                                        String memoryDeltaSummary) {
     }
 
     private record IntentRetrievalParams(int sessionTopK,
@@ -3908,6 +3934,14 @@ public class AiServiceImpl implements AiService {
     }
 
     private record IntentResult(IntentType intentType, double confidence, String reason) {
+    }
+
+    private String normalizeMemorySignalType(String value) {
+        String normalized = safe(value).toUpperCase(Locale.ROOT);
+        if ("CORRECTION".equals(normalized) || "PRIORITY_HINT".equals(normalized)) {
+            return normalized;
+        }
+        return "NONE";
     }
 
     private enum IntentType {

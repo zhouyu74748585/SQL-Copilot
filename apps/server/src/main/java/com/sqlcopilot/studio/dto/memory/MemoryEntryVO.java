@@ -26,6 +26,9 @@ public class MemoryEntryVO {
     /** 记忆摘要正文。 */
     private String summary;
 
+    /** 结构化长期记忆摘要。 */
+    private MemoryStructuredSummaryVO structuredSummary;
+
     /** 来源类型：AUTO_SESSION / PROMOTED_SQL / MANUAL。 */
     private String sourceType;
 

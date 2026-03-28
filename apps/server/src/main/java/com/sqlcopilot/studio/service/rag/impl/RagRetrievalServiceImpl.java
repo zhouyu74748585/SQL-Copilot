@@ -180,14 +180,7 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
             connectionId,
             normalizedDatabaseName
         );
-        List<QdrantScoredPoint> historyHits = safeSearch(
-            collectionNames.getSqlHistory(),
-            inputVector,
-            sqlHistoryLimit,
-            connectionId,
-            normalizedDatabaseName
-        );
-        historyHits = filterHistoryEntryType(historyHits);
+        List<QdrantScoredPoint> historyHits = List.of();
         List<QdrantScoredPoint> managedMemoryHits = searchManagedMemoryAcrossScopes(
             collectionNames.getManagedMemory(),
             inputVector,
@@ -218,13 +211,6 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         );
         tableHits = focusTableSupplement.tableHits();
         columnHits = focusTableSupplement.columnHits();
-        historyHits = supplementHistoryHitsByFocusTables(
-            connectionId,
-            normalizedDatabaseName,
-            inputVector,
-            retrievalQuery.focusTables(),
-            historyHits
-        );
         if (focusTableSupplement.supplementedTableCount() > 0 || focusTableSupplement.supplementedColumnCount() > 0) {
             log.info(
                 "[RAG-RETRIEVE-FOCUS-SUPPLEMENT] connectionId={}, databaseName={}, focusTableCount={}, supplementedTableCount={}, supplementedColumnCount={}, tableHitCount={}, columnHitCount={}, historyHitCount={}",

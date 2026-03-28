@@ -567,7 +567,7 @@ interface KnowledgeWorkspaceTab {
 
 interface MemoryWorkspaceTab {
   key: string;
-  node: 'entries' | 'history-sql';
+  node: 'entries';
   title: string;
   createdAt: number;
   updatedAt: number;

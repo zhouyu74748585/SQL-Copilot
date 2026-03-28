@@ -5,13 +5,11 @@ import type {
   MemoryEntryPageVO,
   MemoryEntrySaveReq,
   MemoryEntryVO,
-  MemoryHistoryPageVO,
-  MemoryHistoryVO,
   MemoryScope,
 } from '../../../types';
 import type {StudioRuntime} from './useStudioRuntime';
 
-type MemoryNode = 'entries' | 'history-sql';
+type MemoryNode = 'entries';
 type SelectOption<T extends string | number> = { label: string; value: T };
 
 export interface MemoryModule {
@@ -26,11 +24,8 @@ export interface MemoryModule {
   memoryDatabaseOptions: ComputedRef<SelectOption<string>[]>;
   memoryEntryTargetDatabaseOptions: ComputedRef<SelectOption<string>[]>;
   memoryEntryTotal: Ref<number>;
-  memoryHistoryTotal: Ref<number>;
   memoryEntryItems: Ref<MemoryEntryVO[]>;
-  memoryHistoryItems: Ref<MemoryHistoryVO[]>;
   selectedMemoryEntry: ComputedRef<MemoryEntryVO | null>;
-  selectedMemoryHistory: ComputedRef<MemoryHistoryVO | null>;
   memoryEntryForm: MemoryEntrySaveReq;
   memoryScopeOptions: Array<{ label: string; value: MemoryScope }>;
   openMemoryNode: (node: MemoryNode) => Promise<void>;
@@ -40,11 +35,8 @@ export interface MemoryModule {
   loadMemoryData: () => Promise<void>;
   resetMemoryEntryForm: () => void;
   selectMemoryEntry: (item: MemoryEntryVO) => void;
-  selectMemoryHistory: (item: MemoryHistoryVO) => void;
   saveMemoryEntry: () => Promise<void>;
   removeMemoryEntry: () => Promise<void>;
-  removeMemoryHistory: () => Promise<void>;
-  promoteMemoryHistory: () => Promise<void>;
   memoryScopeLabel: (scope?: MemoryScope) => string;
 }
 
@@ -56,10 +48,7 @@ export function useMemoryModule(runtime: StudioRuntime): MemoryModule {
   const memoryFilterConnectionId = ref(0);
   const memoryFilterDatabaseName = ref('');
   const memoryEntryTotal = ref(0);
-  const memoryHistoryTotal = ref(0);
   const memoryEntryItems = ref<MemoryEntryVO[]>([]);
-  const memoryHistoryItems = ref<MemoryHistoryVO[]>([]);
-  const selectedMemoryHistoryId = ref(0);
 
   const memoryScopeOptions = [
     {label: '数据库级', value: 'DATABASE' as const},
@@ -112,10 +101,6 @@ export function useMemoryModule(runtime: StudioRuntime): MemoryModule {
     memoryEntryItems.value.find((item) => item.id === memoryEntryForm.id) ?? null
   ));
 
-  const selectedMemoryHistory = computed(() => (
-    memoryHistoryItems.value.find((item) => item.historyId === selectedMemoryHistoryId.value) ?? null
-  ));
-
   function resetMemoryEntryForm() {
     memoryEntryForm.id = undefined;
     memoryEntryForm.scope = 'CONNECTION';
@@ -141,7 +126,7 @@ export function useMemoryModule(runtime: StudioRuntime): MemoryModule {
     const tab = {
       key: `memory-${node}`,
       node,
-      title: node === 'entries' ? '长期记忆' : '历史 SQL 记忆',
+      title: '长期记忆',
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -179,32 +164,19 @@ export function useMemoryModule(runtime: StudioRuntime): MemoryModule {
   }
 
   async function loadMemoryGlobalTotals() {
-    const [entryPage, historyPage] = await Promise.all([
-      getApi<MemoryEntryPageVO>('/api/memory/entry/page?pageNo=1&pageSize=1'),
-      getApi<MemoryHistoryPageVO>('/api/memory/history/page?pageNo=1&pageSize=1'),
-    ]);
+    const entryPage = await getApi<MemoryEntryPageVO>('/api/memory/entry/page?pageNo=1&pageSize=1');
     memoryEntryTotal.value = entryPage.total || 0;
-    memoryHistoryTotal.value = historyPage.total || 0;
   }
 
   async function loadMemoryData() {
     memoryLoading.value = true;
     try {
-      const query = buildMemoryQuery();
-      if (memoryActiveNode.value === 'entries') {
-        const page = await getApi<MemoryEntryPageVO>(`/api/memory/entry/page${query}`);
-        memoryEntryItems.value = page.items || [];
-        if (memoryEntryForm.id) {
-          const current = memoryEntryItems.value.find((item) => item.id === memoryEntryForm.id);
-          if (!current) {
-            resetMemoryEntryForm();
-          }
-        }
-      } else {
-        const page = await getApi<MemoryHistoryPageVO>(`/api/memory/history/page${query}`);
-        memoryHistoryItems.value = page.items || [];
-        if (!memoryHistoryItems.value.some((item) => item.historyId === selectedMemoryHistoryId.value)) {
-          selectedMemoryHistoryId.value = memoryHistoryItems.value[0]?.historyId || 0;
+      const page = await getApi<MemoryEntryPageVO>(`/api/memory/entry/page${buildMemoryQuery()}`);
+      memoryEntryItems.value = page.items || [];
+      if (memoryEntryForm.id) {
+        const current = memoryEntryItems.value.find((item) => item.id === memoryEntryForm.id);
+        if (!current) {
+          resetMemoryEntryForm();
         }
       }
     } finally {
@@ -219,7 +191,7 @@ export function useMemoryModule(runtime: StudioRuntime): MemoryModule {
       loadMemoryData(),
       loadMemoryGlobalTotals(),
     ]);
-    if (node === 'entries' && !memoryEntryForm.title) {
+    if (!memoryEntryForm.title) {
       resetMemoryEntryForm();
     }
   }
@@ -255,29 +227,6 @@ export function useMemoryModule(runtime: StudioRuntime): MemoryModule {
     memoryEntryForm.databaseName = item.databaseName || '';
     memoryEntryForm.title = item.title;
     memoryEntryForm.summary = item.summary;
-  }
-
-  function selectMemoryHistory(item: MemoryHistoryVO) {
-    selectedMemoryHistoryId.value = item.historyId;
-  }
-
-  function removeHistoryItemLocally(historyId: number) {
-    const nextItems = memoryHistoryItems.value.filter((item) => item.historyId !== historyId);
-    memoryHistoryItems.value = nextItems;
-    if (selectedMemoryHistoryId.value === historyId) {
-      selectedMemoryHistoryId.value = nextItems[0]?.historyId || 0;
-    }
-  }
-
-  function upsertMemoryEntryLocally(saved: MemoryEntryVO) {
-    const nextItems = [...memoryEntryItems.value];
-    const index = nextItems.findIndex((item) => item.id === saved.id);
-    if (index >= 0) {
-      nextItems[index] = saved;
-    } else {
-      nextItems.unshift(saved);
-    }
-    memoryEntryItems.value = nextItems;
   }
 
   async function saveMemoryEntry() {
@@ -323,54 +272,6 @@ export function useMemoryModule(runtime: StudioRuntime): MemoryModule {
     }
   }
 
-  async function removeMemoryHistory() {
-    if (!selectedMemoryHistory.value) {
-      return;
-    }
-    const historyId = selectedMemoryHistory.value.historyId;
-    memoryActionLoading.value = true;
-    try {
-      await postApi<boolean>('/api/memory/history/remove', {historyId});
-      message.success('历史 SQL 记忆已删除');
-      removeHistoryItemLocally(historyId);
-      await Promise.all([
-        loadMemoryData(),
-        loadMemoryGlobalTotals(),
-      ]);
-    } finally {
-      memoryActionLoading.value = false;
-    }
-  }
-
-  async function promoteMemoryHistory() {
-    if (!selectedMemoryHistory.value) {
-      return;
-    }
-    const sourceHistory = selectedMemoryHistory.value;
-    memoryActionLoading.value = true;
-    try {
-      const saved = await postApi<MemoryEntryVO>('/api/memory/history/promote', {
-        historyIds: [sourceHistory.historyId],
-      });
-      message.success('已提升为长期记忆');
-      removeHistoryItemLocally(sourceHistory.historyId);
-      upsertMemoryEntryLocally(saved);
-      memoryKeyword.value = '';
-      memoryFilterConnectionId.value = normalizeConnectionId(saved.connectionId);
-      memoryFilterDatabaseName.value = saved.scope === 'DATABASE' ? normalizeDatabaseName(saved.databaseName) : '';
-      if (memoryFilterConnectionId.value) {
-        await runtime.prepareConnectionTreeData(memoryFilterConnectionId.value);
-      }
-      await Promise.all([
-        openMemoryNode('entries'),
-        loadMemoryGlobalTotals(),
-      ]);
-      selectMemoryEntry(saved);
-    } finally {
-      memoryActionLoading.value = false;
-    }
-  }
-
   watch(
     () => runtime.activeMemoryTab.value?.key || '',
     (tabKey) => {
@@ -396,11 +297,8 @@ export function useMemoryModule(runtime: StudioRuntime): MemoryModule {
     memoryDatabaseOptions,
     memoryEntryTargetDatabaseOptions,
     memoryEntryTotal,
-    memoryHistoryTotal,
     memoryEntryItems,
-    memoryHistoryItems,
     selectedMemoryEntry,
-    selectedMemoryHistory,
     memoryEntryForm,
     memoryScopeOptions,
     openMemoryNode,
@@ -410,11 +308,8 @@ export function useMemoryModule(runtime: StudioRuntime): MemoryModule {
     loadMemoryData,
     resetMemoryEntryForm,
     selectMemoryEntry,
-    selectMemoryHistory,
     saveMemoryEntry,
     removeMemoryEntry,
-    removeMemoryHistory,
-    promoteMemoryHistory,
     memoryScopeLabel,
   };
 }

@@ -425,6 +425,12 @@ const zhToEnExact: Record<string, string> = {
 };
 
 Object.assign(zhToEnExact, {
+  '记忆类型': 'Memory Type',
+  '纠正信息': 'Corrections',
+  '重点提示': 'Priority Hints',
+  '约束': 'Constraints',
+  '事实': 'Facts',
+  '关联表': 'Related Tables',
   '设置': 'Settings',
   '刷新': 'Refresh',
   '刷新预览': 'Refresh Preview',

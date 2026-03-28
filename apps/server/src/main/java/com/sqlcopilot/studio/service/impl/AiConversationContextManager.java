@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sqlcopilot.studio.dto.ai.AiConfigVO;
 import com.sqlcopilot.studio.dto.ai.AiGenerateSqlReq;
+import com.sqlcopilot.studio.dto.memory.MemoryStructuredSummaryVO;
 import com.sqlcopilot.studio.dto.schema.ContextBuildReq;
 import com.sqlcopilot.studio.dto.schema.ContextBuildVO;
 import com.sqlcopilot.studio.entity.QueryHistoryEntity;
@@ -17,6 +18,7 @@ import com.sqlcopilot.studio.service.llm.LlmGatewayResult;
 import com.sqlcopilot.studio.service.llm.LlmGatewayService;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
 import com.sqlcopilot.studio.service.rag.RagEmbeddingService;
+import com.sqlcopilot.studio.service.rag.model.QdrantPayloadFilter;
 import com.sqlcopilot.studio.service.rag.model.QdrantScoredPoint;
 import com.sqlcopilot.studio.service.rag.model.RagPromptContext;
 import org.slf4j.Logger;
@@ -44,15 +46,28 @@ public class AiConversationContextManager {
     private static final double MIN_AUTO_COMPRESS_RATIO = 0.30D;
     private static final double MAX_AUTO_COMPRESS_RATIO = 0.95D;
     private static final int MIN_RAW_RECENT_TOKENS = 512;
+    private static final double MEMORY_SIGNAL_TRIGGER_CONFIDENCE = 0.80D;
     private static final ThreadLocal<Map<String, Object>> REQUEST_CONTEXT_CACHE = ThreadLocal.withInitial(ConcurrentHashMap::new);
     private static final ThreadLocal<Integer> REQUEST_CONTEXT_CACHE_DEPTH = ThreadLocal.withInitial(() -> 0);
     private static final String CONTEXT_COMPRESS_SYSTEM_PROMPT = """
-        你是对话上下文压缩器。请基于输入内容生成压缩摘要，用于后续 SQL 问答。
+        你是长期记忆结构化总结器。请基于输入内容输出严格 JSON，不要输出任何额外文本：
+        {
+          "memoryType": "SESSION_SUMMARY|CORRECTION|PRIORITY_HINT|MANUAL",
+          "facts": ["..."],
+          "constraints": ["..."],
+          "corrections": ["..."],
+          "priorityHints": ["..."],
+          "relatedTables": ["..."],
+          "confidence": 0.00,
+          "summaryText": "中文摘要"
+        }
         要求：
-        1) 只输出最终摘要，不输出推理过程；
-        2) 保留业务意图、关键筛选、关键表字段、已确认结论与未解决问题；
-        3) 不要编造不存在的信息；
-        4) 输出纯文本，控制在 400 中文字以内。
+        1) 只保留对后续 SQL 生成和解释真正有价值的信息；
+        2) corrections 只写“纠正旧理解”的内容；
+        3) priorityHints 只写“用户重点强调”的要求；
+        4) facts / constraints / corrections / priorityHints / relatedTables 都必须去重；
+        5) 不要编造不存在的信息；
+        6) summaryText 控制在 220 中文字以内。
         """;
 
     private final SchemaService schemaService;
@@ -63,7 +78,7 @@ public class AiConversationContextManager {
     private final QdrantClientService qdrantClientService;
     private final ObjectMapper objectMapper;
     private final LlmGatewayService llmGatewayService;
-    private final String sqlHistoryCollectionName;
+    private final String managedMemoryCollectionName;
 
     public AiConversationContextManager(SchemaService schemaService,
                                         AiConfigService aiConfigService,
@@ -73,7 +88,7 @@ public class AiConversationContextManager {
                                         QdrantClientService qdrantClientService,
                                         ObjectMapper objectMapper,
                                         LlmGatewayService llmGatewayService,
-                                        @Value("${rag.collection.sql-history:sql_history}") String sqlHistoryCollectionName) {
+                                        @Value("${rag.collection.managed-memory:managed_memory}") String managedMemoryCollectionName) {
         this.schemaService = schemaService;
         this.aiConfigService = aiConfigService;
         this.memoryService = memoryService;
@@ -82,7 +97,7 @@ public class AiConversationContextManager {
         this.qdrantClientService = qdrantClientService;
         this.objectMapper = objectMapper;
         this.llmGatewayService = llmGatewayService;
-        this.sqlHistoryCollectionName = sqlHistoryCollectionName;
+        this.managedMemoryCollectionName = managedMemoryCollectionName;
     }
 
     /**
@@ -254,11 +269,56 @@ public class AiConversationContextManager {
         if (!sessionContext.isBlank()) {
             lines.add("会话历史:\n" + sessionContext);
         }
-        String globalContext = retrieveGlobalHistoryContext(req, globalTopK, query, focusTables);
-        if (!globalContext.isBlank()) {
-            lines.add("全局历史:\n" + globalContext);
+        String memoryContext = retrieveLongTermMemoryContext(req, globalTopK, query, focusTables);
+        if (!memoryContext.isBlank()) {
+            lines.add("长期记忆:\n" + memoryContext);
         }
         return String.join("\n\n", lines);
+    }
+
+    public void captureImmediateMemorySignal(AiGenerateSqlReq req,
+                                             String signalType,
+                                             double signalConfidence,
+                                             String deltaSummary) {
+        if (!isMemoryEnabled(req) || signalConfidence < MEMORY_SIGNAL_TRIGGER_CONFIDENCE) {
+            return;
+        }
+        String normalizedSignalType = safe(signalType).toUpperCase(Locale.ROOT);
+        if (!"CORRECTION".equals(normalizedSignalType) && !"PRIORITY_HINT".equals(normalizedSignalType)) {
+            return;
+        }
+        AiConfigVO aiConfig = aiConfigService.getConfig();
+        ConversationMemoryPolicy memoryPolicy = resolveMemoryPolicy(aiConfig);
+        List<QueryHistoryEntity> chatHistory = queryHistoryMapper.listBySession(
+            req.getConnectionId(),
+            safe(req.getSessionId()),
+            500
+        );
+        if (chatHistory == null || chatHistory.isEmpty()) {
+            return;
+        }
+        List<QueryHistoryEntity> windowRecords = pickWindowRecordsByTokenBudget(chatHistory, memoryPolicy.windowSize(), memoryPolicy.windowTokens());
+        if (windowRecords.isEmpty()) {
+            return;
+        }
+        try {
+            MemoryStructuredSummaryVO structuredSummary = buildStructuredMemorySummary(
+                req,
+                windowRecords,
+                normalizedSignalType,
+                deltaSummary
+            );
+            memoryService.autoUpsertSessionMemory(
+                req.getConnectionId(),
+                req.getDatabaseName(),
+                req.getSessionId(),
+                structuredSummary,
+                windowRecords
+            );
+        } catch (Exception ex) {
+            log.warn("[AI-MEMORY-SIGNAL-UPsert-FAILED] sessionId={}, signalType={}, reason={}",
+                safe(req.getSessionId()), normalizedSignalType, safe(ex.getMessage()));
+        }
     }
 
     public String buildRetrievalInput(String prompt) {
@@ -323,18 +383,22 @@ public class AiConversationContextManager {
             ? pickWindowRecordsByTokenBudget(windowRecords, windowRecords.size(), resolveRecentRawTokenBudget(memoryPolicy))
             : windowRecords;
         String windowDialogContext = buildWindowDialogContext(rawRecentRecords);
-        String windowSummary = shouldCompressWindow ? buildCompressedSummary(req, windowRecords) : "";
+        MemoryStructuredSummaryVO windowStructuredSummary = shouldCompressWindow
+            ? buildStructuredMemorySummary(req, windowRecords, "SESSION_SUMMARY", "")
+            : null;
+        String windowSummary = windowStructuredSummary == null ? "" : safe(windowStructuredSummary.getSummaryText());
         String windowStructuredContext = buildStructuredContextJson(rawRecentRecords);
         String slidingSummary = "";
         if (!olderRecords.isEmpty()) {
             // 关键步骤：超出最近原文窗口的更早历史统一折叠成滑动摘要，既保留语义又避免无限堆积 token。
-            slidingSummary = buildCompressedSummary(req, olderRecords);
+            MemoryStructuredSummaryVO slidingStructuredSummary = buildStructuredMemorySummary(req, olderRecords, "SESSION_SUMMARY", "");
+            slidingSummary = safe(slidingStructuredSummary == null ? "" : slidingStructuredSummary.getSummaryText());
             try {
                 memoryService.autoUpsertSessionMemory(
                     req.getConnectionId(),
                     req.getDatabaseName(),
                     req.getSessionId(),
-                    slidingSummary,
+                    slidingStructuredSummary,
                     olderRecords
                 );
             } catch (Exception ex) {
@@ -415,30 +479,8 @@ public class AiConversationContextManager {
      * 关键步骤：将原始对话记录压缩为摘要，减少长对话进入模型时的 token 膨胀。
      */
     private String buildCompressedSummary(AiGenerateSqlReq req, List<QueryHistoryEntity> rows) {
-        if (rows == null || rows.isEmpty()) {
-            return "";
-        }
-        StringBuilder builder = new StringBuilder();
-        for (QueryHistoryEntity item : rows) {
-            String prompt = safe(item.getPromptText());
-            String sql = safe(item.getSqlText());
-            String assistant = safe(item.getAssistantContent());
-            if (!prompt.isBlank()) {
-                builder.append("U: ").append(prompt).append("\n");
-            }
-            if (!sql.isBlank()) {
-                builder.append("SQL: ").append(sql).append("\n");
-            }
-            if (!assistant.isBlank()) {
-                builder.append("A: ").append(assistant).append("\n");
-            }
-        }
-        String source = builder.toString().trim();
-        if (source.isBlank()) {
-            return "";
-        }
-        String cacheKey = "compress:summary:" + source.hashCode();
-        return getOrComputeRequestCache(cacheKey, () -> compactTextByLlm(req, "会话历史压缩", source));
+        MemoryStructuredSummaryVO structuredSummary = buildStructuredMemorySummary(req, rows, "SESSION_SUMMARY", "");
+        return structuredSummary == null ? "" : safe(structuredSummary.getSummaryText());
     }
 
     /**
@@ -520,20 +562,14 @@ public class AiConversationContextManager {
         return builder.toString().trim();
     }
 
-    private String retrieveGlobalHistoryContext(AiGenerateSqlReq req, int topK, String query, List<String> focusTables) {
+    private String retrieveLongTermMemoryContext(AiGenerateSqlReq req, int topK, String query, List<String> focusTables) {
         String retrievalText = safe(query).isBlank() ? safe(req.getPrompt()) : safe(query);
         try {
             List<Float> vector = ragEmbeddingService.embedText(retrievalText);
             if (vector == null || vector.isEmpty()) {
                 return "";
             }
-            List<QdrantScoredPoint> points = qdrantClientService.searchPoints(
-                sqlHistoryCollectionName,
-                vector,
-                Math.max(1, topK),
-                req.getConnectionId(),
-                req.getDatabaseName()
-            );
+            List<QdrantScoredPoint> points = searchManagedMemories(vector, Math.max(1, topK), req.getConnectionId(), req.getDatabaseName());
             if (points == null || points.isEmpty()) {
                 return "";
             }
@@ -545,28 +581,38 @@ public class AiConversationContextManager {
             int idx = 1;
             for (QdrantScoredPoint point : points) {
                 Map<String, Object> payload = point.getPayload();
-                String sessionId = Objects.toString(payload.get("session_id"), "").trim();
+                String sessionId = Objects.toString(payload.get("source_session_id"), "").trim();
                 if (safe(req.getSessionId()).equals(sessionId)) {
                     continue;
                 }
-                List<String> tables = payloadStringList(payload, "tables");
+                List<String> tables = payloadStringList(payload, "related_tables");
                 if (!tableFilter.isEmpty()) {
                     boolean matched = tables.stream().map(this::normalizeRelatedTableName).anyMatch(tableFilter::contains);
                     if (!matched) {
                         continue;
                     }
                 }
-                String sqlText = Objects.toString(payload.get("sql_text"), "").trim();
-                String semantic = Objects.toString(payload.get("semantic_description"), "").trim();
-                if (sqlText.isBlank() && semantic.isBlank()) {
+                String summary = Objects.toString(payload.get("summary"), "").trim();
+                if (summary.isBlank()) {
                     continue;
                 }
                 builder.append(idx++).append(". ");
-                if (!semantic.isBlank()) {
-                    builder.append("语义=").append(semantic).append("；");
+                String memoryType = Objects.toString(payload.get("memory_type"), "").trim();
+                if (!memoryType.isBlank()) {
+                    builder.append("类型=").append(memoryType).append("；");
                 }
-                if (!sqlText.isBlank()) {
-                    builder.append("SQL=").append(sqlText).append("；");
+                builder.append("摘要=").append(summary).append("；");
+                List<String> corrections = payloadStringList(payload, "corrections");
+                if (!corrections.isEmpty()) {
+                    builder.append("纠正=").append(String.join(",", corrections)).append("；");
+                }
+                List<String> constraints = payloadStringList(payload, "constraints");
+                if (!constraints.isEmpty()) {
+                    builder.append("约束=").append(String.join(",", constraints)).append("；");
+                }
+                List<String> hints = payloadStringList(payload, "priority_hints");
+                if (!hints.isEmpty()) {
+                    builder.append("重点提示=").append(String.join(",", hints)).append("；");
                 }
                 if (!tables.isEmpty()) {
                     builder.append("Tables=").append(String.join(",", tables));
@@ -578,34 +624,196 @@ public class AiConversationContextManager {
             }
             return builder.toString().trim();
         } catch (Exception ex) {
-            log.warn("[AI-INTENT-HISTORY-RECALL-FAILED] sessionId={}, reason={}", safe(req.getSessionId()), safe(ex.getMessage()));
+            log.warn("[AI-INTENT-MEMORY-RECALL-FAILED] sessionId={}, reason={}", safe(req.getSessionId()), safe(ex.getMessage()));
             return "";
         }
     }
 
     /**
-     * 关键步骤：上下文压缩统一走原始提示词通道，避免再次拼入上下文造成递归放大。
+     * 关键步骤：结构化记忆总结统一走原始提示词通道，避免再次拼入上下文造成递归放大。
      */
-    private String compactTextByLlm(AiGenerateSqlReq req, String title, String sourceText) {
-        String input = "压缩任务: " + safe(title) + "\n\n原始内容:\n" + safe(sourceText);
+    private MemoryStructuredSummaryVO buildStructuredMemorySummary(AiGenerateSqlReq req,
+                                                                   List<QueryHistoryEntity> rows,
+                                                                   String memoryType,
+                                                                   String deltaSummary) {
+        if (rows == null || rows.isEmpty()) {
+            return null;
+        }
+        String sourceText = buildSummarySource(rows);
+        if (sourceText.isBlank()) {
+            return null;
+        }
+        String normalizedMemoryType = safe(memoryType).isBlank() ? "SESSION_SUMMARY" : safe(memoryType).toUpperCase(Locale.ROOT);
+        String cacheKey = "memory:structured-summary:" + normalizedMemoryType + ":" + sourceText.hashCode() + ":" + safe(deltaSummary).hashCode();
+        return getOrComputeRequestCache(cacheKey, () -> generateStructuredSummaryByLlm(req, normalizedMemoryType, sourceText, deltaSummary, rows));
+    }
+
+    private MemoryStructuredSummaryVO generateStructuredSummaryByLlm(AiGenerateSqlReq req,
+                                                                     String memoryType,
+                                                                     String sourceText,
+                                                                     String deltaSummary,
+                                                                     List<QueryHistoryEntity> rows) {
+        StringBuilder input = new StringBuilder();
+        input.append("目标记忆类型: ").append(safe(memoryType)).append("\n");
+        if (!safe(deltaSummary).isBlank()) {
+            input.append("额外提示: ").append(safe(deltaSummary)).append("\n");
+        }
+        input.append("\n原始内容:\n").append(safe(sourceText));
         try {
             LlmGatewayRequest gatewayRequest = new LlmGatewayRequest();
             gatewayRequest.setModelId(resolveRequestedModelId(req));
             gatewayRequest.setLegacyModelName(req.getModelName());
             gatewayRequest.setSystemPrompt(CONTEXT_COMPRESS_SYSTEM_PROMPT);
-            gatewayRequest.setUserPrompt(input);
-            gatewayRequest.setTaskLabel("上下文压缩");
+            gatewayRequest.setUserPrompt(input.toString());
+            gatewayRequest.setTaskLabel("结构化记忆总结");
             gatewayRequest.setTimeout(Duration.ofSeconds(30));
             gatewayRequest.setTemperature(0.1D);
             LlmGatewayResult gatewayResult = llmGatewayService.callStream(gatewayRequest, null);
             String content = safe(gatewayResult == null ? "" : gatewayResult.getContent());
             if (!content.isBlank()) {
-                return content;
+                MemoryStructuredSummaryVO parsed = parseStructuredSummary(content);
+                if (parsed != null) {
+                    parsed.setMemoryType(safe(parsed.getMemoryType()).isBlank() ? safe(memoryType) : safe(parsed.getMemoryType()).toUpperCase(Locale.ROOT));
+                    parsed.setRelatedTables(mergeStringLists(parsed.getRelatedTables(), extractRelatedTablesFromRows(rows)));
+                    parsed.setSourceHistoryIds(extractHistoryIds(rows));
+                    parsed.setSupersedesMemoryIds(List.of());
+                    parsed.setScope(resolveScopeFromRows(rows, req.getDatabaseName()));
+                    parsed.setSummaryText(safe(parsed.getSummaryText()));
+                    return parsed;
+                }
             }
         } catch (Exception ex) {
             log.warn("[AI-CONTEXT-COMPRESS-FAILED] sessionId={}, reason={}", safe(req.getSessionId()), safe(ex.getMessage()));
         }
-        return safe(sourceText);
+        return buildFallbackStructuredSummary(memoryType, rows, deltaSummary, sourceText, req.getDatabaseName());
+    }
+
+    private MemoryStructuredSummaryVO parseStructuredSummary(String rawOutput) {
+        String normalized = safe(rawOutput);
+        if (normalized.isBlank()) {
+            return null;
+        }
+        List<String> candidates = new ArrayList<>();
+        candidates.add(normalized);
+        int jsonStart = normalized.indexOf('{');
+        int jsonEnd = normalized.lastIndexOf('}');
+        if (jsonStart >= 0 && jsonEnd > jsonStart) {
+            candidates.add(normalized.substring(jsonStart, jsonEnd + 1));
+        }
+        for (String candidate : candidates) {
+            try {
+                return objectMapper.readValue(candidate, MemoryStructuredSummaryVO.class);
+            } catch (Exception ignore) {
+                // ignore malformed candidate
+            }
+        }
+        return null;
+    }
+
+    private MemoryStructuredSummaryVO buildFallbackStructuredSummary(String memoryType,
+                                                                     List<QueryHistoryEntity> rows,
+                                                                     String deltaSummary,
+                                                                     String sourceText,
+                                                                     String requestedDatabaseName) {
+        MemoryStructuredSummaryVO summary = new MemoryStructuredSummaryVO();
+        String normalizedMemoryType = safe(memoryType).isBlank() ? "SESSION_SUMMARY" : safe(memoryType).toUpperCase(Locale.ROOT);
+        summary.setMemoryType(normalizedMemoryType);
+        summary.setFacts("SESSION_SUMMARY".equals(normalizedMemoryType) ? collectNonBlankItems(extractAssistantReplies(rows), 3) : List.of());
+        summary.setConstraints(List.of());
+        summary.setCorrections("CORRECTION".equals(normalizedMemoryType) ? collectNonBlankItems(List.of(safe(deltaSummary)), 3) : List.of());
+        summary.setPriorityHints("PRIORITY_HINT".equals(normalizedMemoryType) ? collectNonBlankItems(List.of(safe(deltaSummary)), 3) : List.of());
+        summary.setRelatedTables(extractRelatedTablesFromRows(rows));
+        summary.setScope(resolveScopeFromRows(rows, requestedDatabaseName));
+        summary.setSourceHistoryIds(extractHistoryIds(rows));
+        summary.setSupersedesMemoryIds(List.of());
+        summary.setConfidence("SESSION_SUMMARY".equals(normalizedMemoryType) ? 0.60D : 0.85D);
+        summary.setSummaryText(buildFallbackSummaryText(normalizedMemoryType, rows, deltaSummary, sourceText));
+        return summary;
+    }
+
+    private String buildFallbackSummaryText(String memoryType,
+                                            List<QueryHistoryEntity> rows,
+                                            String deltaSummary,
+                                            String sourceText) {
+        String delta = safe(deltaSummary);
+        if (!delta.isBlank()) {
+            if ("CORRECTION".equals(memoryType)) {
+                return "纠正: " + delta;
+            }
+            if ("PRIORITY_HINT".equals(memoryType)) {
+                return "重点提示: " + delta;
+            }
+        }
+        List<String> prompts = collectNonBlankItems(extractPrompts(rows), 2);
+        List<String> assistants = collectNonBlankItems(extractAssistantReplies(rows), 2);
+        List<String> segments = new ArrayList<>();
+        if (!prompts.isEmpty()) {
+            segments.add("问题: " + String.join("；", prompts));
+        }
+        if (!assistants.isEmpty()) {
+            segments.add("结论: " + String.join("；", assistants));
+        }
+        if (segments.isEmpty()) {
+            return shortenText(sourceText, 220);
+        }
+        return shortenText(String.join("\n", segments), 220);
+    }
+
+    private String buildSummarySource(List<QueryHistoryEntity> rows) {
+        StringBuilder builder = new StringBuilder();
+        for (QueryHistoryEntity item : rows) {
+            String prompt = safe(item.getPromptText());
+            String sql = safe(item.getSqlText());
+            String assistant = safe(item.getAssistantContent());
+            if (!prompt.isBlank()) {
+                builder.append("U: ").append(prompt).append("\n");
+            }
+            if (!sql.isBlank()) {
+                builder.append("SQL: ").append(sql).append("\n");
+            }
+            if (!assistant.isBlank()) {
+                builder.append("A: ").append(assistant).append("\n");
+            }
+        }
+        return builder.toString().trim();
+    }
+
+    private List<QdrantScoredPoint> searchManagedMemories(List<Float> vector,
+                                                          int topK,
+                                                          Long connectionId,
+                                                          String databaseName) {
+        if (vector == null || vector.isEmpty() || connectionId == null || connectionId <= 0 || topK <= 0) {
+            return List.of();
+        }
+        Map<String, QdrantScoredPoint> merged = new LinkedHashMap<>();
+        List<QdrantScoredPoint> connectionHits = qdrantClientService.searchPointsByFilters(
+            managedMemoryCollectionName,
+            vector,
+            topK,
+            List.of(
+                new QdrantPayloadFilter("connection_id", connectionId),
+                new QdrantPayloadFilter("scope", "CONNECTION")
+            )
+        );
+        mergeScoredPoints(merged, connectionHits);
+        String normalizedDatabaseName = safe(databaseName);
+        if (!normalizedDatabaseName.isBlank()) {
+            List<QdrantScoredPoint> databaseHits = qdrantClientService.searchPointsByFilters(
+                managedMemoryCollectionName,
+                vector,
+                topK,
+                List.of(
+                    new QdrantPayloadFilter("connection_id", connectionId),
+                    new QdrantPayloadFilter("scope", "DATABASE"),
+                    new QdrantPayloadFilter("database_name", normalizedDatabaseName)
+                )
+            );
+            mergeScoredPoints(merged, databaseHits);
+        }
+        return merged.values().stream()
+            .sorted(Comparator.comparingDouble(point -> -1D * (point.getScore() == null ? 0D : point.getScore())))
+            .limit(topK)
+            .toList();
     }
 
     @SuppressWarnings("unchecked")
@@ -638,6 +846,23 @@ public class AiConversationContextManager {
             }
         }
         return values;
+    }
+
+    private void mergeScoredPoints(Map<String, QdrantScoredPoint> target, List<QdrantScoredPoint> hits) {
+        if (hits == null || hits.isEmpty()) {
+            return;
+        }
+        for (QdrantScoredPoint hit : hits) {
+            if (hit == null) {
+                continue;
+            }
+            QdrantScoredPoint current = target.get(hit.getId());
+            double nextScore = hit.getScore() == null ? 0D : hit.getScore();
+            double currentScore = current == null || current.getScore() == null ? 0D : current.getScore();
+            if (current == null || nextScore > currentScore) {
+                target.put(hit.getId(), hit);
+            }
+        }
     }
 
     private long asLong(Object value) {
@@ -698,6 +923,115 @@ public class AiConversationContextManager {
             }
         }
         return new ArrayList<>(unique);
+    }
+
+    private List<String> extractPrompts(List<QueryHistoryEntity> rows) {
+        List<String> prompts = new ArrayList<>();
+        if (rows != null) {
+            for (QueryHistoryEntity row : rows) {
+                String prompt = safe(row == null ? null : row.getPromptText());
+                if (!prompt.isBlank()) {
+                    prompts.add(prompt);
+                }
+            }
+        }
+        return prompts;
+    }
+
+    private List<String> extractAssistantReplies(List<QueryHistoryEntity> rows) {
+        List<String> replies = new ArrayList<>();
+        if (rows != null) {
+            for (QueryHistoryEntity row : rows) {
+                String reply = safe(row == null ? null : row.getAssistantContent());
+                if (!reply.isBlank()) {
+                    replies.add(reply);
+                }
+            }
+        }
+        return replies;
+    }
+
+    private List<String> extractRelatedTablesFromRows(List<QueryHistoryEntity> rows) {
+        LinkedHashSet<String> tables = new LinkedHashSet<>();
+        if (rows != null) {
+            for (QueryHistoryEntity row : rows) {
+                String sql = safe(row == null ? null : row.getSqlText());
+                if (sql.isBlank()) {
+                    continue;
+                }
+                for (String item : sql.split("[\\s,]+")) {
+                    String normalized = normalizeRelatedTableName(item);
+                    if (!normalized.isBlank() && (sql.contains("from " + item) || sql.contains("join " + item) || sql.contains("update " + item))) {
+                        tables.add(normalized);
+                    }
+                }
+            }
+        }
+        return new ArrayList<>(tables);
+    }
+
+    private List<Long> extractHistoryIds(List<QueryHistoryEntity> rows) {
+        LinkedHashSet<Long> ids = new LinkedHashSet<>();
+        if (rows != null) {
+            for (QueryHistoryEntity row : rows) {
+                if (row != null && row.getId() != null && row.getId() > 0) {
+                    ids.add(row.getId());
+                }
+            }
+        }
+        return new ArrayList<>(ids);
+    }
+
+    private String resolveScopeFromRows(List<QueryHistoryEntity> rows, String requestedDatabaseName) {
+        LinkedHashSet<String> databases = new LinkedHashSet<>();
+        if (rows != null) {
+            for (QueryHistoryEntity row : rows) {
+                String databaseName = safe(row == null ? null : row.getDatabaseName());
+                if (!databaseName.isBlank()) {
+                    databases.add(databaseName);
+                }
+            }
+        }
+        String fallbackDatabaseName = safe(requestedDatabaseName);
+        if (databases.isEmpty() && !fallbackDatabaseName.isBlank()) {
+            databases.add(fallbackDatabaseName);
+        }
+        return databases.size() == 1 ? "DATABASE" : "CONNECTION";
+    }
+
+    private List<String> collectNonBlankItems(List<String> items, int limit) {
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        if (items != null) {
+            for (String item : items) {
+                String normalized = safe(item);
+                if (!normalized.isBlank()) {
+                    values.add(normalized);
+                }
+                if (values.size() >= Math.max(1, limit)) {
+                    break;
+                }
+            }
+        }
+        return new ArrayList<>(values);
+    }
+
+    private List<String> mergeStringLists(List<String> left, List<String> right) {
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        if (left != null) {
+            left.stream().map(this::safe).filter(item -> !item.isBlank()).forEach(values::add);
+        }
+        if (right != null) {
+            right.stream().map(this::safe).filter(item -> !item.isBlank()).forEach(values::add);
+        }
+        return new ArrayList<>(values);
+    }
+
+    private String shortenText(String text, int maxLength) {
+        String normalized = safe(text);
+        if (normalized.length() <= Math.max(0, maxLength)) {
+            return normalized;
+        }
+        return normalized.substring(0, Math.max(0, maxLength - 3)) + "...";
     }
 
     private String normalizeRelatedTableName(String tableName) {

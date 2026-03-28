@@ -31,6 +31,8 @@ public class MemoryServiceImpl implements MemoryService {
     private static final int DEFAULT_PAGE_NO = 1;
     private static final int DEFAULT_PAGE_SIZE = 20;
     private static final int MAX_PAGE_SIZE = 100;
+    private static final double DEFAULT_MEMORY_CONFIDENCE = 0.60D;
+    private static final double MANUAL_MEMORY_CONFIDENCE = 1.00D;
     private static final Pattern TABLE_PATTERN = Pattern.compile("(?i)\\b(?:from|join|update|into|table)\\s+([a-zA-Z0-9_$.`\"]+)");
 
     private final MemoryEntryMapper memoryEntryMapper;
@@ -117,7 +119,11 @@ public class MemoryServiceImpl implements MemoryService {
         entity.setDatabaseName(scopeContext.databaseName());
         entity.setTitle(title);
         entity.setSummary(summary);
-        persistMemoryEntry(entity, extractRelatedTablesFromMemory(entity, List.of()));
+        List<String> relatedTables = extractRelatedTablesFromMemory(entity, List.of());
+        MemoryStructuredSummaryVO structuredSummary = buildManualStructuredSummary(entity, relatedTables);
+        entity.setStructuredSummaryJson(writeStructuredSummary(structuredSummary));
+        entity.setSummary(normalizeSummary(structuredSummary.getSummaryText()));
+        persistMemoryEntry(entity, relatedTables);
         return toMemoryEntryVO(entity);
     }
 
@@ -131,7 +137,6 @@ public class MemoryServiceImpl implements MemoryService {
         removeManagedMemoryVector(entity.getId());
     }
 
-    @Override
     public MemoryHistoryPageVO pageHistories(MemoryHistoryPageReq req) {
         int pageNo = normalizePageNo(req == null ? null : req.getPageNo());
         int pageSize = normalizePageSize(req == null ? null : req.getPageSize());
@@ -146,7 +151,6 @@ public class MemoryServiceImpl implements MemoryService {
         return vo;
     }
 
-    @Override
     public void removeHistory(MemoryHistoryRemoveReq req) {
         QueryHistoryEntity entity = requireQueryHistory(req.getHistoryId());
         Map<Long, Map<String, Object>> payloadByHistoryId = loadHistoryPayloads(List.of(entity), entity.getConnectionId(), entity.getDatabaseName());
@@ -156,7 +160,6 @@ public class MemoryServiceImpl implements MemoryService {
         removeHistoryVector(entity);
     }
 
-    @Override
     @Transactional(rollbackFor = Exception.class)
     public MemoryEntryVO promoteHistory(MemoryHistoryPromoteReq req) {
         List<Long> historyIds = normalizeHistoryIds(req == null ? null : req.getHistoryIds());
@@ -196,7 +199,11 @@ public class MemoryServiceImpl implements MemoryService {
         entity.setLastUsedAt(null);
         entity.setCreatedAt(now);
         entity.setUpdatedAt(now);
-        persistMemoryEntry(entity, extractRelatedTablesFromHistoryPayloads(payloadByHistoryId, rows));
+        List<String> relatedTables = extractRelatedTablesFromHistoryPayloads(payloadByHistoryId, rows);
+        MemoryStructuredSummaryVO structuredSummary = buildPromotedStructuredSummary(entity, rows, payloadByHistoryId, relatedTables);
+        entity.setStructuredSummaryJson(writeStructuredSummary(structuredSummary));
+        entity.setSummary(normalizeSummary(structuredSummary.getSummaryText()));
+        persistMemoryEntry(entity, relatedTables);
         rows.forEach(this::removeHistoryVector);
         return toMemoryEntryVO(entity);
     }
@@ -206,17 +213,30 @@ public class MemoryServiceImpl implements MemoryService {
     public void autoUpsertSessionMemory(Long connectionId,
                                         String requestedDatabaseName,
                                         String sessionId,
-                                        String summary,
+                                        MemoryStructuredSummaryVO structuredSummary,
                                         List<QueryHistoryEntity> sourceRows) {
         long normalizedConnectionId = normalizeConnectionId(connectionId);
         String normalizedSessionId = normalizeText(sessionId);
-        String normalizedSummary = normalizeSummary(summary);
         List<QueryHistoryEntity> rows = sourceRows == null ? List.of() : sourceRows.stream().filter(Objects::nonNull).toList();
-        if (normalizedConnectionId <= 0 || normalizedSessionId.isBlank() || normalizedSummary.isBlank() || rows.isEmpty()) {
+        if (normalizedConnectionId <= 0 || normalizedSessionId.isBlank() || rows.isEmpty()) {
             return;
         }
 
         ScopeResolution scopeResolution = resolveScopeFromHistories(rows, requestedDatabaseName);
+        List<Long> sourceHistoryIds = collectHistoryIds(rows);
+        List<String> relatedTables = extractRelatedTablesFromRows(rows);
+        MemoryStructuredSummaryVO normalizedIncoming = ensureStructuredSummary(
+            structuredSummary,
+            "SESSION_SUMMARY",
+            scopeResolution.scope(),
+            relatedTables,
+            sourceHistoryIds,
+            "",
+            DEFAULT_MEMORY_CONFIDENCE
+        );
+        if (normalizeSummary(normalizedIncoming.getSummaryText()).isBlank()) {
+            return;
+        }
         MemoryEntryEntity entity = memoryEntryMapper.findAutoSessionEntry(
             scopeResolution.scope(),
             normalizedConnectionId,
@@ -232,14 +252,22 @@ public class MemoryServiceImpl implements MemoryService {
             entity.setLastUsedAt(null);
             entity.setCreatedAt(now);
         }
+        MemoryStructuredSummaryVO mergedSummary = mergeStructuredSummary(
+            parseStructuredSummary(entity == null ? null : entity.getStructuredSummaryJson()),
+            normalizedIncoming,
+            scopeResolution.scope(),
+            relatedTables,
+            sourceHistoryIds
+        );
         entity.setScope(scopeResolution.scope());
         entity.setConnectionId(normalizedConnectionId);
         entity.setDatabaseName(scopeResolution.databaseName());
-        entity.setTitle(buildAutoMemoryTitle(rows, normalizedSummary));
-        entity.setSummary(normalizedSummary);
-        entity.setSourceHistoryIdsJson(writeHistoryIds(collectHistoryIds(rows)));
+        entity.setTitle(buildAutoMemoryTitle(rows, mergedSummary.getSummaryText()));
+        entity.setSummary(normalizeSummary(mergedSummary.getSummaryText()));
+        entity.setStructuredSummaryJson(writeStructuredSummary(mergedSummary));
+        entity.setSourceHistoryIdsJson(writeHistoryIds(mergedSummary.getSourceHistoryIds()));
         entity.setUpdatedAt(now);
-        persistMemoryEntry(entity, extractRelatedTablesFromRows(rows));
+        persistMemoryEntry(entity, mergedSummary.getRelatedTables());
     }
 
     @Override
@@ -256,6 +284,7 @@ public class MemoryServiceImpl implements MemoryService {
         qdrantClientService.deletePointsByFilters(sqlHistoryCollectionName, List.of(
             new QdrantPayloadFilter("entry_type", "session_summary")
         ));
+        qdrantClientService.dropCollection(sqlHistoryCollectionName);
         qdrantClientService.dropCollection("sql_fragment");
     }
 
@@ -383,7 +412,18 @@ public class MemoryServiceImpl implements MemoryService {
     }
 
     private void persistMemoryEntry(MemoryEntryEntity entity, List<String> relatedTables) {
-        String vectorText = buildMemoryDocumentText(entity);
+        MemoryStructuredSummaryVO structuredSummary = ensureStructuredSummary(
+            parseStructuredSummary(entity == null ? null : entity.getStructuredSummaryJson()),
+            "SESSION_SUMMARY",
+            normalizeText(entity == null ? null : entity.getScope()),
+            relatedTables,
+            parseHistoryIds(entity == null ? null : entity.getSourceHistoryIdsJson()),
+            normalizeSummary(entity == null ? null : entity.getSummary()),
+            "MANUAL".equals(normalizeText(entity == null ? null : entity.getSourceType())) ? MANUAL_MEMORY_CONFIDENCE : DEFAULT_MEMORY_CONFIDENCE
+        );
+        entity.setStructuredSummaryJson(writeStructuredSummary(structuredSummary));
+        entity.setSummary(normalizeSummary(structuredSummary.getSummaryText()));
+        String vectorText = buildMemoryDocumentText(entity, structuredSummary);
         List<Float> vector = ragEmbeddingService.embedText(vectorText);
         if (vector == null || vector.isEmpty()) {
             throw new BusinessException(500, "长期记忆向量化失败");
@@ -399,7 +439,7 @@ public class MemoryServiceImpl implements MemoryService {
             List.of(new QdrantPoint(
                 buildManagedMemoryPointId(entity.getId()),
                 vector,
-                buildManagedMemoryPayload(entity, relatedTables)
+                buildManagedMemoryPayload(entity, relatedTables, structuredSummary)
             ))
         );
     }
@@ -427,7 +467,9 @@ public class MemoryServiceImpl implements MemoryService {
         qdrantClientService.deletePointsByFilters(sqlHistoryCollectionName, buildLegacyHistoryDeleteFilters(entity));
     }
 
-    private Map<String, Object> buildManagedMemoryPayload(MemoryEntryEntity entity, List<String> relatedTables) {
+    private Map<String, Object> buildManagedMemoryPayload(MemoryEntryEntity entity,
+                                                          List<String> relatedTables,
+                                                          MemoryStructuredSummaryVO structuredSummary) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("memory_id", entity.getId());
         payload.put("scope", entity.getScope());
@@ -435,17 +477,31 @@ public class MemoryServiceImpl implements MemoryService {
         payload.put("database_name", normalizeDatabaseName(entity.getDatabaseName()));
         payload.put("title", normalizeText(entity.getTitle()));
         payload.put("summary", normalizeSummary(entity.getSummary()));
+        payload.put("memory_type", normalizeText(structuredSummary == null ? null : structuredSummary.getMemoryType()));
+        payload.put("facts", structuredSummary == null ? List.of() : structuredSummary.getFacts());
+        payload.put("constraints", structuredSummary == null ? List.of() : structuredSummary.getConstraints());
+        payload.put("corrections", structuredSummary == null ? List.of() : structuredSummary.getCorrections());
+        payload.put("priority_hints", structuredSummary == null ? List.of() : structuredSummary.getPriorityHints());
+        payload.put("confidence", structuredSummary == null ? DEFAULT_MEMORY_CONFIDENCE : normalizeConfidence(structuredSummary.getConfidence(), DEFAULT_MEMORY_CONFIDENCE));
+        payload.put("source_history_ids", structuredSummary == null ? List.of() : structuredSummary.getSourceHistoryIds());
+        payload.put("structured_summary_json", entity.getStructuredSummaryJson());
         payload.put("source_type", normalizeText(entity.getSourceType()));
         payload.put("source_session_id", normalizeText(entity.getSourceSessionId()));
-        payload.put("related_tables", relatedTables == null ? List.of() : relatedTables);
+        payload.put("related_tables", structuredSummary == null ? (relatedTables == null ? List.of() : relatedTables) : structuredSummary.getRelatedTables());
         payload.put("updated_at", entity.getUpdatedAt());
         return payload;
     }
 
-    private String buildMemoryDocumentText(MemoryEntryEntity entity) {
+    private String buildMemoryDocumentText(MemoryEntryEntity entity, MemoryStructuredSummaryVO structuredSummary) {
         return """
             记忆标题: %s
             记忆摘要: %s
+            记忆类型: %s
+            事实: %s
+            约束: %s
+            纠正: %s
+            重点提示: %s
+            关联表: %s
             作用域: %s
             连接ID: %s
             数据库: %s
@@ -453,6 +509,12 @@ public class MemoryServiceImpl implements MemoryService {
             """.formatted(
             normalizeText(entity.getTitle()),
             normalizeSummary(entity.getSummary()),
+            normalizeText(structuredSummary == null ? null : structuredSummary.getMemoryType()),
+            joinSummaryItems(structuredSummary == null ? List.of() : structuredSummary.getFacts()),
+            joinSummaryItems(structuredSummary == null ? List.of() : structuredSummary.getConstraints()),
+            joinSummaryItems(structuredSummary == null ? List.of() : structuredSummary.getCorrections()),
+            joinSummaryItems(structuredSummary == null ? List.of() : structuredSummary.getPriorityHints()),
+            joinSummaryItems(structuredSummary == null ? List.of() : structuredSummary.getRelatedTables()),
             normalizeText(entity.getScope()),
             entity.getConnectionId(),
             normalizeDatabaseName(entity.getDatabaseName()),
@@ -776,16 +838,26 @@ public class MemoryServiceImpl implements MemoryService {
     }
 
     private MemoryEntryVO toMemoryEntryVO(MemoryEntryEntity entity) {
+        MemoryStructuredSummaryVO structuredSummary = ensureStructuredSummary(
+            parseStructuredSummary(entity == null ? null : entity.getStructuredSummaryJson()),
+            "SESSION_SUMMARY",
+            normalizeText(entity == null ? null : entity.getScope()),
+            extractRelatedTablesFromMemory(entity, List.of()),
+            parseHistoryIds(entity == null ? null : entity.getSourceHistoryIdsJson()),
+            normalizeSummary(entity == null ? null : entity.getSummary()),
+            "MANUAL".equals(normalizeText(entity == null ? null : entity.getSourceType())) ? MANUAL_MEMORY_CONFIDENCE : DEFAULT_MEMORY_CONFIDENCE
+        );
         MemoryEntryVO vo = new MemoryEntryVO();
         vo.setId(entity.getId());
         vo.setScope(entity.getScope());
         vo.setConnectionId(entity.getConnectionId());
         vo.setDatabaseName(normalizeDatabaseName(entity.getDatabaseName()));
         vo.setTitle(normalizeText(entity.getTitle()));
-        vo.setSummary(normalizeSummary(entity.getSummary()));
+        vo.setSummary(normalizeSummary(structuredSummary.getSummaryText()));
+        vo.setStructuredSummary(structuredSummary);
         vo.setSourceType(normalizeText(entity.getSourceType()));
         vo.setSourceSessionId(normalizeText(entity.getSourceSessionId()));
-        vo.setSourceHistoryIds(parseHistoryIds(entity.getSourceHistoryIdsJson()));
+        vo.setSourceHistoryIds(structuredSummary.getSourceHistoryIds());
         vo.setHitCount(Optional.ofNullable(entity.getHitCount()).orElse(0L));
         vo.setLastUsedAt(entity.getLastUsedAt());
         vo.setCreatedAt(entity.getCreatedAt());
@@ -915,6 +987,252 @@ public class MemoryServiceImpl implements MemoryService {
 
     private String normalizeSummary(String value) {
         return normalizeText(value);
+    }
+
+    private MemoryStructuredSummaryVO buildManualStructuredSummary(MemoryEntryEntity entity, List<String> relatedTables) {
+        MemoryStructuredSummaryVO structuredSummary = new MemoryStructuredSummaryVO();
+        structuredSummary.setMemoryType("MANUAL");
+        structuredSummary.setFacts(List.of());
+        structuredSummary.setConstraints(List.of());
+        structuredSummary.setCorrections(List.of());
+        structuredSummary.setPriorityHints(List.of());
+        structuredSummary.setRelatedTables(relatedTables == null ? List.of() : relatedTables);
+        structuredSummary.setScope(normalizeText(entity == null ? null : entity.getScope()));
+        structuredSummary.setSourceHistoryIds(parseHistoryIds(entity == null ? null : entity.getSourceHistoryIdsJson()));
+        structuredSummary.setSupersedesMemoryIds(List.of());
+        structuredSummary.setConfidence(MANUAL_MEMORY_CONFIDENCE);
+        structuredSummary.setSummaryText(normalizeSummary(entity == null ? null : entity.getSummary()));
+        return ensureStructuredSummary(
+            structuredSummary,
+            "MANUAL",
+            normalizeText(entity == null ? null : entity.getScope()),
+            relatedTables,
+            structuredSummary.getSourceHistoryIds(),
+            normalizeSummary(entity == null ? null : entity.getSummary()),
+            MANUAL_MEMORY_CONFIDENCE
+        );
+    }
+
+    private MemoryStructuredSummaryVO buildPromotedStructuredSummary(MemoryEntryEntity entity,
+                                                                     List<QueryHistoryEntity> rows,
+                                                                     Map<Long, Map<String, Object>> payloadByHistoryId,
+                                                                     List<String> relatedTables) {
+        LinkedHashSet<String> facts = new LinkedHashSet<>();
+        LinkedHashSet<String> constraints = new LinkedHashSet<>();
+        LinkedHashSet<String> corrections = new LinkedHashSet<>();
+        LinkedHashSet<String> priorityHints = new LinkedHashSet<>();
+        for (QueryHistoryEntity row : rows) {
+            Map<String, Object> payload = payloadByHistoryId.get(row.getId());
+            String semantic = normalizeText(payloadString(payload, "semantic_description"));
+            if (!semantic.isBlank()) {
+                facts.add(semantic);
+            }
+            String prompt = normalizeText(row == null ? null : row.getPromptText());
+            if (!prompt.isBlank()) {
+                priorityHints.add(prompt);
+            }
+        }
+        MemoryStructuredSummaryVO structuredSummary = new MemoryStructuredSummaryVO();
+        structuredSummary.setMemoryType("SESSION_SUMMARY");
+        structuredSummary.setFacts(new ArrayList<>(facts));
+        structuredSummary.setConstraints(new ArrayList<>(constraints));
+        structuredSummary.setCorrections(new ArrayList<>(corrections));
+        structuredSummary.setPriorityHints(new ArrayList<>(priorityHints));
+        structuredSummary.setRelatedTables(relatedTables);
+        structuredSummary.setScope(normalizeText(entity == null ? null : entity.getScope()));
+        structuredSummary.setSourceHistoryIds(collectHistoryIds(rows));
+        structuredSummary.setSupersedesMemoryIds(List.of());
+        structuredSummary.setConfidence(DEFAULT_MEMORY_CONFIDENCE);
+        structuredSummary.setSummaryText(buildPromotedSummary(rows, payloadByHistoryId));
+        return ensureStructuredSummary(
+            structuredSummary,
+            "SESSION_SUMMARY",
+            normalizeText(entity == null ? null : entity.getScope()),
+            relatedTables,
+            collectHistoryIds(rows),
+            buildPromotedSummary(rows, payloadByHistoryId),
+            DEFAULT_MEMORY_CONFIDENCE
+        );
+    }
+
+    private MemoryStructuredSummaryVO mergeStructuredSummary(MemoryStructuredSummaryVO existing,
+                                                             MemoryStructuredSummaryVO incoming,
+                                                             String scope,
+                                                             List<String> relatedTables,
+                                                             List<Long> sourceHistoryIds) {
+        MemoryStructuredSummaryVO normalizedExisting = ensureStructuredSummary(
+            existing,
+            "SESSION_SUMMARY",
+            scope,
+            relatedTables,
+            sourceHistoryIds,
+            "",
+            DEFAULT_MEMORY_CONFIDENCE
+        );
+        MemoryStructuredSummaryVO normalizedIncoming = ensureStructuredSummary(
+            incoming,
+            "SESSION_SUMMARY",
+            scope,
+            relatedTables,
+            sourceHistoryIds,
+            "",
+            DEFAULT_MEMORY_CONFIDENCE
+        );
+        MemoryStructuredSummaryVO merged = new MemoryStructuredSummaryVO();
+        merged.setFacts(mergeStringLists(normalizedExisting.getFacts(), normalizedIncoming.getFacts()));
+        merged.setConstraints(mergeStringLists(normalizedExisting.getConstraints(), normalizedIncoming.getConstraints()));
+        merged.setCorrections(mergeStringLists(normalizedExisting.getCorrections(), normalizedIncoming.getCorrections()));
+        merged.setPriorityHints(mergeStringLists(normalizedExisting.getPriorityHints(), normalizedIncoming.getPriorityHints()));
+        merged.setRelatedTables(mergeStringLists(
+            mergeStringLists(normalizedExisting.getRelatedTables(), normalizedIncoming.getRelatedTables()),
+            relatedTables
+        ));
+        merged.setScope(normalizeText(scope));
+        merged.setSourceHistoryIds(mergeLongLists(
+            mergeLongLists(normalizedExisting.getSourceHistoryIds(), normalizedIncoming.getSourceHistoryIds()),
+            sourceHistoryIds
+        ));
+        merged.setSupersedesMemoryIds(List.of());
+        merged.setConfidence(normalizeConfidence(normalizedIncoming.getConfidence(), normalizeConfidence(normalizedExisting.getConfidence(), DEFAULT_MEMORY_CONFIDENCE)));
+        merged.setMemoryType(resolveMemoryType(merged, normalizeText(normalizedIncoming.getMemoryType())));
+        merged.setSummaryText(buildSummaryTextFromStructuredSummary(merged));
+        return ensureStructuredSummary(
+            merged,
+            "SESSION_SUMMARY",
+            scope,
+            merged.getRelatedTables(),
+            merged.getSourceHistoryIds(),
+            merged.getSummaryText(),
+            normalizeConfidence(merged.getConfidence(), DEFAULT_MEMORY_CONFIDENCE)
+        );
+    }
+
+    private MemoryStructuredSummaryVO ensureStructuredSummary(MemoryStructuredSummaryVO structuredSummary,
+                                                              String fallbackMemoryType,
+                                                              String fallbackScope,
+                                                              List<String> fallbackRelatedTables,
+                                                              List<Long> fallbackSourceHistoryIds,
+                                                              String fallbackSummaryText,
+                                                              Double fallbackConfidence) {
+        MemoryStructuredSummaryVO normalized = structuredSummary == null ? new MemoryStructuredSummaryVO() : structuredSummary;
+        normalized.setFacts(mergeStringLists(normalized.getFacts(), List.of()));
+        normalized.setConstraints(mergeStringLists(normalized.getConstraints(), List.of()));
+        normalized.setCorrections(mergeStringLists(normalized.getCorrections(), List.of()));
+        normalized.setPriorityHints(mergeStringLists(normalized.getPriorityHints(), List.of()));
+        normalized.setRelatedTables(mergeStringLists(normalized.getRelatedTables(), fallbackRelatedTables));
+        normalized.setScope(normalizeText(normalized.getScope()).isBlank() ? normalizeText(fallbackScope) : normalizeText(normalized.getScope()));
+        normalized.setSourceHistoryIds(mergeLongLists(normalized.getSourceHistoryIds(), fallbackSourceHistoryIds));
+        normalized.setSupersedesMemoryIds(mergeLongLists(normalized.getSupersedesMemoryIds(), List.of()));
+        normalized.setConfidence(normalizeConfidence(normalized.getConfidence(), fallbackConfidence == null ? DEFAULT_MEMORY_CONFIDENCE : fallbackConfidence));
+        String summaryText = normalizeSummary(normalized.getSummaryText());
+        if (summaryText.isBlank()) {
+            summaryText = normalizeSummary(fallbackSummaryText);
+        }
+        normalized.setSummaryText(summaryText);
+        normalized.setMemoryType(resolveMemoryType(normalized, normalizeText(fallbackMemoryType)));
+        return normalized;
+    }
+
+    private String resolveMemoryType(MemoryStructuredSummaryVO structuredSummary, String fallbackMemoryType) {
+        if (structuredSummary != null && structuredSummary.getCorrections() != null && !structuredSummary.getCorrections().isEmpty()) {
+            return "CORRECTION";
+        }
+        if (structuredSummary != null && structuredSummary.getPriorityHints() != null && !structuredSummary.getPriorityHints().isEmpty()) {
+            return "PRIORITY_HINT";
+        }
+        if (normalizeText(fallbackMemoryType).isBlank()) {
+            return "SESSION_SUMMARY";
+        }
+        return normalizeText(fallbackMemoryType).toUpperCase(Locale.ROOT);
+    }
+
+    private String buildSummaryTextFromStructuredSummary(MemoryStructuredSummaryVO structuredSummary) {
+        if (structuredSummary == null) {
+            return "";
+        }
+        List<String> lines = new ArrayList<>();
+        appendSummaryLine(lines, "纠正", structuredSummary.getCorrections());
+        appendSummaryLine(lines, "重点提示", structuredSummary.getPriorityHints());
+        appendSummaryLine(lines, "约束", structuredSummary.getConstraints());
+        appendSummaryLine(lines, "事实", structuredSummary.getFacts());
+        appendSummaryLine(lines, "关联表", structuredSummary.getRelatedTables());
+        if (lines.isEmpty()) {
+            return normalizeSummary(structuredSummary.getSummaryText());
+        }
+        return String.join("\n", lines);
+    }
+
+    private void appendSummaryLine(List<String> lines, String label, List<String> values) {
+        List<String> normalizedValues = mergeStringLists(values, List.of());
+        if (normalizedValues.isEmpty()) {
+            return;
+        }
+        lines.add(label + ": " + String.join("；", normalizedValues));
+    }
+
+    private List<String> mergeStringLists(List<String> left, List<String> right) {
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        if (left != null) {
+            left.stream().map(this::normalizeText).filter(item -> !item.isBlank()).forEach(values::add);
+        }
+        if (right != null) {
+            right.stream().map(this::normalizeText).filter(item -> !item.isBlank()).forEach(values::add);
+        }
+        return new ArrayList<>(values);
+    }
+
+    private List<Long> mergeLongLists(List<Long> left, List<Long> right) {
+        LinkedHashSet<Long> values = new LinkedHashSet<>();
+        if (left != null) {
+            left.stream().filter(Objects::nonNull).filter(item -> item > 0).forEach(values::add);
+        }
+        if (right != null) {
+            right.stream().filter(Objects::nonNull).filter(item -> item > 0).forEach(values::add);
+        }
+        return new ArrayList<>(values);
+    }
+
+    private double normalizeConfidence(Double value, double fallback) {
+        if (value == null || value <= 0D) {
+            return fallback;
+        }
+        return Math.max(0D, Math.min(value, 1D));
+    }
+
+    private MemoryStructuredSummaryVO parseStructuredSummary(String json) {
+        String normalized = normalizeText(json);
+        if (normalized.isBlank()) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(normalized, MemoryStructuredSummaryVO.class);
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private String writeStructuredSummary(MemoryStructuredSummaryVO structuredSummary) {
+        try {
+            return objectMapper.writeValueAsString(ensureStructuredSummary(
+                structuredSummary,
+                "SESSION_SUMMARY",
+                normalizeText(structuredSummary == null ? null : structuredSummary.getScope()),
+                structuredSummary == null ? List.of() : structuredSummary.getRelatedTables(),
+                structuredSummary == null ? List.of() : structuredSummary.getSourceHistoryIds(),
+                structuredSummary == null ? "" : structuredSummary.getSummaryText(),
+                structuredSummary == null ? DEFAULT_MEMORY_CONFIDENCE : normalizeConfidence(structuredSummary.getConfidence(), DEFAULT_MEMORY_CONFIDENCE)
+            ));
+        } catch (Exception ex) {
+            throw new BusinessException(500, "序列化结构化记忆失败");
+        }
+    }
+
+    private String joinSummaryItems(List<String> values) {
+        List<String> normalizedValues = mergeStringLists(values, List.of());
+        if (normalizedValues.isEmpty()) {
+            return "-";
+        }
+        return String.join("；", normalizedValues);
     }
 
     private String normalizeOneLine(String value, int maxLength) {

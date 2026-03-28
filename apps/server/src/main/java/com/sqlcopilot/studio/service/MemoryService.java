@@ -13,16 +13,10 @@ public interface MemoryService {
 
     void removeEntry(MemoryEntryRemoveReq req);
 
-    MemoryHistoryPageVO pageHistories(MemoryHistoryPageReq req);
-
-    void removeHistory(MemoryHistoryRemoveReq req);
-
-    MemoryEntryVO promoteHistory(MemoryHistoryPromoteReq req);
-
     void autoUpsertSessionMemory(Long connectionId,
                                  String requestedDatabaseName,
                                  String sessionId,
-                                 String summary,
+                                 MemoryStructuredSummaryVO structuredSummary,
                                  List<QueryHistoryEntity> sourceRows);
 
     void markRetrieved(List<Long> memoryIds);

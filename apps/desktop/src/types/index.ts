@@ -770,6 +770,20 @@ export type KnowledgeScope = 'GLOBAL' | 'CONNECTION' | 'DATABASE';
 
 export type MemoryScope = 'CONNECTION' | 'DATABASE';
 
+export interface MemoryStructuredSummary {
+  memoryType: 'SESSION_SUMMARY' | 'CORRECTION' | 'PRIORITY_HINT' | 'MANUAL' | string;
+  facts: string[];
+  constraints: string[];
+  corrections: string[];
+  priorityHints: string[];
+  relatedTables: string[];
+  scope?: MemoryScope | string;
+  sourceHistoryIds: number[];
+  supersedesMemoryIds: number[];
+  confidence?: number;
+  summaryText: string;
+}
+
 export interface KnowledgeTermVO {
   id: number;
   scope: KnowledgeScope;
@@ -826,6 +840,7 @@ export interface MemoryEntryVO {
   databaseName?: string;
   title: string;
   summary: string;
+  structuredSummary?: MemoryStructuredSummary;
   sourceType: 'AUTO_SESSION' | 'PROMOTED_SQL' | 'MANUAL';
   sourceSessionId?: string;
   sourceHistoryIds?: number[];

@@ -9,7 +9,6 @@ import com.sqlcopilot.studio.mapper.QueryHistoryMapper;
 import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.SchemaService;
 import com.sqlcopilot.studio.service.SqlService;
-import com.sqlcopilot.studio.service.rag.RagIngestionService;
 import com.sqlcopilot.studio.support.SchemaContextSupport;
 import com.sqlcopilot.studio.util.BusinessException;
 import com.sqlcopilot.studio.util.ResultSetConverter;
@@ -72,20 +71,17 @@ public class SqlServiceImpl implements SqlService {
     private final SchemaService schemaService;
     private final QueryHistoryMapper queryHistoryMapper;
     private final AuditLogMapper auditLogMapper;
-    private final RagIngestionService ragIngestionService;
     private final ConcurrentHashMap<String, RiskAckPayload> riskAckStore = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, RunningSqlExecution> runningExecutionStore = new ConcurrentHashMap<>();
 
     public SqlServiceImpl(ConnectionService connectionService,
                           SchemaService schemaService,
                           QueryHistoryMapper queryHistoryMapper,
-                          AuditLogMapper auditLogMapper,
-                          RagIngestionService ragIngestionService) {
+                          AuditLogMapper auditLogMapper) {
         this.connectionService = connectionService;
         this.schemaService = schemaService;
         this.queryHistoryMapper = queryHistoryMapper;
         this.auditLogMapper = auditLogMapper;
-        this.ragIngestionService = ragIngestionService;
     }
 
     @Override
@@ -811,10 +807,7 @@ public class SqlServiceImpl implements SqlService {
         history.setSuccessFlag(Boolean.TRUE.equals(result.getSuccess()) ? 1 : 0);
         history.setCreatedAt(System.currentTimeMillis());
         queryHistoryMapper.insert(history);
-        // 关键策略：仅在“记忆理解开启 + 执行成功”时向量化，避免无效样本进入检索库。
-        if (memoryEnabled && history.getSuccessFlag() != null && history.getSuccessFlag() == 1) {
-            ragIngestionService.ingestSqlHistory(history);
-        }
+        // 单一长期记忆池方案下，执行历史仅保留在 query_history，不再进入 SQL 历史向量池。
     }
 
     private boolean resolveExecuteMemoryEnabled(SqlExecuteReq req) {
