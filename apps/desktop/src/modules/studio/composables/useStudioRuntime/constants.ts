@@ -1,0 +1,21 @@
+﻿import {theme as antdTheme} from 'ant-design-vue';
+
+export const browserTabKey = 'browser';
+export const uiThemeStorageKey = 'sqlcopilot.ui-theme.v1';
+export const resultExportDirectoryStorageKey = 'sqlcopilot.result-export-directory.v1';
+export const sessionTitleOverridesStorageKey = 'sqlcopilot.session-title-overrides.v1';
+export const {defaultAlgorithm, darkAlgorithm} = antdTheme;
+export const isMacOS = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform);
+export const isWindows = typeof navigator !== 'undefined' && /win/i.test(navigator.platform);
+export const isLinux = typeof navigator !== 'undefined' && /linux/i.test(navigator.platform);
+export const vectorizeStatusPollIntervalMs = 30000;
+export const tableStatsMinRequestIntervalMs = 30000;
+export const tableStatsPollIntervalMs = 1500;
+export const FRONTEND_HIDDEN_DB_TYPES = new Set(['MONGODB']);
+export const aiRequestTimeoutMs = 120000;
+export const AI_REQUEST_ABORTED = 'AI_REQUEST_ABORTED';
+export const chartExportPixelRatioCandidates = [2, 1.5, 1] as const;
+export const erDiagramExportPixelRatioCandidates = [2, 1.5, 1] as const;
+export const RISK_EXECUTION_CANCELLED = 'RISK_EXECUTION_CANCELLED';
+export const SQL_EXECUTION_ABORTED = 'SQL_EXECUTION_ABORTED';
+export const QUERY_RESULT_MAX_ROWS = 5000;
