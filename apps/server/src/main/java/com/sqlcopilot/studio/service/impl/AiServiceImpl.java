@@ -7,9 +7,11 @@ import com.sqlcopilot.studio.dto.schema.*;
 import com.sqlcopilot.studio.dto.sql.QueryRowVO;
 import com.sqlcopilot.studio.entity.ConnectionEntity;
 import com.sqlcopilot.studio.service.AiConfigService;
+import com.sqlcopilot.studio.service.PromptBudgetPlanner;
 import com.sqlcopilot.studio.service.AiService;
 import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.SchemaService;
+import com.sqlcopilot.studio.service.TokenEstimatorService;
 import com.sqlcopilot.studio.service.llm.*;
 import com.sqlcopilot.studio.service.rag.RagRetrievalService;
 import com.sqlcopilot.studio.service.rag.model.RagPromptContext;
@@ -245,6 +247,8 @@ public class AiServiceImpl implements AiService {
     private final ObjectMapper objectMapper;
     private final LlmGatewayService llmGatewayService;
     private final AiConversationContextManager conversationContextManager;
+    private final TokenEstimatorService tokenEstimatorService;
+    private final PromptBudgetPlanner promptBudgetPlanner;
 
     public AiServiceImpl(SchemaService schemaService,
                          AiConfigService aiConfigService,
@@ -252,7 +256,9 @@ public class AiServiceImpl implements AiService {
                          RagRetrievalService ragRetrievalService,
                          ObjectMapper objectMapper,
                          LlmGatewayService llmGatewayService,
-                         AiConversationContextManager conversationContextManager) {
+                         AiConversationContextManager conversationContextManager,
+                         TokenEstimatorService tokenEstimatorService,
+                         PromptBudgetPlanner promptBudgetPlanner) {
         this.schemaService = schemaService;
         this.aiConfigService = aiConfigService;
         this.connectionService = connectionService;
@@ -260,6 +266,8 @@ public class AiServiceImpl implements AiService {
         this.objectMapper = objectMapper;
         this.llmGatewayService = llmGatewayService;
         this.conversationContextManager = conversationContextManager;
+        this.tokenEstimatorService = tokenEstimatorService;
+        this.promptBudgetPlanner = promptBudgetPlanner;
     }
 
     @Override
@@ -392,7 +400,7 @@ public class AiServiceImpl implements AiService {
             vo.setSqlText(generated.getSqlText());
             vo.setFallbackUsed(Boolean.TRUE.equals(generated.getFallbackUsed()));
             vo.setReasoning(joinReasoning(baseReasoning, generated.getReasoning()));
-            vo.setTotalTokens(generated.getTotalTokens());
+            copyUsage(vo, generated);
             delegatedTrace = generated.getTrace();
         } else if (intentType == IntentType.EXPLAIN_SQL) {
             if (!hasSqlSnippet && conversationSqlFallback.isBlank()) {
@@ -406,7 +414,7 @@ public class AiServiceImpl implements AiService {
             vo.setContent(explained.getContent());
             vo.setFallbackUsed(Boolean.TRUE.equals(explained.getFallbackUsed()));
             vo.setReasoning(joinReasoning(baseReasoning, explained.getReasoning()));
-            vo.setTotalTokens(explained.getTotalTokens());
+            copyUsage(vo, explained);
             delegatedTrace = explained.getTrace();
         } else if (intentType == IntentType.ANALYZE_SQL) {
             if (!hasSqlSnippet && conversationSqlFallback.isBlank()) {
@@ -420,7 +428,7 @@ public class AiServiceImpl implements AiService {
             vo.setContent(analyzed.getContent());
             vo.setFallbackUsed(Boolean.TRUE.equals(analyzed.getFallbackUsed()));
             vo.setReasoning(joinReasoning(baseReasoning, analyzed.getReasoning()));
-            vo.setTotalTokens(analyzed.getTotalTokens());
+            copyUsage(vo, analyzed);
             delegatedTrace = analyzed.getTrace();
         } else {
             AiGenerateChartVO chart = generateChart(req);
@@ -430,7 +438,7 @@ public class AiServiceImpl implements AiService {
             vo.setConfigSummary(chart.getConfigSummary());
             vo.setFallbackUsed(Boolean.TRUE.equals(chart.getFallbackUsed()));
             vo.setReasoning(joinReasoning(baseReasoning, chart.getReasoning()));
-            vo.setTotalTokens(chart.getTotalTokens());
+            copyUsage(vo, chart);
             delegatedTrace = chart.getTrace();
         }
 
@@ -655,12 +663,15 @@ public class AiServiceImpl implements AiService {
         vo.setFallbackUsed(fallbackUsed);
         TokenUsageStats tokenUsage = resolveTokenUsage(
             providerTokenUsage,
-            req.getPrompt() + "\n" + generationContext.promptContext(),
+            gatewayResult == null ? req.getPrompt() + "\n" + generationContext.promptContext() : gatewayResult.getUserPrompt(),
             generatedSql + "\n" + reasoning
         );
-        vo.setPromptTokens(tokenUsage.promptTokens());
-        vo.setCompletionTokens(tokenUsage.completionTokens());
-        vo.setTotalTokens(tokenUsage.totalTokens());
+        applyUsage(
+            vo,
+            tokenUsage,
+            gatewayResult == null ? null : gatewayResult.getPromptBudget(),
+            estimateTurnContentTokens(req.getPrompt(), generatedSql, "", null)
+        );
         if (detailOutputEnabled) {
             publishTraceSnapshot(req.getSessionId(), "generate", traceStages, System.currentTimeMillis() - startAt);
             vo.setTrace(buildTrace(traceStages, System.currentTimeMillis() - startAt));
@@ -909,12 +920,15 @@ public class AiServiceImpl implements AiService {
         vo.setFallbackUsed(fallbackUsed);
         TokenUsageStats tokenUsage = resolveTokenUsage(
             providerTokenUsage,
-            req.getPrompt() + "\n" + generationContext.promptContext(),
+            gatewayResult == null ? req.getPrompt() + "\n" + generationContext.promptContext() : gatewayResult.getUserPrompt(),
             sqlText + "\n" + reasoning + "\n" + configSummary
         );
-        vo.setPromptTokens(tokenUsage.promptTokens());
-        vo.setCompletionTokens(tokenUsage.completionTokens());
-        vo.setTotalTokens(tokenUsage.totalTokens());
+        applyUsage(
+            vo,
+            tokenUsage,
+            gatewayResult == null ? null : gatewayResult.getPromptBudget(),
+            estimateTurnContentTokens(req.getPrompt(), sqlText, configSummary, chartConfig)
+        );
         if (detailOutputEnabled) {
             publishTraceSnapshot(req.getSessionId(), "generate-chart", traceStages, System.currentTimeMillis() - startAt);
             vo.setTrace(buildTrace(traceStages, System.currentTimeMillis() - startAt));
@@ -1209,7 +1223,14 @@ public class AiServiceImpl implements AiService {
                 new AiConversationContextManager.ConversationGenerationContext(
                     contextText,
                     relatedTables,
-                    providerReq.getPrompt()
+                    providerReq.getPrompt(),
+                    "",
+                    "",
+                    "",
+                    "",
+                    contextText,
+                    0,
+                    resolveMemoryWindowBudget()
                 );
             TextProviderResult providerResult = generateTextByConfiguredProvider(
                 providerReq,
@@ -1915,21 +1936,21 @@ public class AiServiceImpl implements AiService {
             vo.setContent(explained.getContent());
             vo.setFallbackUsed(Boolean.TRUE.equals(explained.getFallbackUsed()));
             vo.setReasoning(joinReasoning(intentResult.reason(), explained.getReasoning()));
-            vo.setTotalTokens(explained.getTotalTokens());
+            copyUsage(vo, explained);
             vo.setTrace(explained.getTrace());
         } else if (intentType == IntentType.ANALYZE_SQL) {
             AiTextResponseVO analyzed = generateKvTextResponse(req, "auto", KV_ANALYZE_QUERY_SYSTEM_PROMPT, "KV 查询分析", false);
             vo.setContent(analyzed.getContent());
             vo.setFallbackUsed(Boolean.TRUE.equals(analyzed.getFallbackUsed()));
             vo.setReasoning(joinReasoning(intentResult.reason(), analyzed.getReasoning()));
-            vo.setTotalTokens(analyzed.getTotalTokens());
+            copyUsage(vo, analyzed);
             vo.setTrace(analyzed.getTrace());
         } else {
             AiGenerateSqlVO generated = generateKvQueryInternal(req, "auto", false);
             vo.setSqlText(generated.getSqlText());
             vo.setFallbackUsed(Boolean.TRUE.equals(generated.getFallbackUsed()));
             vo.setReasoning(joinReasoning(intentResult.reason(), generated.getReasoning()));
-            vo.setTotalTokens(generated.getTotalTokens());
+            copyUsage(vo, generated);
             vo.setTrace(generated.getTrace());
         }
         publishFinalResult(req.getSessionId(), "auto", buildFinalResult("auto", vo));
@@ -2000,9 +2021,12 @@ public class AiServiceImpl implements AiService {
         vo.setReasoning(reasoning);
         vo.setFallbackUsed(fallbackUsed);
         TokenUsageStats tokenUsage = resolveTokenUsage(providerTokenUsage, userPrompt, generatedText + "\n" + reasoning);
-        vo.setPromptTokens(tokenUsage.promptTokens());
-        vo.setCompletionTokens(tokenUsage.completionTokens());
-        vo.setTotalTokens(tokenUsage.totalTokens());
+        applyUsage(
+            vo,
+            tokenUsage,
+            gatewayResult == null ? null : gatewayResult.getPromptBudget(),
+            estimateTurnContentTokens(req.getPrompt(), generatedText, "", null)
+        );
         if (detailOutputEnabled) {
             publishTraceSnapshot(req.getSessionId(), actionType, traceStages, System.currentTimeMillis() - startAt);
             vo.setTrace(buildTrace(traceStages, System.currentTimeMillis() - startAt));
@@ -2069,9 +2093,12 @@ public class AiServiceImpl implements AiService {
         vo.setReasoning(reasoning);
         vo.setFallbackUsed(fallbackUsed);
         TokenUsageStats tokenUsage = resolveTokenUsage(providerTokenUsage, userPrompt, content + "\n" + reasoning);
-        vo.setPromptTokens(tokenUsage.promptTokens());
-        vo.setCompletionTokens(tokenUsage.completionTokens());
-        vo.setTotalTokens(tokenUsage.totalTokens());
+        applyUsage(
+            vo,
+            tokenUsage,
+            gatewayResult == null ? null : gatewayResult.getPromptBudget(),
+            estimateTurnContentTokens(req.getPrompt(), "", content, null)
+        );
         if (detailOutputEnabled) {
             publishTraceSnapshot(req.getSessionId(), actionType, traceStages, System.currentTimeMillis() - startAt);
             vo.setTrace(buildTrace(traceStages, System.currentTimeMillis() - startAt));
@@ -2319,9 +2346,12 @@ public class AiServiceImpl implements AiService {
             userPrompt.toString(),
             content + "\n" + reasoning
         );
-        vo.setPromptTokens(tokenUsage.promptTokens());
-        vo.setCompletionTokens(tokenUsage.completionTokens());
-        vo.setTotalTokens(tokenUsage.totalTokens());
+        applyUsage(
+            vo,
+            tokenUsage,
+            gatewayResult == null ? null : gatewayResult.getPromptBudget(),
+            estimateTurnContentTokens(req.getPrompt(), "", content, null)
+        );
         if (detailOutputEnabled) {
             publishTraceSnapshot(req.getSessionId(), actionType, traceStages, System.currentTimeMillis() - startAt);
             vo.setTrace(buildTrace(traceStages, System.currentTimeMillis() - startAt));
@@ -2692,7 +2722,8 @@ public class AiServiceImpl implements AiService {
      */
     private ProviderResult generateByConfiguredProvider(AiGenerateSqlReq req,
                                                         AiConversationContextManager.ConversationGenerationContext context) {
-        String userPrompt = buildProviderUserPrompt(req, context);
+        PromptBudgetPlanner.PromptBudgetPlan promptPlan = buildProviderPromptPlan(req, context, OPENAI_SYSTEM_PROMPT);
+        String userPrompt = promptPlan.userPrompt();
         LlmGatewayRequest gatewayRequest = new LlmGatewayRequest();
         gatewayRequest.setModelId(resolveRequestedModelId(req));
         gatewayRequest.setLegacyModelName(req.getModelName());
@@ -2705,6 +2736,7 @@ public class AiServiceImpl implements AiService {
             gatewayRequest,
             createLlmStreamListener(req.getSessionId(), "generate")
         );
+        gatewayResult.setPromptBudget(promptPlan.budget());
         String sqlText = extractSql(gatewayResult.getContent());
         if (sqlText.isBlank()) {
             return new ProviderResult(gatewayResult.getContent(), gatewayResult.getReasoning(), gatewayResult.getUsage(), gatewayResult);
@@ -2716,7 +2748,8 @@ public class AiServiceImpl implements AiService {
                                                                 AiConversationContextManager.ConversationGenerationContext context,
                                                                 String systemPrompt,
                                                                 String taskLabel) {
-        String userPrompt = buildProviderUserPrompt(req, context);
+        PromptBudgetPlanner.PromptBudgetPlan promptPlan = buildProviderPromptPlan(req, context, systemPrompt);
+        String userPrompt = promptPlan.userPrompt();
         LlmGatewayRequest gatewayRequest = new LlmGatewayRequest();
         gatewayRequest.setModelId(resolveRequestedModelId(req));
         gatewayRequest.setLegacyModelName(req.getModelName());
@@ -2729,6 +2762,7 @@ public class AiServiceImpl implements AiService {
             gatewayRequest,
             shouldStreamTaskLabel(taskLabel) ? createLlmStreamListener(req.getSessionId(), resolveActionTypeByTaskLabel(taskLabel)) : null
         );
+        gatewayResult.setPromptBudget(promptPlan.budget());
         return new TextProviderResult(gatewayResult.getContent(), gatewayResult.getReasoning(), gatewayResult.getUsage(), gatewayResult);
     }
 
@@ -2736,11 +2770,12 @@ public class AiServiceImpl implements AiService {
                                                                    String systemPrompt,
                                                                    String userPrompt,
                                                                    String taskLabel) {
+        PromptBudgetPlanner.PromptBudgetPlan promptPlan = buildRawPromptPlan(req, systemPrompt, userPrompt);
         LlmGatewayRequest gatewayRequest = new LlmGatewayRequest();
         gatewayRequest.setModelId(resolveRequestedModelId(req));
         gatewayRequest.setLegacyModelName(req.getModelName());
         gatewayRequest.setSystemPrompt(systemPrompt);
-        gatewayRequest.setUserPrompt(userPrompt);
+        gatewayRequest.setUserPrompt(promptPlan.userPrompt());
         gatewayRequest.setTaskLabel(taskLabel);
         gatewayRequest.setTimeout(Duration.ofSeconds(30));
         gatewayRequest.setTemperature(0.1D);
@@ -2748,6 +2783,7 @@ public class AiServiceImpl implements AiService {
             gatewayRequest,
             shouldStreamTaskLabel(taskLabel) ? createLlmStreamListener(req.getSessionId(), resolveActionTypeByTaskLabel(taskLabel)) : null
         );
+        gatewayResult.setPromptBudget(promptPlan.budget());
         return new TextProviderResult(gatewayResult.getContent(), gatewayResult.getReasoning(), gatewayResult.getUsage(), gatewayResult);
     }
 
@@ -2837,20 +2873,64 @@ public class AiServiceImpl implements AiService {
 
     private String buildProviderUserPrompt(AiGenerateSqlReq req,
                                            AiConversationContextManager.ConversationGenerationContext context) {
+        return buildProviderPromptPlan(req, context, OPENAI_SYSTEM_PROMPT).userPrompt();
+    }
+
+    private PromptBudgetPlanner.PromptBudgetPlan buildProviderPromptPlan(AiGenerateSqlReq req,
+                                                                         AiConversationContextManager.ConversationGenerationContext context,
+                                                                         String systemPrompt) {
         DatabaseBasicInfo basicInfo = loadDatabaseBasicInfo(req.getConnectionId(), req.getDatabaseName());
+        ModelExecutionProfile profile = resolveModelExecutionProfile(req);
+        return promptBudgetPlanner.plan(new PromptBudgetPlanner.PromptBudgetRequest(
+            systemPrompt,
+            buildDatabaseInfoText(basicInfo),
+            safe(req.getPrompt()),
+            buildTableUsageGuardrails(context),
+            context == null ? "" : context.retrievalInputForPrompt(),
+            context == null ? "" : context.windowSummary(),
+            context == null ? "" : context.slidingSummary(),
+            context == null ? "" : context.windowStructuredContext(),
+            context == null ? "" : context.windowDialogContext(),
+            context == null ? "" : context.knowledgeContext(),
+            profile.contextWindowTokens(),
+            profile.completionReserveTokens(),
+            context == null ? 0 : context.memoryWindowUsedTokens(),
+            context == null ? 0 : context.memoryWindowBudgetTokens(),
+            profile.tokenizerType()
+        ));
+    }
+
+    private PromptBudgetPlanner.PromptBudgetPlan buildRawPromptPlan(AiGenerateSqlReq req,
+                                                                    String systemPrompt,
+                                                                    String userPrompt) {
+        ModelExecutionProfile profile = resolveModelExecutionProfile(req);
+        return promptBudgetPlanner.plan(new PromptBudgetPlanner.PromptBudgetRequest(
+            systemPrompt,
+            "",
+            safe(userPrompt),
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            profile.contextWindowTokens(),
+            profile.completionReserveTokens(),
+            0,
+            resolveMemoryWindowBudget(),
+            profile.tokenizerType()
+        ));
+    }
+
+    private String buildDatabaseInfoText(DatabaseBasicInfo basicInfo) {
         StringBuilder builder = new StringBuilder();
-        builder.append("数据库基本信息:\n")
-            .append("- 类型: ").append(basicInfo.dbType()).append('\n')
+        builder.append("- 类型: ").append(basicInfo.dbType()).append('\n')
             .append("- 版本: ").append(basicInfo.dbVersion()).append('\n')
             .append("- 连接默认库: ").append(basicInfo.configuredDatabaseName());
         if (!basicInfo.requestDatabaseName().isBlank()) {
             builder.append('\n').append("- 本次目标库: ").append(basicInfo.requestDatabaseName());
         }
-        builder.append("\n\n");
-        builder.append("用户需求:\n").append(req.getPrompt());
-        builder.append("\n\n表使用硬约束:\n").append(buildTableUsageGuardrails(context));
-        builder.append("\n\n检索增强输入(含会话记忆):\n").append(context.retrievalInputForPrompt());
-        builder.append("\n\nRAG Context:\n").append(context.promptContext());
         return builder.toString();
     }
 
@@ -3445,9 +3525,101 @@ public class AiServiceImpl implements AiService {
             }
             return new TokenUsageStats(promptTokens, completionTokens, totalTokens);
         }
-        int promptTokens = estimateTokens(promptText);
-        int completionTokens = estimateTokens(completionText);
+        int promptTokens = tokenEstimatorService.estimateTokens(promptText, TokenEstimatorService.TOKENIZER_OPENAI_COMPAT);
+        int completionTokens = tokenEstimatorService.estimateTokens(completionText, TokenEstimatorService.TOKENIZER_OPENAI_COMPAT);
         return new TokenUsageStats(promptTokens, completionTokens, promptTokens + completionTokens);
+    }
+
+    private int estimateTurnContentTokens(String promptText,
+                                          String sqlText,
+                                          String assistantContent,
+                                          ChartConfigVO chartConfig) {
+        return tokenEstimatorService.estimateTurnContentTokens(
+            promptText,
+            sqlText,
+            assistantContent,
+            chartConfig == null ? "" : serializeChartConfig(chartConfig)
+        );
+    }
+
+    private void applyUsage(AiGenerateSqlVO vo, TokenUsageStats tokenUsage, PromptBudgetVO promptBudget, int turnContentTokens) {
+        vo.setPromptTokens(tokenUsage.promptTokens());
+        vo.setCompletionTokens(tokenUsage.completionTokens());
+        vo.setTotalTokens(tokenUsage.totalTokens());
+        vo.setRequestPromptTokens(tokenUsage.promptTokens());
+        vo.setRequestCompletionTokens(tokenUsage.completionTokens());
+        vo.setRequestTotalTokens(tokenUsage.totalTokens());
+        vo.setTurnContentTokens(turnContentTokens);
+        vo.setPromptBudget(promptBudget);
+    }
+
+    private void applyUsage(AiGenerateChartVO vo, TokenUsageStats tokenUsage, PromptBudgetVO promptBudget, int turnContentTokens) {
+        vo.setPromptTokens(tokenUsage.promptTokens());
+        vo.setCompletionTokens(tokenUsage.completionTokens());
+        vo.setTotalTokens(tokenUsage.totalTokens());
+        vo.setRequestPromptTokens(tokenUsage.promptTokens());
+        vo.setRequestCompletionTokens(tokenUsage.completionTokens());
+        vo.setRequestTotalTokens(tokenUsage.totalTokens());
+        vo.setTurnContentTokens(turnContentTokens);
+        vo.setPromptBudget(promptBudget);
+    }
+
+    private void applyUsage(AiTextResponseVO vo, TokenUsageStats tokenUsage, PromptBudgetVO promptBudget, int turnContentTokens) {
+        vo.setPromptTokens(tokenUsage.promptTokens());
+        vo.setCompletionTokens(tokenUsage.completionTokens());
+        vo.setTotalTokens(tokenUsage.totalTokens());
+        vo.setRequestPromptTokens(tokenUsage.promptTokens());
+        vo.setRequestCompletionTokens(tokenUsage.completionTokens());
+        vo.setRequestTotalTokens(tokenUsage.totalTokens());
+        vo.setTurnContentTokens(turnContentTokens);
+        vo.setPromptBudget(promptBudget);
+    }
+
+    private void copyUsage(AiAutoQueryVO target, AiGenerateSqlVO source) {
+        if (target == null || source == null) {
+            return;
+        }
+        target.setTotalTokens(source.getTotalTokens());
+        target.setRequestPromptTokens(source.getRequestPromptTokens());
+        target.setRequestCompletionTokens(source.getRequestCompletionTokens());
+        target.setRequestTotalTokens(source.getRequestTotalTokens());
+        target.setTurnContentTokens(source.getTurnContentTokens());
+        target.setPromptBudget(source.getPromptBudget());
+    }
+
+    private void copyUsage(AiAutoQueryVO target, AiTextResponseVO source) {
+        if (target == null || source == null) {
+            return;
+        }
+        target.setTotalTokens(source.getTotalTokens());
+        target.setRequestPromptTokens(source.getRequestPromptTokens());
+        target.setRequestCompletionTokens(source.getRequestCompletionTokens());
+        target.setRequestTotalTokens(source.getRequestTotalTokens());
+        target.setTurnContentTokens(source.getTurnContentTokens());
+        target.setPromptBudget(source.getPromptBudget());
+    }
+
+    private void copyUsage(AiAutoQueryVO target, AiGenerateChartVO source) {
+        if (target == null || source == null) {
+            return;
+        }
+        target.setTotalTokens(source.getTotalTokens());
+        target.setRequestPromptTokens(source.getRequestPromptTokens());
+        target.setRequestCompletionTokens(source.getRequestCompletionTokens());
+        target.setRequestTotalTokens(source.getRequestTotalTokens());
+        target.setTurnContentTokens(source.getTurnContentTokens());
+        target.setPromptBudget(source.getPromptBudget());
+    }
+
+    private String serializeChartConfig(ChartConfigVO chartConfig) {
+        if (chartConfig == null) {
+            return "";
+        }
+        try {
+            return objectMapper.writeValueAsString(chartConfig);
+        } catch (Exception ignored) {
+            return "";
+        }
     }
 
     private AiStreamObserver currentStreamObserver() {
@@ -3583,12 +3755,55 @@ public class AiServiceImpl implements AiService {
             || normalized.contains("SQL 修复");
     }
 
-    private int estimateTokens(String text) {
-        int length = safe(text).length();
-        if (length <= 0) {
-            return 0;
+    private int resolveMemoryWindowBudget() {
+        AiConfigVO config = aiConfigService.getConfig();
+        Integer budget = config == null ? null : config.getConversationMemoryWindowTokens();
+        if (budget == null) {
+            return 6000;
         }
-        return Math.max(1, (int) Math.ceil(length / 4.0));
+        return Math.max(512, Math.min(budget, 32000));
+    }
+
+    private ModelExecutionProfile resolveModelExecutionProfile(AiGenerateSqlReq req) {
+        AiConfigVO config = aiConfigService.getConfig();
+        List<AiModelOptionVO> options = config == null || config.getModelOptions() == null ? List.of() : config.getModelOptions();
+        String target = resolveRequestedModelId(req);
+        for (AiModelOptionVO option : options) {
+            if (option != null && target.equalsIgnoreCase(safe(option.getId()))) {
+                return new ModelExecutionProfile(
+                    normalizeContextWindowTokens(option.getContextWindowTokens()),
+                    normalizeCompletionReserveTokens(option.getCompletionReserveTokens()),
+                    normalizeTokenizerType(option.getTokenizerType())
+                );
+            }
+        }
+        if (!options.isEmpty() && options.get(0) != null) {
+            AiModelOptionVO first = options.get(0);
+            return new ModelExecutionProfile(
+                normalizeContextWindowTokens(first.getContextWindowTokens()),
+                normalizeCompletionReserveTokens(first.getCompletionReserveTokens()),
+                normalizeTokenizerType(first.getTokenizerType())
+            );
+        }
+        return new ModelExecutionProfile(32000, 2048, TokenEstimatorService.TOKENIZER_GENERIC_HEURISTIC);
+    }
+
+    private int normalizeContextWindowTokens(Integer value) {
+        int actual = value == null ? 32000 : value;
+        return Math.max(2048, Math.min(actual, 256000));
+    }
+
+    private int normalizeCompletionReserveTokens(Integer value) {
+        int actual = value == null ? 2048 : value;
+        return Math.max(256, Math.min(actual, 64000));
+    }
+
+    private String normalizeTokenizerType(String value) {
+        String normalized = safe(value).toUpperCase(Locale.ROOT);
+        if (TokenEstimatorService.TOKENIZER_OPENAI_COMPAT.equals(normalized)) {
+            return TokenEstimatorService.TOKENIZER_OPENAI_COMPAT;
+        }
+        return TokenEstimatorService.TOKENIZER_GENERIC_HEURISTIC;
     }
 
     private boolean resolveDetailOutputEnabled(AiGenerateSqlReq req) {
@@ -3704,6 +3919,7 @@ public class AiServiceImpl implements AiService {
             llmCall.setCompletionTokens(Math.max(0, usage.completionTokens()));
             llmCall.setTotalTokens(Math.max(0, usage.totalTokens()));
         }
+        llmCall.setPromptBudget(result.getPromptBudget());
         return llmCall;
     }
 
@@ -3746,7 +3962,9 @@ public class AiServiceImpl implements AiService {
             List.of(),
             List.of(
                 buildTraceField("relatedTables", "relatedTables", context == null ? List.of() : context.relatedTables()),
-                buildTraceField("promptContext", "promptContext", context == null ? "" : context.promptContext())
+                buildTraceField("promptContext", "promptContext", context == null ? "" : context.promptContext()),
+                buildTraceField("memoryWindowUsedTokens", "memoryWindowUsedTokens", context == null ? 0 : context.memoryWindowUsedTokens()),
+                buildTraceField("memoryWindowBudgetTokens", "memoryWindowBudgetTokens", context == null ? 0 : context.memoryWindowBudgetTokens())
             ),
             null
         );
@@ -3889,6 +4107,11 @@ public class AiServiceImpl implements AiService {
                                         String memorySignalType,
                                         double memoryConfidence,
                                         String memoryDeltaSummary) {
+    }
+
+    private record ModelExecutionProfile(int contextWindowTokens,
+                                         int completionReserveTokens,
+                                         String tokenizerType) {
     }
 
     private record IntentRetrievalParams(int sessionTopK,

@@ -18,6 +18,14 @@ public class QueryHistoryEntity {
     private String structuredContextJson;
     private String traceJson;
     private Integer tokenEstimate;
+    private Integer turnContentTokens;
+    private Integer requestPromptTokens;
+    private Integer requestCompletionTokens;
+    private Integer requestTotalTokens;
+    private String tokenEstimateSource;
+    private Integer tokenEstimateVersion;
+    private String tokenEstimateScope;
+    private String promptBudgetJson;
     private Integer memoryEnabled;
     private Long executionMs;
     private Integer successFlag;

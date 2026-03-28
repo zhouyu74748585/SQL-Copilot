@@ -10,6 +10,7 @@ import com.sqlcopilot.studio.repository.SchemaNamespaceJdbcRepository;
 import com.sqlcopilot.studio.repository.SchemaObjectDefinitionJdbcRepository;
 import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.SchemaService;
+import com.sqlcopilot.studio.service.TokenEstimatorService;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
 import com.sqlcopilot.studio.service.rag.RagIngestionService;
 import com.sqlcopilot.studio.service.rag.model.QdrantPayloadFilter;
@@ -50,6 +51,7 @@ public class SchemaServiceImpl implements SchemaService {
     private final SchemaNamespaceJdbcRepository schemaNamespaceJdbcRepository;
     private final SchemaObjectDefinitionJdbcRepository schemaObjectDefinitionJdbcRepository;
     private final RagCollectionNames ragCollectionNames;
+    private final TokenEstimatorService tokenEstimatorService;
     private final long schemaCacheTtlMs;
     private final long tableStatsRefreshIntervalMs;
     private final Map<SchemaCacheKey, SchemaSnapshot> schemaSnapshotCache = new ConcurrentHashMap<>();
@@ -66,6 +68,7 @@ public class SchemaServiceImpl implements SchemaService {
                              RagIngestionService ragIngestionService,
                              RagVectorizeStatusMapper ragVectorizeStatusMapper,
                              QdrantClientService qdrantClientService,
+                             TokenEstimatorService tokenEstimatorService,
                              JdbcDriverResolver jdbcDriverResolver,
                              SchemaNamespaceJdbcRepository schemaNamespaceJdbcRepository,
                              SchemaObjectDefinitionJdbcRepository schemaObjectDefinitionJdbcRepository,
@@ -77,6 +80,7 @@ public class SchemaServiceImpl implements SchemaService {
         this.ragIngestionService = ragIngestionService;
         this.ragVectorizeStatusMapper = ragVectorizeStatusMapper;
         this.qdrantClientService = qdrantClientService;
+        this.tokenEstimatorService = tokenEstimatorService;
         this.jdbcDriverResolver = jdbcDriverResolver;
         this.schemaNamespaceJdbcRepository = schemaNamespaceJdbcRepository;
         this.schemaObjectDefinitionJdbcRepository = schemaObjectDefinitionJdbcRepository;
@@ -604,7 +608,7 @@ public class SchemaServiceImpl implements SchemaService {
                 tableColumns.put(tableName, tableColumnList);
             }
             String segment = buildTableSegment(tableColumnList == null ? List.of() : tableColumnList, tableName);
-            int segmentTokens = Math.max(1, segment.length() / 4);
+            int segmentTokens = tokenEstimatorService.estimateTokens(segment, TokenEstimatorService.TOKENIZER_OPENAI_COMPAT);
             if (usedTokens + segmentTokens > tokenBudget) {
                 continue;
             }

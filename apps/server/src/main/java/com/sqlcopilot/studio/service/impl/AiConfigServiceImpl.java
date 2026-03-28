@@ -9,6 +9,7 @@ import com.sqlcopilot.studio.dto.ai.AiModelOptionVO;
 import com.sqlcopilot.studio.entity.AiProviderConfigEntity;
 import com.sqlcopilot.studio.mapper.AiConfigMapper;
 import com.sqlcopilot.studio.service.AiConfigService;
+import com.sqlcopilot.studio.service.TokenEstimatorService;
 import com.sqlcopilot.studio.util.BusinessException;
 import org.springframework.stereotype.Service;
 
@@ -23,6 +24,8 @@ public class AiConfigServiceImpl implements AiConfigService {
     private static final int DEFAULT_CONVERSATION_MEMORY_WINDOW_SIZE = 12;
     private static final int DEFAULT_CONVERSATION_MEMORY_WINDOW_TOKENS = 6000;
     private static final double DEFAULT_CONVERSATION_AUTO_COMPRESS_RATIO = 0.75D;
+    private static final int DEFAULT_CONTEXT_WINDOW_TOKENS = 32000;
+    private static final int DEFAULT_COMPLETION_RESERVE_TOKENS = 2048;
 
     private final AiConfigMapper aiConfigMapper;
     private final ObjectMapper objectMapper;
@@ -151,6 +154,9 @@ public class AiConfigServiceImpl implements AiConfigService {
                 item.setOpenaiModel(option.getOpenaiModel());
                 item.setCliCommand(option.getCliCommand());
                 item.setCliWorkingDir(option.getCliWorkingDir());
+                item.setContextWindowTokens(option.getContextWindowTokens());
+                item.setCompletionReserveTokens(option.getCompletionReserveTokens());
+                item.setTokenizerType(option.getTokenizerType());
                 reqItems.add(item);
             }
             return normalizeModelOptions(reqItems);
@@ -177,6 +183,9 @@ public class AiConfigServiceImpl implements AiConfigService {
             option.setOpenaiModel(safe(item.getOpenaiModel()));
             option.setCliCommand(safe(item.getCliCommand()));
             option.setCliWorkingDir(safe(item.getCliWorkingDir()));
+            option.setContextWindowTokens(normalizeContextWindowTokens(item.getContextWindowTokens()));
+            option.setCompletionReserveTokens(normalizeCompletionReserveTokens(item.getCompletionReserveTokens()));
+            option.setTokenizerType(normalizeTokenizerType(item.getTokenizerType()));
             option.setName(resolveOptionName(safe(item.getName()), option, index));
             option.setId(resolveUniqueOptionId(safe(item.getId()), option, index, idSet));
             validateOption(option);
@@ -267,6 +276,9 @@ public class AiConfigServiceImpl implements AiConfigService {
         option.setOpenaiModel("gpt-4.1-mini");
         option.setCliCommand("");
         option.setCliWorkingDir("");
+        option.setContextWindowTokens(DEFAULT_CONTEXT_WINDOW_TOKENS);
+        option.setCompletionReserveTokens(DEFAULT_COMPLETION_RESERVE_TOKENS);
+        option.setTokenizerType(TokenEstimatorService.TOKENIZER_GENERIC_HEURISTIC);
         return List.of(option);
     }
 
@@ -298,6 +310,24 @@ public class AiConfigServiceImpl implements AiConfigService {
         double ratio = value == null ? DEFAULT_CONVERSATION_AUTO_COMPRESS_RATIO : value;
         double normalized = Math.max(0.30D, Math.min(ratio, 0.95D));
         return Math.round(normalized * 100.0D) / 100.0D;
+    }
+
+    private Integer normalizeContextWindowTokens(Integer value) {
+        int actual = value == null ? DEFAULT_CONTEXT_WINDOW_TOKENS : value;
+        return Math.max(2048, Math.min(actual, 256000));
+    }
+
+    private Integer normalizeCompletionReserveTokens(Integer value) {
+        int actual = value == null ? DEFAULT_COMPLETION_RESERVE_TOKENS : value;
+        return Math.max(256, Math.min(actual, 64000));
+    }
+
+    private String normalizeTokenizerType(String value) {
+        String normalized = safe(value).toUpperCase(Locale.ROOT);
+        if (TokenEstimatorService.TOKENIZER_OPENAI_COMPAT.equals(normalized)) {
+            return TokenEstimatorService.TOKENIZER_OPENAI_COMPAT;
+        }
+        return TokenEstimatorService.TOKENIZER_GENERIC_HEURISTIC;
     }
 
     private String safe(String input) {

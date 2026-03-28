@@ -9,6 +9,7 @@ import com.sqlcopilot.studio.mapper.QueryHistoryMapper;
 import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.SchemaService;
 import com.sqlcopilot.studio.service.SqlService;
+import com.sqlcopilot.studio.service.TokenEstimatorService;
 import com.sqlcopilot.studio.support.SchemaContextSupport;
 import com.sqlcopilot.studio.util.BusinessException;
 import com.sqlcopilot.studio.util.ResultSetConverter;
@@ -71,17 +72,20 @@ public class SqlServiceImpl implements SqlService {
     private final SchemaService schemaService;
     private final QueryHistoryMapper queryHistoryMapper;
     private final AuditLogMapper auditLogMapper;
+    private final TokenEstimatorService tokenEstimatorService;
     private final ConcurrentHashMap<String, RiskAckPayload> riskAckStore = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, RunningSqlExecution> runningExecutionStore = new ConcurrentHashMap<>();
 
     public SqlServiceImpl(ConnectionService connectionService,
                           SchemaService schemaService,
                           QueryHistoryMapper queryHistoryMapper,
-                          AuditLogMapper auditLogMapper) {
+                          AuditLogMapper auditLogMapper,
+                          TokenEstimatorService tokenEstimatorService) {
         this.connectionService = connectionService;
         this.schemaService = schemaService;
         this.queryHistoryMapper = queryHistoryMapper;
         this.auditLogMapper = auditLogMapper;
+        this.tokenEstimatorService = tokenEstimatorService;
     }
 
     @Override
@@ -802,6 +806,15 @@ public class SqlServiceImpl implements SqlService {
         history.setDatabaseName(normalize(targetDatabaseName));
         history.setChartConfigJson(null);
         history.setChartImageCacheKey(null);
+        history.setTurnContentTokens(tokenEstimatorService.estimateTurnContentTokens(
+            null,
+            req.getSqlText(),
+            result.getMessage(),
+            null
+        ));
+        history.setTokenEstimateSource(TokenEstimatorService.TOKEN_SOURCE_BACKEND_ESTIMATOR);
+        history.setTokenEstimateVersion(TokenEstimatorService.TOKEN_ESTIMATE_VERSION);
+        history.setTokenEstimateScope(TokenEstimatorService.TOKEN_SCOPE_TURN_CONTENT);
         history.setMemoryEnabled(memoryEnabled ? 1 : 0);
         history.setExecutionMs(result.getExecutionMs());
         history.setSuccessFlag(Boolean.TRUE.equals(result.getSuccess()) ? 1 : 0);

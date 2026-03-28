@@ -6,6 +6,7 @@ import com.sqlcopilot.studio.dto.schema.TableDetailVO;
 import com.sqlcopilot.studio.service.MemoryService;
 import com.sqlcopilot.studio.service.RagConfigService;
 import com.sqlcopilot.studio.service.SchemaService;
+import com.sqlcopilot.studio.service.TokenEstimatorService;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
 import com.sqlcopilot.studio.service.rag.RagEmbeddingService;
 import com.sqlcopilot.studio.service.rag.RagRerankService;
@@ -52,6 +53,7 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
     private final RagEmbeddingService ragEmbeddingService;
     private final QdrantClientService qdrantClientService;
     private final RagRerankService ragRerankService;
+    private final TokenEstimatorService tokenEstimatorService;
     private final RagCollectionNames collectionNames;
     private final int schemaTableLimit;
     private final int schemaColumnLimit;
@@ -86,7 +88,8 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
                                    MemoryService memoryService,
                                    RagEmbeddingService ragEmbeddingService,
                                    QdrantClientService qdrantClientService,
-                                   RagRerankService ragRerankService) {
+                                   RagRerankService ragRerankService,
+                                   TokenEstimatorService tokenEstimatorService) {
         this.ragEnabled = ragEnabled;
         this.collectionNames = new RagCollectionNames(
             schemaTableCollection,
@@ -111,6 +114,7 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         this.ragEmbeddingService = ragEmbeddingService;
         this.qdrantClientService = qdrantClientService;
         this.ragRerankService = ragRerankService;
+        this.tokenEstimatorService = tokenEstimatorService;
     }
 
     @Override
@@ -917,10 +921,10 @@ public class RagRetrievalServiceImpl implements RagRetrievalService {
         appendSection(builder, "参考 SQL", referenceSection.toString().trim());
 
         String promptContext = builder.toString().trim();
-        int promptBudgetUsed = Math.max(1, promptContext.length() / 4);
+        int promptBudgetUsed = tokenEstimatorService.estimateTokens(promptContext, TokenEstimatorService.TOKENIZER_OPENAI_COMPAT);
         if (promptBudgetUsed > PROMPT_CONTEXT_TOKEN_BUDGET) {
             promptContext = shorten(promptContext, PROMPT_CONTEXT_TOKEN_BUDGET * 4);
-            promptBudgetUsed = Math.max(1, promptContext.length() / 4);
+            promptBudgetUsed = tokenEstimatorService.estimateTokens(promptContext, TokenEstimatorService.TOKENIZER_OPENAI_COMPAT);
         }
         return new PromptBuildResult(promptContext, new ArrayList<>(relatedTables), new ArrayList<>(relatedColumns), historySqlSamples, promptBudgetUsed);
     }

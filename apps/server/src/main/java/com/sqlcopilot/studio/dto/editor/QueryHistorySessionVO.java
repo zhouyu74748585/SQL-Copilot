@@ -24,6 +24,6 @@ public class QueryHistorySessionVO {
     /** 会话记录条数。 */
     private Long messageCount;
 
-    /** 当前会话累计 token 数。 */
+    /** 当前会话累计请求成本 token 数。 */
     private Long totalTokens;
 }

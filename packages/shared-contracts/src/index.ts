@@ -101,6 +101,7 @@ export interface AiTraceLlmCallVO {
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  promptBudget?: PromptBudgetVO;
 }
 
 export interface AiTraceStageVO {
@@ -120,6 +121,18 @@ export interface AiTraceVO {
   stages?: AiTraceStageVO[];
 }
 
+export interface PromptBudgetVO {
+  contextWindowTokens?: number;
+  completionReserveTokens?: number;
+  safetyMarginTokens?: number;
+  promptBudgetTokens?: number;
+  promptTokens?: number;
+  memoryWindowUsedTokens?: number;
+  memoryWindowBudgetTokens?: number;
+  tokenizerType?: string;
+  overBudget?: boolean;
+}
+
 export interface AiGenerateChartVO {
   sqlText: string;
   chartConfig?: ChartConfigVO;
@@ -129,6 +142,11 @@ export interface AiGenerateChartVO {
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  turnContentTokens?: number;
+  requestPromptTokens?: number;
+  requestCompletionTokens?: number;
+  requestTotalTokens?: number;
+  promptBudget?: PromptBudgetVO;
   trace?: AiTraceVO;
 }
 
@@ -141,6 +159,11 @@ export interface AiAutoQueryVO {
   reasoning: string;
   fallbackUsed: boolean;
   totalTokens?: number;
+  turnContentTokens?: number;
+  requestPromptTokens?: number;
+  requestCompletionTokens?: number;
+  requestTotalTokens?: number;
+  promptBudget?: PromptBudgetVO;
   sqlText?: string;
   content?: string;
   chartConfig?: ChartConfigVO;

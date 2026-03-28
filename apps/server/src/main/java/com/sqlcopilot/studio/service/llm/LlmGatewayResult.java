@@ -1,6 +1,7 @@
 package com.sqlcopilot.studio.service.llm;
 
 import lombok.Data;
+import com.sqlcopilot.studio.dto.ai.PromptBudgetVO;
 
 /** 统一 LLM 网关结果。 */
 @Data
@@ -44,4 +45,7 @@ public class LlmGatewayResult {
 
     /** token 使用量。 */
     private OpenAiTextClient.TokenUsage usage;
+
+    /** Prompt 预算快照。 */
+    private PromptBudgetVO promptBudget;
 }

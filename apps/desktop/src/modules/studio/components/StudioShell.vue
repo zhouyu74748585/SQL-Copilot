@@ -1815,17 +1815,18 @@
               <a-tooltip placement="bottomRight" overlay-class-name="query-context-usage-tooltip">
                 <template #title>
                   <div class="query-context-usage-tooltip-copy">
-                    <strong>窗口上下文占比</strong>
-                    <span>当前占用 {{ formatCompactCount(activeQueryContextUsage.usedTokens) }} tokens</span>
-                    <span>总窗口 {{ formatCompactCount(activeQueryContextUsage.totalTokens) }} tokens</span>
-                    <span>当前占比 {{ Math.max(0, activeQueryContextUsage.percent) }}%</span>
-                    <span v-if="!activeQueryContextUsage.enabled">对话记忆已关闭，当前为估算参考值</span>
+                    <strong>{{ tt('上下文 Token 预算 / Context Token Budget') }}</strong>
+                    <span>{{ tt('会话原文窗口') }} {{ formatCompactCount(activeQueryContextUsage.windowUsedTokens) }} / {{ formatCompactCount(activeQueryContextUsage.windowTotalTokens) }} tokens</span>
+                    <span>{{ tt('窗口占比') }} {{ Math.max(0, activeQueryContextUsage.windowPercent) }}%</span>
+                    <span>{{ tt('完整 Prompt') }} {{ formatCompactCount(activeQueryContextUsage.promptUsedTokens) }} / {{ formatCompactCount(activeQueryContextUsage.promptTotalTokens) }} tokens</span>
+                    <span>{{ tt('Prompt 占比') }} {{ Math.max(0, activeQueryContextUsage.promptPercent) }}%</span>
+                    <span v-if="!activeQueryContextUsage.enabled">{{ tt('对话记忆已关闭，窗口值为本地估算；完整 Prompt 以后端返回为准') }}</span>
                   </div>
                 </template>
                 <span
                   class="query-context-usage-ring is-compact"
                   :class="[`is-${activeQueryContextUsage.tone}`, { 'is-disabled': !activeQueryContextUsage.enabled }]"
-                  :style="{ '--context-usage-ratio': `${activeQueryContextUsage.cappedRatio}` }"
+                  :style="{ '--context-usage-ratio': `${Math.max(activeQueryContextUsage.windowCappedRatio, activeQueryContextUsage.promptCappedRatio)}` }"
                 >
                   <span class="query-context-usage-ring-core"></span>
                 </span>
@@ -2099,17 +2100,18 @@
                 <a-tooltip placement="topRight" overlay-class-name="query-context-usage-tooltip">
                   <template #title>
                     <div class="query-context-usage-tooltip-copy">
-                      <strong>窗口上下文占比</strong>
-                      <span>当前占用 {{ formatCompactCount(activeQueryContextUsage.usedTokens) }} tokens</span>
-                      <span>总窗口 {{ formatCompactCount(activeQueryContextUsage.totalTokens) }} tokens</span>
-                      <span>当前占比 {{ Math.max(0, activeQueryContextUsage.percent) }}%</span>
-                      <span v-if="!activeQueryContextUsage.enabled">对话记忆已关闭，当前为估算参考值</span>
+                      <strong>{{ tt('上下文 Token 预算 / Context Token Budget') }}</strong>
+                      <span>{{ tt('会话原文窗口') }} {{ formatCompactCount(activeQueryContextUsage.windowUsedTokens) }} / {{ formatCompactCount(activeQueryContextUsage.windowTotalTokens) }} tokens</span>
+                      <span>{{ tt('窗口占比') }} {{ Math.max(0, activeQueryContextUsage.windowPercent) }}%</span>
+                      <span>{{ tt('完整 Prompt') }} {{ formatCompactCount(activeQueryContextUsage.promptUsedTokens) }} / {{ formatCompactCount(activeQueryContextUsage.promptTotalTokens) }} tokens</span>
+                      <span>{{ tt('Prompt 占比') }} {{ Math.max(0, activeQueryContextUsage.promptPercent) }}%</span>
+                      <span v-if="!activeQueryContextUsage.enabled">{{ tt('对话记忆已关闭，窗口值为本地估算；完整 Prompt 以后端返回为准') }}</span>
                     </div>
                   </template>
                   <span
                     class="query-context-usage-ring"
                     :class="[`is-${activeQueryContextUsage.tone}`, { 'is-disabled': !activeQueryContextUsage.enabled }]"
-                    :style="{ '--context-usage-ratio': `${activeQueryContextUsage.cappedRatio}` }"
+                    :style="{ '--context-usage-ratio': `${Math.max(activeQueryContextUsage.windowCappedRatio, activeQueryContextUsage.promptCappedRatio)}` }"
                   >
                     <span class="query-context-usage-ring-core"></span>
                   </span>
@@ -3017,6 +3019,41 @@
                   </a-col>
                 </a-row>
               </template>
+              <a-row :gutter="12">
+                <a-col :span="8">
+                  <a-form-item :label="tt('上下文窗口 Token')">
+                    <a-input-number
+                      v-model:value="item.contextWindowTokens"
+                      :min="2048"
+                      :max="256000"
+                      :step="512"
+                      style="width: 100%"
+                    />
+                  </a-form-item>
+                </a-col>
+                <a-col :span="8">
+                  <a-form-item :label="tt('Completion 预留 Token')">
+                    <a-input-number
+                      v-model:value="item.completionReserveTokens"
+                      :min="256"
+                      :max="64000"
+                      :step="256"
+                      style="width: 100%"
+                    />
+                  </a-form-item>
+                </a-col>
+                <a-col :span="8">
+                  <a-form-item :label="tt('Tokenizer 类型')">
+                    <a-select
+                      v-model:value="item.tokenizerType"
+                      :options="[
+                        { label: 'GENERIC_HEURISTIC', value: 'GENERIC_HEURISTIC' },
+                        { label: 'OPENAI_COMPAT', value: 'OPENAI_COMPAT' },
+                      ]"
+                    />
+                  </a-form-item>
+                </a-col>
+              </a-row>
             </div>
           </a-tab-pane>
 

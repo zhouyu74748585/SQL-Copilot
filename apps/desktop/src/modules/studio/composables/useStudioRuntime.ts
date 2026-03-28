@@ -108,6 +108,7 @@ import type {
   QueryHistorySessionPageVO,
   QueryHistorySessionVO,
   QueryHistoryVO,
+  PromptBudgetVO,
   KvObjectDetailVO,
   KvOverviewVO,
   KvRedisBrowserNodeVO,
@@ -354,15 +355,25 @@ interface QueryWorkspaceTab {
   sqlMemoryEnabled: boolean;
   detailOutputOverride: boolean | null;
   lastTokenEstimate: number;
+  lastPromptBudget: PromptBudgetVO | null;
+  lastRequestPromptTokens: number;
+  lastRequestCompletionTokens: number;
+  lastRequestTotalTokens: number;
+  lastTurnContentTokens: number;
 }
 
 interface QueryContextUsage {
   enabled: boolean;
-  usedTokens: number;
-  totalTokens: number;
-  ratio: number;
-  cappedRatio: number;
-  percent: number;
+  windowUsedTokens: number;
+  windowTotalTokens: number;
+  windowRatio: number;
+  windowCappedRatio: number;
+  windowPercent: number;
+  promptUsedTokens: number;
+  promptTotalTokens: number;
+  promptRatio: number;
+  promptCappedRatio: number;
+  promptPercent: number;
   tone: 'idle' | 'normal' | 'warning' | 'danger';
 }
 
@@ -3282,6 +3293,11 @@ function createQueryTab(options?: {
     sqlMemoryEnabled: true,
     detailOutputOverride: options?.detailOutputOverride ?? null,
     lastTokenEstimate: 0,
+    lastPromptBudget: null,
+    lastRequestPromptTokens: 0,
+    lastRequestCompletionTokens: 0,
+    lastRequestTotalTokens: 0,
+    lastTurnContentTokens: 0,
   };
   if (options?.title?.trim()) {
     sessionTitleOverrides.value = {
@@ -3890,17 +3906,22 @@ function conversationMemoryEnabledForTab(tab: QueryWorkspaceTab | null | undefin
 }
 
 function buildQueryContextUsage(tab: QueryWorkspaceTab | null | undefined): QueryContextUsage {
-  const totalTokens = Math.min(32000, Math.max(512, Number(aiConfigForm.conversationMemoryWindowTokens || 6000)));
+  const memoryWindowBudget = Math.min(32000, Math.max(512, Number(aiConfigForm.conversationMemoryWindowTokens || 6000)));
   const maxTurns = Math.min(50, Math.max(1, Number(aiConfigForm.conversationMemoryWindowSize || 12)));
   const enabled = conversationMemoryEnabledForTab(tab);
   if (!tab || !tab.chatMessages.length) {
     return {
       enabled,
-      usedTokens: 0,
-      totalTokens,
-      ratio: 0,
-      cappedRatio: 0,
-      percent: 0,
+      windowUsedTokens: 0,
+      windowTotalTokens: memoryWindowBudget,
+      windowRatio: 0,
+      windowCappedRatio: 0,
+      windowPercent: 0,
+      promptUsedTokens: tab?.lastPromptBudget?.promptTokens ?? 0,
+      promptTotalTokens: tab?.lastPromptBudget?.promptBudgetTokens ?? 0,
+      promptRatio: 0,
+      promptCappedRatio: 0,
+      promptPercent: 0,
       tone: enabled ? 'idle' : 'normal',
     };
   }
@@ -3911,7 +3932,7 @@ function buildQueryContextUsage(tab: QueryWorkspaceTab | null | undefined): Quer
     const item = tab.chatMessages[index];
     const itemTokens = estimateQueryChatMessageTokens(item);
     const nextTurnCount = turnCount + (item.role === 'user' ? 1 : 0);
-    if (selected.length > 0 && (usedTokens + itemTokens > totalTokens || nextTurnCount > maxTurns)) {
+    if (selected.length > 0 && (usedTokens + itemTokens > memoryWindowBudget || nextTurnCount > maxTurns)) {
       break;
     }
     selected.unshift(item);
@@ -3920,25 +3941,44 @@ function buildQueryContextUsage(tab: QueryWorkspaceTab | null | undefined): Quer
       turnCount = nextTurnCount;
     }
   }
-  const ratio = totalTokens > 0 ? usedTokens / totalTokens : 0;
-  const cappedRatio = Math.max(0, Math.min(ratio, 1));
-  let tone: QueryContextUsage['tone'] = 'normal';
-  if (ratio >= 1) {
-    tone = 'danger';
-  } else if (ratio >= 0.85) {
-    tone = 'warning';
-  } else if (ratio <= 0.05) {
-    tone = 'idle';
-  }
+  const budgetSnapshot = tab.lastPromptBudget;
+  const promptUsedTokens = Math.max(0, Number(budgetSnapshot?.promptTokens ?? 0));
+  const promptTotalTokens = Math.max(0, Number(budgetSnapshot?.promptBudgetTokens ?? 0));
+  const windowTotalTokens = Math.max(0, Number(budgetSnapshot?.memoryWindowBudgetTokens ?? memoryWindowBudget));
+  const windowUsedTokens = Math.max(0, Number(budgetSnapshot?.memoryWindowUsedTokens ?? usedTokens));
+  const windowRatio = windowTotalTokens > 0 ? windowUsedTokens / windowTotalTokens : 0;
+  const promptRatio = promptTotalTokens > 0 ? promptUsedTokens / promptTotalTokens : 0;
+  const tone = resolveUsageTone(Math.max(windowRatio, promptRatio), enabled);
   return {
     enabled,
-    usedTokens,
-    totalTokens,
-    ratio,
-    cappedRatio,
-    percent: Math.round(ratio * 100),
+    windowUsedTokens,
+    windowTotalTokens,
+    windowRatio,
+    windowCappedRatio: Math.max(0, Math.min(windowRatio, 1)),
+    windowPercent: Math.round(windowRatio * 100),
+    promptUsedTokens,
+    promptTotalTokens,
+    promptRatio,
+    promptCappedRatio: Math.max(0, Math.min(promptRatio, 1)),
+    promptPercent: Math.round(promptRatio * 100),
     tone,
   };
+}
+
+function resolveUsageTone(ratio: number, enabled: boolean): QueryContextUsage['tone'] {
+  if (!enabled) {
+    return 'normal';
+  }
+  if (ratio >= 1) {
+    return 'danger';
+  }
+  if (ratio >= 0.85) {
+    return 'warning';
+  }
+  if (ratio <= 0.05) {
+    return 'idle';
+  }
+  return 'normal';
 }
 
 function estimateQueryChatMessageTokens(message: QueryChatMessage) {
@@ -4520,7 +4560,7 @@ async function runAiTextActionWithSql(
     if (!result) {
       throw new Error('流式响应未返回最终结果');
     }
-    tab.lastTokenEstimate = Number(result.totalTokens || 0);
+    applyResponseTokenSnapshot(tab, result);
     const content = result.content || '未返回内容';
     appendAssistantTextMessage(tab, content, actionType, result.trace, thinkingMessage);
     await saveConversationHistoryOnce(tab, userMessage, `${promptText}\n\n${normalizedSqlText}`, normalizedSqlText, {
@@ -4528,7 +4568,6 @@ async function runAiTextActionWithSql(
       assistantContent: content,
       databaseName: tab.databaseName,
       trace: result.trace,
-      tokenEstimate: tab.lastTokenEstimate,
     });
     if (result.reasoning) {
       message.info(result.reasoning);
@@ -7829,6 +7868,14 @@ interface SaveConversationHistoryOptions {
   trace?: AiTraceVO;
   traceJson?: string;
   tokenEstimate?: number;
+  turnContentTokens?: number;
+  requestPromptTokens?: number;
+  requestCompletionTokens?: number;
+  requestTotalTokens?: number;
+  tokenEstimateSource?: string;
+  tokenEstimateVersion?: number;
+  tokenEstimateScope?: string;
+  promptBudget?: PromptBudgetVO | null;
   memoryEnabled?: boolean;
 }
 
@@ -7865,6 +7912,15 @@ async function saveConversationHistory(
       traceJson: options?.traceJson || (options?.trace ? JSON.stringify(options.trace) : ''),
       trace: options?.trace,
       tokenEstimate: options?.tokenEstimate,
+      turnContentTokens: options?.turnContentTokens,
+      requestPromptTokens: options?.requestPromptTokens,
+      requestCompletionTokens: options?.requestCompletionTokens,
+      requestTotalTokens: options?.requestTotalTokens,
+      tokenEstimateSource: options?.tokenEstimateSource,
+      tokenEstimateVersion: options?.tokenEstimateVersion,
+      tokenEstimateScope: options?.tokenEstimateScope,
+      promptBudgetJson: options?.promptBudget ? JSON.stringify(options.promptBudget) : '',
+      promptBudget: options?.promptBudget ?? undefined,
       memoryEnabled,
       executionMs: options?.executionMs,
       success: options?.success ?? true,
@@ -7898,13 +7954,48 @@ async function saveConversationHistoryOnce(
   }
   const mergedOptions: SaveConversationHistoryOptions = {
     ...options,
-    tokenEstimate: options?.tokenEstimate ?? (tab.lastTokenEstimate || Math.max(1, Math.ceil(((promptText || "").length + (sqlText || "").length) / 4))),
+    tokenEstimate: options?.tokenEstimate ?? tab.lastRequestTotalTokens ?? tab.lastTokenEstimate ?? estimateTextTokens(`${promptText || ''}\n${sqlText || ''}`),
+    turnContentTokens: options?.turnContentTokens ?? tab.lastTurnContentTokens,
+    requestPromptTokens: options?.requestPromptTokens ?? tab.lastRequestPromptTokens,
+    requestCompletionTokens: options?.requestCompletionTokens ?? tab.lastRequestCompletionTokens,
+    requestTotalTokens: options?.requestTotalTokens ?? tab.lastRequestTotalTokens,
+    tokenEstimateSource: options?.tokenEstimateSource ?? (tab.lastRequestTotalTokens > 0 ? 'provider_usage' : 'backend_estimator'),
+    tokenEstimateVersion: options?.tokenEstimateVersion ?? 2,
+    tokenEstimateScope: options?.tokenEstimateScope ?? (tab.lastRequestTotalTokens > 0 ? 'REQUEST_TOTAL' : 'TURN_CONTENT'),
+    promptBudget: options?.promptBudget ?? tab.lastPromptBudget ?? null,
     memoryEnabled: resolveHistoryMemoryEnabled(tab, options),
     structuredContextJson: options?.structuredContextJson ?? buildStructuredContextForTab(tab),
     traceJson: options?.traceJson ?? (options?.trace ? JSON.stringify(options.trace) : ''),
   };
   await saveConversationHistory(tab, promptText, sqlText, mergedOptions);
   userMessage.historySaved = true;
+}
+
+function applyPromptBudgetSnapshot(tab: QueryWorkspaceTab, budget: PromptBudgetVO | null | undefined) {
+  tab.lastPromptBudget = budget ? JSON.parse(JSON.stringify(budget)) : null;
+}
+
+function applyResponseTokenSnapshot(
+  tab: QueryWorkspaceTab,
+  result: {
+    totalTokens?: number;
+    requestPromptTokens?: number;
+    requestCompletionTokens?: number;
+    requestTotalTokens?: number;
+    turnContentTokens?: number;
+    promptBudget?: PromptBudgetVO;
+  } | null | undefined,
+) {
+  if (!tab || !result) {
+    return;
+  }
+  const totalTokens = Number(result.requestTotalTokens ?? result.totalTokens ?? 0);
+  tab.lastTokenEstimate = totalTokens;
+  tab.lastRequestPromptTokens = Number(result.requestPromptTokens ?? 0);
+  tab.lastRequestCompletionTokens = Number(result.requestCompletionTokens ?? 0);
+  tab.lastRequestTotalTokens = totalTokens;
+  tab.lastTurnContentTokens = Number(result.turnContentTokens ?? 0);
+  applyPromptBudgetSnapshot(tab, result.promptBudget);
 }
 
 function timeoutRetryErrorMessage(rawMessage: string) {
@@ -8202,13 +8293,12 @@ async function generateSqlForTab(
       if (!generated) {
         throw new Error('流式响应未返回最终结果');
       }
-      tab.lastTokenEstimate = Number(generated.totalTokens || 0);
+      applyResponseTokenSnapshot(tab, generated);
       const generatedText = (generated.sqlText || '').trim();
       if (looksLikeExecutableQueryText(generatedText, queryTabDbType(tab))) {
         appendAssistantSqlMessage(tab, generatedText, actionType, '', undefined, undefined, undefined, generated.trace, thinkingMessage);
         await saveConversationHistoryOnce(tab, userMessage, promptText, generatedText, {
           trace: generated.trace,
-          tokenEstimate: tab.lastTokenEstimate,
         });
         message.success('SQL generated.');
       } else {
@@ -8218,7 +8308,6 @@ async function generateSqlForTab(
           assistantContent: generatedText || '未返回可执行 SQL',
           databaseName: tab.databaseName,
           trace: generated.trace,
-          tokenEstimate: tab.lastTokenEstimate,
         });
         message.warning('未生成可执行 SQL，已返回说明内容');
       }
@@ -8274,7 +8363,7 @@ async function generateSqlForTab(
     if (!result) {
       throw new Error('流式响应未返回最终结果');
     }
-    tab.lastTokenEstimate = Number(result.totalTokens || 0);
+    applyResponseTokenSnapshot(tab, result);
     const content = result.content || 'No content returned.';
     appendAssistantTextMessage(tab, content, actionType, result.trace, thinkingMessage);
     await saveConversationHistoryOnce(tab, userMessage, promptText, actionSqlSnippet || '', {
@@ -8282,7 +8371,6 @@ async function generateSqlForTab(
       assistantContent: content,
       databaseName: tab.databaseName,
       trace: result.trace,
-      tokenEstimate: tab.lastTokenEstimate,
     });
     if (result.reasoning) {
       message.info(result.reasoning);
@@ -8404,7 +8492,7 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
     }
     const latestTokenEstimate = result.totalTokens;
     if (latestTokenEstimate != null) {
-      tab.lastTokenEstimate = Number(latestTokenEstimate || 0);
+      applyResponseTokenSnapshot(tab, result);
     }
     const actionType = autoActionTypeByIntent(result.intentType);
     if (result.intentType === 'GENERATE_SQL') {
@@ -8425,7 +8513,6 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
           actionType,
           databaseName: tab.databaseName,
           trace: result.trace,
-          tokenEstimate: tab.lastTokenEstimate,
         });
         if (tab.autoExecute) {
           const executed = await executeSqlForTab(tab, sqlText, { silentSuccess: true });
@@ -8444,7 +8531,6 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
           assistantContent: contentText,
           databaseName: tab.databaseName,
           trace: result.trace,
-          tokenEstimate: tab.lastTokenEstimate,
         });
       }
     } else if (result.intentType === 'GENERATE_CHART') {
@@ -8459,7 +8545,6 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
           chartConfig: config,
           databaseName: tab.databaseName,
           trace: result.trace,
-          tokenEstimate: tab.lastTokenEstimate,
         });
       } else {
         const plannedMessage = appendAssistantSqlMessage(
@@ -8479,7 +8564,6 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
           chartConfig: config,
           databaseName: tab.databaseName,
           trace: result.trace,
-          tokenEstimate: tab.lastTokenEstimate,
         });
         const generatedChart = await generateChartFromMessage(tab, plannedMessage, {
           appendRenderMessage: false,
@@ -8497,7 +8581,6 @@ async function sendAutoForTab(tab: QueryWorkspaceTab, retryOptions?: RetryInvoke
         assistantContent: content,
         databaseName: tab.databaseName,
         trace: result.trace,
-        tokenEstimate: tab.lastTokenEstimate,
       });
     } else {
       throw new Error('未识别的 Auto 意图类型');
@@ -8867,7 +8950,7 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
     if (!generated) {
       throw new Error('流式响应未返回最终结果');
     }
-    tab.lastTokenEstimate = Number(generated.totalTokens || 0);
+    applyResponseTokenSnapshot(tab, generated);
     const sqlText = (generated.sqlText || '').trim();
     const config = generated.chartConfig ? cloneChartConfig(generated.chartConfig) : null;
     const summary = (generated.configSummary || '').trim() || chartSummaryText(config);
@@ -8893,7 +8976,6 @@ async function generateChartPlanForTab(tab: QueryWorkspaceTab, retryOptions?: Re
       chartConfig: config,
       databaseName: tab.databaseName,
       trace: generated.trace,
-      tokenEstimate: tab.lastTokenEstimate,
     });
     if (generated.reasoning) {
       message.info(generated.reasoning);
@@ -10371,6 +10453,9 @@ function normalizeModelOptions(options: AiModelOption[] | undefined) {
         openaiModel: (item.openaiModel || '').trim(),
         cliCommand: (item.cliCommand || '').trim(),
         cliWorkingDir: (item.cliWorkingDir || '').trim(),
+        contextWindowTokens: Number(item.contextWindowTokens || 32000),
+        completionReserveTokens: Number(item.completionReserveTokens || 2048),
+        tokenizerType: (item.tokenizerType || 'GENERIC_HEURISTIC').trim() || 'GENERIC_HEURISTIC',
       } satisfies AiModelOption;
     })
     .filter((item) => !!item.id);
@@ -10402,6 +10487,9 @@ function addOpenAiModelOption() {
       openaiModel: 'gpt-4.1-mini',
       cliCommand: '',
       cliWorkingDir: '',
+      contextWindowTokens: 32000,
+      completionReserveTokens: 2048,
+      tokenizerType: 'GENERIC_HEURISTIC',
     },
   ];
 }
@@ -10419,6 +10507,9 @@ function addCliModelOption() {
       openaiModel: '',
       cliCommand: '',
       cliWorkingDir: '',
+      contextWindowTokens: 32000,
+      completionReserveTokens: 2048,
+      tokenizerType: 'GENERIC_HEURISTIC',
     },
   ];
 }
@@ -10503,6 +10594,9 @@ function defaultAiConfigForm(): AiConfigSaveReq {
     openaiModel: 'gpt-4.1-mini',
     cliCommand: '',
     cliWorkingDir: '',
+    contextWindowTokens: 32000,
+    completionReserveTokens: 2048,
+    tokenizerType: 'GENERIC_HEURISTIC',
   };
   return {
     providerType: 'OPENAI',

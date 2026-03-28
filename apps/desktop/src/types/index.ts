@@ -621,6 +621,7 @@ export interface AiTraceLlmCallVO {
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  promptBudget?: PromptBudgetVO;
 }
 
 export interface AiTraceStageVO {
@@ -640,6 +641,18 @@ export interface AiTraceVO {
   stages?: AiTraceStageVO[];
 }
 
+export interface PromptBudgetVO {
+  contextWindowTokens?: number;
+  completionReserveTokens?: number;
+  safetyMarginTokens?: number;
+  promptBudgetTokens?: number;
+  promptTokens?: number;
+  memoryWindowUsedTokens?: number;
+  memoryWindowBudgetTokens?: number;
+  tokenizerType?: string;
+  overBudget?: boolean;
+}
+
 export interface AiGenerateSqlVO {
   sqlText: string;
   reasoning: string;
@@ -647,6 +660,11 @@ export interface AiGenerateSqlVO {
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  turnContentTokens?: number;
+  requestPromptTokens?: number;
+  requestCompletionTokens?: number;
+  requestTotalTokens?: number;
+  promptBudget?: PromptBudgetVO;
   trace?: AiTraceVO;
 }
 
@@ -657,6 +675,11 @@ export interface AiTextResponseVO {
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  turnContentTokens?: number;
+  requestPromptTokens?: number;
+  requestCompletionTokens?: number;
+  requestTotalTokens?: number;
+  promptBudget?: PromptBudgetVO;
   trace?: AiTraceVO;
 }
 
@@ -730,6 +753,14 @@ export interface QueryHistoryVO {
   traceJson?: string;
   trace?: AiTraceVO;
   tokenEstimate?: number;
+  turnContentTokens?: number;
+  requestPromptTokens?: number;
+  requestCompletionTokens?: number;
+  requestTotalTokens?: number;
+  tokenEstimateSource?: string;
+  tokenEstimateVersion?: number;
+  tokenEstimateScope?: string;
+  promptBudget?: PromptBudgetVO;
   memoryEnabled?: boolean;
   executionMs?: number;
   success?: boolean;
@@ -1014,6 +1045,9 @@ export interface AiModelOption {
   openaiModel?: string;
   cliCommand?: string;
   cliWorkingDir?: string;
+  contextWindowTokens?: number;
+  completionReserveTokens?: number;
+  tokenizerType?: string;
 }
 
 export interface RagConfigVO {

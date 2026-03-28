@@ -3,6 +3,7 @@ package com.sqlcopilot.studio.service.llm;
 import com.sqlcopilot.studio.dto.ai.AiConfigVO;
 import com.sqlcopilot.studio.dto.ai.AiModelOptionVO;
 import com.sqlcopilot.studio.service.AiConfigService;
+import com.sqlcopilot.studio.service.TokenEstimatorService;
 import com.sqlcopilot.studio.util.BusinessException;
 import org.springframework.stereotype.Service;
 
@@ -35,10 +36,14 @@ public class LlmGatewayService {
 
     private final AiConfigService aiConfigService;
     private final OpenAiTextClient openAiTextClient;
+    private final TokenEstimatorService tokenEstimatorService;
 
-    public LlmGatewayService(AiConfigService aiConfigService, OpenAiTextClient openAiTextClient) {
+    public LlmGatewayService(AiConfigService aiConfigService,
+                             OpenAiTextClient openAiTextClient,
+                             TokenEstimatorService tokenEstimatorService) {
         this.aiConfigService = aiConfigService;
         this.openAiTextClient = openAiTextClient;
+        this.tokenEstimatorService = tokenEstimatorService;
     }
 
     public LlmGatewayResult call(LlmGatewayRequest request) {
@@ -455,8 +460,8 @@ public class LlmGatewayService {
     }
 
     private TokenUsageStats buildEstimatedBreakdown(String promptText, String completionText, int totalTokensHint) {
-        int estimatedPrompt = estimateTokens(promptText);
-        int estimatedCompletion = estimateTokens(completionText);
+        int estimatedPrompt = tokenEstimatorService.estimateTokens(promptText, TokenEstimatorService.TOKENIZER_GENERIC_HEURISTIC);
+        int estimatedCompletion = tokenEstimatorService.estimateTokens(completionText, TokenEstimatorService.TOKENIZER_GENERIC_HEURISTIC);
         int estimatedTotal = estimatedPrompt + estimatedCompletion;
         if (totalTokensHint <= 0 || estimatedTotal <= 0) {
             return new TokenUsageStats(estimatedPrompt, estimatedCompletion, estimatedTotal);
@@ -562,14 +567,6 @@ public class LlmGatewayService {
             }
         }
         return lastPayload;
-    }
-
-    private int estimateTokens(String text) {
-        int length = safe(text).length();
-        if (length <= 0) {
-            return 0;
-        }
-        return Math.max(1, (int) Math.ceil(length / 4.0));
     }
 
     private String summarizeCommandHead(List<String> commandLine) {

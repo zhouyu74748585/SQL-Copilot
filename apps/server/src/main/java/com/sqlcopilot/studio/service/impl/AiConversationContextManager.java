@@ -13,6 +13,7 @@ import com.sqlcopilot.studio.mapper.QueryHistoryMapper;
 import com.sqlcopilot.studio.service.AiConfigService;
 import com.sqlcopilot.studio.service.MemoryService;
 import com.sqlcopilot.studio.service.SchemaService;
+import com.sqlcopilot.studio.service.TokenEstimatorService;
 import com.sqlcopilot.studio.service.llm.LlmGatewayRequest;
 import com.sqlcopilot.studio.service.llm.LlmGatewayResult;
 import com.sqlcopilot.studio.service.llm.LlmGatewayService;
@@ -78,6 +79,7 @@ public class AiConversationContextManager {
     private final QdrantClientService qdrantClientService;
     private final ObjectMapper objectMapper;
     private final LlmGatewayService llmGatewayService;
+    private final TokenEstimatorService tokenEstimatorService;
     private final String managedMemoryCollectionName;
 
     public AiConversationContextManager(SchemaService schemaService,
@@ -88,6 +90,7 @@ public class AiConversationContextManager {
                                         QdrantClientService qdrantClientService,
                                         ObjectMapper objectMapper,
                                         LlmGatewayService llmGatewayService,
+                                        TokenEstimatorService tokenEstimatorService,
                                         @Value("${rag.collection.managed-memory:managed_memory}") String managedMemoryCollectionName) {
         this.schemaService = schemaService;
         this.aiConfigService = aiConfigService;
@@ -97,6 +100,7 @@ public class AiConversationContextManager {
         this.qdrantClientService = qdrantClientService;
         this.objectMapper = objectMapper;
         this.llmGatewayService = llmGatewayService;
+        this.tokenEstimatorService = tokenEstimatorService;
         this.managedMemoryCollectionName = managedMemoryCollectionName;
     }
 
@@ -167,7 +171,18 @@ public class AiConversationContextManager {
         }
         if (!isMemoryEnabled(req)) {
             String fallbackContext = !ragContextText.isBlank() ? ragContextText : schemaContextText;
-            return new ConversationGenerationContext(fallbackContext, deduplicateTables(relatedTables), promptRetrievalHint);
+            return new ConversationGenerationContext(
+                fallbackContext,
+                deduplicateTables(relatedTables),
+                promptRetrievalHint,
+                "",
+                "",
+                "",
+                "",
+                fallbackContext,
+                0,
+                resolveMemoryWindowTokens(aiConfigService.getConfig())
+            );
         }
 
         AiConfigVO aiConfig = aiConfigService.getConfig();
@@ -193,7 +208,14 @@ public class AiConversationContextManager {
         return new ConversationGenerationContext(
             String.join("\n\n", segments),
             deduplicateTables(relatedTables),
-            promptRetrievalHint
+            promptRetrievalHint,
+            snapshot.windowSummary(),
+            snapshot.slidingSummary(),
+            snapshot.windowStructuredContext(),
+            snapshot.windowDialogContext(),
+            !ragContextText.isBlank() ? ragContextText : schemaContextText,
+            snapshot.windowTokenCount(),
+            snapshot.windowTokenBudget()
         );
     }
 
@@ -372,7 +394,7 @@ public class AiConversationContextManager {
             500
         );
         if (chatHistory == null || chatHistory.isEmpty()) {
-            return new ConversationMemorySnapshot("", "", "[]", "");
+            return new ConversationMemorySnapshot("", "", "[]", "", 0, memoryPolicy.windowTokens());
         }
         List<QueryHistoryEntity> windowRecords = pickWindowRecordsByTokenBudget(chatHistory, memoryPolicy.windowSize(), memoryPolicy.windowTokens());
         int windowStartIndex = Math.max(0, chatHistory.size() - windowRecords.size());
@@ -380,7 +402,7 @@ public class AiConversationContextManager {
         int windowTokens = sumHistoryTokens(windowRecords);
         boolean shouldCompressWindow = windowTokens >= memoryPolicy.compressTriggerTokens();
         List<QueryHistoryEntity> rawRecentRecords = shouldCompressWindow
-            ? pickWindowRecordsByTokenBudget(windowRecords, windowRecords.size(), resolveRecentRawTokenBudget(memoryPolicy))
+            ? pickWindowRecordsByTokenBudget(windowRecords, windowRecords.size(), resolveRecentRawTokenBudget(memoryPolicy, windowTokens))
             : windowRecords;
         String windowDialogContext = buildWindowDialogContext(rawRecentRecords);
         MemoryStructuredSummaryVO windowStructuredSummary = shouldCompressWindow
@@ -406,7 +428,14 @@ public class AiConversationContextManager {
                     safe(req.getSessionId()), safe(ex.getMessage()));
             }
         }
-        return new ConversationMemorySnapshot(windowSummary, slidingSummary, windowStructuredContext, windowDialogContext);
+        return new ConversationMemorySnapshot(
+            windowSummary,
+            slidingSummary,
+            windowStructuredContext,
+            windowDialogContext,
+            windowTokens,
+            memoryPolicy.windowTokens()
+        );
     }
 
     private int resolveMemoryWindowSize(AiConfigVO config) {
@@ -441,9 +470,10 @@ public class AiConversationContextManager {
         return new ConversationMemoryPolicy(windowSize, windowTokens, autoCompressRatio, compressTriggerTokens);
     }
 
-    private int resolveRecentRawTokenBudget(ConversationMemoryPolicy memoryPolicy) {
-        int reserved = memoryPolicy.windowTokens() - memoryPolicy.compressTriggerTokens();
-        return Math.max(MIN_RAW_RECENT_TOKENS, reserved);
+    private int resolveRecentRawTokenBudget(ConversationMemoryPolicy memoryPolicy, int currentWindowTokens) {
+        int remainingBudget = Math.max(0, memoryPolicy.windowTokens() - memoryPolicy.compressTriggerTokens());
+        int configuredRawCeiling = Math.min(MIN_RAW_RECENT_TOKENS, Math.max(128, currentWindowTokens));
+        return Math.max(0, Math.min(remainingBudget, configuredRawCeiling));
     }
 
     private List<QueryHistoryEntity> pickWindowRecordsByTokenBudget(List<QueryHistoryEntity> rows, int windowSize, int windowTokenBudget) {
@@ -458,7 +488,14 @@ public class AiConversationContextManager {
             }
             QueryHistoryEntity item = rows.get(index);
             int rowTokens = estimateHistoryTokens(item);
-            if (!selected.isEmpty() && usedTokens + rowTokens > Math.max(1, windowTokenBudget)) {
+            int safeBudget = Math.max(1, windowTokenBudget);
+            if (selected.isEmpty() && rowTokens > safeBudget) {
+                QueryHistoryEntity truncated = truncateHistoryEntityForBudget(item, safeBudget);
+                selected.add(0, truncated);
+                usedTokens += estimateHistoryTokens(truncated);
+                break;
+            }
+            if (!selected.isEmpty() && usedTokens + rowTokens > safeBudget) {
                 break;
             }
             selected.add(0, item);
@@ -896,19 +933,58 @@ public class AiConversationContextManager {
             return 0;
         }
         Integer tokenEstimate = item.getTokenEstimate();
-        if (tokenEstimate != null && tokenEstimate > 0) {
+        if (tokenEstimate != null && tokenEstimate > 0
+            && TokenEstimatorService.TOKEN_SCOPE_TURN_CONTENT.equalsIgnoreCase(safe(item.getTokenEstimateScope()))) {
             return tokenEstimate;
         }
-        String source = buildWindowDialogContext(List.of(item));
-        return estimateTokens(source);
+        return tokenEstimatorService.estimateTurnContentTokens(item);
     }
 
-    private int estimateTokens(String text) {
-        int length = safe(text).length();
-        if (length <= 0) {
-            return 0;
+    private QueryHistoryEntity truncateHistoryEntityForBudget(QueryHistoryEntity source, int tokenBudget) {
+        QueryHistoryEntity copy = new QueryHistoryEntity();
+        copy.setId(source.getId());
+        copy.setConnectionId(source.getConnectionId());
+        copy.setSessionId(source.getSessionId());
+        copy.setHistoryType(source.getHistoryType());
+        copy.setActionType(source.getActionType());
+        copy.setDatabaseName(source.getDatabaseName());
+        copy.setMemoryEnabled(source.getMemoryEnabled());
+        copy.setCreatedAt(source.getCreatedAt());
+        copy.setPromptText(truncateTextByBudget(source.getPromptText(), tokenBudget));
+        copy.setSqlText(truncateTextByBudget(source.getSqlText(), tokenBudget));
+        copy.setAssistantContent(truncateTextByBudget(source.getAssistantContent(), tokenBudget));
+        copy.setChartConfigJson(truncateTextByBudget(source.getChartConfigJson(), tokenBudget));
+        copy.setTurnContentTokens(tokenEstimatorService.estimateTurnContentTokens(copy));
+        copy.setTokenEstimateSource(TokenEstimatorService.TOKEN_SOURCE_BACKEND_ESTIMATOR);
+        copy.setTokenEstimateVersion(TokenEstimatorService.TOKEN_ESTIMATE_VERSION);
+        copy.setTokenEstimateScope(TokenEstimatorService.TOKEN_SCOPE_TURN_CONTENT);
+        return copy;
+    }
+
+    private String truncateTextByBudget(String text, int tokenBudget) {
+        String value = raw(text);
+        if (value.isBlank()) {
+            return "";
         }
-        return Math.max(1, (int) Math.ceil(length / 4.0));
+        int estimatedTokens = tokenEstimatorService.estimateTokens(value, TokenEstimatorService.TOKENIZER_OPENAI_COMPAT);
+        if (estimatedTokens <= tokenBudget) {
+            return value.trim();
+        }
+        int left = 0;
+        int right = value.length();
+        String best = "";
+        while (left <= right) {
+            int middle = (left + right) >>> 1;
+            String candidate = value.substring(Math.max(0, value.length() - middle));
+            int candidateTokens = tokenEstimatorService.estimateTokens(candidate, TokenEstimatorService.TOKENIZER_OPENAI_COMPAT);
+            if (candidateTokens <= tokenBudget) {
+                best = candidate;
+                left = middle + 1;
+            } else {
+                right = middle - 1;
+            }
+        }
+        return best.trim();
     }
 
     private List<String> deduplicateTables(List<String> tables) {
@@ -1055,15 +1131,28 @@ public class AiConversationContextManager {
         return Objects.toString(input, "").trim();
     }
 
+    private String raw(String input) {
+        return Objects.toString(input, "");
+    }
+
     public record ConversationGenerationContext(String promptContext,
-                                               List<String> relatedTables,
-                                               String retrievalInputForPrompt) {
+                                                List<String> relatedTables,
+                                                String retrievalInputForPrompt,
+                                                String windowSummary,
+                                                String slidingSummary,
+                                                String windowStructuredContext,
+                                                String windowDialogContext,
+                                                String knowledgeContext,
+                                                int memoryWindowUsedTokens,
+                                                int memoryWindowBudgetTokens) {
     }
 
     private record ConversationMemorySnapshot(String windowSummary,
                                               String slidingSummary,
                                               String windowStructuredContext,
-                                              String windowDialogContext) {
+                                              String windowDialogContext,
+                                              int windowTokenCount,
+                                              int windowTokenBudget) {
     }
 
     private record ConversationMemoryPolicy(int windowSize,

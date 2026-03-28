@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.sqlcopilot.studio.service.TokenEstimatorService;
 import com.sqlcopilot.studio.util.BusinessException;
 import org.springframework.stereotype.Component;
 
@@ -23,12 +24,14 @@ import java.util.Objects;
 public class OpenAiTextClient {
 
     private final ObjectMapper objectMapper;
+    private final TokenEstimatorService tokenEstimatorService;
     private final HttpClient httpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10))
         .build();
 
-    public OpenAiTextClient(ObjectMapper objectMapper) {
+    public OpenAiTextClient(ObjectMapper objectMapper, TokenEstimatorService tokenEstimatorService) {
         this.objectMapper = objectMapper;
+        this.tokenEstimatorService = tokenEstimatorService;
     }
 
     public OpenAiTextResult requestText(String apiKey,
@@ -627,8 +630,11 @@ public class OpenAiTextClient {
             }
             return new TokenUsage(promptTokens, completionTokens, totalTokens, usage.estimated());
         }
-        int promptTokens = estimateTokens(safe(systemPrompt) + "\n" + safe(userPrompt));
-        int completionTokens = estimateTokens(content);
+        int promptTokens = tokenEstimatorService.estimateTokens(
+            safe(systemPrompt) + "\n" + safe(userPrompt),
+            TokenEstimatorService.TOKENIZER_OPENAI_COMPAT
+        );
+        int completionTokens = tokenEstimatorService.estimateTokens(content, TokenEstimatorService.TOKENIZER_OPENAI_COMPAT);
         return new TokenUsage(promptTokens, completionTokens, promptTokens + completionTokens, true);
     }
 
@@ -690,14 +696,6 @@ public class OpenAiTextClient {
         } catch (Exception ignored) {
             return 0;
         }
-    }
-
-    private int estimateTokens(String text) {
-        int length = safe(text).length();
-        if (length <= 0) {
-            return 0;
-        }
-        return Math.max(1, (int) Math.ceil(length / 4.0));
     }
 
     private String safe(String value) {

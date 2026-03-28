@@ -5,6 +5,7 @@ import com.sqlcopilot.studio.dto.ai.AiGenerateSqlReq;
 import com.sqlcopilot.studio.service.AiConfigService;
 import com.sqlcopilot.studio.service.MemoryService;
 import com.sqlcopilot.studio.service.SchemaService;
+import com.sqlcopilot.studio.service.TokenEstimatorService;
 import com.sqlcopilot.studio.service.llm.LlmGatewayService;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
 import com.sqlcopilot.studio.service.rag.RagEmbeddingService;
@@ -47,6 +48,7 @@ class AiConversationContextManagerRetrievalInputTest {
             qdrantClientService,
             new ObjectMapper(),
             llmGatewayService,
+            new TokenEstimatorService(),
             "sql_history"
         );
         AiGenerateSqlReq req = new AiGenerateSqlReq();

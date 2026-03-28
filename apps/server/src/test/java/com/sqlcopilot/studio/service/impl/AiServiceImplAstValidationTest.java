@@ -6,7 +6,9 @@ import com.sqlcopilot.studio.dto.schema.SchemaOverviewVO;
 import com.sqlcopilot.studio.entity.ConnectionEntity;
 import com.sqlcopilot.studio.service.AiConfigService;
 import com.sqlcopilot.studio.service.ConnectionService;
+import com.sqlcopilot.studio.service.PromptBudgetPlanner;
 import com.sqlcopilot.studio.service.SchemaService;
+import com.sqlcopilot.studio.service.TokenEstimatorService;
 import com.sqlcopilot.studio.service.llm.LlmGatewayService;
 import com.sqlcopilot.studio.service.rag.RagRetrievalService;
 import org.junit.jupiter.api.BeforeEach;
@@ -45,10 +47,13 @@ class AiServiceImplAstValidationTest {
     @Mock
     private AiConversationContextManager conversationContextManager;
 
+    private TokenEstimatorService tokenEstimatorService;
+
     private AiServiceImpl aiService;
 
     @BeforeEach
     void setUp() {
+        tokenEstimatorService = new TokenEstimatorService();
         aiService = new AiServiceImpl(
             schemaService,
             aiConfigService,
@@ -56,7 +61,9 @@ class AiServiceImplAstValidationTest {
             ragRetrievalService,
             new ObjectMapper(),
             llmGatewayService,
-            conversationContextManager
+            conversationContextManager,
+            tokenEstimatorService,
+            new PromptBudgetPlanner(tokenEstimatorService)
         );
     }
 

@@ -23,6 +23,14 @@ public interface QueryHistoryMapper {
             structured_context_json,
             trace_json,
             token_estimate,
+            turn_content_tokens,
+            request_prompt_tokens,
+            request_completion_tokens,
+            request_total_tokens,
+            token_estimate_source,
+            token_estimate_version,
+            token_estimate_scope,
+            prompt_budget_json,
             memory_enabled,
             execution_ms,
             success_flag,
@@ -42,6 +50,14 @@ public interface QueryHistoryMapper {
             #{structuredContextJson},
             #{traceJson},
             #{tokenEstimate},
+            #{turnContentTokens},
+            #{requestPromptTokens},
+            #{requestCompletionTokens},
+            #{requestTotalTokens},
+            #{tokenEstimateSource},
+            #{tokenEstimateVersion},
+            #{tokenEstimateScope},
+            #{promptBudgetJson},
             #{memoryEnabled},
             #{executionMs},
             #{successFlag},
@@ -78,7 +94,7 @@ public interface QueryHistoryMapper {
                 MIN(q.created_at) AS createdAt,
                 MAX(q.created_at) AS updatedAt,
                 COUNT(1) AS messageCount,
-                SUM(COALESCE(q.token_estimate, 0)) AS totalTokens
+                SUM(COALESCE(q.request_total_tokens, q.token_estimate, 0)) AS totalTokens
             FROM query_history q
             WHERE q.connection_id = #{connectionId}
               AND q.session_id IS NOT NULL

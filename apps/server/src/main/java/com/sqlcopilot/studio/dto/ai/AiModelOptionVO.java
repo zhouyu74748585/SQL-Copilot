@@ -29,4 +29,13 @@ public class AiModelOptionVO {
 
     /** 本地 CLI 执行工作目录。 */
     private String cliWorkingDir;
+
+    /** 模型上下文窗口上限。 */
+    private Integer contextWindowTokens;
+
+    /** 输出预留 token。 */
+    private Integer completionReserveTokens;
+
+    /** tokenizer 类型。 */
+    private String tokenizerType;
 }

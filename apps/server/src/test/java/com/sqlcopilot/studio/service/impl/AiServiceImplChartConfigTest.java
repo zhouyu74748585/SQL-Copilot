@@ -5,7 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sqlcopilot.studio.dto.ai.ChartConfigVO;
 import com.sqlcopilot.studio.service.AiConfigService;
 import com.sqlcopilot.studio.service.ConnectionService;
+import com.sqlcopilot.studio.service.PromptBudgetPlanner;
 import com.sqlcopilot.studio.service.SchemaService;
+import com.sqlcopilot.studio.service.TokenEstimatorService;
 import com.sqlcopilot.studio.service.llm.LlmGatewayService;
 import com.sqlcopilot.studio.service.rag.RagRetrievalService;
 import org.junit.jupiter.api.BeforeEach;
@@ -44,10 +46,13 @@ class AiServiceImplChartConfigTest {
     @Mock
     private AiConversationContextManager conversationContextManager;
 
+    private TokenEstimatorService tokenEstimatorService;
+
     private AiServiceImpl aiService;
 
     @BeforeEach
     void setUp() {
+        tokenEstimatorService = new TokenEstimatorService();
         aiService = new AiServiceImpl(
             schemaService,
             aiConfigService,
@@ -55,7 +60,9 @@ class AiServiceImplChartConfigTest {
             ragRetrievalService,
             new ObjectMapper(),
             llmGatewayService,
-            conversationContextManager
+            conversationContextManager,
+            tokenEstimatorService,
+            new PromptBudgetPlanner(tokenEstimatorService)
         );
     }
 

@@ -6,6 +6,7 @@ import com.sqlcopilot.studio.dto.schema.TableDetailVO;
 import com.sqlcopilot.studio.service.MemoryService;
 import com.sqlcopilot.studio.service.RagConfigService;
 import com.sqlcopilot.studio.service.SchemaService;
+import com.sqlcopilot.studio.service.TokenEstimatorService;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
 import com.sqlcopilot.studio.service.rag.RagEmbeddingService;
 import com.sqlcopilot.studio.service.rag.RagRerankService;
@@ -133,7 +134,8 @@ class RagRetrievalServiceImplTest {
             memoryService,
             ragEmbeddingService,
             qdrantClientService,
-            ragRerankService
+            ragRerankService,
+            new TokenEstimatorService()
         );
 
         RagPromptContext context = service.retrievePromptContext(
@@ -208,7 +210,8 @@ class RagRetrievalServiceImplTest {
             memoryService,
             ragEmbeddingService,
             qdrantClientService,
-            ragRerankService
+            ragRerankService,
+            new TokenEstimatorService()
         );
 
         RagPromptContext context = service.retrievePromptContext(1L, "mdm", "distribution_callback_log");
@@ -312,7 +315,8 @@ class RagRetrievalServiceImplTest {
             memoryService,
             ragEmbeddingService,
             qdrantClientService,
-            ragRerankService
+            ragRerankService,
+            new TokenEstimatorService()
         );
 
         RagPromptContext context = service.retrievePromptContext(

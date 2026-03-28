@@ -8,6 +8,7 @@ import com.sqlcopilot.studio.mapper.ErGraphSnapshotMapper;
 import com.sqlcopilot.studio.mapper.QueryHistoryMapper;
 import com.sqlcopilot.studio.mapper.SavedQueryMapper;
 import com.sqlcopilot.studio.service.ConnectionService;
+import com.sqlcopilot.studio.service.TokenEstimatorService;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -74,6 +75,7 @@ class EditorServiceImplExportTest {
             erGraphSnapshotMapper,
             connectionService,
             new ObjectMapper(),
+            new TokenEstimatorService(),
             qdrantClientService,
             "sql_history"
         );

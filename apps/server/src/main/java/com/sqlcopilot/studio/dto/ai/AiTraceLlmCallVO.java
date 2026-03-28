@@ -44,4 +44,7 @@ public class AiTraceLlmCallVO {
 
     /** 总 token。 */
     private Integer totalTokens;
+
+    /** Prompt 预算快照。 */
+    private PromptBudgetVO promptBudget;
 }

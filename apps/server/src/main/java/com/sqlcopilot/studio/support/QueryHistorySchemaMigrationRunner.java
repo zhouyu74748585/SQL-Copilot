@@ -29,12 +29,21 @@ public class QueryHistorySchemaMigrationRunner implements ApplicationRunner {
             ensureHistoryColumn(connection, statement, "structured_context_json", "TEXT");
             ensureHistoryColumn(connection, statement, "trace_json", "TEXT");
             ensureHistoryColumn(connection, statement, "token_estimate", "INTEGER");
+            ensureHistoryColumn(connection, statement, "turn_content_tokens", "INTEGER");
+            ensureHistoryColumn(connection, statement, "request_prompt_tokens", "INTEGER");
+            ensureHistoryColumn(connection, statement, "request_completion_tokens", "INTEGER");
+            ensureHistoryColumn(connection, statement, "request_total_tokens", "INTEGER");
+            ensureHistoryColumn(connection, statement, "token_estimate_source", "TEXT");
+            ensureHistoryColumn(connection, statement, "token_estimate_version", "INTEGER");
+            ensureHistoryColumn(connection, statement, "token_estimate_scope", "TEXT");
+            ensureHistoryColumn(connection, statement, "prompt_budget_json", "TEXT");
             ensureHistoryColumn(connection, statement, "memory_enabled", "INTEGER");
             statement.execute("""
                 CREATE INDEX IF NOT EXISTS idx_query_history_execute_memory
                 ON query_history(connection_id, database_name, history_type, success_flag, memory_enabled, created_at DESC)
                 """);
             backfillHistoryType(connection);
+            markLegacyTokenScope(connection);
         } catch (SQLException ex) {
             throw new IllegalStateException("查询历史表迁移失败", ex);
         }
@@ -68,6 +77,24 @@ public class QueryHistorySchemaMigrationRunner implements ApplicationRunner {
                 ELSE 'CHAT'
             END
             WHERE history_type IS NULL OR TRIM(history_type) = ''
+            """;
+        try (PreparedStatement preparedStatement = connection.prepareStatement(sql)) {
+            preparedStatement.executeUpdate();
+        }
+    }
+
+    /**
+     * 关键操作：为旧 token_estimate 标记 legacy scope，避免继续被误认为单条历史内容 token。
+     */
+    private void markLegacyTokenScope(Connection connection) throws SQLException {
+        String sql = """
+            UPDATE query_history
+            SET token_estimate_scope = 'LEGACY_REQUEST_TOTAL',
+                token_estimate_source = COALESCE(NULLIF(TRIM(token_estimate_source), ''), 'legacy_migration'),
+                token_estimate_version = COALESCE(token_estimate_version, 1)
+            WHERE token_estimate IS NOT NULL
+              AND token_estimate > 0
+              AND (token_estimate_scope IS NULL OR TRIM(token_estimate_scope) = '')
             """;
         try (PreparedStatement preparedStatement = connection.prepareStatement(sql)) {
             preparedStatement.executeUpdate();

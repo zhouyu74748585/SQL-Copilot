@@ -3,6 +3,7 @@ package com.sqlcopilot.studio.service.impl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sqlcopilot.studio.dto.ai.AiTraceVO;
 import com.sqlcopilot.studio.dto.ai.ChartConfigVO;
+import com.sqlcopilot.studio.dto.ai.PromptBudgetVO;
 import com.sqlcopilot.studio.dto.editor.*;
 import com.sqlcopilot.studio.dto.schema.ErGraphVO;
 import com.sqlcopilot.studio.entity.ConnectionEntity;
@@ -14,6 +15,7 @@ import com.sqlcopilot.studio.mapper.QueryHistoryMapper;
 import com.sqlcopilot.studio.mapper.SavedQueryMapper;
 import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.EditorService;
+import com.sqlcopilot.studio.service.TokenEstimatorService;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
 import com.sqlcopilot.studio.support.SchemaContextSupport;
 import com.sqlcopilot.studio.util.BusinessException;
@@ -43,6 +45,7 @@ public class EditorServiceImpl implements EditorService {
     private final ErGraphSnapshotMapper erGraphSnapshotMapper;
     private final ConnectionService connectionService;
     private final ObjectMapper objectMapper;
+    private final TokenEstimatorService tokenEstimatorService;
     private final QdrantClientService qdrantClientService;
     private final String sqlHistoryCollectionName;
 
@@ -51,6 +54,7 @@ public class EditorServiceImpl implements EditorService {
                              ErGraphSnapshotMapper erGraphSnapshotMapper,
                              ConnectionService connectionService,
                              ObjectMapper objectMapper,
+                             TokenEstimatorService tokenEstimatorService,
                              QdrantClientService qdrantClientService,
                              @org.springframework.beans.factory.annotation.Value("${rag.collection.sql-history:sql_history}") String sqlHistoryCollectionName) {
         this.queryHistoryMapper = queryHistoryMapper;
@@ -58,6 +62,7 @@ public class EditorServiceImpl implements EditorService {
         this.erGraphSnapshotMapper = erGraphSnapshotMapper;
         this.connectionService = connectionService;
         this.objectMapper = objectMapper;
+        this.tokenEstimatorService = tokenEstimatorService;
         this.qdrantClientService = qdrantClientService;
         this.sqlHistoryCollectionName = sqlHistoryCollectionName;
     }
@@ -200,6 +205,14 @@ public class EditorServiceImpl implements EditorService {
         entity.setStructuredContextJson(safe(req.getStructuredContextJson()));
         entity.setTraceJson(resolveTraceJson(req));
         entity.setTokenEstimate(req.getTokenEstimate());
+        entity.setTurnContentTokens(resolveTurnContentTokens(req));
+        entity.setRequestPromptTokens(resolveNonNegative(req.getRequestPromptTokens()));
+        entity.setRequestCompletionTokens(resolveNonNegative(req.getRequestCompletionTokens()));
+        entity.setRequestTotalTokens(resolveRequestTotalTokens(req));
+        entity.setTokenEstimateSource(resolveTokenEstimateSource(req));
+        entity.setTokenEstimateVersion(resolveTokenEstimateVersion(req));
+        entity.setTokenEstimateScope(resolveTokenEstimateScope(req));
+        entity.setPromptBudgetJson(resolvePromptBudgetJson(req));
         entity.setMemoryEnabled(Boolean.TRUE.equals(req.getMemoryEnabled()) ? 1 : 0);
         entity.setExecutionMs(req.getExecutionMs());
         entity.setSuccessFlag(Boolean.TRUE.equals(req.getSuccess()) ? 1 : 0);
@@ -672,6 +685,14 @@ public class EditorServiceImpl implements EditorService {
         vo.setTraceJson(safe(entity.getTraceJson()));
         vo.setTrace(parseTrace(entity.getTraceJson()));
         vo.setTokenEstimate(entity.getTokenEstimate());
+        vo.setTurnContentTokens(entity.getTurnContentTokens());
+        vo.setRequestPromptTokens(entity.getRequestPromptTokens());
+        vo.setRequestCompletionTokens(entity.getRequestCompletionTokens());
+        vo.setRequestTotalTokens(entity.getRequestTotalTokens());
+        vo.setTokenEstimateSource(safe(entity.getTokenEstimateSource()));
+        vo.setTokenEstimateVersion(entity.getTokenEstimateVersion());
+        vo.setTokenEstimateScope(safe(entity.getTokenEstimateScope()));
+        vo.setPromptBudget(parsePromptBudget(entity.getPromptBudgetJson()));
         vo.setMemoryEnabled(entity.getMemoryEnabled() == null ? null : entity.getMemoryEnabled() == 1);
         vo.setExecutionMs(entity.getExecutionMs());
         vo.setSuccess(entity.getSuccessFlag() == 1);
@@ -689,6 +710,102 @@ public class EditorServiceImpl implements EditorService {
         vo.setCreatedAt(entity.getCreatedAt());
         vo.setUpdatedAt(entity.getUpdatedAt());
         return vo;
+    }
+
+    private Integer resolveTurnContentTokens(SaveQueryHistoryReq req) {
+        Integer value = resolveNonNegative(req.getTurnContentTokens());
+        if (value != null && value > 0) {
+            return value;
+        }
+        return tokenEstimatorService.estimateTurnContentTokens(
+            req.getPromptText(),
+            req.getSqlText(),
+            req.getAssistantContent(),
+            req.getChartConfigJson()
+        );
+    }
+
+    private Integer resolveRequestTotalTokens(SaveQueryHistoryReq req) {
+        Integer value = resolveNonNegative(req.getRequestTotalTokens());
+        if (value != null && value > 0) {
+            return value;
+        }
+        Integer legacy = resolveNonNegative(req.getTokenEstimate());
+        if (legacy != null && legacy > 0) {
+            return legacy;
+        }
+        Integer promptTokens = resolveNonNegative(req.getRequestPromptTokens());
+        Integer completionTokens = resolveNonNegative(req.getRequestCompletionTokens());
+        if (promptTokens == null && completionTokens == null) {
+            return null;
+        }
+        return Math.max(0, (promptTokens == null ? 0 : promptTokens) + (completionTokens == null ? 0 : completionTokens));
+    }
+
+    private String resolveTokenEstimateSource(SaveQueryHistoryReq req) {
+        String source = safe(req.getTokenEstimateSource());
+        if (!source.isBlank()) {
+            return source;
+        }
+        if (resolveNonNegative(req.getRequestTotalTokens()) != null
+            || resolveNonNegative(req.getRequestPromptTokens()) != null
+            || resolveNonNegative(req.getRequestCompletionTokens()) != null) {
+            return TokenEstimatorService.TOKEN_SOURCE_PROVIDER_USAGE;
+        }
+        if (resolveNonNegative(req.getTokenEstimate()) != null) {
+            return "legacy_client";
+        }
+        return TokenEstimatorService.TOKEN_SOURCE_BACKEND_ESTIMATOR;
+    }
+
+    private Integer resolveTokenEstimateVersion(SaveQueryHistoryReq req) {
+        Integer version = resolveNonNegative(req.getTokenEstimateVersion());
+        return version == null || version <= 0 ? TokenEstimatorService.TOKEN_ESTIMATE_VERSION : version;
+    }
+
+    private String resolveTokenEstimateScope(SaveQueryHistoryReq req) {
+        String scope = safe(req.getTokenEstimateScope());
+        if (!scope.isBlank()) {
+            return scope;
+        }
+        if (resolveNonNegative(req.getRequestTotalTokens()) != null || resolveNonNegative(req.getTokenEstimate()) != null) {
+            return TokenEstimatorService.TOKEN_SCOPE_REQUEST_TOTAL;
+        }
+        return TokenEstimatorService.TOKEN_SCOPE_TURN_CONTENT;
+    }
+
+    private String resolvePromptBudgetJson(SaveQueryHistoryReq req) {
+        String raw = safe(req.getPromptBudgetJson());
+        if (!raw.isBlank()) {
+            return raw;
+        }
+        if (req.getPromptBudget() == null) {
+            return "";
+        }
+        try {
+            return objectMapper.writeValueAsString(req.getPromptBudget());
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private PromptBudgetVO parsePromptBudget(String json) {
+        String raw = safe(json);
+        if (raw.isBlank()) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(raw, PromptBudgetVO.class);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private Integer resolveNonNegative(Integer value) {
+        if (value == null) {
+            return null;
+        }
+        return Math.max(0, value);
     }
 
     private QueryHistorySessionVO normalizeSessionTitle(QueryHistorySessionVO item) {

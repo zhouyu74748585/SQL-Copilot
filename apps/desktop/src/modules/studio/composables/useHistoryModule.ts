@@ -228,6 +228,11 @@ export function useHistoryModule(runtime: StudioRuntime): HistoryModule {
     const first = ordered[0];
     const latestMemoryFlag = [...ordered].reverse().find((item) => item.memoryEnabled != null)?.memoryEnabled;
     const latestTokenEstimate = [...ordered].reverse().find((item) => item.tokenEstimate != null)?.tokenEstimate;
+    const latestPromptBudget = [...ordered].reverse().find((item) => item.promptBudget != null)?.promptBudget ?? null;
+    const latestRequestPromptTokens = [...ordered].reverse().find((item) => item.requestPromptTokens != null)?.requestPromptTokens ?? 0;
+    const latestRequestCompletionTokens = [...ordered].reverse().find((item) => item.requestCompletionTokens != null)?.requestCompletionTokens ?? 0;
+    const latestRequestTotalTokens = [...ordered].reverse().find((item) => item.requestTotalTokens != null)?.requestTotalTokens ?? 0;
+    const latestTurnContentTokens = [...ordered].reverse().find((item) => item.turnContentTokens != null)?.turnContentTokens ?? 0;
     const models = runtime.aiModelOptions.value.map((item) => String(item.value)).filter((item) => !!item);
     const tab: QueryTab = {
       key: `query-history-${connectionId}-${encodeURIComponent(sessionId)}`,
@@ -269,6 +274,11 @@ export function useHistoryModule(runtime: StudioRuntime): HistoryModule {
       sqlMemoryEnabled: true,
       detailOutputOverride: null,
       lastTokenEstimate: Number(latestTokenEstimate ?? 0),
+      lastPromptBudget: latestPromptBudget,
+      lastRequestPromptTokens: Number(latestRequestPromptTokens ?? 0),
+      lastRequestCompletionTokens: Number(latestRequestCompletionTokens ?? 0),
+      lastRequestTotalTokens: Number(latestRequestTotalTokens ?? 0),
+      lastTurnContentTokens: Number(latestTurnContentTokens ?? 0),
     };
     runtime.applySessionTitle(tab);
     return tab;
