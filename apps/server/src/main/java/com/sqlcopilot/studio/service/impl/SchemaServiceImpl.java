@@ -11,6 +11,7 @@ import com.sqlcopilot.studio.repository.SchemaObjectDefinitionJdbcRepository;
 import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.SchemaService;
 import com.sqlcopilot.studio.service.TokenEstimatorService;
+import com.sqlcopilot.studio.service.kv.KvRuntimeClientFactory;
 import com.sqlcopilot.studio.service.rag.QdrantClientService;
 import com.sqlcopilot.studio.service.rag.RagIngestionService;
 import com.sqlcopilot.studio.service.rag.model.QdrantPayloadFilter;
@@ -52,6 +53,7 @@ public class SchemaServiceImpl implements SchemaService {
     private final SchemaObjectDefinitionJdbcRepository schemaObjectDefinitionJdbcRepository;
     private final RagCollectionNames ragCollectionNames;
     private final TokenEstimatorService tokenEstimatorService;
+    private final KvRuntimeClientFactory kvRuntimeClientFactory;
     private final long schemaCacheTtlMs;
     private final long tableStatsRefreshIntervalMs;
     private final Map<SchemaCacheKey, SchemaSnapshot> schemaSnapshotCache = new ConcurrentHashMap<>();
@@ -69,6 +71,7 @@ public class SchemaServiceImpl implements SchemaService {
                              RagVectorizeStatusMapper ragVectorizeStatusMapper,
                              QdrantClientService qdrantClientService,
                              TokenEstimatorService tokenEstimatorService,
+                             KvRuntimeClientFactory kvRuntimeClientFactory,
                              JdbcDriverResolver jdbcDriverResolver,
                              SchemaNamespaceJdbcRepository schemaNamespaceJdbcRepository,
                              SchemaObjectDefinitionJdbcRepository schemaObjectDefinitionJdbcRepository,
@@ -81,6 +84,7 @@ public class SchemaServiceImpl implements SchemaService {
         this.ragVectorizeStatusMapper = ragVectorizeStatusMapper;
         this.qdrantClientService = qdrantClientService;
         this.tokenEstimatorService = tokenEstimatorService;
+        this.kvRuntimeClientFactory = kvRuntimeClientFactory;
         this.jdbcDriverResolver = jdbcDriverResolver;
         this.schemaNamespaceJdbcRepository = schemaNamespaceJdbcRepository;
         this.schemaObjectDefinitionJdbcRepository = schemaObjectDefinitionJdbcRepository;
@@ -490,6 +494,18 @@ public class SchemaServiceImpl implements SchemaService {
         if ("SQLITE".equals(dbType)) {
             String sqliteName = normalize(connectionEntity.getDatabaseName());
             return List.of(sqliteName.isBlank() ? "main" : sqliteName);
+        }
+        if ("MONGODB".equals(dbType)) {
+            return kvRuntimeClientFactory.withMongoClient(connectionEntity, connectionId, client -> {
+                List<String> result = new ArrayList<>();
+                for (String name : client.listDatabaseNames()) {
+                    result.add(name);
+                }
+                return result;
+            });
+        }
+        if ("REDIS".equals(dbType)) {
+            return kvRuntimeClientFactory.listRedisDatabases(connectionEntity, connectionId);
         }
         if ("ORACLE".equals(dbType)) {
             String configuredDatabaseName = resolveTargetDatabaseName(connectionEntity, null);

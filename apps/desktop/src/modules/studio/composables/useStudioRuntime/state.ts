@@ -77,6 +77,7 @@ import {
   defaultRagConfigForm,
   getDesktopBridge,
   loadLastResultExportDirectory,
+  mergeSupportedDbTypes,
   saveLastResultExportDirectory,
 } from './connections';
 import {
@@ -615,7 +616,7 @@ const contextMenu = reactive({
 const connectionForm = reactive<ConnectionCreateReq>(defaultConnectionForm());
 const connectionFormSubmitted = ref(false);
 
-const supportedDbTypes = ref<ConnectionDbTypeVO[]>([]);
+const supportedDbTypes = ref<ConnectionDbTypeVO[]>(mergeSupportedDbTypes([], FRONTEND_HIDDEN_DB_TYPES));
 
 const connectionPreviewDbOptions = ref<string[]>([]);
 
@@ -3249,6 +3250,7 @@ async function copyTableEditorSql() {
     activeChartFieldOptions,
     activeNumericFieldOptions,
     activeSeriesFieldOptions,
+    syncViewportSize,
     emptyManualChartConfig,
     cloneChartConfig,
     isNumericField,
@@ -3267,6 +3269,7 @@ async function copyTableEditorSql() {
     buildConnectionNode,
     buildCategoryChildren,
     getCategoryChildren,
+    defaultPortForDbType,
     findSupportedDbType,
     requiresDatabaseLayer,
     supportsSchemaLayer,
@@ -3346,6 +3349,7 @@ async function copyTableEditorSql() {
     pruneVectorizeStatusMap,
     startVectorizeStatusPolling,
     stopVectorizeStatusPolling,
+    loadSupportedDbTypes,
     loadConnections,
     refreshConnections,
     openCreateGroupModal,

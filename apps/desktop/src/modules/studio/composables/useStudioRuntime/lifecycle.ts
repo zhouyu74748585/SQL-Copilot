@@ -2,6 +2,41 @@ import {onBeforeUnmount, onMounted, watch} from 'vue';
 import {getApi} from '../../../../api/client';
 import type {AiConfigVO, RagConfigVO} from '../../../../types';
 
+const RUNTIME_BOOTSTRAP_RETRY_DELAY_MS = 1200;
+const RUNTIME_BOOTSTRAP_MAX_ATTEMPTS = 25;
+
+function wait(ms: number) {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+async function loadRuntimeBootstrapData(runtime: any) {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < RUNTIME_BOOTSTRAP_MAX_ATTEMPTS; attempt += 1) {
+    let ready = true;
+    try {
+      await runtime.loadSupportedDbTypes();
+    } catch (error) {
+      ready = false;
+      lastError = error;
+    }
+    try {
+      await runtime.loadConnections();
+    } catch (error) {
+      ready = false;
+      lastError = error;
+    }
+    if (ready) {
+      return;
+    }
+    await wait(RUNTIME_BOOTSTRAP_RETRY_DELAY_MS);
+  }
+  if (lastError) {
+    throw lastError;
+  }
+}
+
 export function setupStudioRuntimeLifecycle(runtime: any) {
   onMounted(async () => {
     runtime.syncViewportSize();
@@ -9,10 +44,7 @@ export function setupStudioRuntimeLifecycle(runtime: any) {
     runtime.loadSessionTitleOverrides();
     runtime.startVectorizeStatusPolling();
     await runtime.runSafely(async () => {
-      await runtime.loadSupportedDbTypes();
-    });
-    await runtime.runSafely(async () => {
-      await runtime.loadConnections();
+      await loadRuntimeBootstrapData(runtime);
     });
     await runtime.runSafely(async () => {
       const aiConfig = await getApi<AiConfigVO>('/api/ai/config/get');

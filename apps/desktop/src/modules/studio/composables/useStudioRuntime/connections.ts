@@ -36,6 +36,219 @@ import type {
 } from './types';
 import {normalizeSelectedDatabases, parseConfiguredDatabaseName, rootDatabaseNameForContext} from './utils';
 
+const FALLBACK_SUPPORTED_DB_TYPES: ConnectionDbTypeVO[] = [
+  {
+    dbType: 'MYSQL',
+    displayName: 'MySQL',
+    defaultPort: 3306,
+    storageKind: 'RELATIONAL',
+    primaryObjectLabel: '表',
+    queryEditorMode: 'sql',
+    supportsSelectedDatabases: true,
+    namespaceLabel: '',
+    supportsNamespaceCreate: false,
+    supportsNamespaceRename: false,
+    supportsNamespaceDrop: false,
+    supportsTableCreate: true,
+    supportsTableDrop: true,
+    supportsViewCreate: true,
+    supportsViewDrop: true,
+    supportsFunctionCreate: false,
+    supportsFunctionDrop: false,
+    supportsGenerateQuery: true,
+    supportsExplainQuery: true,
+    supportsAnalyzeQuery: true,
+    supportsGenerateChart: true,
+    requiresHost: true,
+    requiresPort: true,
+    supportsDatabaseName: false,
+    supportsDatabasePreview: true,
+    databaseNameLabel: '数据库名',
+    supportsUsername: true,
+    supportsPassword: true,
+  },
+  {
+    dbType: 'POSTGRESQL',
+    displayName: 'PostgreSQL',
+    defaultPort: 5432,
+    storageKind: 'RELATIONAL',
+    primaryObjectLabel: '表',
+    queryEditorMode: 'sql',
+    supportsSelectedDatabases: true,
+    namespaceLabel: '数据库',
+    supportsNamespaceCreate: true,
+    supportsNamespaceRename: true,
+    supportsNamespaceDrop: true,
+    supportsTableCreate: true,
+    supportsTableDrop: true,
+    supportsViewCreate: true,
+    supportsViewDrop: true,
+    supportsFunctionCreate: true,
+    supportsFunctionDrop: true,
+    supportsGenerateQuery: true,
+    supportsExplainQuery: true,
+    supportsAnalyzeQuery: true,
+    supportsGenerateChart: true,
+    requiresHost: true,
+    requiresPort: true,
+    supportsDatabaseName: false,
+    supportsDatabasePreview: true,
+    databaseNameLabel: '数据库',
+    supportsUsername: true,
+    supportsPassword: true,
+  },
+  {
+    dbType: 'SQLSERVER',
+    displayName: 'SQL Server',
+    defaultPort: 1433,
+    storageKind: 'RELATIONAL',
+    primaryObjectLabel: '表',
+    queryEditorMode: 'sql',
+    supportsSelectedDatabases: true,
+    namespaceLabel: '架构',
+    supportsNamespaceCreate: true,
+    supportsNamespaceRename: true,
+    supportsNamespaceDrop: true,
+    supportsTableCreate: true,
+    supportsTableDrop: true,
+    supportsViewCreate: true,
+    supportsViewDrop: true,
+    supportsFunctionCreate: true,
+    supportsFunctionDrop: true,
+    supportsGenerateQuery: true,
+    supportsExplainQuery: true,
+    supportsAnalyzeQuery: true,
+    supportsGenerateChart: true,
+    requiresHost: true,
+    requiresPort: true,
+    supportsDatabaseName: false,
+    supportsDatabasePreview: true,
+    databaseNameLabel: '数据库',
+    supportsUsername: true,
+    supportsPassword: true,
+  },
+  {
+    dbType: 'ORACLE',
+    displayName: 'Oracle',
+    defaultPort: 1521,
+    storageKind: 'RELATIONAL',
+    primaryObjectLabel: '表',
+    queryEditorMode: 'sql',
+    supportsSelectedDatabases: false,
+    namespaceLabel: 'Schema',
+    supportsNamespaceCreate: true,
+    supportsNamespaceRename: false,
+    supportsNamespaceDrop: true,
+    supportsTableCreate: true,
+    supportsTableDrop: true,
+    supportsViewCreate: true,
+    supportsViewDrop: true,
+    supportsFunctionCreate: true,
+    supportsFunctionDrop: true,
+    supportsGenerateQuery: true,
+    supportsExplainQuery: true,
+    supportsAnalyzeQuery: true,
+    supportsGenerateChart: true,
+    requiresHost: true,
+    requiresPort: true,
+    supportsDatabaseName: true,
+    supportsDatabasePreview: false,
+    databaseNameLabel: '服务名',
+    supportsUsername: true,
+    supportsPassword: true,
+  },
+  {
+    dbType: 'SQLITE',
+    displayName: 'SQLite',
+    defaultPort: 0,
+    storageKind: 'RELATIONAL',
+    primaryObjectLabel: '表',
+    queryEditorMode: 'sql',
+    supportsSelectedDatabases: false,
+    namespaceLabel: '',
+    supportsNamespaceCreate: false,
+    supportsNamespaceRename: false,
+    supportsNamespaceDrop: false,
+    supportsTableCreate: true,
+    supportsTableDrop: true,
+    supportsViewCreate: true,
+    supportsViewDrop: true,
+    supportsFunctionCreate: false,
+    supportsFunctionDrop: false,
+    supportsGenerateQuery: true,
+    supportsExplainQuery: true,
+    supportsAnalyzeQuery: true,
+    supportsGenerateChart: true,
+    requiresHost: false,
+    requiresPort: false,
+    supportsDatabaseName: true,
+    supportsDatabasePreview: false,
+    databaseNameLabel: '数据库文件路径',
+    supportsUsername: false,
+    supportsPassword: false,
+  },
+  {
+    dbType: 'REDIS',
+    displayName: 'Redis',
+    defaultPort: 6379,
+    storageKind: 'KV',
+    primaryObjectLabel: '键',
+    queryEditorMode: 'redis',
+    supportsSelectedDatabases: false,
+    namespaceLabel: '逻辑库',
+    supportsNamespaceCreate: false,
+    supportsNamespaceRename: false,
+    supportsNamespaceDrop: false,
+    supportsTableCreate: false,
+    supportsTableDrop: false,
+    supportsViewCreate: false,
+    supportsViewDrop: false,
+    supportsFunctionCreate: false,
+    supportsFunctionDrop: false,
+    supportsGenerateQuery: true,
+    supportsExplainQuery: true,
+    supportsAnalyzeQuery: true,
+    supportsGenerateChart: false,
+    requiresHost: true,
+    requiresPort: true,
+    supportsDatabaseName: true,
+    supportsDatabasePreview: false,
+    databaseNameLabel: '逻辑库',
+    supportsUsername: true,
+    supportsPassword: true,
+  },
+  {
+    dbType: 'MONGODB',
+    displayName: 'MongoDB',
+    defaultPort: 27017,
+    storageKind: 'DOCUMENT',
+    primaryObjectLabel: '集合',
+    queryEditorMode: 'json',
+    supportsSelectedDatabases: true,
+    namespaceLabel: '数据库',
+    supportsNamespaceCreate: false,
+    supportsNamespaceRename: false,
+    supportsNamespaceDrop: false,
+    supportsTableCreate: false,
+    supportsTableDrop: false,
+    supportsViewCreate: false,
+    supportsViewDrop: false,
+    supportsFunctionCreate: false,
+    supportsFunctionDrop: false,
+    supportsGenerateQuery: true,
+    supportsExplainQuery: true,
+    supportsAnalyzeQuery: true,
+    supportsGenerateChart: false,
+    requiresHost: true,
+    requiresPort: true,
+    supportsDatabaseName: false,
+    supportsDatabasePreview: true,
+    databaseNameLabel: '数据库',
+    supportsUsername: false,
+    supportsPassword: true,
+  },
+];
+
 export function defaultConnectionForm(): ConnectionCreateReq {
   return {
     name: '新建连接',
@@ -61,6 +274,31 @@ export function defaultConnectionForm(): ConnectionCreateReq {
     sshPrivateKeyText: '',
     sshPrivateKeyPassphrase: '',
   };
+}
+
+export function mergeSupportedDbTypes(
+  supportedDbTypes: ConnectionDbTypeVO[] | undefined,
+  hiddenDbTypes?: Set<string>,
+) {
+  const merged = new Map<string, ConnectionDbTypeVO>();
+  FALLBACK_SUPPORTED_DB_TYPES.forEach((item) => {
+    if (hiddenDbTypes?.has(item.dbType)) {
+      return;
+    }
+    merged.set(item.dbType, {...item});
+  });
+  (supportedDbTypes ?? []).forEach((item) => {
+    const dbType = (item.dbType || '').trim().toUpperCase();
+    if (!dbType || hiddenDbTypes?.has(dbType)) {
+      return;
+    }
+    merged.set(dbType, {
+      ...merged.get(dbType),
+      ...item,
+      dbType,
+    });
+  });
+  return Array.from(merged.values());
 }
 
 export function defaultAiConfigForm(): AiConfigSaveReq {
@@ -140,7 +378,8 @@ export function normalizeModelOptions(options: AiModelOption[] | undefined) {
 }
 
 export function findSupportedDbTypeInList(supportedDbTypes: ConnectionDbTypeVO[], dbType: string) {
-  return supportedDbTypes.find((item) => item.dbType === dbType) ?? null;
+  const normalizedDbType = (dbType || '').trim().toUpperCase();
+  return mergeSupportedDbTypes(supportedDbTypes).find((item) => item.dbType === normalizedDbType) ?? null;
 }
 
 export function isMultiDatabaseTypeInList(supportedDbTypes: ConnectionDbTypeVO[], dbType: string) {
@@ -1163,7 +1402,15 @@ interface ConnectionLoadingHelperContext {
 export function createConnectionLoadingHelpers(ctx: ConnectionLoadingHelperContext) {
   async function loadSupportedDbTypes() {
     const list = await getApi<ConnectionDbTypeVO[]>('/api/connection/db-types');
-    ctx.supportedDbTypes.value = list.filter((item) => ctx.isFrontendVisibleDbType(item.dbType));
+    const hiddenFallbackDbTypes = new Set(
+      FALLBACK_SUPPORTED_DB_TYPES
+        .map((item) => item.dbType)
+        .filter((dbType) => !ctx.isFrontendVisibleDbType(dbType)),
+    );
+    ctx.supportedDbTypes.value = mergeSupportedDbTypes(
+      list.filter((item) => ctx.isFrontendVisibleDbType(item.dbType)),
+      hiddenFallbackDbTypes,
+    );
     ctx.ensureConnectionFormDbType();
   }
 
