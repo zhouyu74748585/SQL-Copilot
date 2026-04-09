@@ -10,6 +10,7 @@ import com.sqlcopilot.studio.mapper.ConnectionGroupMapper;
 import com.sqlcopilot.studio.mapper.ConnectionMapper;
 import com.sqlcopilot.studio.service.ConnectionService;
 import com.sqlcopilot.studio.service.kv.KvRuntimeClientFactory;
+import com.sqlcopilot.studio.support.SchemaContextSupport;
 import com.sqlcopilot.studio.support.JdbcDriverResolver;
 import com.sqlcopilot.studio.support.ConnectionSchemaMigrationRunner;
 import com.sqlcopilot.studio.support.driver.IsolatedJdbcConnectionManager;
@@ -294,18 +295,24 @@ public class ConnectionServiceImpl implements ConnectionService {
 
     @Override
     public Connection openTargetConnection(Long connectionId) throws SQLException {
+        return openTargetConnection(connectionId, null);
+    }
+
+    @Override
+    public Connection openTargetConnection(Long connectionId, String databaseName) throws SQLException {
         ConnectionEntity entity = getConnectionEntity(connectionId);
         validateConnectionConfig(entity);
         if (isNonJdbcType(entity.getDbType())) {
             throw new BusinessException(400, "当前连接类型不支持 JDBC SQL 连接: " + entity.getDbType());
         }
+        ConnectionEntity runtimeEntity = buildRuntimeJdbcEntity(entity, databaseName);
         if (isSshEnabled(entity)) {
             // 关键操作：SSH 场景先建立本地端口转发，再切换 JDBC 目标到 127.0.0.1:localPort。
             SshTunnelManager.TunnelEndpoint endpoint = sshTunnelManager.ensureTunnel(connectionId, entity);
-            ConnectionEntity tunneledEntity = buildTunneledJdbcEntity(entity, endpoint);
+            ConnectionEntity tunneledEntity = buildTunneledJdbcEntity(runtimeEntity, endpoint);
             return openJdbcConnection(tunneledEntity, entity.getId());
         }
-        return openJdbcConnection(entity, entity.getId());
+        return openJdbcConnection(runtimeEntity, entity.getId());
     }
 
     private void fillEntity(ConnectionCreateReq req, ConnectionEntity entity) {
@@ -747,6 +754,37 @@ public class ConnectionServiceImpl implements ConnectionService {
             target.setDatabaseName(extractDatabaseNameFromHost(source.getHost()));
         }
         return target;
+    }
+
+    private ConnectionEntity buildRuntimeJdbcEntity(ConnectionEntity source, String requestedDatabaseContext) {
+        ConnectionEntity runtimeEntity = cloneForRuntime(source);
+        String targetDatabaseName = resolveRuntimeDatabaseName(source, requestedDatabaseContext);
+        if (!targetDatabaseName.isBlank()) {
+            runtimeEntity.setDatabaseName(targetDatabaseName);
+        }
+        return runtimeEntity;
+    }
+
+    private String resolveRuntimeDatabaseName(ConnectionEntity source, String requestedDatabaseContext) {
+        String dbType = upper(source.getDbType());
+        if (DB_TYPE_SQLITE.equals(dbType) || DB_TYPE_MONGODB.equals(dbType) || DB_TYPE_REDIS.equals(dbType)) {
+            return safeValue(source.getDatabaseName());
+        }
+        String requested = safeValue(requestedDatabaseContext);
+        if (!requested.isBlank()) {
+            if (SchemaContextSupport.supportsSchemaLayer(dbType)) {
+                SchemaContextSupport.SchemaContext context = SchemaContextSupport.parse(dbType, requested);
+                if (!context.databaseName().isBlank()) {
+                    return context.databaseName();
+                }
+            }
+            return requested;
+        }
+        String configured = safeValue(source.getDatabaseName());
+        if (!configured.isBlank()) {
+            return configured;
+        }
+        return extractDatabaseNameFromHost(source.getHost());
     }
 
     private String toSelectedDatabasesJson(List<String> selectedDatabases, String dbType) {

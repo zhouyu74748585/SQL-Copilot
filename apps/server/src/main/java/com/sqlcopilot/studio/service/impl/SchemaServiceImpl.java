@@ -382,7 +382,7 @@ public class SchemaServiceImpl implements SchemaService {
         Map<String, String> mysqlColumnExtraMap = Map.of();
         ConnectionEntity connectionEntity = connectionService.getConnectionEntity(connectionId);
         String targetDatabaseName = resolveTargetDatabaseName(connectionEntity, databaseName);
-        try (Connection connection = connectionService.openTargetConnection(connectionId)) {
+        try (Connection connection = connectionService.openTargetConnection(connectionId, targetDatabaseName)) {
             applyDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
             DatabaseMetaData metaData = connection.getMetaData();
             String catalog = resolveCatalog(connection, connectionEntity.getDbType(), targetDatabaseName);
@@ -463,7 +463,7 @@ public class SchemaServiceImpl implements SchemaService {
             throw new BusinessException(404, "对象不存在: " + normalizedObjectName);
         }
 
-        try (Connection connection = connectionService.openTargetConnection(connectionId)) {
+        try (Connection connection = connectionService.openTargetConnection(connectionId, targetDatabaseName)) {
             applyDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
             String definitionSql = schemaObjectDefinitionJdbcRepository.fetchDefinition(
                 connection,
@@ -531,7 +531,7 @@ public class SchemaServiceImpl implements SchemaService {
             return List.of();
         }
         String databaseContext = resolveTargetDatabaseName(connectionEntity, databaseName);
-        try (Connection connection = connectionService.openTargetConnection(connectionId)) {
+        try (Connection connection = connectionService.openTargetConnection(connectionId, databaseContext)) {
             applyDatabaseContext(connection, dbType, databaseContext);
             String schemasSql = jdbcDriverResolver.findSchemasSql(dbType);
             if (schemasSql.isBlank()) {
@@ -551,7 +551,7 @@ public class SchemaServiceImpl implements SchemaService {
         ConnectionEntity connectionEntity = connectionService.getConnectionEntity(connectionId);
         String normalizedType = normalize(objectType).toUpperCase(Locale.ROOT);
         String targetDatabaseName = resolveTargetDatabaseName(connectionEntity, databaseName);
-        try (Connection connection = connectionService.openTargetConnection(connectionId)) {
+        try (Connection connection = connectionService.openTargetConnection(connectionId, targetDatabaseName)) {
             // 关键操作：对象元数据按当前连接和目标库隔离读取，避免跨库串读。
             applyDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
             DatabaseMetaData metaData = connection.getMetaData();
@@ -727,7 +727,7 @@ public class SchemaServiceImpl implements SchemaService {
             default -> throw new BusinessException(400, "当前数据库不支持新建 Schema: " + dbType);
         };
 
-        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId())) {
+        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId(), databaseName)) {
             applyDatabaseContext(connection, dbType, databaseName);
             String executedSql = schemaNamespaceJdbcRepository.createNamespace(
                 connection,
@@ -878,7 +878,7 @@ public class SchemaServiceImpl implements SchemaService {
             throw new BusinessException(400, "目标表已存在: " + targetTableName);
         }
 
-        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId())) {
+        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId(), databaseName)) {
             applyDatabaseContext(connection, dbType, databaseName);
             String sql = renderSchemaOperationSql(renameTableSql, dbType, databaseName, sourceTableName, targetTableName);
             try (Statement statement = connection.createStatement()) {
@@ -916,7 +916,7 @@ public class SchemaServiceImpl implements SchemaService {
             throw new BusinessException(400, "当前数据库未配置对象定义保存 SQL: " + normalizedObjectType);
         }
 
-        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId())) {
+        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId(), targetDatabaseName)) {
             applyDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
             schemaObjectDefinitionJdbcRepository.saveDefinition(
                 connection,
@@ -971,7 +971,7 @@ public class SchemaServiceImpl implements SchemaService {
             throw new BusinessException(404, "对象不存在: " + normalizedObjectName);
         }
 
-        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId())) {
+        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId(), targetDatabaseName)) {
             applyDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
             String executedSql = schemaObjectDefinitionJdbcRepository.dropDefinition(
                 connection,
@@ -1188,7 +1188,7 @@ public class SchemaServiceImpl implements SchemaService {
 
     private TableOperationVO executeDDL(Long connectionId, String databaseName, String ddl, String successMessage) {
         ConnectionEntity connectionEntity = connectionService.getConnectionEntity(connectionId);
-        try (Connection connection = connectionService.openTargetConnection(connectionId)) {
+        try (Connection connection = connectionService.openTargetConnection(connectionId, databaseName)) {
             applyDatabaseContext(connection, connectionEntity.getDbType(), databaseName);
             try (Statement stmt = connection.createStatement()) {
                 stmt.execute(ddl);
@@ -1301,7 +1301,7 @@ public class SchemaServiceImpl implements SchemaService {
         ConnectionEntity connectionEntity = connectionService.getConnectionEntity(connectionId);
         String targetDatabaseName = resolveTargetDatabaseName(connectionEntity, databaseName);
 
-        try (Connection connection = connectionService.openTargetConnection(connectionId)) {
+        try (Connection connection = connectionService.openTargetConnection(connectionId, targetDatabaseName)) {
             applyDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
             List<SchemaTableCacheEntity> configuredTables = queryTablesByConfiguredSql(
                 connection,
@@ -1417,7 +1417,7 @@ public class SchemaServiceImpl implements SchemaService {
         ConnectionEntity connectionEntity = connectionService.getConnectionEntity(connectionId);
         String targetDatabaseName = resolveTargetDatabaseName(connectionEntity, databaseName);
         Map<String, TableStat> statsMap;
-        try (Connection connection = connectionService.openTargetConnection(connectionId)) {
+        try (Connection connection = connectionService.openTargetConnection(connectionId, targetDatabaseName)) {
             applyDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
             statsMap = queryTableStats(connection, connectionEntity.getDbType(), targetDatabaseName);
         } catch (SQLException ex) {
@@ -1546,7 +1546,7 @@ public class SchemaServiceImpl implements SchemaService {
         long now = System.currentTimeMillis();
         ConnectionEntity connectionEntity = connectionService.getConnectionEntity(connectionId);
         String targetDatabaseName = resolveTargetDatabaseName(connectionEntity, databaseName);
-        try (Connection connection = connectionService.openTargetConnection(connectionId)) {
+        try (Connection connection = connectionService.openTargetConnection(connectionId, targetDatabaseName)) {
             applyDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
             List<SchemaColumnCacheEntity> configuredColumns = queryColumnsByConfiguredSql(
                 connection,

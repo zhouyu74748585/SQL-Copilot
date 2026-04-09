@@ -36,4 +36,8 @@ public interface ConnectionService {
     ConnectionEntity getConnectionEntity(Long id);
 
     java.sql.Connection openTargetConnection(Long connectionId) throws java.sql.SQLException;
+
+    default java.sql.Connection openTargetConnection(Long connectionId, String databaseName) throws java.sql.SQLException {
+        return openTargetConnection(connectionId);
+    }
 }
