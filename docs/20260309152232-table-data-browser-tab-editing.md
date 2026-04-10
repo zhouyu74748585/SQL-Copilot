@@ -539,3 +539,66 @@
 - 后端健康检查通过：`curl http://127.0.0.1:18132/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`
 - 前端 preview 成功：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6077 --strictPort`
 - 前端连通性通过：`curl -I http://127.0.0.1:6077` 返回 `HTTP/1.1 200 OK`
+
+
+### 2026-04-10 10:21:25
+
+## 本次目标
+- 在数据浏览页面的列标题下拉菜单中，除快捷排序外新增“添加到筛选”能力。
+
+## 关键改动
+- `apps/desktop/src/modules/studio/components/TableDataVirtualGrid.vue`
+  - 表头下拉菜单新增“添加到筛选”入口。
+  - 新增 `add-to-filter` 事件透传，并补充对应国际化文案。
+- `apps/desktop/src/modules/studio/composables/useTableDataModule.ts`
+  - 新增 `addTableDataFilterForColumn(tab, columnName)` 方法。
+  - 点击列标题菜单后会自动展开筛选面板，并按当前列追加一条默认 `EQ` 的筛选草稿。
+  - 对无效列名增加保护提示，避免异常状态写入。
+- `apps/desktop/src/modules/studio/components/StudioShell.vue`
+  - 将表头菜单新增事件接入页面级数据浏览模块。
+- `apps/desktop/src/modules/studio/styles/table-data.css`
+  - 为标题下拉菜单新增分割线样式，区分快捷排序与筛选操作。
+
+## 验证结果
+- 前端类型检查通过：`npm run -w @sqlcopilot/desktop type-check`
+- 前端 clean 构建通过：`npm run -w @sqlcopilot/desktop build -- --emptyOutDir`
+- 前端预览通过：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6076 --strictPort`
+- 前端连通性通过：`curl -I http://127.0.0.1:6076` 返回 `HTTP/1.1 200 OK`
+- 后端 clean 启动通过：`mvn -f apps/server/pom.xml clean spring-boot:run '-Dspring-boot.run.arguments=--server.port=18131' '-Dfile.encoding=UTF-8'`
+- 后端健康检查通过：`curl -s http://127.0.0.1:18131/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`
+
+
+### 2026-04-10 10:31:58
+
+## 本次目标
+- 为数据浏览页面增加当前页查找/替换能力。
+- 支持 `Ctrl+F` / `Command+F` 快捷键从页面底部弹出查找栏，并可切换到替换模式。
+
+## 关键改动
+- `apps/desktop/src/modules/studio/composables/useStudioRuntime/types.ts`
+  - 为数据浏览 Tab 增加查找/替换状态：查找栏显示、替换显示、关键词、替换词、匹配列表、当前匹配索引。
+- `apps/desktop/src/modules/studio/composables/useTableDataModule.ts`
+  - 新增当前页匹配计算、上一条/下一条定位、单个替换、全部替换等逻辑。
+  - 查找范围限定为当前分页已加载的数据行。
+  - 替换仅对可编辑且非主键列生效，替换后继续复用现有脏数据管理与提交流程。
+- `apps/desktop/src/modules/studio/composables/useUiShellModule.ts`
+  - 新增数据浏览页 `Ctrl+F` / `Command+F` 快捷键拦截，阻止浏览器默认查找并打开页内查找栏。
+- `apps/desktop/src/modules/studio/composables/useStudioController.ts`
+  - 将活动数据浏览 Tab 的查找栏打开动作接入全局快捷键模块。
+- `apps/desktop/src/modules/studio/components/StudioShell.vue`
+  - 在数据浏览页表格下方新增查找/替换面板。
+  - 支持查找输入、匹配计数、上一条/下一条、显示/隐藏替换、替换当前、全部替换。
+  - 新增输入框自动聚焦逻辑。
+- `apps/desktop/src/modules/studio/components/TableDataVirtualGrid.vue`
+  - 增加匹配单元格高亮与当前匹配高亮。
+  - 当前匹配切换时自动滚动到对应数据行。
+- `apps/desktop/src/modules/studio/styles/table-data.css`
+  - 增加底部查找/替换栏与匹配高亮样式。
+
+## 验证结果
+- 前端类型检查通过：`npm run -w @sqlcopilot/desktop type-check`
+- 前端 clean 构建通过：`npm run -w @sqlcopilot/desktop build -- --emptyOutDir`
+- 前端 preview 通过：`npm run -w @sqlcopilot/desktop preview -- --host 127.0.0.1 --port 6076 --strictPort`
+- 前端连通性通过：`curl -I http://127.0.0.1:6076` 返回 `HTTP/1.1 200 OK`
+- 后端 clean 启动通过：`mvn -f apps/server/pom.xml clean spring-boot:run '-Dspring-boot.run.arguments=--server.port=18131' '-Dfile.encoding=UTF-8'`
+- 后端健康检查通过：`curl -s http://127.0.0.1:18131/api/health` 返回 `{"code":0,"message":"success","data":"ok"}`

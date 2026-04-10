@@ -46,6 +46,10 @@
                   <button type="button" class="table-data-virtual-grid-sort-menu-item" @click="emitQuickSort(String(column.dataIndex || ''), 'NONE')">
                     {{ quickSortClearText }}
                   </button>
+                  <div class="table-data-virtual-grid-sort-menu-divider" />
+                  <button type="button" class="table-data-virtual-grid-sort-menu-item" @click="emitAddToFilter(String(column.dataIndex || ''))">
+                    {{ quickFilterText }}
+                  </button>
                 </div>
               </template>
             </a-dropdown>
@@ -95,7 +99,11 @@
               v-for="column in columns"
               :key="`${row.__rowKey}::${column.key}`"
               class="table-data-virtual-grid-cell"
-              :class="{ 'is-readonly': isReadonlyColumn(String(column.dataIndex || '')) }"
+              :class="{
+                'is-readonly': isReadonlyColumn(String(column.dataIndex || '')),
+                'is-search-match': isSearchMatchedCell(row.__rowKey, String(column.dataIndex || '')),
+                'is-search-match-active': isActiveSearchMatchedCell(row.__rowKey, String(column.dataIndex || '')),
+              }"
               :data-testid="cellTestId(row.__rowKey, String(column.dataIndex || ''))"
               @dblclick.stop="emit('start-edit', row.__rowKey, String(column.dataIndex || ''))"
             >
@@ -231,6 +239,14 @@ const props = defineProps({
     type: Function as PropType<(columnName: string) => 'ASC' | 'DESC' | ''>,
     default: undefined,
   },
+  searchMatchedCellKeys: {
+    type: Array as PropType<string[]>,
+    default: () => [],
+  },
+  activeSearchMatchedCellKey: {
+    type: String,
+    default: '',
+  },
 });
 
 const emit = defineEmits<{
@@ -242,6 +258,7 @@ const emit = defineEmits<{
   'update-cell': [rowKey: string, columnName: string, value: string | null];
   'resize-column': [columnName: string, width: number];
   'quick-sort': [columnName: string, direction: TableDataQuickSortDirection];
+  'add-to-filter': [columnName: string];
 }>();
 
 const bodyRef = ref<HTMLDivElement | null>(null);
@@ -282,6 +299,7 @@ const offsetTop = computed(() => visibleStart.value * ROW_HEIGHT);
 const visibleRows = computed(() => props.rows.slice(visibleStart.value, visibleEnd.value));
 const selectedRowKey = computed(() => props.tab.selectedRowKey);
 const checkedRowKeySet = computed(() => new Set(props.tab.checkedRowKeys || []));
+const searchMatchedCellKeySet = computed(() => new Set(props.searchMatchedCellKeys || []));
 const allRowsChecked = computed(() => rowSelectionEnabled.value && props.rows.length > 0 && props.rows.every((row) => checkedRowKeySet.value.has(row.__rowKey)));
 const someRowsChecked = computed(() => rowSelectionEnabled.value && !allRowsChecked.value && props.rows.some((row) => checkedRowKeySet.value.has(row.__rowKey)));
 const emptyText = computed(() => {
@@ -303,6 +321,10 @@ const quickSortDescText = computed(() => {
 const quickSortClearText = computed(() => {
   void currentLocale.value;
   return translateText('移除排序');
+});
+const quickFilterText = computed(() => {
+  void currentLocale.value;
+  return translateText('添加到筛选');
 });
 
 function normalizeTestIdSegment(value: string | null | undefined) {
@@ -331,6 +353,38 @@ watch(
     if (bodyRef.value) {
       bodyRef.value.scrollTop = 0;
       bodyRef.value.scrollLeft = 0;
+    }
+  },
+);
+
+watch(
+  () => props.activeSearchMatchedCellKey,
+  async (value) => {
+    if (!value) {
+      return;
+    }
+    const [rowKey] = String(value).split('::');
+    const rowIndex = props.rows.findIndex((item) => item.__rowKey === rowKey);
+    if (rowIndex < 0) {
+      return;
+    }
+    await nextTick();
+    if (!bodyRef.value) {
+      return;
+    }
+    const top = rowIndex * ROW_HEIGHT;
+    const bottom = top + ROW_HEIGHT;
+    const viewportTop = bodyRef.value.scrollTop;
+    const viewportBottom = viewportTop + bodyHeight.value;
+    if (top < viewportTop) {
+      bodyRef.value.scrollTop = top;
+      scrollTop.value = top;
+      return;
+    }
+    if (bottom > viewportBottom) {
+      const nextTop = Math.max(0, bottom - bodyHeight.value);
+      bodyRef.value.scrollTop = nextTop;
+      scrollTop.value = nextTop;
     }
   },
 );
@@ -378,6 +432,14 @@ function isReadonlyColumn(columnName: string) {
   return !props.tab.editable || props.isPrimaryKeyColumn(columnName);
 }
 
+function isSearchMatchedCell(rowKey: string, columnName: string) {
+  return searchMatchedCellKeySet.value.has(`${rowKey}::${columnName}`);
+}
+
+function isActiveSearchMatchedCell(rowKey: string, columnName: string) {
+  return props.activeSearchMatchedCellKey === `${rowKey}::${columnName}`;
+}
+
 function isCellEditing(rowKey: string, columnName: string) {
   return props.tab.editingCellKey === `${rowKey}::${columnName}`;
 }
@@ -389,6 +451,10 @@ function handleCellValueChange(rowKey: string, columnName: string, value: string
 
 function emitQuickSort(columnName: string, direction: TableDataQuickSortDirection) {
   emit('quick-sort', columnName, direction);
+}
+
+function emitAddToFilter(columnName: string) {
+  emit('add-to-filter', columnName);
 }
 
 function startColumnResize(event: MouseEvent, column: TableDataDisplayColumn) {

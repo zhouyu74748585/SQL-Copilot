@@ -1577,6 +1577,8 @@
                 :rows="tableDataDisplayRows(activeTableDataTab!)"
                 :scroll-x="tableDataScrollX(activeTableDataTab!)"
                 :scroll-y="queryResultScrollY"
+                :search-matched-cell-keys="activeTableDataTab!.searchMatches.map((item) => `${item.rowKey}::${item.columnName}`)"
+                :active-search-matched-cell-key="activeTableDataTab!.activeSearchMatchIndex >= 0 ? `${activeTableDataTab!.searchMatches[activeTableDataTab!.activeSearchMatchIndex]?.rowKey || ''}::${activeTableDataTab!.searchMatches[activeTableDataTab!.activeSearchMatchIndex]?.columnName || ''}` : ''"
                 :quick-sort-enabled="true"
                 :row-selection-enabled="true"
                 :reset-key="`${activeTableDataTab!.key}:${activeTableDataTab!.connectionId}:${activeTableDataTab!.databaseName}:${activeTableDataTab!.tableName}:${activeTableDataTab!.pageNo}:${activeTableDataTab!.pageSize}`"
@@ -1591,8 +1593,68 @@
                 @update-cell="(rowKey: string, columnName: string, value: string | null) => updateTableDataCell(activeTableDataTab!, rowKey, columnName, value)"
                 @resize-column="(columnName: string, width: number) => updateTableDataColumnWidth(activeTableDataTab!, columnName, width)"
                 @quick-sort="(columnName: string, direction: 'ASC' | 'DESC' | 'NONE') => applyTableDataQuickSort(activeTableDataTab!, columnName, direction)"
+                @add-to-filter="(columnName: string) => addTableDataFilterForColumn(activeTableDataTab!, columnName)"
               />
             </a-spin>
+          </div>
+
+          <div v-if="activeTableDataTab.searchPanelVisible" class="table-data-search-panel">
+            <div class="table-data-search-main">
+              <span class="table-data-search-label">{{ tt('查找') }}</span>
+              <a-input
+                ref="tableDataSearchInputRef"
+                size="small"
+                class="table-data-search-input"
+                :value="activeTableDataTab.searchKeyword"
+                :placeholder="tt('在当前页查找')"
+                @update:value="updateTableDataSearchKeyword(activeTableDataTab!, String($event || ''))"
+                @pressEnter="focusNextTableDataSearchMatch(activeTableDataTab!)"
+              />
+              <span class="table-data-search-count">
+                {{ activeTableDataTab.searchMatches.length ? `${activeTableDataTab.activeSearchMatchIndex + 1}/${activeTableDataTab.searchMatches.length}` : '0/0' }}
+              </span>
+              <a-button size="small" type="text" class="table-data-icon-btn" :disabled="!activeTableDataTab.searchMatches.length" @click="focusPrevTableDataSearchMatch(activeTableDataTab)">
+                <template #icon><arrow-up-outlined /></template>
+              </a-button>
+              <a-button size="small" type="text" class="table-data-icon-btn" :disabled="!activeTableDataTab.searchMatches.length" @click="focusNextTableDataSearchMatch(activeTableDataTab)">
+                <template #icon><arrow-down-outlined /></template>
+              </a-button>
+              <a-button size="small" type="text" class="table-data-search-toggle-btn" @click="toggleTableDataReplacePanel(activeTableDataTab)">
+                {{ activeTableDataTab.searchReplaceVisible ? tt('隐藏替换') : tt('替换') }}
+              </a-button>
+              <a-button size="small" type="text" class="table-data-icon-btn" @click="closeTableDataSearchPanel(activeTableDataTab)">
+                <template #icon><close-outlined /></template>
+              </a-button>
+            </div>
+            <div v-if="activeTableDataTab.searchReplaceVisible" class="table-data-search-replace">
+              <span class="table-data-search-label">{{ tt('替换') }}</span>
+              <a-input
+                ref="tableDataReplaceInputRef"
+                size="small"
+                class="table-data-search-input"
+                :value="activeTableDataTab.replaceKeyword"
+                :placeholder="tt('替换为')"
+                :disabled="!activeTableDataTab.editable"
+                @update:value="updateTableDataReplaceKeyword(activeTableDataTab!, String($event || ''))"
+                @pressEnter="replaceCurrentTableDataSearchMatch(activeTableDataTab!)"
+              />
+              <a-button
+                size="small"
+                type="default"
+                :disabled="!activeTableDataTab.editable || !activeTableDataTab.searchMatches.length"
+                @click="replaceCurrentTableDataSearchMatch(activeTableDataTab)"
+              >
+                {{ tt('替换当前') }}
+              </a-button>
+              <a-button
+                size="small"
+                type="primary"
+                :disabled="!activeTableDataTab.editable || !activeTableDataTab.searchMatches.length"
+                @click="replaceAllTableDataSearchMatches(activeTableDataTab)"
+              >
+                {{ tt('全部替换') }}
+              </a-button>
+            </div>
           </div>
 
           <div class="table-data-bottom-bar">
@@ -3678,8 +3740,10 @@ import {
   ApartmentOutlined,
   AppstoreOutlined,
   AreaChartOutlined,
+  ArrowDownOutlined,
   ArrowLeftOutlined,
   ArrowRightOutlined,
+  ArrowUpOutlined,
   BulbFilled,
   BulbOutlined,
   CheckOutlined,
@@ -4323,11 +4387,20 @@ const {
     toggleTableDataFilterPanel,
     toggleTableDataDetailCollapsed,
     addTableDataFilter,
+    addTableDataFilterForColumn,
     removeTableDataFilter,
     addTableDataSort,
     removeTableDataSort,
     tableDataSortDirectionForColumn,
     applyTableDataQuickSort,
+    closeTableDataSearchPanel,
+    toggleTableDataReplacePanel,
+    updateTableDataSearchKeyword,
+    updateTableDataReplaceKeyword,
+    focusNextTableDataSearchMatch,
+    focusPrevTableDataSearchMatch,
+    replaceCurrentTableDataSearchMatch,
+    replaceAllTableDataSearchMatches,
     applyTableDataFilters,
     prevTableDataPage,
     nextTableDataPage,
@@ -4565,6 +4638,29 @@ const workspaceTabContextMenuVisible = ref(false);
 const workspaceTabContextMenuX = ref(0);
 const workspaceTabContextMenuY = ref(0);
 const workspaceTabContextTargetKey = ref('');
+const tableDataSearchInputRef = ref<any>(null);
+const tableDataReplaceInputRef = ref<any>(null);
+
+function focusAntInput(target: { focus?: () => void } | null | undefined) {
+  target?.focus?.();
+}
+
+watch(
+  () => [activeTableDataTab.value?.key, activeTableDataTab.value?.searchPanelVisible, activeTableDataTab.value?.searchReplaceVisible] as const,
+  async ([, searchVisible, replaceVisible], [, previousSearchVisible, previousReplaceVisible]) => {
+    if (!searchVisible) {
+      return;
+    }
+    await nextTick();
+    if (!previousSearchVisible) {
+      focusAntInput(tableDataSearchInputRef.value);
+      return;
+    }
+    if (replaceVisible && !previousReplaceVisible) {
+      focusAntInput(tableDataReplaceInputRef.value);
+    }
+  },
+);
 
 const workspaceTabDescriptors = computed<WorkspaceTabDescriptor[]>(() => [
   {

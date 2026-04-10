@@ -345,6 +345,11 @@ export interface TableDataSortDraft {
   direction: 'ASC' | 'DESC';
 }
 
+export interface TableDataSearchMatch {
+  rowKey: string;
+  columnName: string;
+}
+
 export interface TableDataRowDraft {
   rowKey: string;
   values: Record<string, string | null>;
@@ -386,6 +391,12 @@ export interface TableDataWorkspaceTab {
   filterPanelVisible: boolean;
   filters: TableDataFilterDraft[];
   sorts: TableDataSortDraft[];
+  searchPanelVisible: boolean;
+  searchReplaceVisible: boolean;
+  searchKeyword: string;
+  replaceKeyword: string;
+  searchMatches: TableDataSearchMatch[];
+  activeSearchMatchIndex: number;
   pageNo: number;
   pageSize: number;
   hasNextPage: boolean;
@@ -459,4 +470,3 @@ export interface SqlQualifiedColumnContext {
   prefix: string;
   replaceStartColumn: number;
 }
-

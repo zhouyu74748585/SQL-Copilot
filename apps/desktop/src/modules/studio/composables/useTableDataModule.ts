@@ -43,11 +43,21 @@ export interface TableDataModule {
   toggleTableDataFilterPanel: (tab: TableDataTab) => void;
   toggleTableDataDetailCollapsed: (tab: TableDataTab) => void;
   addTableDataFilter: (tab: TableDataTab) => void;
+  addTableDataFilterForColumn: (tab: TableDataTab, columnName: string) => void;
   removeTableDataFilter: (tab: TableDataTab, filterKey: string) => void;
   addTableDataSort: (tab: TableDataTab) => void;
   removeTableDataSort: (tab: TableDataTab, sortKey: string) => void;
   tableDataSortDirectionForColumn: (tab: TableDataTab, columnName: string) => TableDataSortDirection | '';
   applyTableDataQuickSort: (tab: TableDataTab, columnName: string, direction: TableDataQuickSortDirection) => Promise<void>;
+  openTableDataSearchPanel: (tab: TableDataTab, showReplace?: boolean) => void;
+  closeTableDataSearchPanel: (tab: TableDataTab) => void;
+  toggleTableDataReplacePanel: (tab: TableDataTab) => void;
+  updateTableDataSearchKeyword: (tab: TableDataTab, keyword: string) => void;
+  updateTableDataReplaceKeyword: (tab: TableDataTab, keyword: string) => void;
+  focusNextTableDataSearchMatch: (tab: TableDataTab) => void;
+  focusPrevTableDataSearchMatch: (tab: TableDataTab) => void;
+  replaceCurrentTableDataSearchMatch: (tab: TableDataTab) => void;
+  replaceAllTableDataSearchMatches: (tab: TableDataTab) => void;
   applyTableDataFilters: (tab: TableDataTab) => Promise<void>;
   prevTableDataPage: (tab: TableDataTab) => Promise<void>;
   nextTableDataPage: (tab: TableDataTab) => Promise<void>;
@@ -169,6 +179,12 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
       filterPanelVisible: false,
       filters: [],
       sorts: [],
+      searchPanelVisible: false,
+      searchReplaceVisible: false,
+      searchKeyword: '',
+      replaceKeyword: '',
+      searchMatches: [],
+      activeSearchMatchIndex: -1,
       columnWidthMap: {},
       pageNo: 1,
       pageSize: 1000,
@@ -217,6 +233,29 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
       {
         key: `filter-${Date.now()}-${Math.round(Math.random() * 1000)}`,
         columnName: tab.columns[0].columnName,
+        operator: 'EQ',
+        value: '',
+      },
+    ];
+    touchTableDataTab(tab);
+  }
+
+  function addTableDataFilterForColumn(tab: TableDataTab, columnName: string) {
+    const normalizedColumnName = (columnName || '').trim();
+    if (!normalizedColumnName) {
+      return;
+    }
+    const matchedColumn = tab.columns.find((item) => item.columnName === normalizedColumnName);
+    if (!matchedColumn) {
+      message.warning('当前列不可用于筛选');
+      return;
+    }
+    tab.filterPanelVisible = true;
+    tab.filters = [
+      ...tab.filters,
+      {
+        key: `filter-${Date.now()}-${Math.round(Math.random() * 1000)}`,
+        columnName: matchedColumn.columnName,
         operator: 'EQ',
         value: '',
       },
@@ -289,6 +328,130 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
     tab.pageNo = 1;
     touchTableDataTab(tab);
     await loadTableDataPage(tab);
+  }
+
+  function openTableDataSearchPanel(tab: TableDataTab, showReplace = false) {
+    tab.searchPanelVisible = true;
+    if (showReplace) {
+      tab.searchReplaceVisible = true;
+    }
+    recomputeTableDataSearchMatches(tab);
+    touchTableDataTab(tab);
+  }
+
+  function closeTableDataSearchPanel(tab: TableDataTab) {
+    if (!tab.searchPanelVisible && !tab.searchReplaceVisible) {
+      return;
+    }
+    tab.searchPanelVisible = false;
+    tab.searchReplaceVisible = false;
+    tab.searchKeyword = '';
+    tab.replaceKeyword = '';
+    tab.searchMatches = [];
+    tab.activeSearchMatchIndex = -1;
+    touchTableDataTab(tab);
+  }
+
+  function toggleTableDataReplacePanel(tab: TableDataTab) {
+    if (!tab.searchPanelVisible) {
+      tab.searchPanelVisible = true;
+    }
+    tab.searchReplaceVisible = !tab.searchReplaceVisible;
+    touchTableDataTab(tab);
+  }
+
+  function updateTableDataSearchKeyword(tab: TableDataTab, keyword: string) {
+    tab.searchKeyword = String(keyword || '');
+    recomputeTableDataSearchMatches(tab);
+    touchTableDataTab(tab);
+  }
+
+  function updateTableDataReplaceKeyword(tab: TableDataTab, keyword: string) {
+    tab.replaceKeyword = String(keyword || '');
+    touchTableDataTab(tab);
+  }
+
+  function focusNextTableDataSearchMatch(tab: TableDataTab) {
+    moveTableDataSearchMatchFocus(tab, 1);
+  }
+
+  function focusPrevTableDataSearchMatch(tab: TableDataTab) {
+    moveTableDataSearchMatchFocus(tab, -1);
+  }
+
+  function replaceCurrentTableDataSearchMatch(tab: TableDataTab) {
+    if (!tab.editable) {
+      message.warning(tab.readOnlyReason || tt('当前表不可编辑'));
+      return;
+    }
+    const match = currentTableDataSearchMatch(tab);
+    if (!match) {
+      return;
+    }
+    if (isTableDataPrimaryKeyColumn(tab, match.columnName)) {
+      message.warning(tt('主键列不支持替换'));
+      return;
+    }
+    const row = tab.rows.find((item) => item.rowKey === match.rowKey);
+    if (!row) {
+      recomputeTableDataSearchMatches(tab);
+      touchTableDataTab(tab);
+      return;
+    }
+    const currentValue = row.values[match.columnName];
+    const nextValue = replaceKeywordInCellValue(currentValue, tab.searchKeyword, tab.replaceKeyword);
+    if (nextValue === currentValue) {
+      moveTableDataSearchMatchFocus(tab, 1);
+      return;
+    }
+    updateTableDataCell(tab, match.rowKey, match.columnName, nextValue);
+    recomputeTableDataSearchMatches(tab, {
+      rowKey: match.rowKey,
+      columnName: match.columnName,
+      moveDirectionIfMissing: 1,
+    });
+    touchTableDataTab(tab);
+  }
+
+  function replaceAllTableDataSearchMatches(tab: TableDataTab) {
+    if (!tab.editable) {
+      message.warning(tab.readOnlyReason || tt('当前表不可编辑'));
+      return;
+    }
+    const keyword = tab.searchKeyword.trim();
+    if (!keyword) {
+      return;
+    }
+    const editableMatches = tab.searchMatches.filter((item) => !isTableDataPrimaryKeyColumn(tab, item.columnName));
+    if (!editableMatches.length) {
+      message.info(tt('当前页无可替换匹配项'));
+      return;
+    }
+    let replacedCount = 0;
+    const replacedCellKeySet = new Set<string>();
+    editableMatches.forEach((match) => {
+      const cellKey = `${match.rowKey}::${match.columnName}`;
+      if (replacedCellKeySet.has(cellKey)) {
+        return;
+      }
+      replacedCellKeySet.add(cellKey);
+      const row = tab.rows.find((item) => item.rowKey === match.rowKey);
+      if (!row) {
+        return;
+      }
+      const currentValue = row.values[match.columnName];
+      const nextValue = replaceKeywordInCellValue(currentValue, tab.searchKeyword, tab.replaceKeyword);
+      if (nextValue === currentValue) {
+        return;
+      }
+      updateTableDataCell(tab, match.rowKey, match.columnName, nextValue);
+      replacedCount += 1;
+    });
+    recomputeTableDataSearchMatches(tab);
+    touchTableDataTab(tab);
+    if (replacedCount > 0) {
+      message.success(tt(`已替换 ${replacedCount} 个单元格`));
+    }
   }
 
   async function applyTableDataFilters(tab: TableDataTab) {
@@ -412,6 +575,10 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
     refreshDirtyState(tab);
     tab.rowDataVersion += 1;
     tab.displayRowsCacheVersion = -1;
+    recomputeTableDataSearchMatches(tab, {
+      rowKey,
+      columnName,
+    });
     touchTableDataTab(tab);
   }
 
@@ -464,6 +631,7 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
     refreshDirtyState(tab);
     tab.rowDataVersion += 1;
     tab.displayRowsCacheVersion = -1;
+    recomputeTableDataSearchMatches(tab);
     touchTableDataTab(tab);
   }
 
@@ -501,6 +669,7 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
     refreshDirtyState(tab);
     tab.rowDataVersion += 1;
     tab.displayRowsCacheVersion = -1;
+    recomputeTableDataSearchMatches(tab);
     touchTableDataTab(tab);
   }
 
@@ -738,6 +907,7 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
       tab.schemaVersion += 1;
       tab.displayRowsCacheVersion = -1;
       tab.displayColumnsCacheVersion = -1;
+      recomputeTableDataSearchMatches(tab);
     } catch (error) {
       if (tableDataPageRequestSeq.get(tab.key) !== requestSeq) {
         return;
@@ -756,6 +926,7 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
       tab.dirty = false;
       tab.rowDataVersion += 1;
       tab.displayRowsCacheVersion = -1;
+      recomputeTableDataSearchMatches(tab);
       message.error(`加载表数据失败: ${msg}`);
     } finally {
       clearTimeout(timeoutId);
@@ -784,6 +955,98 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
       });
     });
     return filters;
+  }
+
+  function moveTableDataSearchMatchFocus(tab: TableDataTab, delta: 1 | -1) {
+    if (!tab.searchMatches.length) {
+      tab.activeSearchMatchIndex = -1;
+      touchTableDataTab(tab);
+      return;
+    }
+    const currentIndex = tab.activeSearchMatchIndex >= 0 ? tab.activeSearchMatchIndex : (delta > 0 ? -1 : 0);
+    const nextIndex = (currentIndex + delta + tab.searchMatches.length) % tab.searchMatches.length;
+    focusTableDataSearchMatchAt(tab, nextIndex);
+  }
+
+  function focusTableDataSearchMatchAt(tab: TableDataTab, matchIndex: number) {
+    if (!tab.searchMatches.length) {
+      tab.activeSearchMatchIndex = -1;
+      return;
+    }
+    const normalizedIndex = Math.min(tab.searchMatches.length - 1, Math.max(0, matchIndex));
+    tab.activeSearchMatchIndex = normalizedIndex;
+    const match = tab.searchMatches[normalizedIndex];
+    tab.selectedRowKey = match.rowKey;
+    if (tab.editingCellKey && !tab.editingCellKey.startsWith(`${match.rowKey}::`)) {
+      tab.editingCellKey = '';
+    }
+  }
+
+  function currentTableDataSearchMatch(tab: TableDataTab) {
+    if (tab.activeSearchMatchIndex < 0 || tab.activeSearchMatchIndex >= tab.searchMatches.length) {
+      return null;
+    }
+    return tab.searchMatches[tab.activeSearchMatchIndex] || null;
+  }
+
+  function recomputeTableDataSearchMatches(
+    tab: TableDataTab,
+    preferred?: { rowKey?: string; columnName?: string; moveDirectionIfMissing?: 1 | -1 },
+  ) {
+    const keyword = tab.searchKeyword.trim().toLowerCase();
+    if (!keyword) {
+      tab.searchMatches = [];
+      tab.activeSearchMatchIndex = -1;
+      return;
+    }
+    const matches: TableDataTab['searchMatches'] = [];
+    tab.rows.forEach((row) => {
+      tab.columns.forEach((column) => {
+        const value = String(row.values[column.columnName] ?? '');
+        if (!value) {
+          return;
+        }
+        if (value.toLowerCase().includes(keyword)) {
+          matches.push({
+            rowKey: row.rowKey,
+            columnName: column.columnName,
+          });
+        }
+      });
+    });
+    tab.searchMatches = matches;
+    if (!matches.length) {
+      tab.activeSearchMatchIndex = -1;
+      return;
+    }
+    if (preferred?.rowKey && preferred?.columnName) {
+      const preferredIndex = matches.findIndex((item) => item.rowKey === preferred.rowKey && item.columnName === preferred.columnName);
+      if (preferredIndex >= 0) {
+        focusTableDataSearchMatchAt(tab, preferredIndex);
+        return;
+      }
+      if (preferred.moveDirectionIfMissing) {
+        const fallbackIndex = preferred.moveDirectionIfMissing > 0 ? 0 : matches.length - 1;
+        focusTableDataSearchMatchAt(tab, fallbackIndex);
+        return;
+      }
+    }
+    if (tab.activeSearchMatchIndex >= 0 && tab.activeSearchMatchIndex < matches.length) {
+      focusTableDataSearchMatchAt(tab, tab.activeSearchMatchIndex);
+      return;
+    }
+    focusTableDataSearchMatchAt(tab, 0);
+  }
+
+  function replaceKeywordInCellValue(value: string | null, searchKeyword: string, replaceKeyword: string) {
+    const source = String(value ?? '');
+    const keyword = searchKeyword.trim();
+    if (!keyword) {
+      return value;
+    }
+    const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const nextValue = source.replace(new RegExp(escaped, 'gi'), replaceKeyword);
+    return nextValue === '' ? null : nextValue;
   }
 
   function buildPageSorts(tab: TableDataTab): TableDataPageReq['sorts'] {
@@ -924,11 +1187,21 @@ export function useTableDataModule(runtime: StudioRuntime): TableDataModule {
     toggleTableDataFilterPanel,
     toggleTableDataDetailCollapsed,
     addTableDataFilter,
+    addTableDataFilterForColumn,
     removeTableDataFilter,
     addTableDataSort,
     removeTableDataSort,
     tableDataSortDirectionForColumn,
     applyTableDataQuickSort,
+    openTableDataSearchPanel,
+    closeTableDataSearchPanel,
+    toggleTableDataReplacePanel,
+    updateTableDataSearchKeyword,
+    updateTableDataReplaceKeyword,
+    focusNextTableDataSearchMatch,
+    focusPrevTableDataSearchMatch,
+    replaceCurrentTableDataSearchMatch,
+    replaceAllTableDataSearchMatches,
     applyTableDataFilters,
     prevTableDataPage,
     nextTableDataPage,

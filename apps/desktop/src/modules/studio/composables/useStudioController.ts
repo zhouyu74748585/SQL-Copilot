@@ -38,6 +38,11 @@ export function useStudioController() {
   const uiShellModule = useUiShellModule(runtime, {
     handleBrowserClipboardKeydown: tableCopyModule.handleBrowserClipboardKeydown,
     handleErRelationDeleteKeydown: erModule.handleErRelationDeleteKeydown,
+    openActiveTableDataSearchPanel: () => {
+      if (runtime.activeTableDataTab.value) {
+        tableDataModule.openTableDataSearchPanel(runtime.activeTableDataTab.value);
+      }
+    },
   });
 
   return {

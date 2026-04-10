@@ -26,6 +26,7 @@ export interface UiShellModule {
 interface UiShellDeps {
   handleBrowserClipboardKeydown: (event: KeyboardEvent) => void;
   handleErRelationDeleteKeydown: (event: KeyboardEvent) => void;
+  openActiveTableDataSearchPanel: () => void;
 }
 
 interface DesktopThemeBridge {
@@ -128,6 +129,14 @@ export function useUiShellModule(runtime: StudioRuntime, deps: UiShellDeps): UiS
   }
 
   function handleWindowKeydown(event: KeyboardEvent) {
+    if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'f') {
+      if (runtime.activeTableDataTab.value) {
+        event.preventDefault();
+        event.stopPropagation();
+        deps.openActiveTableDataSearchPanel();
+        return;
+      }
+    }
     deps.handleErRelationDeleteKeydown(event);
     deps.handleBrowserClipboardKeydown(event);
   }
