@@ -2,6 +2,7 @@ package com.sqlcopilot.studio.repository;
 
 import com.sqlcopilot.studio.dto.schema.TableDataPageReq;
 import com.sqlcopilot.studio.dto.schema.TableDataPageVO;
+import com.sqlcopilot.studio.support.SchemaContextSupport;
 import org.springframework.stereotype.Repository;
 
 import java.sql.Connection;
@@ -28,6 +29,7 @@ public class TableDataJdbcRepository {
      */
     public List<TableDataPageVO.RowVO> queryPage(Connection connection,
                                                   String dbType,
+                                                  String databaseName,
                                                   String tableName,
                                                   List<String> selectedColumns,
                                                   List<String> defaultOrderColumns,
@@ -42,7 +44,7 @@ public class TableDataJdbcRepository {
         sql.append("SELECT ")
             .append(buildColumnList(selectedColumns, dbType))
             .append(" FROM ")
-            .append(quoteIdentifier(tableName, dbType))
+            .append(buildTableReference(databaseName, tableName, dbType))
             .append(whereSql.sql())
             .append(" ORDER BY ")
             .append(buildOrderBy(defaultOrderColumns, sorts, dbType));
@@ -90,11 +92,12 @@ public class TableDataJdbcRepository {
      */
     public int deleteByPrimaryKey(Connection connection,
                                   String dbType,
+                                  String databaseName,
                                   String tableName,
                                   List<String> primaryKeyColumns,
                                   LinkedHashMap<String, Object> primaryKeyValues) throws SQLException {
         String where = buildPrimaryKeyWhereClause(primaryKeyColumns, dbType);
-        String sql = "DELETE FROM " + quoteIdentifier(tableName, dbType) + " WHERE " + where;
+        String sql = "DELETE FROM " + buildTableReference(databaseName, tableName, dbType) + " WHERE " + where;
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             bindValuesByColumnOrder(statement, primaryKeyColumns, primaryKeyValues);
             return statement.executeUpdate();
@@ -106,6 +109,7 @@ public class TableDataJdbcRepository {
      */
     public int updateByPrimaryKey(Connection connection,
                                   String dbType,
+                                  String databaseName,
                                   String tableName,
                                   LinkedHashMap<String, Object> updateValues,
                                   List<String> primaryKeyColumns,
@@ -120,7 +124,7 @@ public class TableDataJdbcRepository {
         }
 
         String where = buildPrimaryKeyWhereClause(primaryKeyColumns, dbType);
-        String sql = "UPDATE " + quoteIdentifier(tableName, dbType)
+        String sql = "UPDATE " + buildTableReference(databaseName, tableName, dbType)
             + " SET " + setSql + " WHERE " + where;
 
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
@@ -140,12 +144,13 @@ public class TableDataJdbcRepository {
      */
     public int insertRow(Connection connection,
                          String dbType,
+                         String databaseName,
                          String tableName,
                          LinkedHashMap<String, Object> values) throws SQLException {
         List<String> columns = new ArrayList<>(values.keySet());
         StringBuilder sql = new StringBuilder();
         sql.append("INSERT INTO ")
-            .append(quoteIdentifier(tableName, dbType))
+            .append(buildTableReference(databaseName, tableName, dbType))
             .append(" (")
             .append(buildColumnList(columns, dbType))
             .append(") VALUES (");
@@ -276,6 +281,47 @@ public class TableDataJdbcRepository {
         return columns.stream().map(item -> quoteIdentifier(item, dbType)).reduce((a, b) -> a + ", " + b).orElse("*");
     }
 
+    private String buildTableReference(String databaseName, String tableName, String dbType) {
+        QualifiedTableName qualifiedTableName = resolveQualifiedTableName(databaseName, tableName, dbType);
+        String quotedTable = quoteIdentifier(qualifiedTableName.tableName(), dbType);
+        if (quotedTable.isBlank()) {
+            return quotedTable;
+        }
+        String qualifiedNamespace = qualifiedTableName.namespaceName();
+        if (qualifiedNamespace.isBlank()) {
+            return quotedTable;
+        }
+        return quoteIdentifier(qualifiedNamespace, dbType) + "." + quotedTable;
+    }
+
+    private QualifiedTableName resolveQualifiedTableName(String databaseName, String tableName, String dbType) {
+        String normalizedTableName = normalize(tableName);
+        String namespaceName = resolveQualifiedNamespace(databaseName, dbType);
+        if (normalizedTableName.isBlank()) {
+            return new QualifiedTableName(namespaceName, "");
+        }
+        int dotIndex = normalizedTableName.lastIndexOf('.');
+        if (dotIndex <= 0 || dotIndex >= normalizedTableName.length() - 1) {
+            return new QualifiedTableName(namespaceName, normalizedTableName);
+        }
+        String explicitNamespace = normalize(normalizedTableName.substring(0, dotIndex));
+        String simpleTableName = normalize(normalizedTableName.substring(dotIndex + 1));
+        if (simpleTableName.isBlank()) {
+            return new QualifiedTableName(namespaceName, normalizedTableName);
+        }
+        return new QualifiedTableName(explicitNamespace.isBlank() ? namespaceName : explicitNamespace, simpleTableName);
+    }
+
+    private String resolveQualifiedNamespace(String databaseName, String dbType) {
+        String type = normalize(dbType).toUpperCase(Locale.ROOT);
+        SchemaContextSupport.SchemaContext context = SchemaContextSupport.parse(type, databaseName);
+        return switch (type) {
+            case "POSTGRESQL", "SQLSERVER", "ORACLE" -> context.hasNamespace() ? context.namespaceName() : "";
+            case "MYSQL" -> context.databaseName();
+            default -> "";
+        };
+    }
+
     private String quoteIdentifier(String identifier, String dbType) {
         String text = normalize(identifier);
         if (text.isBlank()) {
@@ -283,12 +329,12 @@ public class TableDataJdbcRepository {
         }
         String type = normalize(dbType).toUpperCase(Locale.ROOT);
         if ("SQLSERVER".equals(type)) {
-            return "[" + text + "]";
+            return "[" + text.replace("]", "]]") + "]";
         }
         if ("POSTGRESQL".equals(type) || "ORACLE".equals(type)) {
-            return "\"" + text + "\"";
+            return "\"" + text.replace("\"", "\"\"") + "\"";
         }
-        return "`" + text + "`";
+        return "`" + text.replace("`", "``") + "`";
     }
 
     private String normalize(String value) {
@@ -296,5 +342,8 @@ public class TableDataJdbcRepository {
     }
 
     private record SqlWithParams(String sql, List<Object> params) {
+    }
+
+    private record QualifiedTableName(String namespaceName, String tableName) {
     }
 }

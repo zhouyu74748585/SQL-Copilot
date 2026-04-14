@@ -134,12 +134,13 @@ public class TableDataServiceImpl implements TableDataService {
         vo.setColumns(buildColumns(tableDetail));
 
         String dbType = connectionEntity.getDbType();
-        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId())) {
+        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId(), databaseName)) {
             applyDatabaseContext(connection, dbType, databaseName);
             int fetchSize = pageSize + 1;
             List<TableDataPageVO.RowVO> rows = tableDataJdbcRepository.queryPage(
                 connection,
                 dbType,
+                databaseName,
                 tableName,
                 allColumns,
                 defaultOrderColumns,
@@ -211,14 +212,21 @@ public class TableDataServiceImpl implements TableDataService {
         int updatedCount = 0;
         int deletedCount = 0;
 
-        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId())) {
+        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId(), databaseName)) {
             applyDatabaseContext(connection, dbType, databaseName);
             boolean originalAutoCommit = connection.getAutoCommit();
             connection.setAutoCommit(false);
             try {
                 // 关键操作：删除 -> 更新 -> 新增，单事务全成全败。
                 for (LinkedHashMap<String, Object> deletePk : deletes) {
-                    int affected = tableDataJdbcRepository.deleteByPrimaryKey(connection, dbType, tableName, primaryKeyColumns, deletePk);
+                    int affected = tableDataJdbcRepository.deleteByPrimaryKey(
+                        connection,
+                        dbType,
+                        databaseName,
+                        tableName,
+                        primaryKeyColumns,
+                        deletePk
+                    );
                     if (affected != 1) {
                         throw new BusinessException(409, "删除失败，目标数据已变化或不存在");
                     }
@@ -229,6 +237,7 @@ public class TableDataServiceImpl implements TableDataService {
                     int affected = tableDataJdbcRepository.updateByPrimaryKey(
                         connection,
                         dbType,
+                        databaseName,
                         tableName,
                         updateRow.updateValues(),
                         primaryKeyColumns,
@@ -241,7 +250,7 @@ public class TableDataServiceImpl implements TableDataService {
                 }
 
                 for (LinkedHashMap<String, Object> insertValues : inserts) {
-                    int affected = tableDataJdbcRepository.insertRow(connection, dbType, tableName, insertValues);
+                    int affected = tableDataJdbcRepository.insertRow(connection, dbType, databaseName, tableName, insertValues);
                     if (affected != 1) {
                         throw new BusinessException(500, "新增失败，未写入任何数据");
                     }
