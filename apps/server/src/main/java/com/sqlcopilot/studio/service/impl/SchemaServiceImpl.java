@@ -999,7 +999,9 @@ public class SchemaServiceImpl implements SchemaService {
         if (normalizedTableName.isBlank()) {
             return TableOperationVO.failure("表名不能为空");
         }
-        String ddl = "DROP TABLE `" + normalizedTableName + "`";
+        ConnectionEntity connectionEntity = connectionService.getConnectionEntity(connectionId);
+        String quotedTable = quoteIdentifier(normalizedTableName, connectionEntity.getDbType());
+        String ddl = "DROP TABLE " + quotedTable;
         TableOperationVO result = executeDDL(connectionId, databaseName, ddl, "表删除成功");
         fillTableOperationContext(result, connectionId, databaseName, normalizedTableName);
         return result;
@@ -1011,7 +1013,9 @@ public class SchemaServiceImpl implements SchemaService {
         if (normalizedTableName.isBlank()) {
             return TableOperationVO.failure("表名不能为空");
         }
-        String ddl = "TRUNCATE TABLE `" + normalizedTableName + "`";
+        ConnectionEntity connectionEntity = connectionService.getConnectionEntity(connectionId);
+        String quotedTable = quoteIdentifier(normalizedTableName, connectionEntity.getDbType());
+        String ddl = "TRUNCATE TABLE " + quotedTable;
         TableOperationVO result = executeDDL(connectionId, databaseName, ddl, "表清空成功");
         fillTableOperationContext(result, connectionId, databaseName, normalizedTableName);
         return result;

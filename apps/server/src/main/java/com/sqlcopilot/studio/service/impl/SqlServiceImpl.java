@@ -103,7 +103,7 @@ public class SqlServiceImpl implements SqlService {
             req.getConnectionId(), targetDatabaseName, explainSql);
 
         ExplainVO vo = new ExplainVO();
-        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId())) {
+        try (Connection connection = connectionService.openTargetConnection(req.getConnectionId(), targetDatabaseName)) {
             applyDatabaseContext(connection, connectionEntity.getDbType(), targetDatabaseName);
             if ("SQLSERVER".equals(dbType)) {
                 return explainSqlServer(sql, connection, vo);
@@ -211,7 +211,7 @@ public class SqlServiceImpl implements SqlService {
 
         long start = System.currentTimeMillis();
         SqlExecuteVO result = new SqlExecuteVO();
-        try (Connection jdbcConnection = connectionService.openTargetConnection(req.getConnectionId())) {
+        try (Connection jdbcConnection = connectionService.openTargetConnection(req.getConnectionId(), targetDatabaseName)) {
             applyDatabaseContext(jdbcConnection, connection.getDbType(), targetDatabaseName);
             try (Statement statement = jdbcConnection.createStatement()) {
                 registerRunningExecution(req, targetDatabaseName, jdbcConnection, statement);
