@@ -23,6 +23,8 @@ import java.util.Objects;
 @Component
 public class OpenAiTextClient {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(OpenAiTextClient.class);
+
     private final ObjectMapper objectMapper;
     private final TokenEstimatorService tokenEstimatorService;
     private final HttpClient httpClient = HttpClient.newBuilder()
@@ -43,6 +45,7 @@ public class OpenAiTextClient {
                                         Double temperature) {
         OpenAiEndpoint endpoint = resolveOpenAiEndpoint(baseUrl, model);
         ObjectNode payload = buildPayload(model, endpoint.apiType(), systemPrompt, userPrompt, temperature);
+        log.debug("[OpenAI] request url={} model={} apiType={}", maskUrl(endpoint.url()), safe(model), endpoint.apiType());
         try {
             HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(endpoint.url()))
@@ -53,7 +56,13 @@ public class OpenAiTextClient {
                 .build();
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new BusinessException(500, "OpenAI 接口返回状态码: " + response.statusCode());
+                if (response.statusCode() == 404 && endpoint.apiType() == OpenAiApiType.RESPONSES) {
+                    return requestTextWithFallback(apiKey, baseUrl, model, systemPrompt, userPrompt, timeout, temperature);
+                }
+                throw new BusinessException(500, "OpenAI 接口返回状态码: " + response.statusCode()
+                    + " url=" + maskUrl(endpoint.url())
+                    + " model=" + safe(model)
+                    + " body=" + shorten(response.body(), 260));
             }
             OpenAiTextResult parsed = parseOpenAiResponse(Objects.toString(response.body(), ""), response.headers().firstValue("content-type").orElse(""), endpoint.apiType());
             TokenUsage usage = normalizeUsage(parsed.usage(), systemPrompt, userPrompt, parsed.content());
@@ -62,6 +71,40 @@ public class OpenAiTextClient {
             throw ex;
         } catch (Exception ex) {
             throw new BusinessException(500, "OpenAI 调用失败: " + safe(ex.getMessage()));
+        }
+    }
+
+    private OpenAiTextResult requestTextWithFallback(String apiKey,
+                                                      String baseUrl,
+                                                      String model,
+                                                      String systemPrompt,
+                                                      String userPrompt,
+                                                      Duration timeout,
+                                                      Double temperature) {
+        OpenAiEndpoint fallbackEndpoint = new OpenAiEndpoint(stripTrailingSlash(baseUrl) + "/chat/completions", OpenAiApiType.CHAT_COMPLETIONS);
+        ObjectNode fallbackPayload = buildPayload(model, fallbackEndpoint.apiType(), systemPrompt, userPrompt, temperature);
+        try {
+            HttpRequest fallbackRequest = HttpRequest.newBuilder()
+                .uri(URI.create(fallbackEndpoint.url()))
+                .timeout(resolveTimeout(timeout))
+                .header("Authorization", "Bearer " + safe(apiKey))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(fallbackPayload), StandardCharsets.UTF_8))
+                .build();
+            HttpResponse<String> fallbackResponse = httpClient.send(fallbackRequest, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (fallbackResponse.statusCode() < 200 || fallbackResponse.statusCode() >= 300) {
+                throw new BusinessException(500, "OpenAI 接口返回状态码: " + fallbackResponse.statusCode()
+                    + " url=" + maskUrl(fallbackEndpoint.url())
+                    + " model=" + safe(model)
+                    + " body=" + shorten(fallbackResponse.body(), 260));
+            }
+            OpenAiTextResult parsed = parseOpenAiResponse(Objects.toString(fallbackResponse.body(), ""), fallbackResponse.headers().firstValue("content-type").orElse(""), fallbackEndpoint.apiType());
+            TokenUsage usage = normalizeUsage(parsed.usage(), systemPrompt, userPrompt, parsed.content());
+            return new OpenAiTextResult(parsed.content(), usage);
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new BusinessException(500, "OpenAI 调用失败（Responses API 404 降级后）: " + safe(ex.getMessage()));
         }
     }
 
@@ -75,6 +118,7 @@ public class OpenAiTextClient {
                                                 LlmStreamListener listener) {
         OpenAiEndpoint endpoint = resolveOpenAiEndpoint(baseUrl, model);
         ObjectNode payload = buildPayload(model, endpoint.apiType(), systemPrompt, userPrompt, temperature, true);
+        log.debug("[OpenAI] stream request url={} model={} apiType={}", maskUrl(endpoint.url()), safe(model), endpoint.apiType());
         try {
             HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(endpoint.url()))
@@ -86,7 +130,15 @@ public class OpenAiTextClient {
                 .build();
             HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new BusinessException(500, "OpenAI 接口返回状态码: " + response.statusCode());
+                if (response.statusCode() == 404 && endpoint.apiType() == OpenAiApiType.RESPONSES) {
+                    try { response.body().close(); } catch (Exception ignored) {}
+                    return requestTextStreamWithFallback(apiKey, baseUrl, model, systemPrompt, userPrompt, timeout, temperature, listener);
+                }
+                String errorBody = readErrorBody(response);
+                throw new BusinessException(500, "OpenAI 接口返回状态码: " + response.statusCode()
+                    + " url=" + maskUrl(endpoint.url())
+                    + " model=" + safe(model)
+                    + " body=" + errorBody);
             }
             String contentType = response.headers().firstValue("content-type").orElse("").toLowerCase();
             String providerRequestId = response.headers().firstValue("x-request-id").orElse("");
@@ -106,6 +158,90 @@ public class OpenAiTextClient {
             throw ex;
         } catch (Exception ex) {
             throw new BusinessException(500, "OpenAI 流式调用失败: " + safe(ex.getMessage()));
+        }
+    }
+
+    private OpenAiStreamResult requestTextStreamWithFallback(String apiKey,
+                                                              String baseUrl,
+                                                              String model,
+                                                              String systemPrompt,
+                                                              String userPrompt,
+                                                              Duration timeout,
+                                                              Double temperature,
+                                                              LlmStreamListener listener) {
+        OpenAiEndpoint fallbackEndpoint = new OpenAiEndpoint(stripTrailingSlash(baseUrl) + "/chat/completions", OpenAiApiType.CHAT_COMPLETIONS);
+        ObjectNode fallbackPayload = buildPayload(model, fallbackEndpoint.apiType(), systemPrompt, userPrompt, temperature, true);
+        try {
+            HttpRequest fallbackRequest = HttpRequest.newBuilder()
+                .uri(URI.create(fallbackEndpoint.url()))
+                .timeout(resolveTimeout(timeout))
+                .header("Authorization", "Bearer " + safe(apiKey))
+                .header("Content-Type", "application/json")
+                .header("Accept", "text/event-stream")
+                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(fallbackPayload), StandardCharsets.UTF_8))
+                .build();
+            HttpResponse<InputStream> fallbackResponse = httpClient.send(fallbackRequest, HttpResponse.BodyHandlers.ofInputStream());
+            if (fallbackResponse.statusCode() < 200 || fallbackResponse.statusCode() >= 300) {
+                String errorBody = readErrorBody(fallbackResponse);
+                throw new BusinessException(500, "OpenAI 接口返回状态码: " + fallbackResponse.statusCode()
+                    + " url=" + maskUrl(fallbackEndpoint.url())
+                    + " model=" + safe(model)
+                    + " body=" + errorBody);
+            }
+            String contentType = fallbackResponse.headers().firstValue("content-type").orElse("").toLowerCase();
+            String providerRequestId = fallbackResponse.headers().firstValue("x-request-id").orElse("");
+            try (BufferedInputStream input = new BufferedInputStream(fallbackResponse.body())) {
+                if (!looksLikeStreamingResponse(contentType, input)) {
+                    String body = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+                    OpenAiTextResult parsed = parseOpenAiResponse(body, fallbackResponse.headers().firstValue("content-type").orElse(""), fallbackEndpoint.apiType());
+                    String text = safe(parsed.content());
+                    if (!text.isBlank() && listener != null) {
+                        listener.onOutputDelta(text, text);
+                    }
+                    return new OpenAiStreamResult(text, "", normalizeUsage(parsed.usage(), systemPrompt, userPrompt, text), providerRequestId, false);
+                }
+                return parseStreamingResponse(input, fallbackEndpoint.apiType(), listener, providerRequestId, systemPrompt, userPrompt);
+            }
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new BusinessException(500, "OpenAI 流式调用失败（Responses API 404 降级后）: " + safe(ex.getMessage()));
+        }
+    }
+
+    private String readErrorBody(HttpResponse<InputStream> response) {
+        try (InputStream body = response.body()) {
+            return shorten(new String(body.readAllBytes(), StandardCharsets.UTF_8), 260);
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private String shorten(String text, int maxLen) {
+        if (text == null) {
+            return "";
+        }
+        String trimmed = text.trim();
+        if (trimmed.length() <= maxLen) {
+            return trimmed;
+        }
+        return trimmed.substring(0, maxLen) + "...";
+    }
+
+    private String maskUrl(String url) {
+        if (url == null || url.isBlank()) {
+            return "";
+        }
+        try {
+            URI uri = URI.create(url);
+            String result = uri.getScheme() + "://" + uri.getHost();
+            if (uri.getPort() > 0) {
+                result += ":" + uri.getPort();
+            }
+            result += uri.getPath();
+            return result;
+        } catch (Exception ignored) {
+            return url;
         }
     }
 
@@ -185,6 +321,11 @@ public class OpenAiTextClient {
     private boolean preferResponsesApi(String baseUrl, String model) {
         String lowerModel = safe(model).toLowerCase();
         String lowerBaseUrl = safe(baseUrl).toLowerCase();
+        // 仅 OpenAI 官方 API 支持 Responses API；第三方兼容服务商不支持，直接跳过避免 404
+        boolean isOpenAiOfficial = lowerBaseUrl.contains("api.openai.com");
+        if (!isOpenAiOfficial) {
+            return false;
+        }
         return lowerModel.contains("codex")
             || lowerModel.startsWith("gpt-5")
             || lowerBaseUrl.contains("/codex/");
