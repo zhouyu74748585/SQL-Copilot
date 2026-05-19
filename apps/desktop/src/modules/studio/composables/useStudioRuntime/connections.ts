@@ -34,7 +34,7 @@ import type {
   TableDataWorkspaceTab,
   TableEditorWorkspaceTab,
 } from './types';
-import {normalizeSelectedDatabases, parseConfiguredDatabaseName, rootDatabaseNameForContext} from './utils';
+import {normalizeSelectedDatabases, parseConfiguredDatabaseName, rootDatabaseNameForContext, stripInvisibleChars} from './utils';
 
 const FALLBACK_SUPPORTED_DB_TYPES: ConnectionDbTypeVO[] = [
   {
@@ -360,11 +360,11 @@ export function normalizeModelOptions(options: AiModelOption[] | undefined) {
         id: (item.id || '').trim() || `${providerType === 'LOCAL_CLI' ? 'cli' : 'openai'}-${index + 1}`,
         name: (item.name || '').trim() || (providerType === 'LOCAL_CLI' ? `CLI-${index + 1}` : `OpenAI-${index + 1}`),
         providerType,
-        openaiBaseUrl: (item.openaiBaseUrl || '').trim(),
+        openaiBaseUrl: stripInvisibleChars((item.openaiBaseUrl || '').trim()),
         openaiApiKey: (item.openaiApiKey || '').trim(),
-        openaiModel: (item.openaiModel || '').trim(),
-        cliCommand: (item.cliCommand || '').trim(),
-        cliWorkingDir: (item.cliWorkingDir || '').trim(),
+        openaiModel: stripInvisibleChars((item.openaiModel || '').trim()),
+        cliCommand: stripInvisibleChars((item.cliCommand || '').trim()),
+        cliWorkingDir: stripInvisibleChars((item.cliWorkingDir || '').trim()),
         contextWindowTokens: Number(item.contextWindowTokens || 32000),
         completionReserveTokens: Number(item.completionReserveTokens || 2048),
         tokenizerType: (item.tokenizerType || 'GENERIC_HEURISTIC').trim() || 'GENERIC_HEURISTIC',

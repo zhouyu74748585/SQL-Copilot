@@ -39,6 +39,14 @@ interface ObjectPresentationHelperContext {
   getPrimaryObjectLabel: () => string;
 }
 
+export function stripInvisibleChars(value: string) {
+  if (!value) {
+    return value;
+  }
+  // 移除零宽字符、不可见标记等隐藏 Unicode 字符，避免复制粘贴引入不可见字符导致 API 调用失败
+  return value.replace(/[\u200B\u200C\u200D\u200E\u200F\u202A\u202B\u202C\u202D\u202E\u2060\u2061\u2062\u2063\u2064\u2065\u2066\u2067\u2068\u2069\u206A\u206B\u206C\u206D\u206E\u206F\uFEFF]/g, '');
+}
+
 export function containsDatabaseInHostInput(rawHost?: string): boolean {
   const host = (rawHost || '').trim();
   if (!host) {
