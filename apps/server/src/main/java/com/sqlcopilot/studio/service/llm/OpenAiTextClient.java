@@ -840,7 +840,18 @@ public class OpenAiTextClient {
     }
 
     private String safe(String value) {
-        return Objects.toString(value, "").trim();
+        return stripInvisibleChars(Objects.toString(value, "").trim());
+    }
+
+    /**
+     * 剥离零宽字符、不可见标记等隐藏 Unicode 字符，避免复制粘贴引入不可见字符导致 API 调用失败。
+     */
+    private String stripInvisibleChars(String value) {
+        if (value == null || value.isEmpty()) {
+            return value;
+        }
+        // 移除常见零宽/不可见字符：U+200B~U+200F, U+202A~U+202E, U+2060~U+206F, U+FEFF, U+200C, U+200D
+        return value.replaceAll("[\\u200B\\u200C\\u200D\\u200E\\u200F\\u202A\\u202B\\u202C\\u202D\\u202E\\u2060\\u2061\\u2062\\u2063\\u2064\\u2065\\u2066\\u2067\\u2068\\u2069\\u206A\\u206B\\u206C\\u206D\\u206E\\u206F\\uFEFF]", "");
     }
 
     private String raw(String value) {

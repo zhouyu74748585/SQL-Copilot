@@ -331,6 +331,13 @@ public class AiConfigServiceImpl implements AiConfigService {
     }
 
     private String safe(String input) {
-        return Objects.toString(input, "").trim();
+        return stripInvisibleChars(Objects.toString(input, "").trim());
+    }
+
+    private String stripInvisibleChars(String value) {
+        if (value == null || value.isEmpty()) {
+            return value;
+        }
+        return value.replaceAll("[\\u200B\\u200C\\u200D\\u200E\\u200F\\u202A\\u202B\\u202C\\u202D\\u202E\\u2060\\u2061\\u2062\\u2063\\u2064\\u2065\\u2066\\u2067\\u2068\\u2069\\u206A\\u206B\\u206C\\u206D\\u206E\\u206F\\uFEFF]", "");
     }
 }
