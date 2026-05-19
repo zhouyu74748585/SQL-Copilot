@@ -198,6 +198,7 @@ interface AiInteractionHelperContext {
   appendAssistantThinkingMessage: (
     tab: QueryWorkspaceTab,
     actionType: QueryChatMessage['actionType'],
+    thinkingEnabled?: boolean,
   ) => QueryChatMessage;
   appendUserChatMessage: (
     tab: QueryWorkspaceTab,
@@ -310,7 +311,7 @@ export function createAiInteractionHelpers(ctx: AiInteractionHelperContext) {
       : 'Please analyze whether this SQL is reasonable.');
     const normalizedPromptText = ctx.enrichPromptWithSchemaReferences(promptText);
     const userMessage = retryOptions?.userMessage ?? ctx.appendUserChatMessage(tab, promptText, actionType);
-    const thinkingMessage = ctx.appendAssistantThinkingMessage(tab, actionType);
+    const thinkingMessage = ctx.appendAssistantThinkingMessage(tab, actionType, ctx.getThinkingEnabled());
     if (!retryOptions) {
       tab.prompt = '';
     }
@@ -343,7 +344,7 @@ export function createAiInteractionHelpers(ctx: AiInteractionHelperContext) {
             ctx.upsertStreamingTraceStage(thinkingMessage, event.stage);
             return ctx.flushStreamingQueryTab(tab);
           }
-          if (event.eventType === 'llm.thinking.delta') {
+          if (event.eventType === 'llm.thinking.delta' && thinkingMessage.thinkingEnabled) {
             ctx.ensureAssistantStreamingState(tab, thinkingMessage, actionType);
             thinkingMessage.thinkingContent = event.delta?.accumulatedText || thinkingMessage.thinkingContent || '';
             ctx.upsertStreamingTraceLlmDelta(thinkingMessage, actionType, 'thinking', thinkingMessage.thinkingContent || '');
@@ -414,7 +415,7 @@ export function createAiInteractionHelpers(ctx: AiInteractionHelperContext) {
           ctx.upsertStreamingTraceStage(thinkingMessage, event.stage);
           return ctx.flushStreamingQueryTab(tab);
         }
-        if (event.eventType === 'llm.thinking.delta') {
+        if (event.eventType === 'llm.thinking.delta' && thinkingMessage.thinkingEnabled) {
           ctx.ensureAssistantStreamingState(tab, thinkingMessage, actionType);
           thinkingMessage.thinkingContent = event.delta?.accumulatedText || thinkingMessage.thinkingContent || '';
           ctx.upsertStreamingTraceLlmDelta(thinkingMessage, actionType, 'thinking', thinkingMessage.thinkingContent || '');
@@ -496,7 +497,7 @@ export function createAiInteractionHelpers(ctx: AiInteractionHelperContext) {
     const normalizedPromptText = ctx.enrichPromptWithSchemaReferences(rawPrompt);
     const finalPrompt = retryOptions?.finalPrompt ?? buildChartPrompt(normalizedPromptText);
     const userMessage = retryOptions?.userMessage ?? ctx.appendUserChatMessage(tab, rawPrompt, 'chart_auto_plan');
-    const thinkingMessage = ctx.appendAssistantThinkingMessage(tab, 'chart_auto_plan');
+    const thinkingMessage = ctx.appendAssistantThinkingMessage(tab, 'chart_auto_plan', ctx.getThinkingEnabled());
     if (!retryOptions) {
       tab.prompt = '';
     }
@@ -523,7 +524,7 @@ export function createAiInteractionHelpers(ctx: AiInteractionHelperContext) {
           ctx.upsertStreamingTraceStage(thinkingMessage, event.stage);
           return ctx.flushStreamingQueryTab(tab);
         }
-        if (event.eventType === 'llm.thinking.delta') {
+        if (event.eventType === 'llm.thinking.delta' && thinkingMessage.thinkingEnabled) {
           ctx.ensureAssistantStreamingState(tab, thinkingMessage, 'chart_auto_plan');
           thinkingMessage.thinkingContent = event.delta?.accumulatedText || thinkingMessage.thinkingContent || '';
           ctx.upsertStreamingTraceLlmDelta(thinkingMessage, 'chart_auto_plan', 'thinking', thinkingMessage.thinkingContent || '');
@@ -739,7 +740,7 @@ export function createAiInteractionHelpers(ctx: AiInteractionHelperContext) {
     const normalizedPromptText = ctx.enrichPromptWithSchemaReferences(rawPrompt);
     const finalPrompt = retryOptions?.finalPrompt ?? ctx.mergePromptWithSqlSnippet(normalizedPromptText, sqlSnippet);
     const userMessage = retryOptions?.userMessage ?? ctx.appendUserChatMessage(tab, rawPrompt, 'auto_generate');
-    const thinkingMessage = ctx.appendAssistantThinkingMessage(tab, 'auto_generate');
+    const thinkingMessage = ctx.appendAssistantThinkingMessage(tab, 'auto_generate', false);
     if (!retryOptions) {
       tab.prompt = '';
     }
@@ -772,7 +773,7 @@ export function createAiInteractionHelpers(ctx: AiInteractionHelperContext) {
           ctx.upsertStreamingTraceStage(thinkingMessage, event.stage);
           return ctx.flushStreamingQueryTab(tab);
         }
-        if (event.eventType === 'llm.thinking.delta') {
+        if (event.eventType === 'llm.thinking.delta' && thinkingMessage.thinkingEnabled) {
           ctx.ensureAssistantStreamingState(tab, thinkingMessage, thinkingMessage.actionType);
           thinkingMessage.thinkingContent = event.delta?.accumulatedText || thinkingMessage.thinkingContent || '';
           ctx.upsertStreamingTraceLlmDelta(thinkingMessage, thinkingMessage.actionType, 'thinking', thinkingMessage.thinkingContent || '');
@@ -947,7 +948,7 @@ export function createAiInteractionHelpers(ctx: AiInteractionHelperContext) {
     try {
       const promptText = `请修复以下 SQL 执行错误。\n错误信息：${errorMessage}\n\nSQL:\n${failedSql}`;
       const userMessage = ctx.appendUserChatMessage(tab, promptText, 'repair');
-      thinkingMessage = ctx.appendAssistantThinkingMessage(tab, 'repair');
+      thinkingMessage = ctx.appendAssistantThinkingMessage(tab, 'repair', ctx.getThinkingEnabled());
       const streamState = {repaired: null as AiRepairVO | null};
       await ctx.postAiStreamWithTimeout(tab, '/api/ai/query/repair/stream', {
         connectionId: tab.connectionId,
@@ -967,7 +968,7 @@ export function createAiInteractionHelpers(ctx: AiInteractionHelperContext) {
           ctx.upsertStreamingTraceStage(thinkingMessage, event.stage);
           return ctx.flushStreamingQueryTab(tab);
         }
-        if (event.eventType === 'llm.thinking.delta') {
+        if (event.eventType === 'llm.thinking.delta' && thinkingMessage.thinkingEnabled) {
           ctx.ensureAssistantStreamingState(tab, thinkingMessage, 'repair');
           thinkingMessage.thinkingContent = event.delta?.accumulatedText || thinkingMessage.thinkingContent || '';
           ctx.upsertStreamingTraceLlmDelta(thinkingMessage, 'repair', 'thinking', thinkingMessage.thinkingContent || '');

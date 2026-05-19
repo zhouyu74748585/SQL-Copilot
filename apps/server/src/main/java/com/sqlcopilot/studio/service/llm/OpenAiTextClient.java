@@ -43,9 +43,20 @@ public class OpenAiTextClient {
                                         String userPrompt,
                                         Duration timeout,
                                         Double temperature) {
+        return requestText(apiKey, baseUrl, model, systemPrompt, userPrompt, timeout, temperature, null);
+    }
+
+    public OpenAiTextResult requestText(String apiKey,
+                                        String baseUrl,
+                                        String model,
+                                        String systemPrompt,
+                                        String userPrompt,
+                                        Duration timeout,
+                                        Double temperature,
+                                        Boolean thinkingEnabled) {
         OpenAiEndpoint endpoint = resolveOpenAiEndpoint(baseUrl, model);
-        ObjectNode payload = buildPayload(model, endpoint.apiType(), systemPrompt, userPrompt, temperature);
-        log.debug("[OpenAI] request url={} model={} apiType={}", maskUrl(endpoint.url()), safe(model), endpoint.apiType());
+        ObjectNode payload = buildPayload(model, endpoint.apiType(), systemPrompt, userPrompt, temperature, false, thinkingEnabled);
+        log.debug("[OpenAI] request url={} model={} apiType={} thinking={}", maskUrl(endpoint.url()), safe(model), endpoint.apiType(), thinkingEnabled);
         try {
             HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(endpoint.url()))
@@ -57,7 +68,7 @@ public class OpenAiTextClient {
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 if (response.statusCode() == 404 && endpoint.apiType() == OpenAiApiType.RESPONSES) {
-                    return requestTextWithFallback(apiKey, baseUrl, model, systemPrompt, userPrompt, timeout, temperature);
+                    return requestTextWithFallback(apiKey, baseUrl, model, systemPrompt, userPrompt, timeout, temperature, thinkingEnabled);
                 }
                 throw new BusinessException(500, "OpenAI 接口返回状态码: " + response.statusCode()
                     + " url=" + maskUrl(endpoint.url())
@@ -80,9 +91,10 @@ public class OpenAiTextClient {
                                                       String systemPrompt,
                                                       String userPrompt,
                                                       Duration timeout,
-                                                      Double temperature) {
+                                                      Double temperature,
+                                                      Boolean thinkingEnabled) {
         OpenAiEndpoint fallbackEndpoint = new OpenAiEndpoint(stripTrailingSlash(baseUrl) + "/chat/completions", OpenAiApiType.CHAT_COMPLETIONS);
-        ObjectNode fallbackPayload = buildPayload(model, fallbackEndpoint.apiType(), systemPrompt, userPrompt, temperature);
+        ObjectNode fallbackPayload = buildPayload(model, fallbackEndpoint.apiType(), systemPrompt, userPrompt, temperature, false, thinkingEnabled);
         try {
             HttpRequest fallbackRequest = HttpRequest.newBuilder()
                 .uri(URI.create(fallbackEndpoint.url()))
@@ -115,10 +127,11 @@ public class OpenAiTextClient {
                                                 String userPrompt,
                                                 Duration timeout,
                                                 Double temperature,
-                                                LlmStreamListener listener) {
+                                                LlmStreamListener listener,
+                                                Boolean thinkingEnabled) {
         OpenAiEndpoint endpoint = resolveOpenAiEndpoint(baseUrl, model);
-        ObjectNode payload = buildPayload(model, endpoint.apiType(), systemPrompt, userPrompt, temperature, true);
-        log.debug("[OpenAI] stream request url={} model={} apiType={}", maskUrl(endpoint.url()), safe(model), endpoint.apiType());
+        ObjectNode payload = buildPayload(model, endpoint.apiType(), systemPrompt, userPrompt, temperature, true, thinkingEnabled);
+        log.debug("[OpenAI] stream request url={} model={} apiType={} thinking={}", maskUrl(endpoint.url()), safe(model), endpoint.apiType(), thinkingEnabled);
         try {
             HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(endpoint.url()))
@@ -132,7 +145,7 @@ public class OpenAiTextClient {
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 if (response.statusCode() == 404 && endpoint.apiType() == OpenAiApiType.RESPONSES) {
                     try { response.body().close(); } catch (Exception ignored) {}
-                    return requestTextStreamWithFallback(apiKey, baseUrl, model, systemPrompt, userPrompt, timeout, temperature, listener);
+                    return requestTextStreamWithFallback(apiKey, baseUrl, model, systemPrompt, userPrompt, timeout, temperature, listener, thinkingEnabled);
                 }
                 String errorBody = readErrorBody(response);
                 throw new BusinessException(500, "OpenAI 接口返回状态码: " + response.statusCode()
@@ -168,9 +181,10 @@ public class OpenAiTextClient {
                                                               String userPrompt,
                                                               Duration timeout,
                                                               Double temperature,
-                                                              LlmStreamListener listener) {
+                                                              LlmStreamListener listener,
+                                                              Boolean thinkingEnabled) {
         OpenAiEndpoint fallbackEndpoint = new OpenAiEndpoint(stripTrailingSlash(baseUrl) + "/chat/completions", OpenAiApiType.CHAT_COMPLETIONS);
-        ObjectNode fallbackPayload = buildPayload(model, fallbackEndpoint.apiType(), systemPrompt, userPrompt, temperature, true);
+        ObjectNode fallbackPayload = buildPayload(model, fallbackEndpoint.apiType(), systemPrompt, userPrompt, temperature, true, thinkingEnabled);
         try {
             HttpRequest fallbackRequest = HttpRequest.newBuilder()
                 .uri(URI.create(fallbackEndpoint.url()))
@@ -270,8 +284,9 @@ public class OpenAiTextClient {
                                     OpenAiApiType apiType,
                                     String systemPrompt,
                                     String userPrompt,
-                                    Double temperature) {
-        return buildPayload(model, apiType, systemPrompt, userPrompt, temperature, false);
+                                    Double temperature,
+                                    boolean stream) {
+        return buildPayload(model, apiType, systemPrompt, userPrompt, temperature, stream, null);
     }
 
     private ObjectNode buildPayload(String model,
@@ -279,7 +294,8 @@ public class OpenAiTextClient {
                                     String systemPrompt,
                                     String userPrompt,
                                     Double temperature,
-                                    boolean stream) {
+                                    boolean stream,
+                                    Boolean thinkingEnabled) {
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("model", safe(model));
         if (stream) {
@@ -293,6 +309,10 @@ public class OpenAiTextClient {
         }
         if (temperature != null) {
             payload.put("temperature", temperature);
+        }
+        // 千问等兼容服务商通过 enable_thinking 控制思考模式
+        if (thinkingEnabled != null) {
+            payload.put("enable_thinking", thinkingEnabled);
         }
         ArrayNode messages = payload.putArray("messages");
         messages.addObject().put("role", "system").put("content", safe(systemPrompt));

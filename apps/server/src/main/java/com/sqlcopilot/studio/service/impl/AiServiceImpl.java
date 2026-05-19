@@ -2732,6 +2732,7 @@ public class AiServiceImpl implements AiService {
         gatewayRequest.setTaskLabel("生成 SQL");
         gatewayRequest.setTimeout(Duration.ofSeconds(30));
         gatewayRequest.setTemperature(0.1D);
+        gatewayRequest.setThinkingEnabled(req.getThinkingEnabled());
         LlmGatewayResult gatewayResult = llmGatewayService.callStream(
             gatewayRequest,
             createLlmStreamListener(req.getSessionId(), "generate", Boolean.TRUE.equals(req.getThinkingEnabled()))
@@ -2758,6 +2759,7 @@ public class AiServiceImpl implements AiService {
         gatewayRequest.setTaskLabel(taskLabel);
         gatewayRequest.setTimeout(Duration.ofSeconds(30));
         gatewayRequest.setTemperature(0.1D);
+        gatewayRequest.setThinkingEnabled(req.getThinkingEnabled());
         LlmGatewayResult gatewayResult = llmGatewayService.callStream(
             gatewayRequest,
             shouldStreamTaskLabel(taskLabel) ? createLlmStreamListener(req.getSessionId(), resolveActionTypeByTaskLabel(taskLabel), Boolean.TRUE.equals(req.getThinkingEnabled())) : null
@@ -2779,6 +2781,7 @@ public class AiServiceImpl implements AiService {
         gatewayRequest.setTaskLabel(taskLabel);
         gatewayRequest.setTimeout(Duration.ofSeconds(30));
         gatewayRequest.setTemperature(0.1D);
+        gatewayRequest.setThinkingEnabled(req.getThinkingEnabled());
         LlmGatewayResult gatewayResult = llmGatewayService.callStream(
             gatewayRequest,
             shouldStreamTaskLabel(taskLabel) ? createLlmStreamListener(req.getSessionId(), resolveActionTypeByTaskLabel(taskLabel), Boolean.TRUE.equals(req.getThinkingEnabled())) : null

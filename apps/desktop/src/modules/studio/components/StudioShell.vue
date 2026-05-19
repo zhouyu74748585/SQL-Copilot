@@ -1935,7 +1935,7 @@
                       <span v-else-if="item.aborted"> · 已中止</span>
                     </span>
                   </div>
-                  <div v-if="item.thinkingContent" class="query-chat-thinking-panel">
+                  <div v-if="item.thinkingEnabled && item.thinkingContent" class="query-chat-thinking-panel">
                     <button class="query-chat-thinking-toggle" @click="toggleMessageThinkingExpanded(activeQueryTab, item.id)">
                       <span class="query-chat-thinking-toggle-label">Thinking</span>
                       <span class="query-chat-thinking-toggle-icon">{{ item.thinkingExpanded !== false ? '▾' : '▸' }}</span>
@@ -1995,7 +1995,7 @@
                             <span>User Prompt</span>
                             <pre>{{ stage.llmCall.userPrompt }}</pre>
                           </div>
-                          <div v-if="stage.llmCall.thinkingContent" class="query-chat-trace-field">
+                          <div v-if="item.thinkingEnabled && stage.llmCall.thinkingContent" class="query-chat-trace-field">
                             <span>Thinking</span>
                             <pre>{{ stage.llmCall.thinkingContent }}</pre>
                           </div>

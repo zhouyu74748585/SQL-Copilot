@@ -77,7 +77,8 @@ public class LlmGatewayService {
             safe(request.getUserPrompt()),
             request.getTimeout() == null ? Duration.ofSeconds(30) : request.getTimeout(),
             request.getTemperature() == null ? 0.1D : request.getTemperature(),
-            listener
+            listener,
+            request.getThinkingEnabled()
         );
         String content = safe(result.content());
         if (content.isBlank()) {
@@ -94,6 +95,10 @@ public class LlmGatewayService {
         gatewayResult.setContent(content);
         gatewayResult.setFullOutput(content);
         gatewayResult.setThinkingContent(safe(result.thinkingContent()));
+        // 禁用思考模式时，清除 thinkingContent，防止通过 trace 泄漏到前端
+        if (!Boolean.TRUE.equals(request.getThinkingEnabled())) {
+            gatewayResult.setThinkingContent("");
+        }
         gatewayResult.setProviderRequestId(safe(result.providerRequestId()));
         gatewayResult.setReasoning("已通过 OpenAI API(" + safe(option.getName()) + "/" + actualModel + ")完成" + safe(request.getTaskLabel()));
         gatewayResult.setUsage(result.usage());

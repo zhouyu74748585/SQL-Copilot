@@ -158,6 +158,7 @@ export interface QueryChatMessage {
   streaming?: boolean;
   finalized?: boolean;
   thinkingContent?: string;
+  thinkingEnabled?: boolean;
   liveOutput?: string;
   aborted?: boolean;
   sqlText?: string;

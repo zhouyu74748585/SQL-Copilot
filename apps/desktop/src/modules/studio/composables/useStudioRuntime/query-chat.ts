@@ -148,7 +148,7 @@ export function createQueryChatHelpers(ctx: QueryChatHelperContext) {
     return messageItem;
   }
 
-  function appendAssistantThinkingMessage(tab: QueryWorkspaceTab, actionType: QueryChatMessage['actionType']) {
+  function appendAssistantThinkingMessage(tab: QueryWorkspaceTab, actionType: QueryChatMessage['actionType'], thinkingEnabled = false) {
     const now = Date.now();
     const messageItem: QueryChatMessage = {
       id: `chat-assistant-thinking-${now}-${Math.random().toString(16).slice(2, 8)}`,
@@ -158,6 +158,7 @@ export function createQueryChatHelpers(ctx: QueryChatHelperContext) {
       streaming: true,
       finalized: false,
       thinkingContent: '',
+      thinkingEnabled,
       liveOutput: '',
       actionType,
       createdAt: now,
@@ -205,9 +206,14 @@ export function createQueryChatHelpers(ctx: QueryChatHelperContext) {
     messageItem.pending = false;
     messageItem.streaming = false;
     messageItem.finalized = true;
-    messageItem.thinkingContent = extractThinkingContentFromTrace(messageItem.trace) || messageItem.thinkingContent || '';
-    if (messageItem.thinkingContent) {
-      messageItem.thinkingExpanded = true;
+    if (messageItem.thinkingEnabled) {
+      messageItem.thinkingContent = extractThinkingContentFromTrace(messageItem.trace) || messageItem.thinkingContent || '';
+      if (messageItem.thinkingContent) {
+        messageItem.thinkingExpanded = true;
+      }
+    } else {
+      messageItem.thinkingContent = '';
+      messageItem.thinkingExpanded = undefined;
     }
     messageItem.liveOutput = '';
     messageItem.aborted = false;
@@ -318,10 +324,12 @@ export function createQueryChatHelpers(ctx: QueryChatHelperContext) {
     }
     messageItem.trace = trace;
     messageItem.traceExpanded = true;
-    const thinkingContent = extractThinkingContentFromTrace(trace);
-    if (thinkingContent) {
-      messageItem.thinkingContent = thinkingContent;
-      messageItem.thinkingExpanded = true;
+    if (messageItem.thinkingEnabled) {
+      const thinkingContent = extractThinkingContentFromTrace(trace);
+      if (thinkingContent) {
+        messageItem.thinkingContent = thinkingContent;
+        messageItem.thinkingExpanded = true;
+      }
     }
   }
 

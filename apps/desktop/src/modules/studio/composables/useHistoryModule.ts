@@ -206,6 +206,7 @@ export function useHistoryModule(runtime: StudioRuntime): HistoryModule {
           streaming: false,
           finalized: true,
           thinkingContent: thinkingContent || undefined,
+          thinkingEnabled: !!thinkingContent,
           liveOutput: '',
           sqlText: sqlText || undefined,
           actionType,

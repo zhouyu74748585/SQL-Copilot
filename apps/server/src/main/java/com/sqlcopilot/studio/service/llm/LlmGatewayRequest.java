@@ -28,4 +28,7 @@ public class LlmGatewayRequest {
 
     /** 采样温度。 */
     private Double temperature;
+
+    /** 是否启用模型思考模式（如千问 enable_thinking）。 */
+    private Boolean thinkingEnabled;
 }
