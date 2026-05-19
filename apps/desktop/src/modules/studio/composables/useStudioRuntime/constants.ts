@@ -4,6 +4,8 @@ export const browserTabKey = 'browser';
 export const uiThemeStorageKey = 'sqlcopilot.ui-theme.v1';
 export const resultExportDirectoryStorageKey = 'sqlcopilot.result-export-directory.v1';
 export const sessionTitleOverridesStorageKey = 'sqlcopilot.session-title-overrides.v1';
+/** 思考模式配置存储键，默认关闭（false） */
+export const thinkingEnabledStorageKey = 'sqlcopilot.thinking-enabled.v1';
 export const {defaultAlgorithm, darkAlgorithm} = antdTheme;
 export const isMacOS = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform);
 export const isWindows = typeof navigator !== 'undefined' && /win/i.test(navigator.platform);

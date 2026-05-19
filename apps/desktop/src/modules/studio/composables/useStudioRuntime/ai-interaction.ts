@@ -223,6 +223,7 @@ interface AiInteractionHelperContext {
   clearUserRetryState: (userMessage: QueryChatMessage) => void;
   conversationMemoryEnabledForTab: (tab: QueryWorkspaceTab | null | undefined) => boolean;
   detailOutputEnabledForTab: (tab: QueryWorkspaceTab | null | undefined) => boolean;
+  getThinkingEnabled: () => boolean;
   enrichPromptWithSchemaReferences: (promptText: string) => string;
   ensureAssistantStreamingState: (
     tab: QueryWorkspaceTab,
@@ -335,6 +336,7 @@ export function createAiInteractionHelpers(ctx: AiInteractionHelperContext) {
           modelId: tab.selectedAiModel || undefined,
           memoryEnabled: ctx.conversationMemoryEnabledForTab(tab),
           detailOutputEnabled: ctx.detailOutputEnabledForTab(tab),
+          thinkingEnabled: ctx.getThinkingEnabled(),
         }, (event) => {
           if (event.eventType === 'stage.updated' && event.stage) {
             ctx.ensureAssistantStreamingState(tab, thinkingMessage, actionType);
@@ -405,6 +407,7 @@ export function createAiInteractionHelpers(ctx: AiInteractionHelperContext) {
         modelId: tab.selectedAiModel || undefined,
         memoryEnabled: ctx.conversationMemoryEnabledForTab(tab),
         detailOutputEnabled: ctx.detailOutputEnabledForTab(tab),
+        thinkingEnabled: ctx.getThinkingEnabled(),
       }, (event) => {
         if (event.eventType === 'stage.updated' && event.stage) {
           ctx.ensureAssistantStreamingState(tab, thinkingMessage, actionType);
@@ -513,6 +516,7 @@ export function createAiInteractionHelpers(ctx: AiInteractionHelperContext) {
         modelId: tab.selectedAiModel || undefined,
         memoryEnabled: ctx.conversationMemoryEnabledForTab(tab),
         detailOutputEnabled: ctx.detailOutputEnabledForTab(tab),
+        thinkingEnabled: ctx.getThinkingEnabled(),
       }, (event) => {
         if (event.eventType === 'stage.updated' && event.stage) {
           ctx.ensureAssistantStreamingState(tab, thinkingMessage, 'chart_auto_plan');
@@ -748,6 +752,7 @@ export function createAiInteractionHelpers(ctx: AiInteractionHelperContext) {
     tab.aiGenerating = true;
     try {
       const streamState = {result: null as AiAutoQueryVO | null};
+      // 意图识别固定关闭思考模式，提升响应速度
       await ctx.postAiStreamWithTimeout(tab, '/api/ai/query/auto/stream', {
         connectionId: tab.connectionId,
         sessionId: tab.sessionId,
@@ -756,6 +761,7 @@ export function createAiInteractionHelpers(ctx: AiInteractionHelperContext) {
         modelId: tab.selectedAiModel || undefined,
         memoryEnabled: ctx.conversationMemoryEnabledForTab(tab),
         detailOutputEnabled: ctx.detailOutputEnabledForTab(tab),
+        thinkingEnabled: false,
       }, (event) => {
         if (event.eventType === 'intent.resolved' && event.intent?.intentType) {
           thinkingMessage.actionType = autoActionTypeByIntent(event.intent.intentType as AiIntentType);
@@ -951,6 +957,7 @@ export function createAiInteractionHelpers(ctx: AiInteractionHelperContext) {
         databaseName: tab.databaseName || undefined,
         modelId: tab.selectedAiModel || undefined,
         detailOutputEnabled: ctx.detailOutputEnabledForTab(tab),
+        thinkingEnabled: ctx.getThinkingEnabled(),
       }, (event) => {
         if (!thinkingMessage) {
           return;

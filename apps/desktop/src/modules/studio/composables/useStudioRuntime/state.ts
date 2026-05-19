@@ -58,6 +58,7 @@ import {
   isMacOS,
   isWindows,
   uiThemeStorageKey,
+  thinkingEnabledStorageKey,
 } from './constants';
 import {
   namespaceCacheKey,
@@ -384,6 +385,9 @@ const aiConfigModalOpen = ref(false);
 const aiConfigActiveTab = ref<'general' | 'model' | 'embedding'>('model');
 
 const uiTheme = ref<UiTheme>('light');
+
+/** 思考模式开关，默认关闭（false） */
+const thinkingEnabled = ref(false);
 
 const selectedAiModel = ref('');
 
@@ -1050,6 +1054,7 @@ const {
   removeQueryChatMessage,
   scrollToQueryChatMessage,
   toggleMessageTraceExpanded,
+  toggleMessageThinkingExpanded,
   upsertStreamingTraceLlmDelta,
   upsertStreamingTraceStage,
 } = createQueryChatHelpers({
@@ -1121,6 +1126,7 @@ const {
   clearUserRetryState,
   conversationMemoryEnabledForTab,
   detailOutputEnabledForTab,
+  getThinkingEnabled: () => thinkingEnabled.value,
   enrichPromptWithSchemaReferences,
   ensureAssistantStreamingState,
   executeSqlForTab,
@@ -2996,11 +3002,13 @@ async function copyTableEditorSql() {
     ragProviderTypeOptions,
     browserTabKey,
     uiThemeStorageKey,
+    thinkingEnabledStorageKey,
     defaultAlgorithm,
     darkAlgorithm,
     isMacOS,
     isWindows,
     isLinux,
+    thinkingEnabled,
     vectorizeStatusPollTimer,
     vectorizeStatusPollIntervalMs,
     tableStatsMinRequestIntervalMs,
@@ -3323,6 +3331,7 @@ async function copyTableEditorSql() {
     modelLabelById,
     detailOutputEnabledForTab,
     toggleMessageTraceExpanded,
+    toggleMessageThinkingExpanded,
     lastPromptText,
     assistantActionLabel,
     normalizeHistoryActionType,

@@ -90,3 +90,30 @@
 ## 备注
 - 当前 Thinking 严格依赖 provider 实际返回；若模型或 CLI 不提供 reasoning/thinking，界面不会伪造思考内容。
 - Vite 构建仍有大 chunk 警告，但不影响本次功能交付与启动验证。
+
+### 2026-05-19 09:33
+
+## 追加记录 - Thinking 内容折叠功能
+
+### 本次目标
+- 前端对话框中 AI 助手的 Thinking 内容面板支持点击标题折叠/展开，提升对话界面可读性。
+
+### 关键改动
+- 新增 `thinkingExpanded` 字段到 `QueryChatMessage` 接口（`types.ts`），控制 Thinking 面板的展开/折叠状态。
+- 新增 `toggleMessageThinkingExpanded` 方法（`query-chat.ts`），用于切换单条消息的 Thinking 折叠状态。
+- 在 `state.ts` 中导出该方法，并在 `StudioShell.vue` 中集成。
+- 模板改造：将 Thinking 标题从 `<div>` 改为 `<button>` 按钮，点击触发折叠切换；箭头图标 ▸/▾ 表示当前状态。
+- Thinking 内容 `<pre>` 通过 `v-if="item.thinkingExpanded !== false"` 控制显隐。
+- CSS 新增 `.query-chat-thinking-toggle` 系列样式（按钮、标签、箭头图标、hover 效果），并在暗色/亮色主题中适配。
+- 流式场景：`applyStreamTraceSnapshot` 和 `prepareAssistantMessage` 中设置 `thinkingExpanded = true`（默认展开，方便实时查看）。
+- 历史加载：`useHistoryModule.ts` 中设置 `thinkingExpanded = false`（历史消息默认折叠，减少界面干扰）。
+
+### 验证结果
+- 前端类型检查：`apps/desktop` 下 `npm run type-check` 通过。
+- 前端构建：`apps/desktop` 下 `npm run build` 通过。
+- 后端 clean 编译：`apps/server` 下 `mvn clean compile` 通过。
+- 启动验证：后端（8080）+ 前端（8888）均正常启动，页面可访问。
+
+### 备注
+- 箭头使用 Unicode 字符 ▸/▾，不依赖额外图标库。
+- 默认展开逻辑：流式对话中 Thinking 实时产生时默认展开；历史会话加载时默认折叠。

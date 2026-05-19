@@ -5,6 +5,9 @@ export interface UiShellModule {
   toggleTheme: () => void;
   loadUiThemePreference: () => void;
   persistUiThemePreference: () => void;
+  toggleThinkingEnabled: () => void;
+  loadThinkingEnabledPreference: () => void;
+  persistThinkingEnabledPreference: () => void;
   handleWindowResize: () => void;
   startResizeLeftPane: (event: MouseEvent) => void;
   handleResizeLeftPane: (event: MouseEvent) => void;
@@ -89,6 +92,34 @@ export function useUiShellModule(runtime: StudioRuntime, deps: UiShellDeps): UiS
 
   function toggleTheme() {
     runtime.uiTheme.value = runtime.uiTheme.value === 'dark' ? 'light' : 'dark';
+  }
+
+  function toggleThinkingEnabled() {
+    runtime.thinkingEnabled.value = !runtime.thinkingEnabled.value;
+  }
+
+  function loadThinkingEnabledPreference() {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(runtime.thinkingEnabledStorageKey);
+      // 默认关闭（false）
+      runtime.thinkingEnabled.value = raw === 'true';
+    } catch {
+      runtime.thinkingEnabled.value = false;
+    }
+  }
+
+  function persistThinkingEnabledPreference() {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    try {
+      window.localStorage.setItem(runtime.thinkingEnabledStorageKey, String(runtime.thinkingEnabled.value));
+    } catch {
+      // ignore
+    }
   }
 
   function loadUiThemePreference() {
@@ -307,6 +338,7 @@ export function useUiShellModule(runtime: StudioRuntime, deps: UiShellDeps): UiS
     window.addEventListener('resize', handleWindowResize);
     window.addEventListener('keydown', handleWindowKeydown);
     loadUiThemePreference();
+    loadThinkingEnabledPreference();
   });
 
   onBeforeUnmount(() => {
@@ -335,10 +367,20 @@ export function useUiShellModule(runtime: StudioRuntime, deps: UiShellDeps): UiS
     },
   );
 
+  watch(
+    () => runtime.thinkingEnabled.value,
+    () => {
+      persistThinkingEnabledPreference();
+    },
+  );
+
   return {
     toggleTheme,
     loadUiThemePreference,
     persistUiThemePreference,
+    toggleThinkingEnabled,
+    loadThinkingEnabledPreference,
+    persistThinkingEnabledPreference,
     handleWindowResize,
     startResizeLeftPane,
     handleResizeLeftPane,

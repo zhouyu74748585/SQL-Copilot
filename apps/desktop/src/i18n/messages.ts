@@ -442,6 +442,7 @@ Object.assign(zhToEnExact, {
   '界面设置': 'Appearance',
   '界面语言': 'Display Language',
   '深色模式': 'Dark Mode',
+  '思考模式': 'Thinking Mode',
   '自动执行': 'Auto Execute',
   '生成 SQL 后直接执行': 'Execute immediately after generating SQL',
   '连接名称': 'Connection Name',

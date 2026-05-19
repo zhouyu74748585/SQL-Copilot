@@ -214,6 +214,7 @@ export function useHistoryModule(runtime: StudioRuntime): HistoryModule {
           chartImageCacheKey: (item.chartImageCacheKey || '').trim() || undefined,
           trace: item.trace ?? undefined,
           traceExpanded: false,
+          thinkingExpanded: false,
           createdAt: ts + 1,
         });
       }

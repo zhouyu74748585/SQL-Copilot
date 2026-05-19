@@ -173,6 +173,7 @@ export interface QueryChatMessage {
   historySaved?: boolean;
   trace?: AiTraceVO;
   traceExpanded?: boolean;
+  thinkingExpanded?: boolean;
   createdAt: number;
 }
 

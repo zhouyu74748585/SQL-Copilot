@@ -2212,6 +2212,39 @@ body.sqlcopilot-theme-dark {
   color: #8c6124;
 }
 
+.query-chat-thinking-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin: 0 0 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.query-chat-thinking-toggle-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #8c6124;
+}
+
+.query-chat-thinking-toggle-icon {
+  font-size: 12px;
+  color: #8c6124;
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+
+.query-chat-thinking-toggle:hover .query-chat-thinking-toggle-label,
+.query-chat-thinking-toggle:hover .query-chat-thinking-toggle-icon {
+  color: #6b4a1a;
+}
+
 .query-chat-thinking-content {
   margin: 0;
   font-size: 12px;
@@ -4080,8 +4113,15 @@ body.sqlcopilot-theme-dark {
 .studio-root .query-chat-trace-field,
 .studio-root .query-chat-trace-llm-meta,
 .studio-root .query-chat-thinking-title,
-.studio-root .query-chat-thinking-content {
+.studio-root .query-chat-thinking-content,
+.studio-root .query-chat-thinking-toggle-label,
+.studio-root .query-chat-thinking-toggle-icon {
   color: var(--text-2);
+}
+
+.studio-root .query-chat-thinking-toggle:hover .query-chat-thinking-toggle-label,
+.studio-root .query-chat-thinking-toggle:hover .query-chat-thinking-toggle-icon {
+  color: var(--text-1);
 }
 
 .studio-root .query-chat-trace-toggle,

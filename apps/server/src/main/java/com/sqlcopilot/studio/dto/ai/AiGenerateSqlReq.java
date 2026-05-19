@@ -32,4 +32,7 @@ public class AiGenerateSqlReq {
     private Boolean memoryEnabled;
 
     private Boolean detailOutputEnabled;
+
+    /** 是否启用模型思考过程展示（默认关闭）。 */
+    private Boolean thinkingEnabled;
 }

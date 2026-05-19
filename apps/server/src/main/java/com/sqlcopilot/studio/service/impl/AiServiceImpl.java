@@ -2734,7 +2734,7 @@ public class AiServiceImpl implements AiService {
         gatewayRequest.setTemperature(0.1D);
         LlmGatewayResult gatewayResult = llmGatewayService.callStream(
             gatewayRequest,
-            createLlmStreamListener(req.getSessionId(), "generate")
+            createLlmStreamListener(req.getSessionId(), "generate", Boolean.TRUE.equals(req.getThinkingEnabled()))
         );
         gatewayResult.setPromptBudget(promptPlan.budget());
         String sqlText = extractSql(gatewayResult.getContent());
@@ -2760,7 +2760,7 @@ public class AiServiceImpl implements AiService {
         gatewayRequest.setTemperature(0.1D);
         LlmGatewayResult gatewayResult = llmGatewayService.callStream(
             gatewayRequest,
-            shouldStreamTaskLabel(taskLabel) ? createLlmStreamListener(req.getSessionId(), resolveActionTypeByTaskLabel(taskLabel)) : null
+            shouldStreamTaskLabel(taskLabel) ? createLlmStreamListener(req.getSessionId(), resolveActionTypeByTaskLabel(taskLabel), Boolean.TRUE.equals(req.getThinkingEnabled())) : null
         );
         gatewayResult.setPromptBudget(promptPlan.budget());
         return new TextProviderResult(gatewayResult.getContent(), gatewayResult.getReasoning(), gatewayResult.getUsage(), gatewayResult);
@@ -2781,7 +2781,7 @@ public class AiServiceImpl implements AiService {
         gatewayRequest.setTemperature(0.1D);
         LlmGatewayResult gatewayResult = llmGatewayService.callStream(
             gatewayRequest,
-            shouldStreamTaskLabel(taskLabel) ? createLlmStreamListener(req.getSessionId(), resolveActionTypeByTaskLabel(taskLabel)) : null
+            shouldStreamTaskLabel(taskLabel) ? createLlmStreamListener(req.getSessionId(), resolveActionTypeByTaskLabel(taskLabel), Boolean.TRUE.equals(req.getThinkingEnabled())) : null
         );
         gatewayResult.setPromptBudget(promptPlan.budget());
         return new TextProviderResult(gatewayResult.getContent(), gatewayResult.getReasoning(), gatewayResult.getUsage(), gatewayResult);
@@ -3711,22 +3711,19 @@ public class AiServiceImpl implements AiService {
         return finalVO;
     }
 
-    private LlmStreamListener createLlmStreamListener(String sessionId, String actionType) {
+    private LlmStreamListener createLlmStreamListener(String sessionId, String actionType, boolean thinkingEnabled) {
         AiStreamObserver observer = currentStreamObserver();
         if (observer == null) {
             return null;
         }
-        return new LlmStreamListener() {
-            @Override
-            public void onThinkingDelta(String deltaText, String accumulatedText) {
-                observer.onThinkingDelta(sessionId, actionType, deltaText, accumulatedText);
-            }
-
-            @Override
-            public void onOutputDelta(String deltaText, String accumulatedText) {
-                observer.onOutputDelta(sessionId, actionType, deltaText, accumulatedText);
-            }
-        };
+        // 根据 thinkingEnabled 选择监听器：
+        // - true: 使用可取消的包装器，支持 SSE 发送失败优雅降级
+        // - false: 禁用思考模式，只转发 output delta 事件
+        if (thinkingEnabled) {
+            return new CancellableLlmStreamListener(observer, sessionId, actionType);
+        } else {
+            return new DisabledThinkingLlmStreamListener(observer, sessionId, actionType);
+        }
     }
 
     private String resolveActionTypeByTaskLabel(String taskLabel) {

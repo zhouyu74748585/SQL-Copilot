@@ -88,6 +88,15 @@ export function createQueryChatHelpers(ctx: QueryChatHelperContext) {
     ctx.touchQueryTab(tab);
   }
 
+  function toggleMessageThinkingExpanded(tab: QueryWorkspaceTab, messageId: string) {
+    const target = tab.chatMessages.find((item) => item.id === messageId);
+    if (!target) {
+      return;
+    }
+    target.thinkingExpanded = target.thinkingExpanded !== true;
+    ctx.touchQueryTab(tab);
+  }
+
   function flushStreamingQueryTab(tab: QueryWorkspaceTab) {
     ctx.touchQueryTab(tab);
     return nextTick().then(() => waitForStreamingPaint());
@@ -197,6 +206,9 @@ export function createQueryChatHelpers(ctx: QueryChatHelperContext) {
     messageItem.streaming = false;
     messageItem.finalized = true;
     messageItem.thinkingContent = extractThinkingContentFromTrace(messageItem.trace) || messageItem.thinkingContent || '';
+    if (messageItem.thinkingContent) {
+      messageItem.thinkingExpanded = true;
+    }
     messageItem.liveOutput = '';
     messageItem.aborted = false;
     messageItem.content = '';
@@ -309,6 +321,7 @@ export function createQueryChatHelpers(ctx: QueryChatHelperContext) {
     const thinkingContent = extractThinkingContentFromTrace(trace);
     if (thinkingContent) {
       messageItem.thinkingContent = thinkingContent;
+      messageItem.thinkingExpanded = true;
     }
   }
 
@@ -391,6 +404,7 @@ export function createQueryChatHelpers(ctx: QueryChatHelperContext) {
 
   return {
     toggleMessageTraceExpanded,
+    toggleMessageThinkingExpanded,
     flushStreamingQueryTab,
     bindQueryChatMessageRef,
     scrollToQueryChatMessage,

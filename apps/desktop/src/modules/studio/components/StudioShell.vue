@@ -1936,8 +1936,11 @@
                     </span>
                   </div>
                   <div v-if="item.thinkingContent" class="query-chat-thinking-panel">
-                    <div class="query-chat-thinking-title">Thinking</div>
-                    <pre class="query-chat-thinking-content">{{ item.thinkingContent }}</pre>
+                    <button class="query-chat-thinking-toggle" @click="toggleMessageThinkingExpanded(activeQueryTab, item.id)">
+                      <span class="query-chat-thinking-toggle-label">Thinking</span>
+                      <span class="query-chat-thinking-toggle-icon">{{ item.thinkingExpanded !== false ? '▾' : '▸' }}</span>
+                    </button>
+                    <pre v-if="item.thinkingExpanded !== false" class="query-chat-thinking-content">{{ item.thinkingContent }}</pre>
                   </div>
                   <div
                     v-if="item.trace && detailOutputEnabledForTab(activeQueryTab)"
@@ -3005,6 +3008,11 @@
               <a-col :span="12">
                 <a-form-item label="默认输出详情">
                   <a-switch v-model:checked="aiConfigForm.detailOutputEnabled" />
+                </a-form-item>
+              </a-col>
+              <a-col :span="12">
+                <a-form-item :label="tt('思考模式')">
+                  <a-switch :checked="thinkingEnabled" data-testid="studio-settings-thinking-switch" @change="toggleThinkingEnabled" />
                 </a-form-item>
               </a-col>
             </a-row>
@@ -4221,6 +4229,8 @@ const {
     confirmSaveErSnapshot,
     handleHistoryMenuClick,
     toggleTheme,
+    thinkingEnabled,
+    toggleThinkingEnabled,
     loadUiThemePreference,
     persistUiThemePreference,
     sessionRefKey,
@@ -4251,6 +4261,7 @@ const {
     modelLabelById,
     detailOutputEnabledForTab,
     toggleMessageTraceExpanded,
+    toggleMessageThinkingExpanded,
     lastPromptText,
     assistantActionLabel,
     normalizeHistoryActionType,
